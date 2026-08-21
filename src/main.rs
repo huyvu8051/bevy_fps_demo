@@ -81,7 +81,7 @@ const RELOAD_TILT_DEG: f32 = 25.0;
 // (reported in-game). The down half is already RELOAD_DIP; this is the
 // left half, kept separate/explicit here so the scope camera and lens can
 // mirror it without needing the same axis-twisted rotation composition.
-const RELOAD_LEFT_DIP: f32 = 0.05;
+const RELOAD_LEFT_DIP: f32 = 0.12;
 
 // Rough position of the barrel tip, in the same camera-local space as
 // GUN_OFFSET. Muzzle flash/smoke spawn here. Since we can't see the model,
@@ -221,6 +221,11 @@ const SCOPE_LENS_HIDDEN_DROP: f32 = 0.03;
 // sits on top of the barrel, not at eye level) — offset along the camera's
 // own local up so it stays correct regardless of pitch. See sync_scope_camera.
 const SCOPE_CAMERA_HEIGHT_OFFSET: f32 = 0.0;
+// While not aiming, the scope camera/lens sit slightly above center screen
+// (like they're just resting up near the shoulder/eye line already) and
+// ease straight down to dead center as ads_blend eases in — same decay
+// shape as the X/Z sweep (full at ads_blend=0, zero at ads_blend=1).
+const SCOPE_HIP_HEIGHT_OFFSET: f32 = 0.05;
 // Active/rendered as soon as ADS starts blending in at all (so the lens is
 // already visible and sliding into place during the transition, matching
 // the gun mesh's own translation), hidden again once the gun raises for a
@@ -2906,6 +2911,7 @@ fn sync_scope_camera(
     let sweep_x = (GUN_OFFSET.x - GUN_ADS_OFFSET.x) * (1.0 - gun.ads_blend);
     let swapped_sweep_x = sweep_x * (1.0 - 2.0 * gun.shoulder_blend);
     let sweep_z = (GUN_OFFSET.z - GUN_ADS_OFFSET.z) * (1.0 - gun.ads_blend);
+    let sweep_y = SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend);
 
     // Same recoil kick (X/Y/Z) and reload dip/tilt gun_view_animation stacks
     // on top of that base position — recoil_t/dip peak the same way they do
@@ -2921,7 +2927,7 @@ fn sync_scope_camera(
         RECOIL_KICK * recoil_t,
     );
 
-    scope_transform.translation += local_to_world(Vec3::new(swapped_sweep_x, 0.0, sweep_z))
+    scope_transform.translation += local_to_world(Vec3::new(swapped_sweep_x, sweep_y, sweep_z))
         + local_to_world(recoil_and_reload)
         + camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend;
     scope_transform.rotation *= Quat::from_rotation_x(
@@ -2994,6 +3000,7 @@ fn update_scope_lens(
         let dip = 4.0 * reload_t * (1.0 - reload_t);
         let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend) - RELOAD_LEFT_DIP * dip;
         let lens_y = SCOPE_LENS_OFFSET.y - SCOPE_LENS_HIDDEN_DROP * (1.0 - gun.ads_blend)
+            + SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend)
             + RECOIL_KICK_UP * recoil_t
             - RELOAD_DIP * dip;
         let lens_z =
