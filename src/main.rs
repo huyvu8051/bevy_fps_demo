@@ -65,6 +65,16 @@ const RECOIL_ROLL_DEG: f32 = 3.0;
 const RECOIL_YAW_KICK_DEG: f32 = 3.0;
 const RECOIL_DURATION: f32 = 0.12;
 
+// Walk-bob: a figure-eight sway (side to side once, up-down twice per
+// stride — feet alternate, so the bob dips on every step) while WASD is
+// held, fading out via Gun.bob_blend when the player stops. Halved while
+// aiming (AIM_BOB_MULTIPLIER) since ADS is meant to steady the view.
+const GUN_BOB_SPEED: f32 = 8.0;
+const GUN_BOB_AMOUNT_X: f32 = 0.015;
+const GUN_BOB_AMOUNT_Y: f32 = 0.012;
+const GUN_BOB_BLEND_SPEED: f32 = 6.0;
+const AIM_BOB_MULTIPLIER: f32 = 0.35;
+
 // Pitches the gun barrel up out of the way when standing close to a wall in
 // front (PUBG-style), so the viewmodel doesn't visibly clip through it.
 // Distance is measured from the camera along its forward ray; the raise
@@ -724,6 +734,11 @@ struct Gun {
     // cosmetic, same as RECOIL_TILT_UP_DEG, so the visual kick doesn't
     // always snap along dead-straight vertical line.
     recoil_roll: f32,
+    // Walk-bob: bob_phase only advances while moving (see is_moving), and
+    // bob_blend eases 0..1 toward "currently moving" so the bob fades in/out
+    // smoothly instead of snapping to zero the instant WASD is released.
+    bob_phase: f32,
+    bob_blend: f32,
 }
 
 // The second camera that renders the scope's actual zoomed view onto
@@ -1039,6 +1054,14 @@ struct HitMarkerAssets {
     material: Handle<StandardMaterial>,
 }
 
+// Synthesized (no licensed sample available) noise-burst + sub-bass thump —
+// see assets/audio/gunshot.wav. Spawned fresh with PlaybackSettings::DESPAWN
+// on every shot in shoot(), rather than reused, so overlapping shots (fast
+// fire rate) each get their own independent playback instead of cutting
+// each other off.
+#[derive(Resource)]
+struct GunshotSound(Handle<AudioSource>);
+
 // Bundles HitMarkerAssets + MuzzleFxAssets into a single system param.
 // shoot() was at 17 function parameters, one over Bevy's hard limit of 16
 // (see all_tuples!(impl_system_function, 0, 16, F) in bevy_ecs) — merging
@@ -1049,6 +1072,7 @@ struct VfxAssets<'w, 's> {
     hit_assets: Res<'w, HitMarkerAssets>,
     muzzle_fx: Res<'w, MuzzleFxAssets>,
     blood: Res<'w, BloodAssets>,
+    gunshot: Res<'w, GunshotSound>,
     // Folded in here too (rather than its own top-level param) for the same
     // 16-param-limit reason — see the SpatialQuery addition in shoot(). Also
     // excludes GunMesh, ScopeLens and ScopeReticle (sit right in front of
@@ -1148,6 +1172,8 @@ fn setup(
             ..default()
         }),
     });
+
+    commands.insert_resource(GunshotSound(asset_server.load("audio/gunshot.wav")));
 
     // Both are flat quads facing the camera at spawn time (a "billboard" that
     // doesn't track the camera afterwards — fine given how briefly they live).
@@ -1296,6 +1322,8 @@ fn setup(
             wall_raise: 0.0,
             shoulder_blend: 0.0,
             recoil_roll: 0.0,
+            bob_phase: 0.0,
+            bob_blend: 0.0,
         },
         ChildOf(camera),
     ));
@@ -2778,6 +2806,7 @@ fn shoot(
     // Different frequency multiplier than the yaw jitter below so the two
     // don't stay correlated shot to shot.
     gun.recoil_roll = ops::sin(time.elapsed_secs() * 641.0);
+    commands.spawn((AudioPlayer(vfx_assets.gunshot.0.clone()), PlaybackSettings::DESPAWN));
     if gun.ammo == 0 {
         // Auto-reload once the mag empties from firing — manual reload via
         // reload_gun (KeyR) is still how you top off early.
@@ -3024,8 +3053,17 @@ fn sync_scope_camera(
         RECOIL_KICK * recoil_t,
     );
 
+    // Same walk-bob gun_view_animation applies to the gun mesh (reads
+    // gun.bob_phase/bob_blend a frame stale, same as ads_blend/wall_raise
+    // above — imperceptible for a continuous oscillation).
+    let bob_aim_scale = 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER);
+    let bob_x = ops::sin(gun.bob_phase) * GUN_BOB_AMOUNT_X * gun.bob_blend * bob_aim_scale;
+    let bob_y =
+        ops::sin(gun.bob_phase * 2.0).abs() * GUN_BOB_AMOUNT_Y * gun.bob_blend * bob_aim_scale;
+
     scope_transform.translation += local_to_world(Vec3::new(swapped_sweep_x, sweep_y, sweep_z))
         + local_to_world(recoil_and_reload)
+        + local_to_world(Vec3::new(bob_x, -bob_y, 0.0))
         + camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend;
     scope_transform.rotation *= Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * recoil_t)
         * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * recoil_t)
@@ -3103,11 +3141,18 @@ fn update_scope_lens(
         let recoil_t = gun.recoil / RECOIL_DURATION;
         let reload_t = gun.reload_remaining / RELOAD_DURATION;
         let dip = 4.0 * reload_t * (1.0 - reload_t);
-        let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend) - RELOAD_LEFT_DIP * dip;
+        let bob_aim_scale = 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER);
+        let bob_x = ops::sin(gun.bob_phase) * GUN_BOB_AMOUNT_X * gun.bob_blend * bob_aim_scale;
+        let bob_y = ops::sin(gun.bob_phase * 2.0).abs()
+            * GUN_BOB_AMOUNT_Y
+            * gun.bob_blend
+            * bob_aim_scale;
+        let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend) - RELOAD_LEFT_DIP * dip + bob_x;
         let lens_y = SCOPE_LENS_OFFSET.y - SCOPE_LENS_HIDDEN_DROP * (1.0 - gun.ads_blend)
             + SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend)
             + RECOIL_KICK_UP * recoil_t
-            - RELOAD_DIP * dip;
+            - RELOAD_DIP * dip
+            - bob_y;
         let lens_z =
             GUN_OFFSET.z + (SCOPE_LENS_OFFSET.z - GUN_OFFSET.z) * gun.ads_blend + RECOIL_KICK * recoil_t;
         transform.translation = Vec3::new(swapped_x, lens_y, lens_z);
@@ -3171,6 +3216,18 @@ fn gun_view_animation(
         let shoulder_step = (LEAN_SPEED * time.delta_secs()).min(1.0);
         gun.shoulder_blend += (shoulder_target - gun.shoulder_blend) * shoulder_step;
 
+        let moving = is_moving(&keys);
+        let bob_target = if moving { 1.0 } else { 0.0 };
+        let bob_blend_step = (GUN_BOB_BLEND_SPEED * time.delta_secs()).min(1.0);
+        gun.bob_blend += (bob_target - gun.bob_blend) * bob_blend_step;
+        if moving {
+            gun.bob_phase += GUN_BOB_SPEED * time.delta_secs();
+        }
+        let bob_aim_scale = 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER);
+        let bob_x = ops::sin(gun.bob_phase) * GUN_BOB_AMOUNT_X * gun.bob_blend * bob_aim_scale;
+        let bob_y =
+            ops::sin(gun.bob_phase * 2.0).abs() * GUN_BOB_AMOUNT_Y * gun.bob_blend * bob_aim_scale;
+
         let recoil_t = gun.recoil / RECOIL_DURATION;
         let reload_t = gun.reload_remaining / RELOAD_DURATION;
         // Parabola: 0 at both ends of the reload, 1 at the midpoint — the
@@ -3186,8 +3243,8 @@ fn gun_view_animation(
         let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
         transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)
             + Vec3::new(
-                0.0,
-                RECOIL_KICK_UP * recoil_t - RELOAD_DIP * dip
+                bob_x,
+                RECOIL_KICK_UP * recoil_t - RELOAD_DIP * dip - bob_y
                     + WALL_GUN_RAISE_HEIGHT * gun.wall_raise,
                 RECOIL_KICK * recoil_t,
             );

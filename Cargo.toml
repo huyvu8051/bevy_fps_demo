@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 avian3d = "0.6"
-bevy = { version = "0.18", features = ["jpeg", "bevy_dev_tools"] }
+bevy = { version = "0.18", features = ["jpeg", "bevy_dev_tools", "wav"] }
 big-brain = { path = "vendor/big-brain" }
 vleue_navigator = { path = "vendor/vleue_navigator", default-features = false, features = ["avian3d"] }
 
