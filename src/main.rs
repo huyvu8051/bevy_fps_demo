@@ -29,12 +29,30 @@ const SCENE_PATH: &str = "models/Sponza/Sponza.gltf";
 // assume, hence the extra Y rotation to point the barrel forward.
 const GUN_PATH: &str = "models/ak47_scope.glb";
 const GUN_OFFSET: Vec3 = Vec3::new(0.22, -0.28, -0.65);
+// Aim-down-sights pose while holding right mouse (see gun_view_animation) —
+// centered horizontally and pulled in close to the camera so the scope sits
+// roughly where the lens/eye would look through it. GUN_PATH's actual scope
+// position on the model isn't known (can't see the rendered model to
+// measure it), so this is a guess based on GUN_OFFSET's own general shape,
+// not a calibrated value — may need nudging once actually seen in-game.
+// Y tuned in-game across several rounds (-0.05 -> -0.18 -> -0.28 -> -0.38
+// -> -0.25, the last one given as an exact value) — X/Z were confirmed
+// correct from the start.
+const GUN_ADS_OFFSET: Vec3 = Vec3::new(0.0, -0.307, -0.35);
+const GUN_ADS_SPEED: f32 = 10.0;
 const GUN_SCALE: f32 = 0.001;
 const GUN_ROTATION_Y_DEG: f32 = -90.0;
 const RECOIL_KICK: f32 = 0.12;
+// Muzzle rise: the gun mesh itself also kicks upward (translation) and
+// tilts its barrel up (rotation), on top of pulling back — separate from
+// RECOIL_PITCH_KICK, which only moves the camera/aim point, not the
+// visible gun model. Raised once already (0.05 -> 0.09) per "more like a
+// real gun" feedback.
+const RECOIL_KICK_UP: f32 = 0.01;
+const RECOIL_TILT_UP_DEG: f32 = 4.0;
 const RECOIL_DURATION: f32 = 0.12;
 
-const MAGAZINE_SIZE: u32 = 30;
+const MAGAZINE_SIZE: u32 = 40;
 const RELOAD_DURATION: f32 = 1.6;
 // How far the gun dips down and tilts during a reload, peaking at the
 // midpoint of RELOAD_DURATION and easing back to the normal pose at both
@@ -44,9 +62,9 @@ const RELOAD_TILT_DEG: f32 = 25.0;
 
 // Rough position of the barrel tip, in the same camera-local space as
 // GUN_OFFSET. Muzzle flash/smoke spawn here. Since we can't see the model,
-// this is a guess (further forward + a bit higher than the grip) — nudge it
-// once you can see whether the flash lines up with the actual muzzle.
-const MUZZLE_OFFSET: Vec3 = Vec3::new(0.22, -0.12, -1.55);
+// this is a guess (further forward + a bit higher than the grip) — nudged
+// up once already, since the flare was sitting below the barrel.
+const MUZZLE_OFFSET: Vec3 = Vec3::new(0.2, -0.005, -1.2);
 
 const MUZZLE_FLASH_LIFETIME: f32 = 0.05;
 const MUZZLE_LIGHT_INTENSITY: f32 = 120_000.0;
@@ -74,6 +92,13 @@ const BLOOD_FLOOR_RAYCAST_DISTANCE: f32 = 5.0;
 const BLOOD_FLOOR_STAIN_MIN: usize = 1;
 const BLOOD_FLOOR_STAIN_MAX: usize = 3;
 const BLOOD_FLOOR_STAIN_SPREAD: f32 = 0.3;
+
+// Horizontal-only impulse (see KnockbackVelocity) applied to a zombie that
+// survives a hit, along the bullet's own travel direction. Headshots always
+// kill outright (HEAD_DAMAGE == ZOMBIE_MAX_HEALTH) so never actually get to
+// stagger — this only shows up on body/limb hits that don't finish the kill.
+const KNOCKBACK_FORCE: f32 = 3.5;
+const KNOCKBACK_DECAY_RATE: f32 = 6.0;
 
 // Automatic fire: how often a shot can go off while the mouse button is held.
 // ~0.1s ≈ 600 rounds/min, roughly AK47-like.
@@ -127,6 +152,13 @@ const AIM_SPREAD_MULTIPLIER: f32 = 0.35;
 // ends up at STATIONARY_SPREAD_MULTIPLIER * AIM_SPREAD_MULTIPLIER of the
 // base spread.
 const STATIONARY_SPREAD_MULTIPLIER: f32 = 0.4;
+// Stance/sprint also scale spread (see current_bullet_spread) — separate
+// constants from the movement-speed ones (SPRINT_MULTIPLIER,
+// CROUCH_SPEED_MULTIPLIER, PRONE_SPEED_MULTIPLIER) since "how fast" and
+// "how accurate" don't have to move in lockstep.
+const SPRINT_SPREAD_MULTIPLIER: f32 = 2.2;
+const CROUCH_SPREAD_MULTIPLIER: f32 = 0.6;
+const PRONE_SPREAD_MULTIPLIER: f32 = 0.2;
 
 // Q/E lean: rolls the camera and shifts it sideways to peek around corners
 // without moving the player capsule itself. No collision awareness (won't
@@ -136,12 +168,32 @@ const STATIONARY_SPREAD_MULTIPLIER: f32 = 0.4;
 const LEAN_SPEED: f32 = 6.0;
 const LEAN_ROLL_DEG: f32 = 15.0;
 const LEAN_SIDE_OFFSET: f32 = 0.4;
+// Gun is parented to the camera, so it already inherits the camera's lean
+// roll for free. These add an *extra* local roll + shoulder-ward shift on
+// top of that so the weapon visibly tucks into the shoulder on lean,
+// PUBG-style, instead of just rolling rigidly with the view.
+const LEAN_GUN_TILT_DEG: f32 = 12.0;
+const LEAN_GUN_SHOULDER_OFFSET: f32 = 0.06;
 
 // Player capsule: radius + cylinder length between the two hemispherical
 // caps, so total standing height = PLAYER_LENGTH + 2 * PLAYER_RADIUS ≈ 1.6m.
 const PLAYER_RADIUS: f32 = 0.35;
 const PLAYER_LENGTH: f32 = 0.9;
 const EYE_HEIGHT_OFFSET: f32 = 0.65;
+
+// Stance (PlayerStance, KeyC/KeyX) and sprint (ShiftLeft while standing)
+// each rebuild the capsule shorter and re-scale move speed every frame in
+// move_player_physics — no persistent Collider to keep in sync, since the
+// shape is already passed fresh to move_and_slide() each call. Crouch/prone
+// capsule lengths are shorter than PLAYER_LENGTH, so the character visually
+// (and physically) gets shorter, not just slower.
+const SPRINT_MULTIPLIER: f32 = 1.6;
+const CROUCH_SPEED_MULTIPLIER: f32 = 0.5;
+const PRONE_SPEED_MULTIPLIER: f32 = 0.25;
+const CROUCH_LENGTH: f32 = PLAYER_LENGTH * 0.5;
+const PRONE_LENGTH: f32 = PLAYER_RADIUS * 0.3;
+const CROUCH_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.55;
+const PRONE_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.15;
 // Snappier than real-world 9.81 — common for FPS games so jumps/falls don't
 // feel floaty.
 const GRAVITY: f32 = -20.0;
@@ -163,10 +215,13 @@ const HIT_MARKER_LIFETIME: f32 = 3.0;
 const MAX_SHOT_DISTANCE: f32 = 200.0;
 
 const PLAYER_MAX_HEALTH: f32 = 100.0;
-// Applied continuously (per second) to any zombie within ZOMBIE_STOP_DISTANCE
-// of the player and actively chasing — no separate "attack" animation/timer,
-// same simplicity tradeoff as the zombies' one-shot-kill damage model.
-const ZOMBIE_DAMAGE_PER_SECOND: f32 = 20.0;
+// Discrete bites instead of continuous per-second drain: a zombie within
+// ZOMBIE_STOP_DISTANCE and chasing deals ZOMBIE_ATTACK_DAMAGE once every
+// ZOMBIE_ATTACK_INTERVAL seconds (see ZombieAttackTimer/zombies_damage_player)
+// — no separate attack animation, same simplicity tradeoff as the zombies'
+// own one-shot-kill damage model.
+const ZOMBIE_ATTACK_DAMAGE: f32 = 12.0;
+const ZOMBIE_ATTACK_INTERVAL: f32 = 1.0;
 
 // "Animated Zombie" by Quaternius (poly.pizza, CC-BY 3.0) —
 // https://poly.pizza/m/jkrEvQZb8J — keep this attribution if shared/published.
@@ -378,7 +433,7 @@ fn is_moving(keys: &ButtonInput<KeyCode>) -> bool {
 // shot would use — same recoil-heat/aim/stationary formula, just factored
 // out so both stay in sync automatically instead of two copies drifting
 // apart.
-fn current_bullet_spread(pitch_kick: f32, aiming: bool, moving: bool) -> f32 {
+fn current_bullet_spread(pitch_kick: f32, aiming: bool, moving: bool, stance: PlayerStance, sprinting: bool) -> f32 {
     let heat = pitch_kick / RECOIL_PITCH_KICK_MAX;
     let mut spread = BULLET_SPREAD * (0.3 + heat);
     if aiming {
@@ -386,6 +441,18 @@ fn current_bullet_spread(pitch_kick: f32, aiming: bool, moving: bool) -> f32 {
     }
     if !moving {
         spread *= STATIONARY_SPREAD_MULTIPLIER;
+    }
+    // Sprinting is the least stable stance regardless of what PlayerStance
+    // says (and move_player_physics only allows sprinting while Standing
+    // anyway) — otherwise Prone is the most stable, Crouching in between.
+    if sprinting {
+        spread *= SPRINT_SPREAD_MULTIPLIER;
+    } else {
+        spread *= match stance {
+            PlayerStance::Standing => 1.0,
+            PlayerStance::Crouching => CROUCH_SPREAD_MULTIPLIER,
+            PlayerStance::Prone => PRONE_SPREAD_MULTIPLIER,
+        };
     }
     spread
 }
@@ -413,6 +480,18 @@ struct Lean {
 struct Player {
     vertical_velocity: f32,
     grounded: bool,
+}
+
+// KeyC toggles Standing<->Crouching, KeyX toggles Standing<->Prone (see
+// toggle_player_stance). Affects move speed, the physics capsule's length
+// (move_player_physics — rebuilt fresh every frame anyway, so no persistent
+// Collider to keep in sync), and camera eye height (sync_camera_to_player).
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
+enum PlayerStance {
+    #[default]
+    Standing,
+    Crouching,
+    Prone,
 }
 
 #[derive(Component)]
@@ -499,6 +578,9 @@ struct Gun {
     ammo: u32,
     // 0.0 = not reloading. Ticks down from RELOAD_DURATION.
     reload_remaining: f32,
+    // 0.0 = hip-fire pose (base_offset), 1.0 = fully raised to GUN_ADS_OFFSET.
+    // Eases toward whichever is_aiming() currently says, in gun_view_animation.
+    ads_blend: f32,
 }
 
 // Marks the ammo counter text so update_ammo_ui can find it.
@@ -509,6 +591,14 @@ struct AmmoUi;
 struct HitMarker {
     remaining: f32,
 }
+
+// Tags every render-mesh descendant of the Gun entity (see wire_gun_mesh),
+// so shoot()'s raycast can exclude the viewmodel itself. Needed once ADS
+// pulled the gun in close to and centered on the camera (GUN_ADS_OFFSET) —
+// it now sits directly in the forward raycast's path, where GUN_OFFSET's
+// off-center hip-fire position never did.
+#[derive(Component)]
+struct GunMesh;
 
 #[derive(Component)]
 struct MuzzleFlash {
@@ -548,6 +638,28 @@ struct Zombie;
 struct ZombieMotion {
     vertical_velocity: f32,
     grounded: bool,
+}
+
+// Horizontal impulse from a bullet hit, added on top of chase movement in
+// move_zombies and exponentially decayed back to zero (same decay shape as
+// ViewRecoil's kick) — a hit knocks a zombie back for a moment instead of
+// its position being unaffected by anything but its own chase logic.
+#[derive(Component, Default)]
+struct KnockbackVelocity(Vec3);
+
+// Counts down to the next bite — only ticks while the zombie is actually in
+// range (zombies_damage_player), so wandering out of melee range and back
+// doesn't let an attack "bank" while it was away. Starts at
+// ZOMBIE_ATTACK_INTERVAL rather than 0.0 so a zombie that just caught up
+// gets a beat before its first bite instead of landing one the instant it
+// arrives.
+#[derive(Component)]
+struct ZombieAttackTimer(f32);
+
+impl Default for ZombieAttackTimer {
+    fn default() -> Self {
+        Self(ZOMBIE_ATTACK_INTERVAL)
+    }
 }
 
 // Driven by big-brain's Thinker/Scorer/Action below (NearPlayer scorer picks
@@ -695,13 +807,14 @@ fn main() {
             Update,
             (
                 // Tuples of systems only implement IntoSystemConfigs up to
-                // arity 20, so this is split into two nested chained groups
+                // arity 20, so this is split into nested chained groups
                 // rather than one flat tuple — .chain() on the outer tuple
                 // still orders everything from grab_cursor through
-                // update_smoke, just via two hops instead of one.
+                // despawn_blood_stains, just via a few hops instead of one.
                 (
                     grab_cursor,
                     toggle_noclip,
+                    toggle_player_stance,
                     toggle_debug_flags,
                     debug_panel_actions,
                     mouse_look,
@@ -722,11 +835,15 @@ fn main() {
                     respawn_zombies,
                     wire_zombie_animations,
                     wire_zombie_hitbox_bones,
+                    wire_gun_mesh,
                     update_zombie_animation,
                     freeze_zombie_animations,
                     update_health_ui,
                     update_zombie_health_bars,
                     update_floating_damage_texts,
+                )
+                    .chain(),
+                (
                     gun_view_animation,
                     update_ammo_ui,
                     update_crosshair,
@@ -762,8 +879,13 @@ struct VfxAssets<'w, 's> {
     muzzle_fx: Res<'w, MuzzleFxAssets>,
     blood: Res<'w, BloodAssets>,
     // Folded in here too (rather than its own top-level param) for the same
-    // 16-param-limit reason — see the SpatialQuery addition in shoot().
-    vfx_meshes: Query<'w, 's, (), Or<(With<HitMarker>, With<MuzzleFlash>, With<Smoke>)>>,
+    // 16-param-limit reason — see the SpatialQuery addition in shoot(). Also
+    // excludes GunMesh now — see its own doc comment for why.
+    vfx_meshes: Query<'w, 's, (), Or<(With<HitMarker>, With<MuzzleFlash>, With<Smoke>, With<GunMesh>)>>,
+    // Also just along for the ride here (not vfx-related at all) — shoot()
+    // needs the player's PlayerStance for current_bullet_spread and has no
+    // room for a dedicated top-level param.
+    stance: Query<'w, 's, &'static PlayerStance, With<Player>>,
 }
 
 #[derive(Resource)]
@@ -915,6 +1037,7 @@ fn setup(
                 grounded: false,
             },
             Health(PLAYER_MAX_HEALTH),
+            PlayerStance::default(),
         ))
         .id();
     commands.insert_resource(GameOver(false));
@@ -976,6 +1099,7 @@ fn setup(
             recoil: 0.0,
             ammo: MAGAZINE_SIZE,
             reload_remaining: 0.0,
+            ads_blend: 0.0,
         },
         ChildOf(camera),
     ));
@@ -1008,6 +1132,8 @@ fn spawn_zombie(commands: &mut Commands, asset_server: &AssetServer, spawn_pos: 
         ZombieMotion::default(),
         Health(ZOMBIE_MAX_HEALTH),
         ZombieHitboxBones::default(),
+        KnockbackVelocity::default(),
+        ZombieAttackTimer::default(),
         // A persistent collider so shoot() can raycast against the zombie's
         // actual current position/orientation (avian3d's SpatialQuery)
         // instead of only the render mesh, which is stuck testing against
@@ -1483,7 +1609,7 @@ fn zombies_damage_player(
     game_over: Res<GameOver>,
     freeze: Res<FreezeZombies>,
     god_mode: Res<GodMode>,
-    zombies: Query<&Transform, (With<Zombie>, With<Chase>)>,
+    mut zombies: Query<(&Transform, &mut ZombieAttackTimer), (With<Zombie>, With<Chase>)>,
     mut player: Query<(&Transform, &mut Health), With<Player>>,
 ) {
     if game_over.0 || freeze.0 || god_mode.0 {
@@ -1492,14 +1618,17 @@ fn zombies_damage_player(
     let Ok((player_transform, mut health)) = player.single_mut() else {
         return;
     };
-    let in_melee_range = zombies.iter().any(|zombie_transform| {
-        zombie_transform
-            .translation
-            .distance(player_transform.translation)
-            <= ZOMBIE_STOP_DISTANCE
-    });
-    if in_melee_range {
-        health.0 -= ZOMBIE_DAMAGE_PER_SECOND * time.delta_secs();
+    let dt = time.delta_secs();
+    for (zombie_transform, mut attack_timer) in &mut zombies {
+        let in_range = zombie_transform.translation.distance(player_transform.translation) <= ZOMBIE_STOP_DISTANCE;
+        if !in_range {
+            continue;
+        }
+        attack_timer.0 -= dt;
+        if attack_timer.0 <= 0.0 {
+            health.0 -= ZOMBIE_ATTACK_DAMAGE;
+            attack_timer.0 = ZOMBIE_ATTACK_INTERVAL;
+        }
     }
 }
 
@@ -1769,13 +1898,16 @@ fn update_crosshair(
     mouse: Res<ButtonInput<MouseButton>>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     camera: Query<&ViewRecoil, With<FpsCamera>>,
+    player: Query<&PlayerStance, With<Player>>,
     mut lines: Query<(&CrosshairLine, &mut Node)>,
 ) {
     let Ok(recoil) = camera.single() else {
         return;
     };
+    let stance = player.single().copied().unwrap_or_default();
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse));
-    let spread = current_bullet_spread(recoil.pitch_kick, aiming, is_moving(&keys));
+    let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
+    let spread = current_bullet_spread(recoil.pitch_kick, aiming, is_moving(&keys), stance, sprinting);
     let gap = CROSSHAIR_BASE_GAP_PX + spread * CROSSHAIR_GAP_SPREAD_SCALE;
 
     for (line, mut node) in &mut lines {
@@ -1935,6 +2067,29 @@ fn toggle_noclip(keys: Res<ButtonInput<KeyCode>>, mut noclip: ResMut<Noclip>) {
     }
 }
 
+// KeyC toggles Standing<->Crouching; KeyX toggles Standing<->Prone. Pressing
+// C while Prone (or X while Crouching) switches directly to the other
+// stance rather than needing to stand up first.
+fn toggle_player_stance(keys: Res<ButtonInput<KeyCode>>, mut player: Query<&mut PlayerStance>) {
+    let Ok(mut stance) = player.single_mut() else {
+        return;
+    };
+    if keys.just_pressed(KeyCode::KeyC) {
+        *stance = if *stance == PlayerStance::Crouching {
+            PlayerStance::Standing
+        } else {
+            PlayerStance::Crouching
+        };
+    }
+    if keys.just_pressed(KeyCode::KeyX) {
+        *stance = if *stance == PlayerStance::Prone {
+            PlayerStance::Standing
+        } else {
+            PlayerStance::Prone
+        };
+    }
+}
+
 fn toggle_debug_flags(
     keys: Res<ButtonInput<KeyCode>>,
     mut freeze: ResMut<FreezeZombies>,
@@ -2057,7 +2212,7 @@ fn move_player_physics(
     noclip: Res<Noclip>,
     camera_query: Query<&FpsCamera>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    mut player_query: Query<(&mut Transform, &mut Player)>,
+    mut player_query: Query<(&mut Transform, &mut Player, &PlayerStance)>,
     mover: MoveAndSlide,
 ) {
     if game_over.0 {
@@ -2066,7 +2221,7 @@ fn move_player_physics(
     let Ok(cam) = camera_query.single() else {
         return;
     };
-    let Ok((mut transform, mut player)) = player_query.single_mut() else {
+    let Ok((mut transform, mut player, stance)) = player_query.single_mut() else {
         return;
     };
 
@@ -2105,10 +2260,22 @@ fn move_player_physics(
         return;
     }
 
-    let move_speed = if cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse)) {
+    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse));
+    let sprinting = keys.pressed(KeyCode::ShiftLeft) && *stance == PlayerStance::Standing;
+    let move_speed = if aiming {
         MOVE_SPEED * AIM_MOVE_SPEED_MULTIPLIER
     } else {
-        MOVE_SPEED
+        match stance {
+            PlayerStance::Standing if sprinting => MOVE_SPEED * SPRINT_MULTIPLIER,
+            PlayerStance::Standing => MOVE_SPEED,
+            PlayerStance::Crouching => MOVE_SPEED * CROUCH_SPEED_MULTIPLIER,
+            PlayerStance::Prone => MOVE_SPEED * PRONE_SPEED_MULTIPLIER,
+        }
+    };
+    let capsule_length = match stance {
+        PlayerStance::Standing => PLAYER_LENGTH,
+        PlayerStance::Crouching => CROUCH_LENGTH,
+        PlayerStance::Prone => PRONE_LENGTH,
     };
 
     let yaw_rotation = Quat::from_rotation_y(cam.yaw);
@@ -2145,7 +2312,7 @@ fn move_player_physics(
     vertical_velocity += GRAVITY * time.delta_secs();
 
     let velocity = horizontal + Vec3::Y * vertical_velocity;
-    let shape = Collider::capsule(PLAYER_RADIUS, PLAYER_LENGTH);
+    let shape = Collider::capsule(PLAYER_RADIUS, capsule_length);
     let config = MoveAndSlideConfig::default();
     let filter = SpatialQueryFilter::default();
 
@@ -2179,16 +2346,21 @@ fn move_player_physics(
 // at eye height every frame. Its rotation is set separately by
 // apply_view_recoil, which runs earlier in the chain.
 fn sync_camera_to_player(
-    player_query: Query<&Transform, (With<Player>, Without<FpsCamera>)>,
+    player_query: Query<(&Transform, &PlayerStance), (With<Player>, Without<FpsCamera>)>,
     mut camera_query: Query<(&mut Transform, &Lean), With<FpsCamera>>,
 ) {
-    let Ok(player_transform) = player_query.single() else {
+    let Ok((player_transform, stance)) = player_query.single() else {
         return;
     };
     let Ok((mut camera_transform, lean)) = camera_query.single_mut() else {
         return;
     };
-    let eye = player_transform.translation + Vec3::Y * EYE_HEIGHT_OFFSET;
+    let eye_height_offset = match stance {
+        PlayerStance::Standing => EYE_HEIGHT_OFFSET,
+        PlayerStance::Crouching => CROUCH_EYE_HEIGHT_OFFSET,
+        PlayerStance::Prone => PRONE_EYE_HEIGHT_OFFSET,
+    };
+    let eye = player_transform.translation + Vec3::Y * eye_height_offset;
     // Uses the rotation apply_view_recoil already set this frame (it runs
     // earlier in the chain) so the peek offset follows whichever way the
     // camera is actually facing, including its current lean roll.
@@ -2213,7 +2385,7 @@ fn shoot(
     mut raycast: MeshRayCast,
     vfx_assets: VfxAssets,
     child_of: Query<&ChildOf>,
-    mut zombies: Query<(&Transform, &mut Health, &ZombieHitboxBones), With<Zombie>>,
+    mut zombies: Query<(&Transform, &mut Health, &ZombieHitboxBones, &mut KnockbackVelocity), With<Zombie>>,
     globals: Query<&GlobalTransform>,
     spatial_query: SpatialQuery,
     mut respawns: ResMut<PendingZombieRespawns>,
@@ -2259,7 +2431,15 @@ fn shoot(
     let jitter = ops::sin(time.elapsed_secs() * 977.0);
     recoil.yaw_kick += jitter * RECOIL_YAW_JITTER;
 
-    let spread = current_bullet_spread(recoil.pitch_kick, is_aiming(cursor, &mouse), is_moving(&keys));
+    let stance = vfx_assets.stance.single().copied().unwrap_or_default();
+    let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
+    let spread = current_bullet_spread(
+        recoil.pitch_kick,
+        is_aiming(cursor, &mouse),
+        is_moving(&keys),
+        stance,
+        sprinting,
+    );
     let spread_x = ops::sin(time.elapsed_secs() * 613.0) * spread;
     let spread_y = ops::sin(time.elapsed_secs() * 811.0) * spread;
     let spread_dir = *camera_transform.forward()
@@ -2360,7 +2540,7 @@ fn shoot(
         // damage reaches ZOMBIE_MAX_HEALTH.
         let mut current = hit_entity;
         for _ in 0..20 {
-            if let Ok((zombie_transform, mut health, bones)) = zombies.get_mut(current) {
+            if let Ok((zombie_transform, mut health, bones, mut knockback)) = zombies.get_mut(current) {
                 let damage = zombie_hit_damage(hit_point, zombie_transform, bones, &globals);
                 health.0 -= damage;
                 spawn_floating_damage(&mut commands, hit_point, damage);
@@ -2378,6 +2558,14 @@ fn shoot(
                     hit_normal,
                     zombie_for_blood,
                 );
+
+                // A stagger from the bullet's own travel direction — only
+                // meaningful if the zombie is still around to be knocked
+                // (headshots kill outright, so never reach this).
+                if alive {
+                    let push = Vec3::new(direction.x, 0.0, direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
+                    knockback.0 += push;
+                }
 
                 if !alive {
                     commands.entity(current).try_despawn();
@@ -2415,7 +2603,15 @@ fn reload_gun(keys: Res<ButtonInput<KeyCode>>, game_over: Res<GameOver>, mut gun
 // both are just countdown timers, this is the only system that turns them
 // into an actual pose each frame (also where reload_remaining hitting 0
 // refills the magazine).
-fn gun_view_animation(time: Res<Time>, mut query: Query<(&mut Transform, &mut Gun)>) {
+fn gun_view_animation(
+    time: Res<Time>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    lean: Query<&Lean, With<FpsCamera>>,
+    mut query: Query<(&mut Transform, &mut Gun)>,
+) {
+    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse));
+    let lean_current = lean.single().map(|lean| lean.current).unwrap_or(0.0);
     for (mut transform, mut gun) in &mut query {
         if gun.recoil > 0.0 {
             gun.recoil = (gun.recoil - time.delta_secs()).max(0.0);
@@ -2427,16 +2623,40 @@ fn gun_view_animation(time: Res<Time>, mut query: Query<(&mut Transform, &mut Gu
             }
         }
 
+        let ads_target = if aiming { 1.0 } else { 0.0 };
+        let ads_step = (GUN_ADS_SPEED * time.delta_secs()).min(1.0);
+        gun.ads_blend += (ads_target - gun.ads_blend) * ads_step;
+
         let recoil_t = gun.recoil / RECOIL_DURATION;
         let reload_t = gun.reload_remaining / RELOAD_DURATION;
         // Parabola: 0 at both ends of the reload, 1 at the midpoint — the
         // gun dips down/tilts away and comes back up as the reload finishes.
         let dip = 4.0 * reload_t * (1.0 - reload_t);
 
-        transform.translation =
-            gun.base_offset + Vec3::new(0.0, -RELOAD_DIP * dip, RECOIL_KICK * recoil_t);
-        transform.rotation = Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians())
+        let base_pos = gun.base_offset.lerp(GUN_ADS_OFFSET, gun.ads_blend);
+        transform.translation = base_pos
+            + Vec3::new(
+                -LEAN_GUN_SHOULDER_OFFSET * lean_current,
+                RECOIL_KICK_UP * recoil_t - RELOAD_DIP * dip,
+                RECOIL_KICK * recoil_t,
+            );
+        // Recoil tilt is applied as the outer rotation (camera-local space),
+        // not composed inside the model's own base orientation like the
+        // reload tilt is — doing it inside meant the -90° base Y rotation
+        // twisted "tilt around local X" into something closer to a sideways
+        // roll than an up/down pitch (reported as the gun leaning right on
+        // recoil instead of the muzzle rising).
+        let base_rotation = Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians())
             * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * dip);
+        // Sign flipped: the previous sign raised the stock/rear instead of
+        // the muzzle.
+        // Extra roll on top of the camera-inherited lean roll (gun is a
+        // child of the camera, so it already rolls with it) — same sign as
+        // apply_view_recoil's camera roll so it tucks the same direction.
+        let lean_roll = -LEAN_GUN_TILT_DEG.to_radians() * lean_current;
+        transform.rotation = Quat::from_rotation_z(lean_roll)
+            * Quat::from_rotation_x(RECOIL_TILT_UP_DEG.to_radians() * recoil_t)
+            * base_rotation;
     }
 }
 
@@ -2532,7 +2752,7 @@ fn move_zombies(
     time: Res<Time>,
     game_over: Res<GameOver>,
     freeze: Res<FreezeZombies>,
-    mut zombies: Query<(&mut Transform, &mut ZombieMotion, &Chase), With<Zombie>>,
+    mut zombies: Query<(&mut Transform, &mut ZombieMotion, &Chase, &mut KnockbackVelocity), With<Zombie>>,
     targets: Query<&Transform, Without<Zombie>>,
     navmesh: Query<&ManagedNavMesh>,
     navmeshes: Res<Assets<NavMesh>>,
@@ -2550,7 +2770,7 @@ fn move_zombies(
         .ok()
         .and_then(|handle| navmeshes.get(handle));
 
-    for (mut transform, mut motion, chase) in &mut zombies {
+    for (mut transform, mut motion, chase, mut knockback) in &mut zombies {
         let Ok(target_transform) = targets.get(chase.target) else {
             continue;
         };
@@ -2601,7 +2821,13 @@ fn move_zombies(
         }
         motion.vertical_velocity += GRAVITY * time.delta_secs();
 
-        let velocity = horizontal_velocity + Vec3::Y * motion.vertical_velocity;
+        // Same exponential-decay shape as ViewRecoil's kick — knockback.0
+        // is set (once, an instant impulse) in shoot() and just fades back
+        // to zero here every frame after.
+        let decay = (KNOCKBACK_DECAY_RATE * time.delta_secs()).min(1.0);
+        knockback.0 *= 1.0 - decay;
+
+        let velocity = horizontal_velocity + knockback.0 + Vec3::Y * motion.vertical_velocity;
         let shape = Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH);
         let config = MoveAndSlideConfig::default();
 
@@ -2689,6 +2915,31 @@ fn wire_zombie_animations(
                 commands
                     .entity(current)
                     .insert(ZombieAnimationPlayer(player_entity));
+                break;
+            }
+            let Ok(parent) = child_of.get(current) else {
+                break;
+            };
+            current = parent.0;
+        }
+    }
+}
+
+// Tags every new Mesh3d that turns out to be a descendant of the Gun entity
+// with GunMesh, once the ak47_scope.glb scene finishes loading (same async
+// timing problem as wire_zombie_animations/wire_zombie_hitbox_bones) — see
+// GunMesh's doc comment for why this needs to exist.
+fn wire_gun_mesh(
+    mut commands: Commands,
+    child_of: Query<&ChildOf>,
+    gun: Query<(), With<Gun>>,
+    new_meshes: Query<Entity, Added<Mesh3d>>,
+) {
+    for mesh_entity in &new_meshes {
+        let mut current = mesh_entity;
+        for _ in 0..20 {
+            if gun.contains(current) {
+                commands.entity(mesh_entity).insert(GunMesh);
                 break;
             }
             let Ok(parent) = child_of.get(current) else {
