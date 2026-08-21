@@ -188,10 +188,12 @@ const SCOPE_LENS_SIZE: f32 = 0.03;
 // sits on top of the barrel, not at eye level) — offset along the camera's
 // own local up so it stays correct regardless of pitch. See sync_scope_camera.
 const SCOPE_CAMERA_HEIGHT_OFFSET: f32 = 0.0;
-// Only shown/rendered once ADS is nearly fully blended in, and hidden again
-// once the gun starts raising for a wall — no point paying for a second
-// render pass while the lens wouldn't be aligned with the scope anyway.
-const SCOPE_VISIBLE_ADS_THRESHOLD: f32 = 0.8;
+// Active/rendered as soon as ADS starts blending in at all (so the lens is
+// already visible and sliding into place during the transition, matching
+// the gun mesh's own translation), hidden again once the gun raises for a
+// wall. Not exactly 0.0 so it doesn't stay "active" forever chasing an
+// asymptotic ease-toward-0 that never quite reaches it.
+const SCOPE_ACTIVE_ADS_THRESHOLD: f32 = 0.02;
 const SCOPE_HIDDEN_WALL_RAISE_THRESHOLD: f32 = 0.2;
 // The gun viewmodel (and the scope lens quad) live on their own render
 // layer, excluded from the scope camera's own view — otherwise the scope
@@ -2773,13 +2775,19 @@ fn reload_gun(keys: Res<ButtonInput<KeyCode>>, game_over: Res<GameOver>, mut gun
 // of its own, it just mirrors the real camera exactly.
 fn sync_scope_camera(
     camera: Query<&Transform, (With<FpsCamera>, Without<ScopeCamera>)>,
+    gun: Query<&Gun>,
     mut scope_camera: Query<&mut Transform, (With<ScopeCamera>, Without<FpsCamera>)>,
 ) {
-    let (Ok(camera_transform), Ok(mut scope_transform)) = (camera.single(), scope_camera.single_mut()) else {
+    let (Ok(camera_transform), Ok(gun), Ok(mut scope_transform)) =
+        (camera.single(), gun.single(), scope_camera.single_mut())
+    else {
         return;
     };
     *scope_transform = *camera_transform;
-    scope_transform.translation += camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET;
+    // Eases in with ads_blend — same lerp-toward-target value the gun mesh
+    // itself uses, so the scope camera's eyepoint rises into place over the
+    // same ADS transition instead of snapping straight to full height.
+    scope_transform.translation += camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend;
 }
 
 // Scroll wheel steps ScopeZoom up/down while aiming — ignored (and drained,
@@ -2804,10 +2812,14 @@ fn adjust_scope_zoom(
     }
 }
 
-// Turns the scope camera/lens on only once ADS is nearly fully blended in
-// (and off again if the gun raises for a wall), applies the current
-// ScopeZoom to the scope camera's FOV, and mirrors the lens quad's X onto
-// whichever shoulder the gun itself is currently on.
+// Turns the scope camera/lens on as soon as ADS starts blending in at all
+// (off again once the gun raises for a wall), applies the current
+// ScopeZoom to the scope camera's FOV, and slides the lens quad in from
+// GUN_OFFSET (the gun's own hip-fire pose) to SCOPE_LENS_OFFSET using the
+// exact same gun.ads_blend lerp gun_view_animation drives the gun mesh's
+// own translation with, then mirrors its X onto whichever shoulder the gun
+// is currently on — so the lens visually travels in/out together with the
+// gun instead of just popping in once ADS is mostly done.
 fn update_scope_lens(
     gun: Query<&Gun>,
     zoom: Res<ScopeZoom>,
@@ -2817,7 +2829,7 @@ fn update_scope_lens(
     let Ok(gun) = gun.single() else {
         return;
     };
-    let visible = gun.ads_blend > SCOPE_VISIBLE_ADS_THRESHOLD
+    let visible = gun.ads_blend > SCOPE_ACTIVE_ADS_THRESHOLD
         && gun.wall_raise < SCOPE_HIDDEN_WALL_RAISE_THRESHOLD;
 
     if let Ok((mut camera, mut projection)) = scope_camera.single_mut() {
@@ -2828,8 +2840,9 @@ fn update_scope_lens(
     }
 
     if let Ok((mut transform, mut visibility)) = lens.single_mut() {
-        let swapped_x = SCOPE_LENS_OFFSET.x * (1.0 - 2.0 * gun.shoulder_blend);
-        transform.translation = Vec3::new(swapped_x, SCOPE_LENS_OFFSET.y, SCOPE_LENS_OFFSET.z);
+        let lens_pos = GUN_OFFSET.lerp(SCOPE_LENS_OFFSET, gun.ads_blend);
+        let swapped_x = lens_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
+        transform.translation = Vec3::new(swapped_x, lens_pos.y, lens_pos.z);
         *visibility = if visible { Visibility::Visible } else { Visibility::Hidden };
     }
 }
