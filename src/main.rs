@@ -880,6 +880,10 @@ struct VfxAssets<'w, 's> {
     // needs the player's PlayerStance for current_bullet_spread and has no
     // room for a dedicated top-level param.
     stance: Query<'w, 's, &'static PlayerStance, With<Player>>,
+    // Same story — shoot() needs the camera's Lean to mirror the muzzle
+    // flash/smoke spawn point onto the left shoulder when leaning left,
+    // matching gun_view_animation's shoulder swap.
+    lean: Query<'w, 's, &'static Lean, With<FpsCamera>>,
 }
 
 #[derive(Resource)]
@@ -2441,9 +2445,21 @@ fn shoot(
         + *camera_transform.up() * spread_y;
     let direction = Dir3::new(spread_dir).unwrap_or(camera_transform.forward());
 
+    // Mirror the same shoulder swap gun_view_animation applies to the gun
+    // mesh's X offset, so the flash/smoke spawn at the muzzle instead of
+    // floating on the old (right-shoulder) side while leaning left.
+    let lean_current = vfx_assets.lean.single().map(|lean| lean.current).unwrap_or(0.0);
+    let shoulder_swap = (-lean_current).clamp(0.0, 1.0);
+    let swapped_muzzle_offset = Vec3::new(
+        MUZZLE_OFFSET.x * (1.0 - 2.0 * shoulder_swap),
+        MUZZLE_OFFSET.y,
+        MUZZLE_OFFSET.z,
+    );
+
     // World-space, not parented to the camera: a flash/puff should stay put
     // where it was fired, not swing around if the player turns right after.
-    let muzzle_world_pos = camera_transform.translation + camera_transform.rotation * MUZZLE_OFFSET;
+    let muzzle_world_pos =
+        camera_transform.translation + camera_transform.rotation * swapped_muzzle_offset;
 
     // Copying the camera's rotation onto the quad makes its face point back
     // at the camera (a cheap "billboard" — good enough since both effects
