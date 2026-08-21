@@ -75,6 +75,15 @@ const GUN_BOB_AMOUNT_Y: f32 = 0.012;
 const GUN_BOB_BLEND_SPEED: f32 = 6.0;
 const AIM_BOB_MULTIPLIER: f32 = 0.35;
 
+// Inertia lean: whipping the mouse sideways makes the gun's rear lag/lean
+// the opposite way for a moment, PUBG-style, before springing back level.
+// Degrees of roll per pixel of this frame's mouse-look delta, capped, eased
+// toward that target (fast attack) and back to 0 (also via LOOK_SWAY_SPEED)
+// once the mouse stops.
+const LOOK_SWAY_SENSITIVITY: f32 = 0.15;
+const LOOK_SWAY_MAX_DEG: f32 = 8.0;
+const LOOK_SWAY_SPEED: f32 = 10.0;
+
 // Pitches the gun barrel up out of the way when standing close to a wall in
 // front (PUBG-style), so the viewmodel doesn't visibly clip through it.
 // Distance is measured from the camera along its forward ray; the raise
@@ -674,6 +683,14 @@ impl Default for AimBlurEnabled {
 #[derive(Resource, Default)]
 struct AimDofFocalDistanceAlt(bool);
 
+// This frame's raw mouse-look delta (set unconditionally every frame by
+// mouse_look, including to Vec2::ZERO when there's no motion or the cursor
+// isn't grabbed) — gun_view_animation reads it to drive the inertia lean
+// (see Gun.look_sway_roll) without mouse_look needing to know anything
+// about the gun.
+#[derive(Resource, Default)]
+struct MouseLookDelta(Vec2);
+
 // Marks the debug panel's text node so update_debug_panel can find it.
 #[derive(Component)]
 struct DebugPanelText;
@@ -739,6 +756,11 @@ struct Gun {
     // smoothly instead of snapping to zero the instant WASD is released.
     bob_phase: f32,
     bob_blend: f32,
+    // Inertia-style lean: eases toward a target proportional to this
+    // frame's mouse-look yaw delta (negated — turning right should make the
+    // gun's rear lag/lean left, PUBG-style), then springs back to 0 once
+    // the mouse stops. See LOOK_SWAY_* constants.
+    look_sway_roll: f32,
 }
 
 // The second camera that renders the scope's actual zoomed view onto
@@ -977,6 +999,7 @@ fn main() {
         .init_resource::<DebugPanelVisible>()
         .init_resource::<AimBlurEnabled>()
         .init_resource::<AimDofFocalDistanceAlt>()
+        .init_resource::<MouseLookDelta>()
         .add_systems(Startup, (setup, log_window_resolution))
         .add_systems(
             PreUpdate,
@@ -1324,6 +1347,7 @@ fn setup(
             recoil_roll: 0.0,
             bob_phase: 0.0,
             bob_blend: 0.0,
+            look_sway_roll: 0.0,
         },
         ChildOf(camera),
     ));
@@ -2299,17 +2323,21 @@ fn grab_cursor(
 fn mouse_look(
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut motion: MessageReader<MouseMotion>,
+    mut look_delta: ResMut<MouseLookDelta>,
     mut query: Query<&mut FpsCamera>,
 ) {
     let Ok(cursor) = cursor.single() else {
+        look_delta.0 = Vec2::ZERO;
         return;
     };
     if cursor.grab_mode == CursorGrabMode::None {
         motion.clear();
+        look_delta.0 = Vec2::ZERO;
         return;
     }
 
     let delta: Vec2 = motion.read().map(|e| e.delta).sum();
+    look_delta.0 = delta;
     if delta == Vec2::ZERO {
         return;
     }
@@ -3065,7 +3093,8 @@ fn sync_scope_camera(
         + local_to_world(recoil_and_reload)
         + local_to_world(Vec3::new(bob_x, -bob_y, 0.0))
         + camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend;
-    scope_transform.rotation *= Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * recoil_t)
+    scope_transform.rotation *= Quat::from_rotation_z(gun.look_sway_roll.to_radians())
+        * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * recoil_t)
         * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * recoil_t)
         * Quat::from_rotation_x((RELOAD_TILT_DEG * dip + RECOIL_TILT_UP_DEG * recoil_t).to_radians());
 }
@@ -3156,7 +3185,8 @@ fn update_scope_lens(
         let lens_z =
             GUN_OFFSET.z + (SCOPE_LENS_OFFSET.z - GUN_OFFSET.z) * gun.ads_blend + RECOIL_KICK * recoil_t;
         transform.translation = Vec3::new(swapped_x, lens_y, lens_z);
-        transform.rotation = Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * recoil_t)
+        transform.rotation = Quat::from_rotation_z(gun.look_sway_roll.to_radians())
+            * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * recoil_t)
             * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * recoil_t)
             * Quat::from_rotation_x((RELOAD_TILT_DEG * dip + RECOIL_TILT_UP_DEG * recoil_t).to_radians());
         *visibility = if visible { Visibility::Visible } else { Visibility::Hidden };
@@ -3172,6 +3202,7 @@ fn gun_view_animation(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     game_over: Res<GameOver>,
+    look_delta: Res<MouseLookDelta>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     camera: Query<&Transform, (With<FpsCamera>, Without<Gun>)>,
     spatial_query: SpatialQuery,
@@ -3228,6 +3259,12 @@ fn gun_view_animation(
         let bob_y =
             ops::sin(gun.bob_phase * 2.0).abs() * GUN_BOB_AMOUNT_Y * gun.bob_blend * bob_aim_scale;
 
+        // Sign flipped from the initial guess — reported backwards in-game.
+        let sway_target =
+            (look_delta.0.x * LOOK_SWAY_SENSITIVITY).clamp(-LOOK_SWAY_MAX_DEG, LOOK_SWAY_MAX_DEG);
+        let sway_step = (LOOK_SWAY_SPEED * time.delta_secs()).min(1.0);
+        gun.look_sway_roll += (sway_target - gun.look_sway_roll) * sway_step;
+
         let recoil_t = gun.recoil / RECOIL_DURATION;
         let reload_t = gun.reload_remaining / RELOAD_DURATION;
         // Parabola: 0 at both ends of the reload, 1 at the midpoint — the
@@ -3262,6 +3299,7 @@ fn gun_view_animation(
         // sign so it pitches the muzzle up rather than down.
         let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
         transform.rotation = Quat::from_rotation_x(wall_raise_tilt)
+            * Quat::from_rotation_z(gun.look_sway_roll.to_radians())
             * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * recoil_t)
             * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * recoil_t)
             * Quat::from_rotation_x(RECOIL_TILT_UP_DEG.to_radians() * recoil_t)
