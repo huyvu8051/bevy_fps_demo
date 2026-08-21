@@ -174,7 +174,13 @@ const AIM_SPREAD_MULTIPLIER: f32 = 0.35;
 // the lens quad blurred one or the other anyway. Stopped down to f/11 to
 // flatten that sensitivity — background blur will be much subtler as a
 // result, but the near viewmodel stays reliably sharp.
-const AIM_DOF_FOCAL_DISTANCE: f32 = 0.25;
+// Two candidate focal distances, switchable live with KeyV (see
+// AimDofFocalDistanceAlt) to A/B test which one keeps the gun/lens sharper
+// without a rebuild. A (the default) matches SCOPE_LENS_OFFSET.z exactly
+// and was confirmed sharpest in-game; B is the original looser guess, kept
+// around as the alternate in case A ever needs re-checking against it.
+const AIM_DOF_FOCAL_DISTANCE_A: f32 = 0.2;
+const AIM_DOF_FOCAL_DISTANCE_B: f32 = 0.25;
 const AIM_DOF_APERTURE_F_STOPS: f32 = 11.0;
 
 // AK47 scope: a second camera renders the actual zoomed-in view to a small
@@ -616,6 +622,11 @@ impl Default for AimBlurEnabled {
     }
 }
 
+// Debug/dev: toggled by KeyV. false = AIM_DOF_FOCAL_DISTANCE_A, true =
+// AIM_DOF_FOCAL_DISTANCE_B — see apply_aim_dof.
+#[derive(Resource, Default)]
+struct AimDofFocalDistanceAlt(bool);
+
 // Marks the debug panel's text node so update_debug_panel can find it.
 #[derive(Component)]
 struct DebugPanelText;
@@ -903,6 +914,7 @@ fn main() {
         .init_resource::<GodMode>()
         .init_resource::<DebugPanelVisible>()
         .init_resource::<AimBlurEnabled>()
+        .init_resource::<AimDofFocalDistanceAlt>()
         .add_systems(Startup, (setup, log_window_resolution))
         .add_systems(
             PreUpdate,
@@ -1949,6 +1961,7 @@ fn update_debug_panel(
     show_hitboxes: Res<ShowHitboxes>,
     god_mode: Res<GodMode>,
     aim_blur: Res<AimBlurEnabled>,
+    dof_focal_alt: Res<AimDofFocalDistanceAlt>,
     zombies: Query<(), With<Zombie>>,
     mut text: Query<(&mut Text, &mut Node), With<DebugPanelText>>,
 ) {
@@ -1962,6 +1975,11 @@ fn update_debug_panel(
     node.display = Display::Flex;
 
     let on_off = |b: bool| if b { "ON" } else { "OFF" };
+    let focal_distance = if dof_focal_alt.0 {
+        AIM_DOF_FOCAL_DISTANCE_B
+    } else {
+        AIM_DOF_FOCAL_DISTANCE_A
+    };
     text.0 = format!(
         "[DEBUG PANEL] (P to close)\n\
          N: Noclip [{}]\n\
@@ -1969,6 +1987,7 @@ fn update_debug_panel(
          H: Show hitboxes [{}]\n\
          G: God mode [{}]\n\
          B: Blur when aiming [{}]\n\
+         V: Blur focal distance [{:.2}m]\n\
          1: Spawn zombie in front of player\n\
          2: Kill all zombies\n\
          3: Set nearest zombie to 1 HP\n\
@@ -1979,6 +1998,7 @@ fn update_debug_panel(
         on_off(show_hitboxes.0),
         on_off(god_mode.0),
         on_off(aim_blur.0),
+        focal_distance,
         zombies.iter().count(),
     );
 }
@@ -2249,6 +2269,7 @@ fn apply_aim_dof(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
     aim_blur: Res<AimBlurEnabled>,
+    dof_focal_alt: Res<AimDofFocalDistanceAlt>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     camera: Query<Entity, With<FpsCamera>>,
 ) {
@@ -2256,8 +2277,13 @@ fn apply_aim_dof(
         return;
     };
     if aim_blur.0 && is_aiming(cursor, &mouse) {
+        let focal_distance = if dof_focal_alt.0 {
+            AIM_DOF_FOCAL_DISTANCE_B
+        } else {
+            AIM_DOF_FOCAL_DISTANCE_A
+        };
         commands.entity(camera_entity).insert(DepthOfField {
-            focal_distance: AIM_DOF_FOCAL_DISTANCE,
+            focal_distance,
             aperture_f_stops: AIM_DOF_APERTURE_F_STOPS,
             mode: DepthOfFieldMode::Gaussian,
             ..default()
@@ -2316,6 +2342,7 @@ fn toggle_debug_flags(
     mut god_mode: ResMut<GodMode>,
     mut panel_visible: ResMut<DebugPanelVisible>,
     mut aim_blur: ResMut<AimBlurEnabled>,
+    mut dof_focal_alt: ResMut<AimDofFocalDistanceAlt>,
 ) {
     if keys.just_pressed(KeyCode::KeyF) {
         freeze.0 = !freeze.0;
@@ -2331,6 +2358,9 @@ fn toggle_debug_flags(
     }
     if keys.just_pressed(KeyCode::KeyB) {
         aim_blur.0 = !aim_blur.0;
+    }
+    if keys.just_pressed(KeyCode::KeyV) {
+        dof_focal_alt.0 = !dof_focal_alt.0;
     }
 }
 
