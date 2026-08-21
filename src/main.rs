@@ -12,6 +12,7 @@ use bevy::render::view::Msaa;
 use bevy::scene::SceneRoot;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window};
 use big_brain::prelude::*;
+use vleue_navigator::prelude::*;
 
 // Downloaded once into assets/models/ so the app doesn't depend on a network
 // request (and a remote repo's file layout) every time it starts.
@@ -118,6 +119,28 @@ const ZOMBIE_AI_ENABLED: bool = true;
 // Large enough that zombies start chasing basically as soon as they spawn —
 // this is meant as target practice, not a stealth encounter.
 const ZOMBIE_CHASE_RANGE: f32 = 60.0;
+// Height at which the flat navmesh plane slices the Sponza collider to build
+// obstacle geometry — high enough to clear the floor slab (zombies/player
+// rest at y≈0.9), low enough to still intersect columns and walls.
+const NAVMESH_HEIGHT: f32 = 1.0;
+// Outer walkable boundary, wound counter-clockwise (matching
+// vleue_navigator's own examples). Shrunk to just the main hall (matches
+// HALL_LIGHT_XS's -14..14 span) rather than the whole building — tried in
+// case it reduces the obstacle-polygon count that comes out of slicing
+// Sponza's single merged collider. Note: NavmeshUpdaterPlugin slices that
+// collider in full regardless of these bounds (no pre-filtering), so this
+// is unlikely to fix the timeout on its own — see NAVMESH_HEIGHT build_timeout
+// comment.
+const NAVMESH_BOUNDS: [Vec2; 4] = [
+    Vec2::new(-15.0, -5.0),
+    Vec2::new(15.0, -5.0),
+    Vec2::new(15.0, 5.0),
+    Vec2::new(-15.0, 5.0),
+];
+// (x, z) world positions of column obstacle holes to cut into the navmesh —
+// empty for now. Add entries here once the real column positions are known
+// (visually, in-game); see spawn_zombie_navmesh/column_footprint.
+const NAVMESH_COLUMN_OBSTACLES: [(f32, f32); 0] = [];
 // Zombies and the player have no collider registered against each other
 // (each only collides with the static Sponza level, per avian3d's spatial
 // index), so without a deliberate stopping distance a zombie that catches up
@@ -272,6 +295,16 @@ fn chase_action_system(
 #[derive(Component)]
 struct ZombieAnimationPlayer(Entity);
 
+// --- Real navmesh (vleue_navigator, vendored fork) ---
+//
+// Auto-generating obstacles from Sponza's own Collider (NavmeshUpdaterPlugin
+// slicing it at a fixed height) was tried and abandoned: that collider is a
+// single merged trimesh for the whole building (~262k triangles across 103
+// primitives), and slicing/triangulating it timed out even at 60s — shrinking
+// the navmesh's outer bounds didn't help, since the slicing step runs over
+// the full collider before bounds are ever applied. See spawn_zombie_navmesh
+// for the hand-authored replacement.
+
 fn main() {
     App::new()
         .add_plugins((
@@ -289,6 +322,7 @@ fn main() {
             MeshPickingPlugin,
             PhysicsPlugins::default(),
             BigBrainPlugin::new(PreUpdate),
+            VleueNavigatorPlugin,
             // A lightweight always-on FPS overlay. Bevy 0.18 doesn't have the
             // draggable DiagnosticsOverlay panels (that's 0.19-only), so this
             // is the only diagnostics UI available here.
@@ -382,6 +416,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
+    mut navmeshes: ResMut<Assets<NavMesh>>,
 ) {
     commands.insert_resource(HitMarkerAssets {
         mesh: meshes.add(Sphere::new(0.03)),
@@ -426,6 +461,8 @@ fn setup(
         // solid ground/walls/stairs without hand-placed colliders.
         ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
     ));
+
+    spawn_zombie_navmesh(&mut commands, &mut navmeshes);
 
     commands.spawn((
         DirectionalLight {
@@ -535,6 +572,55 @@ fn spawn_zombie(commands: &mut Commands, asset_server: &AssetServer, spawn_pos: 
                 .when(NearPlayer, ChaseAction),
         );
     }
+}
+
+// Builds the navmesh directly from hand-authored edges instead of slicing
+// Sponza's collider (see the comment above ChaseAction... no — see the
+// comment block near NAVMESH_HEIGHT: auto-generation from the collider timed
+// out on the full ~262k-triangle merged mesh). This is instant and exact
+// instead of an async build with a timeout, but the tradeoff is that
+// NAVMESH_COLUMN_OBSTACLES has to be measured/placed by hand — currently
+// empty, since column positions can't be measured without seeing the
+// rendered level. steer_around_obstacles (local raycast avoidance, still
+// active in move_zombies) is what currently keeps zombies off columns;
+// this navmesh only contributes a straight-line route within NAVMESH_BOUNDS
+// until real obstacle polygons are added here.
+fn spawn_zombie_navmesh(commands: &mut Commands, navmeshes: &mut Assets<NavMesh>) {
+    let mut navmesh = NavMesh::from_edge_and_obstacles(
+        NAVMESH_BOUNDS.to_vec(),
+        NAVMESH_COLUMN_OBSTACLES
+            .iter()
+            .map(|&(x, z)| column_footprint(x, z))
+            .collect(),
+    );
+    // Local mesh-space (x, y) maps to world (x, NAVMESH_HEIGHT, z) — same
+    // horizontal-plane rotation used by vleue_navigator's own avian3d
+    // example, just applied to the asset's transform directly instead of an
+    // entity's, since there's no NavMeshSettings/NavmeshUpdaterPlugin
+    // involved in this hand-authored path.
+    navmesh.set_transform(
+        Transform::from_xyz(0.0, NAVMESH_HEIGHT, 0.0)
+            .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+    );
+    // Assets::insert only errors for Index-based ids with a stale
+    // generation; get_single() is a fixed Uuid id, which per its own docs
+    // never errors.
+    navmeshes
+        .insert(ManagedNavMesh::get_single().id(), navmesh)
+        .expect("inserting under a Uuid asset id never fails");
+    commands.spawn(ManagedNavMesh::single());
+}
+
+// A small square hole, wound clockwise (opposite NAVMESH_BOUNDS' CCW winding
+// — polyanya/geo's convention for interior rings/holes) around (x, z).
+fn column_footprint(x: f32, z: f32) -> Vec<Vec2> {
+    const COLUMN_RADIUS: f32 = 0.5;
+    vec![
+        Vec2::new(x - COLUMN_RADIUS, z - COLUMN_RADIUS),
+        Vec2::new(x - COLUMN_RADIUS, z + COLUMN_RADIUS),
+        Vec2::new(x + COLUMN_RADIUS, z + COLUMN_RADIUS),
+        Vec2::new(x + COLUMN_RADIUS, z - COLUMN_RADIUS),
+    ]
 }
 
 fn spawn_hall_lights(commands: &mut Commands) {
@@ -987,8 +1073,19 @@ fn move_zombies(
     time: Res<Time>,
     mut zombies: Query<(&mut Transform, &mut ZombieMotion, &Chase), With<Zombie>>,
     targets: Query<&Transform, Without<Zombie>>,
+    navmesh: Query<&ManagedNavMesh>,
+    navmeshes: Res<Assets<NavMesh>>,
     mover: MoveAndSlide,
 ) {
+    // Built once per frame (not per zombie) — Direct update mode means this
+    // is ready as soon as the level's collider finishes loading and the
+    // first navmesh build completes; None until then, or if the entity
+    // hasn't spawned/query fails for any reason.
+    let navmesh = navmesh
+        .single()
+        .ok()
+        .and_then(|handle| navmeshes.get(handle));
+
     for (mut transform, mut motion, chase) in &mut zombies {
         let Ok(target_transform) = targets.get(chase.target) else {
             continue;
@@ -999,7 +1096,30 @@ fn move_zombies(
         let distance = horizontal.length();
         let filter = SpatialQueryFilter::default();
         let horizontal_velocity = if distance > ZOMBIE_STOP_DISTANCE {
-            let desired_direction = horizontal / distance;
+            // Route via the navmesh's next waypoint when available — this is
+            // what actually routes around a whole column instead of just
+            // nudging past whatever the raycast probe below happens to see.
+            // Falls back to a straight line at the player (with the old
+            // raycast-only avoidance) if the navmesh isn't built yet or no
+            // path exists between the two points.
+            let desired_direction = navmesh
+                .and_then(|navmesh| {
+                    navmesh.transformed_path(transform.translation, target_transform.translation)
+                })
+                .and_then(|path| path.path.first().copied())
+                .map(|waypoint| {
+                    Vec3::new(
+                        waypoint.x - transform.translation.x,
+                        0.0,
+                        waypoint.z - transform.translation.z,
+                    )
+                    .normalize_or_zero()
+                })
+                .filter(|direction| *direction != Vec3::ZERO)
+                .unwrap_or(horizontal / distance);
+            // Raycast probing still runs on top of the navmesh direction —
+            // cheap local avoidance for anything the (fairly coarse) navmesh
+            // slice doesn't resolve, e.g. another zombie in the way.
             let steered = steer_around_obstacles(
                 &mover.spatial_query,
                 transform.translation,
