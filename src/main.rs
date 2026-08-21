@@ -55,6 +55,14 @@ const RECOIL_KICK: f32 = 0.12;
 // real gun" feedback.
 const RECOIL_KICK_UP: f32 = 0.01;
 const RECOIL_TILT_UP_DEG: f32 = 4.0;
+// Random per-shot left/right roll layered on top of RECOIL_TILT_UP_DEG's
+// straight-up pitch (see Gun.recoil_roll) so the visual kick doesn't always
+// snap along dead-vertical — purely cosmetic, same as RECOIL_TILT_UP_DEG.
+// Roll alone only visibly swings whichever end is farthest from the gun
+// model's rotation pivot (reported as "the tail wags but not the muzzle") —
+// paired with a same-signed yaw kick so the muzzle sways side to side too.
+const RECOIL_ROLL_DEG: f32 = 3.0;
+const RECOIL_YAW_KICK_DEG: f32 = 3.0;
 const RECOIL_DURATION: f32 = 0.12;
 
 // Pitches the gun barrel up out of the way when standing close to a wall in
@@ -711,6 +719,11 @@ struct Gun {
     // ±1 range), so a reversal never sees a doubled distance/speed the way
     // driving it straight off Lean.current did.
     shoulder_blend: f32,
+    // Random -1.0..1.0 left/right lean set fresh each shot (see shoot()),
+    // scaled by RECOIL_ROLL_DEG and recoil_t in gun_view_animation — purely
+    // cosmetic, same as RECOIL_TILT_UP_DEG, so the visual kick doesn't
+    // always snap along dead-straight vertical line.
+    recoil_roll: f32,
 }
 
 // The second camera that renders the scope's actual zoomed view onto
@@ -1282,6 +1295,7 @@ fn setup(
             ads_blend: 0.0,
             wall_raise: 0.0,
             shoulder_blend: 0.0,
+            recoil_roll: 0.0,
         },
         ChildOf(camera),
     ));
@@ -2761,6 +2775,9 @@ fn shoot(
     *cooldown = FIRE_RATE;
     gun.ammo -= 1;
     gun.recoil = RECOIL_DURATION;
+    // Different frequency multiplier than the yaw jitter below so the two
+    // don't stay correlated shot to shot.
+    gun.recoil_roll = ops::sin(time.elapsed_secs() * 641.0);
     if gun.ammo == 0 {
         // Auto-reload once the mag empties from firing — manual reload via
         // reload_gun (KeyR) is still how you top off early.
@@ -3010,9 +3027,9 @@ fn sync_scope_camera(
     scope_transform.translation += local_to_world(Vec3::new(swapped_sweep_x, sweep_y, sweep_z))
         + local_to_world(recoil_and_reload)
         + camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend;
-    scope_transform.rotation *= Quat::from_rotation_x(
-        (RELOAD_TILT_DEG * dip + RECOIL_TILT_UP_DEG * recoil_t).to_radians(),
-    );
+    scope_transform.rotation *= Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * recoil_t)
+        * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * recoil_t)
+        * Quat::from_rotation_x((RELOAD_TILT_DEG * dip + RECOIL_TILT_UP_DEG * recoil_t).to_radians());
 }
 
 // Scroll wheel steps ScopeZoom up/down while aiming — ignored (and drained,
@@ -3094,9 +3111,9 @@ fn update_scope_lens(
         let lens_z =
             GUN_OFFSET.z + (SCOPE_LENS_OFFSET.z - GUN_OFFSET.z) * gun.ads_blend + RECOIL_KICK * recoil_t;
         transform.translation = Vec3::new(swapped_x, lens_y, lens_z);
-        transform.rotation = Quat::from_rotation_x(
-            (RELOAD_TILT_DEG * dip + RECOIL_TILT_UP_DEG * recoil_t).to_radians(),
-        );
+        transform.rotation = Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * recoil_t)
+            * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * recoil_t)
+            * Quat::from_rotation_x((RELOAD_TILT_DEG * dip + RECOIL_TILT_UP_DEG * recoil_t).to_radians());
         *visibility = if visible { Visibility::Visible } else { Visibility::Hidden };
     }
 }
@@ -3188,6 +3205,8 @@ fn gun_view_animation(
         // sign so it pitches the muzzle up rather than down.
         let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
         transform.rotation = Quat::from_rotation_x(wall_raise_tilt)
+            * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * recoil_t)
+            * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * recoil_t)
             * Quat::from_rotation_x(RECOIL_TILT_UP_DEG.to_radians() * recoil_t)
             * base_rotation;
     }
