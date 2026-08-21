@@ -240,6 +240,22 @@ const SCOPE_HIDDEN_WALL_RAISE_THRESHOLD: f32 = 0.2;
 // main camera stays on both layers so the player still sees their own gun.
 const WORLD_LAYER: usize = 0;
 const VIEWMODEL_LAYER: usize = 1;
+// A static red chevron reticle, PUBG-4x-style — baked directly into the
+// scope camera's own view (its own render layer, invisible to the main
+// camera) as a triangle sitting a fixed distance directly in front of it,
+// so it's always dead center in the scope texture no matter where the
+// player aims or how far they've zoomed.
+const SCOPE_RETICLE_LAYER: usize = 2;
+const SCOPE_RETICLE_DISTANCE: f32 = 0.3;
+// Sized to look right at SCOPE_DEFAULT_ZOOM — the scope's FOV shrinks a lot
+// between SCOPE_MIN_ZOOM and SCOPE_MAX_ZOOM (e.g. 18x), so a fixed-size mesh
+// at a fixed distance would swing from tiny to covering the whole screen.
+// update_scope_lens rescales the reticle's Transform.scale every frame by
+// SCOPE_DEFAULT_ZOOM / current zoom to compensate, so it stays roughly
+// constant on screen (like a real second-focal-plane reticle) instead of
+// scaling with magnification.
+const SCOPE_RETICLE_WIDTH: f32 = 0.001;
+const SCOPE_RETICLE_HEIGHT: f32 = 0.002;
 // Standing still (no WASD held) tightens spread further, stacking
 // multiplicatively with AIM_SPREAD_MULTIPLIER — e.g. stationary + aiming
 // ends up at STATIONARY_SPREAD_MULTIPLIER * AIM_SPREAD_MULTIPLIER of the
@@ -709,6 +725,11 @@ struct ScopeCamera;
 #[derive(Component)]
 struct ScopeLens;
 
+// Marks the static reticle chevron so shoot()'s raycast can exclude it —
+// see VfxAssets.vfx_meshes.
+#[derive(Component)]
+struct ScopeReticle;
+
 // Current scope magnification, adjusted by mouse wheel while aiming (see
 // adjust_scope_zoom) and clamped to [SCOPE_MIN_ZOOM, SCOPE_MAX_ZOOM].
 #[derive(Resource)]
@@ -1017,14 +1038,25 @@ struct VfxAssets<'w, 's> {
     blood: Res<'w, BloodAssets>,
     // Folded in here too (rather than its own top-level param) for the same
     // 16-param-limit reason — see the SpatialQuery addition in shoot(). Also
-    // excludes GunMesh and ScopeLens now — see their own doc comments for
-    // why (both sit right in front of the camera and would otherwise catch
-    // the shot raycast before it reaches anything downrange).
+    // excludes GunMesh, ScopeLens and ScopeReticle (sit right in front of
+    // the camera and would otherwise catch the shot raycast before it
+    // reaches anything downrange) and BloodStain (a decal parented onto the
+    // zombie mesh — without this, a stain from an earlier hit sat in front
+    // of the zombie's own hitbox mesh and ate the raycast for follow-up
+    // shots instead of letting them reach the zombie).
     vfx_meshes: Query<
         'w,
         's,
         (),
-        Or<(With<HitMarker>, With<MuzzleFlash>, With<Smoke>, With<GunMesh>, With<ScopeLens>)>,
+        Or<(
+            With<HitMarker>,
+            With<MuzzleFlash>,
+            With<Smoke>,
+            With<GunMesh>,
+            With<ScopeLens>,
+            With<ScopeReticle>,
+            With<BloodStain>,
+        )>,
     >,
     // Also just along for the ride here (not vfx-related at all) — shoot()
     // needs the player's PlayerStance for current_bullet_spread and has no
@@ -1279,27 +1311,62 @@ fn setup(
     // lens quad (rendered by the main camera) always samples this frame's
     // texture instead of lagging a frame behind. Starts inactive —
     // update_scope_lens only turns it (and the lens quad) on while ADS'd.
+    let scope_camera = commands
+        .spawn((
+            Camera3d::default(),
+            Camera {
+                order: -1,
+                is_active: false,
+                ..default()
+            },
+            RenderTarget::from(scope_image_handle.clone()),
+            Projection::Perspective(PerspectiveProjection {
+                fov: SCOPE_BASE_FOV / SCOPE_DEFAULT_ZOOM,
+                ..default()
+            }),
+            Transform::from_translation(PLAYER_SPAWN + Vec3::Y * EYE_HEIGHT_OFFSET),
+            AmbientLight {
+                color: Color::WHITE,
+                brightness: 250.0,
+                ..default()
+            },
+            Msaa::Off,
+            // World (0) so it can see out into the scene, plus its own
+            // reticle layer (2) — never layer 1, so it never sees the gun.
+            RenderLayers::from_layers(&[WORLD_LAYER, SCOPE_RETICLE_LAYER]),
+            // So the reticle's high emissive value actually blooms/glows in
+            // the scope's own render texture, laser-like, instead of just
+            // being a flat bright-red triangle — Bloom pulls in Hdr as a
+            // required component the same way the main camera's does.
+            Bloom::default(),
+            ScopeCamera,
+        ))
+        .id();
+
+    // Chevron reticle: a single upward-pointing triangle, parented to the
+    // scope camera itself so it always sits dead center in its view
+    // regardless of zoom/aim. Unlit + a strongly overdriven emissive so it
+    // blooms into a laser-like glow (see the scope camera's Bloom above)
+    // instead of reading as a flat red shape.
     commands.spawn((
-        Camera3d::default(),
-        Camera {
-            order: -1,
-            is_active: false,
+        Mesh3d(meshes.add(
+            Triangle2d::new(
+                Vec2::new(0.0, 0.0),
+                Vec2::new(-SCOPE_RETICLE_WIDTH / 2.0, -SCOPE_RETICLE_HEIGHT / 2.0),
+                Vec2::new(SCOPE_RETICLE_WIDTH / 2.0, -SCOPE_RETICLE_HEIGHT / 2.0),
+            )
+            .mesh(),
+        )),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.0, 0.0),
+            emissive: LinearRgba::rgb(35.0, 0.0, 0.0),
+            unlit: true,
             ..default()
-        },
-        RenderTarget::from(scope_image_handle.clone()),
-        Projection::Perspective(PerspectiveProjection {
-            fov: SCOPE_BASE_FOV / SCOPE_DEFAULT_ZOOM,
-            ..default()
-        }),
-        Transform::from_translation(PLAYER_SPAWN + Vec3::Y * EYE_HEIGHT_OFFSET),
-        AmbientLight {
-            color: Color::WHITE,
-            brightness: 250.0,
-            ..default()
-        },
-        Msaa::Off,
-        RenderLayers::layer(WORLD_LAYER),
-        ScopeCamera,
+        })),
+        Transform::from_translation(Vec3::new(0.0, 0.0, -SCOPE_RETICLE_DISTANCE)),
+        RenderLayers::layer(SCOPE_RETICLE_LAYER),
+        ScopeReticle,
+        ChildOf(scope_camera),
     ));
 
     commands.spawn((
@@ -1948,6 +2015,11 @@ struct CrosshairLine {
     direction: Vec2,
 }
 
+// Marks the crosshair's root Node so update_crosshair can hide the whole
+// thing while ADS'd — the scope's own reticle takes over at that point.
+#[derive(Component)]
+struct CrosshairRoot;
+
 fn spawn_debug_panel(commands: &mut Commands) {
     commands.spawn((
         Text::new(""),
@@ -2076,14 +2148,17 @@ fn debug_panel_actions(
 
 fn spawn_crosshair(commands: &mut Commands) {
     commands
-        .spawn(Node {
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            position_type: PositionType::Absolute,
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        })
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            CrosshairRoot,
+        ))
         .with_children(|root| {
             root.spawn(Node {
                 width: Val::Px(CROSSHAIR_CONTAINER_PX),
@@ -2122,6 +2197,7 @@ fn update_crosshair(
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     camera: Query<&ViewRecoil, With<FpsCamera>>,
     player: Query<&PlayerStance, With<Player>>,
+    mut root: Query<&mut Node, (With<CrosshairRoot>, Without<CrosshairLine>)>,
     mut lines: Query<(&CrosshairLine, &mut Node)>,
 ) {
     let Ok(recoil) = camera.single() else {
@@ -2129,6 +2205,10 @@ fn update_crosshair(
     };
     let stance = player.single().copied().unwrap_or_default();
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse));
+    // Hidden entirely while ADS'd — the scope's own reticle takes over.
+    if let Ok(mut root) = root.single_mut() {
+        root.display = if aiming { Display::None } else { Display::Flex };
+    }
     let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
     let spread = current_bullet_spread(recoil.pitch_kick, aiming, is_moving(&keys), stance, sprinting);
     let gap = CROSSHAIR_BASE_GAP_PX + spread * CROSSHAIR_GAP_SPREAD_SCALE;
@@ -2969,7 +3049,8 @@ fn update_scope_lens(
     gun: Query<&Gun>,
     zoom: Res<ScopeZoom>,
     mut scope_camera: Query<(&mut Camera, &mut Projection), With<ScopeCamera>>,
-    mut lens: Query<(&mut Transform, &mut Visibility), With<ScopeLens>>,
+    mut lens: Query<(&mut Transform, &mut Visibility), (With<ScopeLens>, Without<ScopeReticle>)>,
+    mut reticle: Query<&mut Transform, (With<ScopeReticle>, Without<ScopeLens>)>,
 ) {
     let Ok(gun) = gun.single() else {
         return;
@@ -2982,6 +3063,13 @@ fn update_scope_lens(
         if let Projection::Perspective(perspective) = projection.as_mut() {
             perspective.fov = SCOPE_BASE_FOV / zoom.0;
         }
+    }
+
+    // Keeps the reticle roughly constant on screen across zoom levels (see
+    // SCOPE_RETICLE_WIDTH/HEIGHT's doc comment) — it's sized to look right
+    // at SCOPE_DEFAULT_ZOOM, so scale down as zoom increases past that.
+    if let Ok(mut reticle_transform) = reticle.single_mut() {
+        reticle_transform.scale = Vec3::splat(SCOPE_DEFAULT_ZOOM / zoom.0);
     }
 
     if let Ok((mut transform, mut visibility)) = lens.single_mut() {
