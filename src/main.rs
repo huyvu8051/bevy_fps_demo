@@ -165,17 +165,17 @@ const AIM_SPREAD_MULTIPLIER: f32 = 0.35;
 // Blurs the background while aiming (see apply_aim_dof) — the player's eye
 // is focused on the scope, not the wider scene, so this sells that focus
 // pull. Toggled on/off entirely via inserting/removing the component
-// instead of always-on with a huge focal_distance, since DoF isn't free.
+// instead of always-on, since DoF isn't free.
 // focal_distance is pinned close, near SCOPE_LENS_OFFSET's own distance
-// from the camera (~0.2m) — not a faraway target distance — since it's the
-// gun/scope viewmodel that needs to stay sharp (it's what the DoF is
-// simulating focus *on*) while everything farther away (the actual scene)
-// blurs. A distant focal_distance instead put the near viewmodel/lens well
-// outside the focal plane and blurred the scope's own render texture,
-// which was the opposite of the intent. aperture_f_stops left at
-// DepthOfField::default()'s own value (1.0, already a fairly wide/blurry
-// aperture).
+// from the camera (~0.2m), so the gun/scope viewmodel stays roughly in
+// focus. That alone wasn't enough though — DepthOfField::default()'s
+// aperture_f_stops (1.0, a very wide/shallow aperture) is so sensitive at
+// close range that even a few cm of depth difference between the gun and
+// the lens quad blurred one or the other anyway. Stopped down to f/11 to
+// flatten that sensitivity — background blur will be much subtler as a
+// result, but the near viewmodel stays reliably sharp.
 const AIM_DOF_FOCAL_DISTANCE: f32 = 0.25;
+const AIM_DOF_APERTURE_F_STOPS: f32 = 11.0;
 
 // AK47 scope: a second camera renders the actual zoomed-in view to a small
 // texture, which is displayed on a lens quad sitting in the scope's tube
@@ -604,6 +604,18 @@ struct GodMode(bool);
 #[derive(Resource, Default)]
 struct DebugPanelVisible(bool);
 
+// Debug/dev: toggled by KeyB. Lets apply_aim_dof's background blur be
+// switched off quickly to check whether DoF is the cause of some visual
+// issue, without having to comment the system out and rebuild.
+#[derive(Resource)]
+struct AimBlurEnabled(bool);
+
+impl Default for AimBlurEnabled {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
 // Marks the debug panel's text node so update_debug_panel can find it.
 #[derive(Component)]
 struct DebugPanelText;
@@ -890,6 +902,7 @@ fn main() {
         .init_resource::<ShowHitboxes>()
         .init_resource::<GodMode>()
         .init_resource::<DebugPanelVisible>()
+        .init_resource::<AimBlurEnabled>()
         .add_systems(Startup, (setup, log_window_resolution))
         .add_systems(
             PreUpdate,
@@ -1935,6 +1948,7 @@ fn update_debug_panel(
     freeze: Res<FreezeZombies>,
     show_hitboxes: Res<ShowHitboxes>,
     god_mode: Res<GodMode>,
+    aim_blur: Res<AimBlurEnabled>,
     zombies: Query<(), With<Zombie>>,
     mut text: Query<(&mut Text, &mut Node), With<DebugPanelText>>,
 ) {
@@ -1954,6 +1968,7 @@ fn update_debug_panel(
          F: Freeze zombies [{}]\n\
          H: Show hitboxes [{}]\n\
          G: God mode [{}]\n\
+         B: Blur when aiming [{}]\n\
          1: Spawn zombie in front of player\n\
          2: Kill all zombies\n\
          3: Set nearest zombie to 1 HP\n\
@@ -1963,6 +1978,7 @@ fn update_debug_panel(
         on_off(freeze.0),
         on_off(show_hitboxes.0),
         on_off(god_mode.0),
+        on_off(aim_blur.0),
         zombies.iter().count(),
     );
 }
@@ -2232,15 +2248,17 @@ fn apply_aim_zoom(
 fn apply_aim_dof(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
+    aim_blur: Res<AimBlurEnabled>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     camera: Query<Entity, With<FpsCamera>>,
 ) {
     let (Ok(cursor), Ok(camera_entity)) = (cursor.single(), camera.single()) else {
         return;
     };
-    if is_aiming(cursor, &mouse) {
+    if aim_blur.0 && is_aiming(cursor, &mouse) {
         commands.entity(camera_entity).insert(DepthOfField {
             focal_distance: AIM_DOF_FOCAL_DISTANCE,
+            aperture_f_stops: AIM_DOF_APERTURE_F_STOPS,
             mode: DepthOfFieldMode::Gaussian,
             ..default()
         });
@@ -2297,6 +2315,7 @@ fn toggle_debug_flags(
     mut show_hitboxes: ResMut<ShowHitboxes>,
     mut god_mode: ResMut<GodMode>,
     mut panel_visible: ResMut<DebugPanelVisible>,
+    mut aim_blur: ResMut<AimBlurEnabled>,
 ) {
     if keys.just_pressed(KeyCode::KeyF) {
         freeze.0 = !freeze.0;
@@ -2309,6 +2328,9 @@ fn toggle_debug_flags(
     }
     if keys.just_pressed(KeyCode::KeyP) {
         panel_visible.0 = !panel_visible.0;
+    }
+    if keys.just_pressed(KeyCode::KeyB) {
+        aim_blur.0 = !aim_blur.0;
     }
 }
 
