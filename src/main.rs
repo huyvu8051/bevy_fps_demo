@@ -595,8 +595,30 @@ const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
 // close enough to be scrutinized anyway. Nothing here throttles time, only
 // which zombies pay for the expensive path each frame; a zombie switches
 // tiers automatically as it enters/leaves range.
-const ZOMBIE_LOD_DISTANCE: f32 = 20.0;
+const ZOMBIE_LOD_DISTANCE: f32 = 15.0;
 const ZOMBIE_LOD_REST_HEIGHT: f32 = 0.9;
+// Full animation fidelity within this distance. Between here and
+// ZOMBIE_LOD_DISTANCE (where freeze_zombie_animations pauses it outright),
+// animation is instead throttled to ZOMBIE_ANIM_THROTTLE_HZ — still
+// visibly moving, just choppier, at a fraction of the CPU-sample/GPU-skin
+// cost of full 60fps animation. Per-zombie phase-shifted (via each one's
+// own world X position) so a whole crowd doesn't visibly freeze/thaw in
+// lockstep on the same frame.
+const ZOMBIE_ANIM_FULL_DISTANCE: f32 = 8.0;
+const ZOMBIE_ANIM_THROTTLE_HZ: f32 = 12.0;
+// Global caps on animation tick rate based on the *total* live zombie
+// count (not just how many are nearby) — past ZOMBIE_ANIM_CROWD_THRESHOLD_1
+// every zombie is capped at ZOMBIE_ANIM_CROWD_HZ_1 (even ones within
+// ZOMBIE_ANIM_FULL_DISTANCE, which would otherwise never throttle), each
+// higher threshold dropping the cap further. Below
+// ZOMBIE_ANIM_CROWD_THRESHOLD_1, no global cap applies — only the normal
+// full/medium distance tiers.
+const ZOMBIE_ANIM_CROWD_THRESHOLD_1: usize = 100;
+const ZOMBIE_ANIM_CROWD_HZ_1: f32 = 12.0;
+const ZOMBIE_ANIM_CROWD_THRESHOLD_2: usize = 200;
+const ZOMBIE_ANIM_CROWD_HZ_2: f32 = 5.0;
+const ZOMBIE_ANIM_CROWD_THRESHOLD_3: usize = 500;
+const ZOMBIE_ANIM_CROWD_HZ_3: f32 = 2.0;
 
 // Cheap stand-in for real pathfinding (no navmesh — Sponza is a single
 // merged mesh with no per-object separation to build one from, and every
@@ -619,6 +641,11 @@ const ZOMBIE_AVOID_ANGLES_DEG: [f32; 6] = [25.0, -25.0, 50.0, -50.0, 80.0, -80.0
 const ZOMBIE_HEALTH_BAR_HEIGHT: f32 = 1.3;
 const ZOMBIE_HEALTH_BAR_WIDTH_PX: f32 = 50.0;
 const ZOMBIE_HEALTH_BAR_HEIGHT_PX: f32 = 6.0;
+// Even among "near" (not motion.far) zombies, only the this-many closest to
+// the player actually get their bar projected/laid out each frame — a
+// crowd of hundreds all within LOD range would otherwise still pay for a
+// bar each.
+const ZOMBIE_HEALTH_BAR_MAX_VISIBLE: usize = 30;
 
 // Animation clip order inside zombie.glb: 0=Bite, 1=Crawl, 2=Idle, 3=Run,
 // 4=Walk (read from the file's own animations list).
@@ -769,6 +796,28 @@ impl Default for AimBlurEnabled {
 // AIM_DOF_FOCAL_DISTANCE_B — see apply_aim_dof.
 #[derive(Resource, Default)]
 struct AimDofFocalDistanceAlt(bool);
+
+// Debug/dev: toggled by KeyM. Forces every zombie's animation paused
+// (CPU sample + GPU skinning both skipped) regardless of distance/crowd
+// tier — for isolating how much of the frame cost is actually animation,
+// separate from the automatic LOD/crowd throttling in
+// freeze_zombie_animations.
+#[derive(Resource, Default)]
+struct ZombieAnimDisabled(bool);
+
+// Debug/dev: toggled by KeyJ. Hides every zombie health bar outright,
+// skipping update_zombie_health_bars' screen-space projection/UI layout
+// work entirely instead of just capping how many are shown.
+#[derive(Resource, Default)]
+struct ZombieHealthBarsHidden(bool);
+
+// Debug/dev: toggled by KeyK. Forces every zombie onto the full-fidelity
+// path in move_zombies (navmesh pathfind + raycast steering + MoveAndSlide
+// collision), disabling the far-distance LOD shortcut entirely — useful to
+// verify collision/pathing behavior for zombies that would normally be
+// past ZOMBIE_LOD_DISTANCE.
+#[derive(Resource, Default)]
+struct ZombieLodDisabled(bool);
 
 // Rough per-system CPU timings (wall-clock ms this frame), shown in the
 // debug panel so it's obvious which system is actually eating frame time as
@@ -958,6 +1007,11 @@ struct ZombieMotion {
     grounded: bool,
     path_recalc_timer: f32,
     cached_path_dir: Vec3,
+    // Set by move_zombies each frame (distance > ZOMBIE_LOD_DISTANCE) —
+    // freeze_zombie_animations pauses animation/skinning for these, and
+    // update_zombie_health_bars hides their bar, since neither is worth
+    // paying for on a zombie too far away to be scrutinized.
+    far: bool,
 }
 
 // Horizontal impulse from a bullet hit, added on top of chase movement in
@@ -1119,6 +1173,9 @@ fn main() {
         .init_resource::<AimDofFocalDistanceAlt>()
         .init_resource::<MouseLookDelta>()
         .init_resource::<PerfTimings>()
+        .init_resource::<ZombieAnimDisabled>()
+        .init_resource::<ZombieHealthBarsHidden>()
+        .init_resource::<ZombieLodDisabled>()
         .add_systems(Startup, (setup, log_window_resolution))
         .add_systems(
             PreUpdate,
@@ -1731,8 +1788,10 @@ fn spawn_zombie_health_bar(commands: &mut Commands, zombie: Entity) {
 fn update_zombie_health_bars(
     mut commands: Commands,
     mut timings: ResMut<PerfTimings>,
+    hidden: Res<ZombieHealthBarsHidden>,
     camera: Query<(&Camera, &GlobalTransform), With<FpsCamera>>,
-    zombies: Query<(&Transform, &Health), With<Zombie>>,
+    player: Query<&Transform, With<Player>>,
+    zombies: Query<(Entity, &Transform, &Health, &ZombieMotion), With<Zombie>>,
     mut bars: Query<(Entity, &ZombieHealthBar, &mut Node, &Children)>,
     mut fills: Query<&mut Node, (With<ZombieHealthBarFill>, Without<ZombieHealthBar>)>,
     mut texts: Query<&mut Text, With<ZombieHealthBarText>>,
@@ -1741,8 +1800,33 @@ fn update_zombie_health_bars(
     let Ok((camera, camera_transform)) = camera.single() else {
         return;
     };
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+
+    if hidden.0 {
+        for (_, _, mut node, _) in &mut bars {
+            node.display = Display::None;
+        }
+        timings.health_bars_ms = perf_start.elapsed().as_secs_f32() * 1000.0;
+        return;
+    }
+
+    // Bars are only shown at all for zombies that are both near (not
+    // motion.far) AND among the ZOMBIE_HEALTH_BAR_MAX_VISIBLE closest to
+    // the player — a crowd of hundreds of nearby zombies would otherwise
+    // still update/layout a bar for every single one of them.
+    let mut candidates: Vec<(Entity, f32)> = zombies
+        .iter()
+        .filter(|(_, _, _, motion)| !motion.far)
+        .map(|(entity, transform, ..)| (entity, transform.translation.distance(player_transform.translation)))
+        .collect();
+    candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
+    candidates.truncate(ZOMBIE_HEALTH_BAR_MAX_VISIBLE);
+    let visible_zombies: std::collections::HashSet<Entity> = candidates.into_iter().map(|(entity, _)| entity).collect();
+
     for (bar_entity, bar, mut node, children) in &mut bars {
-        let Ok((zombie_transform, health)) = zombies.get(bar.zombie) else {
+        let Ok((_, zombie_transform, health, _)) = zombies.get(bar.zombie) else {
             // try_despawn instead of despawn: observed in testing that a bar
             // can already be gone by the time this runs (exact interleaving
             // with other despawn commands the same frame isn't pinned down),
@@ -1751,6 +1835,13 @@ fn update_zombie_health_bars(
             commands.entity(bar_entity).try_despawn();
             continue;
         };
+
+        // Skips the screen-space projection + UI layout update entirely
+        // unless this zombie made the near+closest-N cut above.
+        if !visible_zombies.contains(&bar.zombie) {
+            node.display = Display::None;
+            continue;
+        }
 
         let head_pos = zombie_transform.translation + Vec3::Y * ZOMBIE_HEALTH_BAR_HEIGHT;
         let Ok(screen_pos) = camera.world_to_viewport(camera_transform, head_pos) else {
@@ -2395,6 +2486,9 @@ fn update_debug_panel(
     aim_blur: Res<AimBlurEnabled>,
     dof_focal_alt: Res<AimDofFocalDistanceAlt>,
     timings: Res<PerfTimings>,
+    zombie_anim_disabled: Res<ZombieAnimDisabled>,
+    zombie_health_bars_hidden: Res<ZombieHealthBarsHidden>,
+    zombie_lod_disabled: Res<ZombieLodDisabled>,
     zombies: Query<(), With<Zombie>>,
     mut text: Query<(&mut Text, &mut Node), With<DebugPanelText>>,
 ) {
@@ -2426,6 +2520,9 @@ fn update_debug_panel(
          3: Set nearest zombie to 1 HP\n\
          4: Heal nearest zombie to full\n\
          5: Spawn another {} zombies\n\
+         M: Zombie animation [{}]\n\
+         J: Zombie health bars [{}]\n\
+         K: Zombie LOD (distance shortcut) [{}]\n\
          move_zombies: {:.2}ms | health bars: {:.2}ms | zombies: {} (near: {})\n\
          Zombies alive: {}",
         on_off(noclip.0),
@@ -2435,6 +2532,9 @@ fn update_debug_panel(
         on_off(aim_blur.0),
         focal_distance,
         ZOMBIE_SPAWNS.len(),
+        on_off(!zombie_anim_disabled.0),
+        on_off(!zombie_health_bars_hidden.0),
+        on_off(!zombie_lod_disabled.0),
         timings.move_zombies_ms,
         timings.health_bars_ms,
         timings.zombie_count,
@@ -2813,6 +2913,9 @@ fn toggle_debug_flags(
     mut panel_visible: ResMut<DebugPanelVisible>,
     mut aim_blur: ResMut<AimBlurEnabled>,
     mut dof_focal_alt: ResMut<AimDofFocalDistanceAlt>,
+    mut zombie_anim_disabled: ResMut<ZombieAnimDisabled>,
+    mut zombie_health_bars_hidden: ResMut<ZombieHealthBarsHidden>,
+    mut zombie_lod_disabled: ResMut<ZombieLodDisabled>,
 ) {
     if keys.just_pressed(KeyCode::KeyF) {
         freeze.0 = !freeze.0;
@@ -2832,6 +2935,15 @@ fn toggle_debug_flags(
     if keys.just_pressed(KeyCode::KeyV) {
         dof_focal_alt.0 = !dof_focal_alt.0;
     }
+    if keys.just_pressed(KeyCode::KeyM) {
+        zombie_anim_disabled.0 = !zombie_anim_disabled.0;
+    }
+    if keys.just_pressed(KeyCode::KeyJ) {
+        zombie_health_bars_hidden.0 = !zombie_health_bars_hidden.0;
+    }
+    if keys.just_pressed(KeyCode::KeyK) {
+        zombie_lod_disabled.0 = !zombie_lod_disabled.0;
+    }
 }
 
 // FreezeZombies stops move_zombies (position) but not, on its own, the
@@ -2839,17 +2951,67 @@ fn toggle_debug_flags(
 // playing animation on each zombie to match, so a frozen zombie doesn't
 // keep walking/idling in place. Runs every frame rather than reacting to
 // FreezeZombies changing; pause()/resume() are idempotent so that's fine.
+// Also pauses animation (CPU sampling + GPU skinning) for zombies past
+// ZOMBIE_LOD_DISTANCE (see ZombieMotion.far) — same "not worth paying for
+// something too far to be scrutinized" trade-off as move_zombies' own LOD
+// path, folded into this system rather than a separate one so the two
+// pause/resume sources can't fight each other over system ordering.
 fn freeze_zombie_animations(
+    time: Res<Time>,
     freeze: Res<FreezeZombies>,
-    zombies: Query<&ZombieAnimationPlayer, With<Zombie>>,
+    anim_disabled: Res<ZombieAnimDisabled>,
+    player: Query<&Transform, With<Player>>,
+    zombies: Query<(&Transform, &ZombieAnimationPlayer, &ZombieMotion), (With<Zombie>, Without<Player>)>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    for link in &zombies {
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+    if anim_disabled.0 {
+        for (_, link, _) in &zombies {
+            if let Ok(mut player) = players.get_mut(link.0) {
+                for (_, active) in player.playing_animations_mut() {
+                    active.pause();
+                }
+            }
+        }
+        return;
+    }
+    // Global cap based on total live zombie count — see the
+    // ZOMBIE_ANIM_CROWD_* constants' doc comment. f32::INFINITY means "no
+    // global cap", so the per-zombie distance tier below decides alone.
+    let total_zombie_count = zombies.iter().count();
+    let global_max_hz = if total_zombie_count > ZOMBIE_ANIM_CROWD_THRESHOLD_3 {
+        ZOMBIE_ANIM_CROWD_HZ_3
+    } else if total_zombie_count > ZOMBIE_ANIM_CROWD_THRESHOLD_2 {
+        ZOMBIE_ANIM_CROWD_HZ_2
+    } else if total_zombie_count > ZOMBIE_ANIM_CROWD_THRESHOLD_1 {
+        ZOMBIE_ANIM_CROWD_HZ_1
+    } else {
+        f32::INFINITY
+    };
+
+    for (zombie_transform, link, motion) in &zombies {
         let Ok(mut player) = players.get_mut(link.0) else {
             continue;
         };
+        let distance = zombie_transform.translation.distance(player_transform.translation);
+        // Within ZOMBIE_ANIM_FULL_DISTANCE, full fidelity unless the global
+        // crowd cap kicks in; beyond it, the normal medium-tier rate,
+        // further capped by the crowd limit too if that's lower.
+        let hz = if distance <= ZOMBIE_ANIM_FULL_DISTANCE {
+            global_max_hz
+        } else {
+            ZOMBIE_ANIM_THROTTLE_HZ.min(global_max_hz)
+        };
+        // Cheap per-entity phase offset so throttled zombies don't all
+        // toggle pause/resume on the exact same frame.
+        let phase = ops::sin(zombie_transform.translation.x * 12.9898).abs();
+        let throttle_cycle = (time.elapsed_secs() * hz + phase * 2.0) % 2.0;
+        let throttled_paused_this_tick = hz.is_finite() && throttle_cycle < 1.0;
+        let should_pause = freeze.0 || motion.far || throttled_paused_this_tick;
         for (_, active) in player.playing_animations_mut() {
-            if freeze.0 {
+            if should_pause {
                 active.pause();
             } else {
                 active.resume();
@@ -3713,6 +3875,7 @@ fn move_zombies(
     game_over: Res<GameOver>,
     freeze: Res<FreezeZombies>,
     mut timings: ResMut<PerfTimings>,
+    lod_disabled: Res<ZombieLodDisabled>,
     mut zombies: Query<(&mut Transform, &mut ZombieMotion, &Chase, &mut KnockbackVelocity), With<Zombie>>,
     targets: Query<&Transform, Without<Zombie>>,
     navmesh: Query<&ManagedNavMesh>,
@@ -3742,7 +3905,7 @@ fn move_zombies(
         let horizontal = Vec3::new(to_target.x, 0.0, to_target.z);
         let distance = horizontal.length();
 
-        if distance > ZOMBIE_LOD_DISTANCE {
+        if distance > ZOMBIE_LOD_DISTANCE && !lod_disabled.0 {
             // Cheap LOD path — see ZOMBIE_LOD_DISTANCE's doc comment. No
             // pathfinding, no obstacle-avoidance raycasts, no MoveAndSlide;
             // just walk straight at the target and rest at a fixed height.
@@ -3754,8 +3917,10 @@ fn move_zombies(
             transform.translation.y = ZOMBIE_LOD_REST_HEIGHT;
             motion.grounded = true;
             motion.vertical_velocity = 0.0;
+            motion.far = true;
             continue;
         }
+        motion.far = false;
         near_zombie_count += 1;
 
         let filter = SpatialQueryFilter::default();
