@@ -81,7 +81,7 @@ const AIM_BOB_MULTIPLIER: f32 = 0.35;
 // toward that target (fast attack) and back to 0 (also via LOOK_SWAY_SPEED)
 // once the mouse stops.
 const LOOK_SWAY_SENSITIVITY: f32 = 0.15;
-const LOOK_SWAY_MAX_DEG: f32 = 8.0;
+const LOOK_SWAY_MAX_DEG: f32 = 0.5;
 const LOOK_SWAY_SPEED: f32 = 10.0;
 
 // Pitches the gun barrel up out of the way when standing close to a wall in
@@ -1050,9 +1050,19 @@ fn main() {
                 )
                     .chain(),
                 (
-                    sync_scope_camera,
                     adjust_scope_zoom,
+                    // gun_view_animation must run before sync_scope_camera
+                    // and update_scope_lens — both mirror per-frame gun
+                    // state (look_sway_roll, bob_phase/blend, ads_blend,
+                    // recoil_roll, etc.) that gun_view_animation computes
+                    // fresh each frame. Running sync_scope_camera first
+                    // meant it read last frame's stale value instead,
+                    // invisible most of the time but a visible one-frame
+                    // lag between the lens quad and the round scope
+                    // camera's own rendered content during a fast mouse
+                    // whip (reported in-game).
                     gun_view_animation,
+                    sync_scope_camera,
                     update_scope_lens,
                     update_ammo_ui,
                     update_crosshair,
