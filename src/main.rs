@@ -2,13 +2,17 @@ use avian3d::prelude::*;
 use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex};
 use bevy::animation::AnimationPlayer;
 use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::RenderTarget;
 use bevy::ecs::system::SystemParam;
-use bevy::input::mouse::MouseMotion;
+use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::math::ops;
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
 use bevy::picking::mesh_picking::MeshPickingPlugin;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
+use bevy::asset::RenderAssetUsages;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::view::Msaa;
 use bevy::scene::SceneRoot;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window};
@@ -157,6 +161,36 @@ const AIM_FOV_MULTIPLIER: f32 = 0.6;
 const AIM_ZOOM_SPEED: f32 = 12.0;
 const AIM_MOVE_SPEED_MULTIPLIER: f32 = 0.5;
 const AIM_SPREAD_MULTIPLIER: f32 = 0.35;
+
+// AK47 scope: a second camera renders the actual zoomed-in view to a small
+// texture, which is displayed on a lens quad sitting in the scope's tube
+// opening — a real optical zoom independent of the main camera/view FOV
+// (unlike AIM_FOV_MULTIPLIER above, which just narrows the whole screen).
+// Scroll wheel adjusts the zoom level while aiming.
+const SCOPE_TEXTURE_SIZE: u32 = 512;
+const SCOPE_MIN_ZOOM: f32 = 2.0;
+const SCOPE_MAX_ZOOM: f32 = 8.0;
+const SCOPE_DEFAULT_ZOOM: f32 = 4.0;
+const SCOPE_ZOOM_STEP: f32 = 0.5;
+const SCOPE_BASE_FOV: f32 = BASE_FOV;
+// Guessed placement for the lens quad in the same camera-local space as
+// GUN_ADS_OFFSET/MUZZLE_OFFSET (can't see the model to calibrate exactly) —
+// closer to the camera than GUN_ADS_OFFSET.z so it renders in front of the
+// gun mesh instead of getting clipped inside it.
+const SCOPE_LENS_OFFSET: Vec3 = Vec3::new(0.0, -0.05, -0.2);
+const SCOPE_LENS_SIZE: f32 = 0.05;
+// Only shown/rendered once ADS is nearly fully blended in, and hidden again
+// once the gun starts raising for a wall — no point paying for a second
+// render pass while the lens wouldn't be aligned with the scope anyway.
+const SCOPE_VISIBLE_ADS_THRESHOLD: f32 = 0.8;
+const SCOPE_HIDDEN_WALL_RAISE_THRESHOLD: f32 = 0.2;
+// The gun viewmodel (and the scope lens quad) live on their own render
+// layer, excluded from the scope camera's own view — otherwise the scope
+// camera (sitting at the same position as the main camera) would render
+// your own gun barrel floating in the middle of the zoomed-in texture. The
+// main camera stays on both layers so the player still sees their own gun.
+const WORLD_LAYER: usize = 0;
+const VIEWMODEL_LAYER: usize = 1;
 // Standing still (no WASD held) tightens spread further, stacking
 // multiplicatively with AIM_SPREAD_MULTIPLIER — e.g. stationary + aiming
 // ends up at STATIONARY_SPREAD_MULTIPLIER * AIM_SPREAD_MULTIPLIER of the
@@ -597,6 +631,23 @@ struct Gun {
     shoulder_blend: f32,
 }
 
+// The second camera that renders the scope's actual zoomed view onto
+// SCOPE_TEXTURE_SIZE² render target, sampled by ScopeLens's material.
+// Starts inactive — update_scope_lens only turns it on while ADS'd, so it
+// isn't paying for a second render pass the rest of the time.
+#[derive(Component)]
+struct ScopeCamera;
+
+// The small quad in front of the gun showing the scope camera's render
+// target — the thing the player actually looks "through".
+#[derive(Component)]
+struct ScopeLens;
+
+// Current scope magnification, adjusted by mouse wheel while aiming (see
+// adjust_scope_zoom) and clamped to [SCOPE_MIN_ZOOM, SCOPE_MAX_ZOOM].
+#[derive(Resource)]
+struct ScopeZoom(f32);
+
 // Marks the ammo counter text so update_ammo_ui can find it.
 #[derive(Component)]
 struct AmmoUi;
@@ -858,7 +909,10 @@ fn main() {
                 )
                     .chain(),
                 (
+                    sync_scope_camera,
+                    adjust_scope_zoom,
                     gun_view_animation,
+                    update_scope_lens,
                     update_ammo_ui,
                     update_crosshair,
                     draw_zombie_hitboxes,
@@ -962,6 +1016,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
     mut navmeshes: ResMut<Assets<NavMesh>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     commands.insert_resource(HitMarkerAssets {
         mesh: meshes.add(Sphere::new(0.03)),
@@ -1098,6 +1153,9 @@ fn setup(
             // cheaper than turning MSAA back on; edges will look a bit more
             // jagged without any anti-aliasing as a result.
             Msaa::Off,
+            // Sees the world (0) and the gun viewmodel/scope lens (1) — the
+            // scope camera below only sees layer 0.
+            RenderLayers::from_layers(&[WORLD_LAYER, VIEWMODEL_LAYER]),
         ))
         .id();
 
@@ -1117,6 +1175,68 @@ fn setup(
             wall_raise: 0.0,
             shoulder_blend: 0.0,
         },
+        ChildOf(camera),
+    ));
+
+    // Scope render target: the scope camera below renders the actual world
+    // (minus the gun/lens, via VIEWMODEL_LAYER) into this texture every
+    // frame, which the lens quad then displays as its own material.
+    let scope_size = Extent3d {
+        width: SCOPE_TEXTURE_SIZE,
+        height: SCOPE_TEXTURE_SIZE,
+        ..default()
+    };
+    let mut scope_image = Image::new_fill(
+        scope_size,
+        TextureDimension::D2,
+        &[0, 0, 0, 255],
+        TextureFormat::Bgra8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    scope_image.texture_descriptor.usage =
+        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+    let scope_image_handle = images.add(scope_image);
+
+    commands.insert_resource(ScopeZoom(SCOPE_DEFAULT_ZOOM));
+
+    // order: -1 so it renders before the main camera each frame, so the
+    // lens quad (rendered by the main camera) always samples this frame's
+    // texture instead of lagging a frame behind. Starts inactive —
+    // update_scope_lens only turns it (and the lens quad) on while ADS'd.
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            order: -1,
+            is_active: false,
+            ..default()
+        },
+        RenderTarget::from(scope_image_handle.clone()),
+        Projection::Perspective(PerspectiveProjection {
+            fov: SCOPE_BASE_FOV / SCOPE_DEFAULT_ZOOM,
+            ..default()
+        }),
+        Transform::from_translation(PLAYER_SPAWN + Vec3::Y * EYE_HEIGHT_OFFSET),
+        AmbientLight {
+            color: Color::WHITE,
+            brightness: 250.0,
+            ..default()
+        },
+        Msaa::Off,
+        RenderLayers::layer(WORLD_LAYER),
+        ScopeCamera,
+    ));
+
+    commands.spawn((
+        Mesh3d(meshes.add(Rectangle::new(SCOPE_LENS_SIZE, SCOPE_LENS_SIZE))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color_texture: Some(scope_image_handle),
+            unlit: true,
+            ..default()
+        })),
+        Transform::from_translation(SCOPE_LENS_OFFSET),
+        Visibility::Hidden,
+        RenderLayers::layer(VIEWMODEL_LAYER),
+        ScopeLens,
         ChildOf(camera),
     ));
 
@@ -2632,6 +2752,70 @@ fn reload_gun(keys: Res<ButtonInput<KeyCode>>, game_over: Res<GameOver>, mut gun
     gun.reload_remaining = RELOAD_DURATION;
 }
 
+// Keeps the scope's render-to-texture camera glued to the main camera's
+// position/orientation every frame — it has no parent/player-follow logic
+// of its own, it just mirrors the real camera exactly.
+fn sync_scope_camera(
+    camera: Query<&Transform, (With<FpsCamera>, Without<ScopeCamera>)>,
+    mut scope_camera: Query<&mut Transform, (With<ScopeCamera>, Without<FpsCamera>)>,
+) {
+    let (Ok(camera_transform), Ok(mut scope_transform)) = (camera.single(), scope_camera.single_mut()) else {
+        return;
+    };
+    *scope_transform = *camera_transform;
+}
+
+// Scroll wheel steps ScopeZoom up/down while aiming — ignored (and drained,
+// so a scroll during ADS doesn't "carry over" and suddenly apply once you
+// start aiming again) the rest of the time.
+fn adjust_scope_zoom(
+    mut wheel: MessageReader<MouseWheel>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    mut zoom: ResMut<ScopeZoom>,
+) {
+    let Ok(cursor) = cursor.single() else {
+        return;
+    };
+    if !is_aiming(cursor, &mouse) {
+        wheel.clear();
+        return;
+    }
+    for event in wheel.read() {
+        zoom.0 = (zoom.0 + event.y.signum() * SCOPE_ZOOM_STEP).clamp(SCOPE_MIN_ZOOM, SCOPE_MAX_ZOOM);
+    }
+}
+
+// Turns the scope camera/lens on only once ADS is nearly fully blended in
+// (and off again if the gun raises for a wall), applies the current
+// ScopeZoom to the scope camera's FOV, and mirrors the lens quad's X onto
+// whichever shoulder the gun itself is currently on.
+fn update_scope_lens(
+    gun: Query<&Gun>,
+    zoom: Res<ScopeZoom>,
+    mut scope_camera: Query<(&mut Camera, &mut Projection), With<ScopeCamera>>,
+    mut lens: Query<(&mut Transform, &mut Visibility), With<ScopeLens>>,
+) {
+    let Ok(gun) = gun.single() else {
+        return;
+    };
+    let visible = gun.ads_blend > SCOPE_VISIBLE_ADS_THRESHOLD
+        && gun.wall_raise < SCOPE_HIDDEN_WALL_RAISE_THRESHOLD;
+
+    if let Ok((mut camera, mut projection)) = scope_camera.single_mut() {
+        camera.is_active = visible;
+        if let Projection::Perspective(perspective) = projection.as_mut() {
+            perspective.fov = SCOPE_BASE_FOV / zoom.0;
+        }
+    }
+
+    if let Ok((mut transform, mut visibility)) = lens.single_mut() {
+        let swapped_x = SCOPE_LENS_OFFSET.x * (1.0 - 2.0 * gun.shoulder_blend);
+        transform.translation = Vec3::new(swapped_x, SCOPE_LENS_OFFSET.y, SCOPE_LENS_OFFSET.z);
+        *visibility = if visible { Visibility::Visible } else { Visibility::Hidden };
+    }
+}
+
 // Drives the gun mesh's Transform from Gun's recoil/reload_remaining state —
 // both are just countdown timers, this is the only system that turns them
 // into an actual pose each frame (also where reload_remaining hitting 0
@@ -3003,7 +3187,9 @@ fn wire_gun_mesh(
         let mut current = mesh_entity;
         for _ in 0..20 {
             if gun.contains(current) {
-                commands.entity(mesh_entity).insert(GunMesh);
+                commands
+                    .entity(mesh_entity)
+                    .insert((GunMesh, RenderLayers::layer(VIEWMODEL_LAYER)));
                 break;
             }
             let Ok(parent) = child_of.get(current) else {
