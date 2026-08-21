@@ -10,6 +10,7 @@ use bevy::math::ops;
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
 use bevy::picking::mesh_picking::MeshPickingPlugin;
 use bevy::post_process::bloom::Bloom;
+use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
 use bevy::asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
@@ -161,6 +162,20 @@ const AIM_FOV_MULTIPLIER: f32 = 0.6;
 const AIM_ZOOM_SPEED: f32 = 12.0;
 const AIM_MOVE_SPEED_MULTIPLIER: f32 = 0.5;
 const AIM_SPREAD_MULTIPLIER: f32 = 0.35;
+// Blurs the background while aiming (see apply_aim_dof) — the player's eye
+// is focused on the scope, not the wider scene, so this sells that focus
+// pull. Toggled on/off entirely via inserting/removing the component
+// instead of always-on with a huge focal_distance, since DoF isn't free.
+// focal_distance is pinned close, near SCOPE_LENS_OFFSET's own distance
+// from the camera (~0.2m) — not a faraway target distance — since it's the
+// gun/scope viewmodel that needs to stay sharp (it's what the DoF is
+// simulating focus *on*) while everything farther away (the actual scene)
+// blurs. A distant focal_distance instead put the near viewmodel/lens well
+// outside the focal plane and blurred the scope's own render texture,
+// which was the opposite of the intent. aperture_f_stops left at
+// DepthOfField::default()'s own value (1.0, already a fairly wide/blurry
+// aperture).
+const AIM_DOF_FOCAL_DISTANCE: f32 = 0.25;
 
 // AK47 scope: a second camera renders the actual zoomed-in view to a small
 // texture, which is displayed on a lens quad sitting in the scope's tube
@@ -184,6 +199,10 @@ const SCOPE_BASE_FOV: f32 = BASE_FOV;
 // gun mesh instead of getting clipped inside it.
 const SCOPE_LENS_OFFSET: Vec3 = Vec3::new(0.0, 0.0, -0.2);
 const SCOPE_LENS_SIZE: f32 = 0.03;
+// How far the lens dips down below SCOPE_LENS_OFFSET.y while not aiming —
+// X/Z stay pinned at SCOPE_LENS_OFFSET the whole time, so it only ever
+// rises/drops straight up-down instead of sweeping in from the side.
+const SCOPE_LENS_HIDDEN_DROP: f32 = 0.03;
 // Raises the scope camera's eyepoint above the main camera's (the scope
 // sits on top of the barrel, not at eye level) — offset along the camera's
 // own local up so it stays correct regardless of pitch. See sync_scope_camera.
@@ -899,6 +918,7 @@ fn main() {
                     apply_lean_input,
                     apply_view_recoil,
                     apply_aim_zoom,
+                    apply_aim_dof,
                     move_player_physics,
                     sync_camera_to_player,
                     move_zombies,
@@ -2206,6 +2226,29 @@ fn apply_aim_zoom(
     perspective.fov += (target_fov - perspective.fov) * t;
 }
 
+// Blurs the background while aiming (see AIM_DOF_FOCAL_DISTANCE) by
+// inserting/removing DepthOfField on the main camera outright, rather than
+// leaving it always attached — no blur at all outside ADS.
+fn apply_aim_dof(
+    mut commands: Commands,
+    mouse: Res<ButtonInput<MouseButton>>,
+    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    camera: Query<Entity, With<FpsCamera>>,
+) {
+    let (Ok(cursor), Ok(camera_entity)) = (cursor.single(), camera.single()) else {
+        return;
+    };
+    if is_aiming(cursor, &mouse) {
+        commands.entity(camera_entity).insert(DepthOfField {
+            focal_distance: AIM_DOF_FOCAL_DISTANCE,
+            mode: DepthOfFieldMode::Gaussian,
+            ..default()
+        });
+    } else {
+        commands.entity(camera_entity).remove::<DepthOfField>();
+    }
+}
+
 // Ground-based movement: WASD sets horizontal velocity relative to where the
 // camera is *facing on the horizontal plane* (yaw only — looking up/down no
 // longer flies you into the air like the old noclip version did). Gravity
@@ -2784,10 +2827,15 @@ fn sync_scope_camera(
         return;
     };
     *scope_transform = *camera_transform;
-    // Eases in with ads_blend — same lerp-toward-target value the gun mesh
-    // itself uses, so the scope camera's eyepoint rises into place over the
-    // same ADS transition instead of snapping straight to full height.
-    scope_transform.translation += camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend;
+    // Mirrors the same lateral sweep the gun mesh itself makes from
+    // GUN_OFFSET.x to GUN_ADS_OFFSET.x as ads_blend eases in (see
+    // gun_view_animation's base_pos), so the scope camera's eyepoint
+    // travels in sideways together with the gun instead of just rising
+    // straight up in place — same mirrored-shoulder treatment too.
+    let sweep_x = (GUN_OFFSET.x - GUN_ADS_OFFSET.x) * (1.0 - gun.ads_blend);
+    let swapped_sweep_x = sweep_x * (1.0 - 2.0 * gun.shoulder_blend);
+    scope_transform.translation += camera_transform.right() * swapped_sweep_x
+        + camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend;
 }
 
 // Scroll wheel steps ScopeZoom up/down while aiming — ignored (and drained,
@@ -2840,9 +2888,14 @@ fn update_scope_lens(
     }
 
     if let Ok((mut transform, mut visibility)) = lens.single_mut() {
-        let lens_pos = GUN_OFFSET.lerp(SCOPE_LENS_OFFSET, gun.ads_blend);
-        let swapped_x = lens_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
-        transform.translation = Vec3::new(swapped_x, lens_pos.y, lens_pos.z);
+        // X sweeps in from GUN_OFFSET.x to SCOPE_LENS_OFFSET.x with
+        // ads_blend — same lateral travel as the gun mesh and the scope
+        // camera (sync_scope_camera). Y also dips down a little below
+        // SCOPE_LENS_OFFSET.y while not aiming; Z stays pinned.
+        let lens_x = GUN_OFFSET.x + (SCOPE_LENS_OFFSET.x - GUN_OFFSET.x) * gun.ads_blend;
+        let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend);
+        let lens_y = SCOPE_LENS_OFFSET.y - SCOPE_LENS_HIDDEN_DROP * (1.0 - gun.ads_blend);
+        transform.translation = Vec3::new(swapped_x, lens_y, SCOPE_LENS_OFFSET.z);
         *visibility = if visible { Visibility::Visible } else { Visibility::Hidden };
     }
 }
