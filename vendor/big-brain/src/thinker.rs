@@ -265,7 +265,7 @@ pub fn thinker_component_detach_system(
 ) {
     for (actor, HasThinker(thinker)) in q.iter() {
         if let Ok(mut ent) = cmd.get_entity(*thinker) {
-            ent.despawn();
+            ent.try_despawn();
         }
         cmd.entity(actor).remove::<HasThinker>();
     }
@@ -280,7 +280,7 @@ pub fn actor_gone_cleanup(
         if actors.get(*actor).is_err() {
             // Actor is gone. Let's clean up.
             if let Ok(mut ent) = cmd.get_entity(child) {
-                ent.despawn();
+                ent.try_despawn();
             }
         }
     }
@@ -356,7 +356,7 @@ pub fn thinker_system(
                         ActionState::Success | ActionState::Failure => {
                             debug!("Action already wrapped up on its own. Cleaning up action in Thinker.");
                             if let Ok(mut ent) = cmd.get_entity(current.0 .0) {
-                                ent.despawn();
+                                ent.try_despawn();
                             }
                             thinker.current_action = None;
                         }
@@ -438,7 +438,7 @@ pub fn thinker_system(
                         );
                         // Despawn the action itself.
                         if let Ok(mut ent) = cmd.get_entity(action_ent.0) {
-                            ent.despawn();
+                            ent.try_despawn();
                         }
                         thinker.current_action = None;
                     } else if *curr_action_state == ActionState::Init {
@@ -546,7 +546,7 @@ fn exec_picked_action(
                     debug!("Previous action already completed. Despawning action entity.",);
                     // Despawn the action itself.
                     if let Ok(mut ent) = cmd.get_entity(action_ent.0) {
-                        ent.despawn();
+                        ent.try_despawn();
                     }
                     if let Some((Scorer(ent), score)) = scorer_info {
                         let scorer_span = scorer_spans.get(*ent).expect("Where is it?");

@@ -286,7 +286,7 @@ pub fn steps_system(
                         let mut seq_state = states.get_mut(seq_ent).expect("idk");
                         *seq_state = step_state;
                         if let Ok(mut ent) = cmd.get_entity(steps_action.active_ent.entity()) {
-                            ent.despawn();
+                            ent.try_despawn();
                         }
                     }
                     Success if steps_action.active_step == steps_action.steps.len() - 1 => {
@@ -297,7 +297,7 @@ pub fn steps_system(
                         let mut seq_state = states.get_mut(seq_ent).expect("idk");
                         *seq_state = step_state;
                         if let Ok(mut ent) = cmd.get_entity(steps_action.active_ent.entity()) {
-                            ent.despawn();
+                            ent.try_despawn();
                         }
                     }
                     Success => {
@@ -305,7 +305,7 @@ pub fn steps_system(
                         trace!("Step succeeded, but there's more steps. Spawning next action.");
                         // Deactivate current step and go to the next step
                         if let Ok(mut ent) = cmd.get_entity(steps_action.active_ent.entity()) {
-                            ent.despawn();
+                            ent.try_despawn();
                         }
 
                         steps_action.active_step += 1;

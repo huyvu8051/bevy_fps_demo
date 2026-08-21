@@ -26,6 +26,21 @@ use vleue_navigator::prelude::*;
 // and point this at an https:// path — bevy treats both the same way.
 const SCENE_PATH: &str = "models/Sponza/Sponza.gltf";
 
+// Sponza's dim, column-choked halls make it a bad zombie-shooting test bed
+// (poor sightlines, no open flat range to check bullet spread/spark/blood
+// effects at varying distances). No other map asset is available (offline,
+// no other .gltf on disk) and downloading one wasn't an option, so this is
+// a plain procedural arena (see spawn_test_arena) — flat lit floor + a
+// square perimeter wall, nothing fancy, just open sightlines. Flip this
+// back to false to use Sponza again; PLAYER_SPAWN/ZOMBIE_SPAWNS/
+// NAVMESH_BOUNDS below all branch on it too.
+const USE_TEST_ARENA: bool = true;
+// Half the arena's side length (so it spans -ARENA_HALF_SIZE..ARENA_HALF_SIZE
+// on both X and Z) — see spawn_test_arena.
+const ARENA_HALF_SIZE: f32 = 18.0;
+const ARENA_WALL_HEIGHT: f32 = 5.0;
+const ARENA_WALL_THICKNESS: f32 = 1.0;
+
 // "AK47 with Scope" by Wolf Schevelenbos (Sketchfab, CC-BY 4.0) —
 // https://sketchfab.com/3d-models/ak47-with-scope-d4d9720f3677485b958ceecc02f7965c
 // Keep this attribution if the project is shared/published (license requirement).
@@ -94,7 +109,7 @@ const WALL_GUN_RAISE_HEIGHT: f32 = 0.18;
 const WALL_GUN_RAISE_ROT_DEG: f32 = 90.0;
 const WALL_GUN_RAISE_SPEED: f32 = 10.0;
 
-const MAGAZINE_SIZE: u32 = 40;
+const MAGAZINE_SIZE: u32 = 50;
 const RELOAD_DURATION: f32 = 1.6;
 // How far the gun dips down and tilts during a reload, peaking at the
 // midpoint of RELOAD_DURATION and easing back to the normal pose at both
@@ -143,6 +158,19 @@ const BLOOD_FLOOR_STAIN_MIN: usize = 1;
 const BLOOD_FLOOR_STAIN_MAX: usize = 3;
 const BLOOD_FLOOR_STAIN_SPREAD: f32 = 0.3;
 
+// Sparks: only spawned on a non-zombie hit (a wall/environment shot) — the
+// mirror-image case of blood, which only spawns on a zombie hit. A random
+// count each time (not always the same) so a burst doesn't look too
+// mechanical. Cone spreads outward from the hit normal, biased toward it
+// rather than fully random, so sparks read as bouncing off the surface
+// instead of flying every which way.
+const SPARK_PARTICLE_MIN: usize = 4;
+const SPARK_PARTICLE_MAX: usize = 9;
+const SPARK_PARTICLE_SPEED: f32 = 3.0;
+const SPARK_PARTICLE_GRAVITY: f32 = -9.0;
+const SPARK_PARTICLE_LIFETIME: f32 = 0.25;
+const SPARK_PARTICLE_SIZE: f32 = 0.02;
+
 // Horizontal-only impulse (see KnockbackVelocity) applied to a zombie that
 // survives a hit, along the bullet's own travel direction. Headshots always
 // kill outright (HEAD_DAMAGE == ZOMBIE_MAX_HEALTH) so never actually get to
@@ -169,6 +197,9 @@ const BULLET_SPREAD: f32 = 0.02;
 // Lowered from 6.0 — felt too fast.
 const MOVE_SPEED: f32 = 4.0;
 const MOUSE_SENSITIVITY: f32 = 0.002;
+// Mouse turns slower while ADS'd — real scopes/sights make fine aim
+// adjustments feel twitchy at full sensitivity.
+const AIM_MOUSE_SENSITIVITY_MULTIPLIER: f32 = 0.5;
 
 // Noclip flies faster than normal walking, along the full look direction
 // (including pitch) rather than the ground-projected one — see
@@ -335,7 +366,11 @@ const GROUND_NORMAL_MIN_Y: f32 = 0.6;
 // data was ambiguous — could be meters or centimeters), so the player spawns
 // well above y=0 and lets gravity fall it onto whatever the real floor turns
 // out to be, rather than guessing a spawn height that might be inside a wall.
-const PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 3.0, 4.0);
+const PLAYER_SPAWN: Vec3 = if USE_TEST_ARENA {
+    Vec3::new(0.0, 3.0, ARENA_HALF_SIZE - 4.0)
+} else {
+    Vec3::new(0.0, 3.0, 4.0)
+};
 
 // How long a bullet-hole marker stays visible before despawning.
 const HIT_MARKER_LIFETIME: f32 = 3.0;
@@ -365,24 +400,53 @@ const ZOMBIE_PATH: &str = "models/zombie.glb";
 // Chase component and so never run move_zombies (which is where gravity is
 // applied), meaning they'd otherwise just hang frozen at their spawn height
 // forever instead of falling to the floor.
-const ZOMBIE_SPAWNS: [Vec3; 5] = [
-    Vec3::new(5.0, 0.9, -3.0),
-    Vec3::new(-6.0, 0.9, -6.0),
-    Vec3::new(8.0, 0.9, 3.0),
-    Vec3::new(-4.0, 0.9, 6.0),
-    Vec3::new(2.0, 0.9, -8.0),
-];
+// A 10x10 grid spanning -half_x..half_x / -half_z..half_z at height y —
+// used to generate a large ZOMBIE_SPAWNS (100 entries) without writing them
+// out by hand. const fn, so this still runs at compile time like the old
+// hand-placed array literal did.
+const fn zombie_spawn_grid(half_x: f32, half_z: f32, y: f32) -> [Vec3; 100] {
+    let mut spawns = [Vec3::ZERO; 100];
+    let mut i = 0usize;
+    while i < 100 {
+        let row = (i / 10) as f32;
+        let col = (i % 10) as f32;
+        let x = -half_x + col * (2.0 * half_x / 9.0);
+        let z = -half_z + row * (2.0 * half_z / 9.0);
+        spawns[i] = Vec3::new(x, y, z);
+        i += 1;
+    }
+    spawns
+}
+
+// Stress-testing 100 zombies at once (to check move_zombies' pathfinding
+// load — see ZOMBIE_PATH_RECALC_INTERVAL) instead of the original 5
+// hand-placed spots. Inset a few meters from the walls/hall edges so
+// nothing spawns stuck inside geometry.
+const ZOMBIE_SPAWNS: [Vec3; 100] = if USE_TEST_ARENA {
+    zombie_spawn_grid(ARENA_HALF_SIZE - 3.0, ARENA_HALF_SIZE - 3.0, 0.9)
+} else {
+    zombie_spawn_grid(14.0, 4.0, 0.9)
+};
 // A dead zombie is replaced after this long, keeping the count topped up to
-// ZOMBIE_SPAWNS.len() (5) instead of slowly depleting to zero.
+// ZOMBIE_SPAWNS.len() (100) instead of slowly depleting to zero.
 const ZOMBIE_RESPAWN_DELAY: f32 = 1.0;
 // Reuses the player's capsule dimensions (roughly human-sized).
 const ZOMBIE_RADIUS: f32 = PLAYER_RADIUS;
 const ZOMBIE_LENGTH: f32 = PLAYER_LENGTH;
 const ZOMBIE_SPEED: f32 = 1.0;
+// move_zombies used to call navmesh.transformed_path() (a full pathfind)
+// every single frame for every chasing zombie — fine for a handful of
+// zombies, but scaled terribly once ZOMBIE_SPAWNS got large (reported as
+// lag once most zombies were chasing at once, e.g. from far away where more
+// of them are in range simultaneously). Recomputing on this interval
+// instead and reusing the cached direction in between cuts the pathfind
+// call rate by ~24x at 60fps, at the cost of a zombie's steering being up
+// to this many seconds stale — imperceptible at this speed/interval.
+const ZOMBIE_PATH_RECALC_INTERVAL: f32 = 0.4;
 // Body-shot kills still take this many hits; a headshot always kills in one
 // (see zombie_hit_damage). Raised from 3.0 — zombies were dying too fast to
 // body shots.
-const ZOMBIE_MAX_HEALTH: f32 = 5.0;
+const ZOMBIE_MAX_HEALTH: f32 = 8.0;
 
 // Per-region damage, picked by zombie_hit_damage from where the raycast hit
 // lands relative to the zombie's root. The zombie.glb rig has no separate
@@ -494,12 +558,24 @@ const NAVMESH_HEIGHT: f32 = 1.0;
 // collider in full regardless of these bounds (no pre-filtering), so this
 // is unlikely to fix the timeout on its own — see NAVMESH_HEIGHT build_timeout
 // comment.
-const NAVMESH_BOUNDS: [Vec2; 4] = [
-    Vec2::new(-15.0, -5.0),
-    Vec2::new(15.0, -5.0),
-    Vec2::new(15.0, 5.0),
-    Vec2::new(-15.0, 5.0),
-];
+const NAVMESH_BOUNDS: [Vec2; 4] = if USE_TEST_ARENA {
+    // Matches the arena's own floor footprint, inset slightly from the
+    // walls (ARENA_HALF_SIZE) so the navmesh boundary doesn't sit exactly
+    // on/through the wall colliders.
+    [
+        Vec2::new(-(ARENA_HALF_SIZE - 1.0), -(ARENA_HALF_SIZE - 1.0)),
+        Vec2::new(ARENA_HALF_SIZE - 1.0, -(ARENA_HALF_SIZE - 1.0)),
+        Vec2::new(ARENA_HALF_SIZE - 1.0, ARENA_HALF_SIZE - 1.0),
+        Vec2::new(-(ARENA_HALF_SIZE - 1.0), ARENA_HALF_SIZE - 1.0),
+    ]
+} else {
+    [
+        Vec2::new(-15.0, -5.0),
+        Vec2::new(15.0, -5.0),
+        Vec2::new(15.0, 5.0),
+        Vec2::new(-15.0, 5.0),
+    ]
+};
 // (x, z) world positions of column obstacle holes to cut into the navmesh —
 // empty for now. Add entries here once the real column positions are known
 // (visually, in-game); see spawn_zombie_navmesh/column_footprint.
@@ -822,6 +898,14 @@ struct BloodParticle {
     remaining: f32,
 }
 
+// A single flying spark — the environment-hit counterpart of BloodParticle,
+// see spawn_spark_effects.
+#[derive(Component)]
+struct SparkParticle {
+    velocity: Vec3,
+    remaining: f32,
+}
+
 // A static decal left where blood actually landed — either right at the
 // hit point, or on a floor found by raycasting straight down from there.
 #[derive(Component)]
@@ -836,10 +920,15 @@ struct BloodStain {
 struct Zombie;
 
 // Gravity/ground state, same idea as Player but tracked per-zombie.
+// path_recalc_timer/cached_path_dir throttle move_zombies' navmesh
+// pathfinding (see ZOMBIE_PATH_RECALC_INTERVAL) instead of recomputing a
+// full path every single frame for every chasing zombie.
 #[derive(Component, Default)]
 struct ZombieMotion {
     vertical_velocity: f32,
     grounded: bool,
+    path_recalc_timer: f32,
+    cached_path_dir: Vec3,
 }
 
 // Horizontal impulse from a bullet hit, added on top of chase movement in
@@ -1072,6 +1161,7 @@ fn main() {
                     despawn_muzzle_flashes,
                     update_smoke,
                     update_blood_particles,
+                    update_spark_particles,
                     despawn_blood_stains,
                 )
                     .chain(),
@@ -1105,6 +1195,7 @@ struct VfxAssets<'w, 's> {
     hit_assets: Res<'w, HitMarkerAssets>,
     muzzle_fx: Res<'w, MuzzleFxAssets>,
     blood: Res<'w, BloodAssets>,
+    sparks: Res<'w, SparkAssets>,
     gunshot: Res<'w, GunshotSound>,
     // Folded in here too (rather than its own top-level param) for the same
     // 16-param-limit reason — see the SpatialQuery addition in shoot(). Also
@@ -1166,6 +1257,12 @@ struct BloodAssets {
     particle_material: Handle<StandardMaterial>,
     stain_mesh: Handle<Mesh>,
     stain_material: Handle<StandardMaterial>,
+}
+
+#[derive(Resource)]
+struct SparkAssets {
+    mesh: Handle<Mesh>,
+    material: Handle<StandardMaterial>,
 }
 
 // Prints the *actual* resolved window size/scale factor at startup, so it's
@@ -1255,15 +1352,30 @@ fn setup(
         }),
     });
 
-    commands.spawn((
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(SCENE_PATH))),
-        Transform::default(),
-        RigidBody::Static,
-        // Waits for the scene to finish loading, then generates a trimesh
-        // collider for every mesh in the hierarchy — the whole level becomes
-        // solid ground/walls/stairs without hand-placed colliders.
-        ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
-    ));
+    commands.insert_resource(SparkAssets {
+        mesh: meshes.add(Rectangle::new(SPARK_PARTICLE_SIZE, SPARK_PARTICLE_SIZE)),
+        material: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.75, 0.2),
+            emissive: LinearRgba::rgb(25.0, 12.0, 1.5),
+            unlit: true,
+            cull_mode: None,
+            ..default()
+        }),
+    });
+
+    if USE_TEST_ARENA {
+        spawn_test_arena(&mut commands, &mut meshes, &mut materials);
+    } else {
+        commands.spawn((
+            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(SCENE_PATH))),
+            Transform::default(),
+            RigidBody::Static,
+            // Waits for the scene to finish loading, then generates a trimesh
+            // collider for every mesh in the hierarchy — the whole level becomes
+            // solid ground/walls/stairs without hand-placed colliders.
+            ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
+        ));
+    }
 
     spawn_zombie_navmesh(&mut commands, &mut navmeshes);
 
@@ -1276,7 +1388,12 @@ fn setup(
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
     ));
 
-    spawn_hall_lights(&mut commands);
+    // HALL_LIGHT_XS's placement is calibrated to Sponza's own hall geometry
+    // — the arena instead just gets a brighter ambient/directional light
+    // (see spawn_test_arena) since it's a single open room.
+    if !USE_TEST_ARENA {
+        spawn_hall_lights(&mut commands);
+    }
 
     let player = commands
         .spawn((
@@ -1484,7 +1601,15 @@ fn spawn_zombie(commands: &mut Commands, asset_server: &AssetServer, spawn_pos: 
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(ZOMBIE_PATH))),
         Transform::from_translation(spawn_pos).with_scale(Vec3::splat(ZOMBIE_SCALE)),
         Zombie,
-        ZombieMotion::default(),
+        ZombieMotion {
+            // Jittered from spawn_pos (deterministic, cheap — same
+            // sin-hash trick used elsewhere for pseudo-randomness) so 100
+            // zombies spawned at once don't all recompute their path on
+            // the exact same frame forever after.
+            path_recalc_timer: ops::sin(spawn_pos.x * 12.9898 + spawn_pos.z * 78.233).abs()
+                * ZOMBIE_PATH_RECALC_INTERVAL,
+            ..default()
+        },
         Health(ZOMBIE_MAX_HEALTH),
         ZombieHitboxBones::default(),
         KnockbackVelocity::default(),
@@ -1748,6 +1873,36 @@ fn spawn_blood_effects(
     }
 }
 
+// Spawns a burst of flying sparks at a non-zombie (wall/environment) hit —
+// the mirror image of spawn_blood_effects. Biased outward from hit_normal
+// (lerped toward a random direction, not fully random) so they read as
+// bouncing off the surface rather than scattering every which way.
+fn spawn_spark_effects(commands: &mut Commands, spark_assets: &SparkAssets, time: &Time, hit_point: Vec3, hit_normal: Vec3) {
+    let normal = hit_normal.normalize_or_zero();
+    let range = (SPARK_PARTICLE_MAX - SPARK_PARTICLE_MIN + 1) as f32;
+    let count = SPARK_PARTICLE_MIN + (ops::sin(time.elapsed_secs() * 349.0).abs() * range) as usize;
+    let count = count.clamp(SPARK_PARTICLE_MIN, SPARK_PARTICLE_MAX);
+
+    for i in 0..count {
+        let seed = time.elapsed_secs() * 883.0 + i as f32 * 157.1;
+        let random_dir =
+            Vec3::new(ops::sin(seed * 1.3), ops::sin(seed * 0.7), ops::sin(seed * 2.1)).normalize_or_zero();
+        let dir = (normal + random_dir).normalize_or_zero();
+        // Varies each spark's speed a bit too, so the burst doesn't look
+        // like a uniform ring.
+        let speed = SPARK_PARTICLE_SPEED * (0.6 + ops::sin(seed * 3.7).abs() * 0.6);
+        commands.spawn((
+            Mesh3d(spark_assets.mesh.clone()),
+            MeshMaterial3d(spark_assets.material.clone()),
+            Transform::from_translation(hit_point),
+            SparkParticle {
+                velocity: dir * speed,
+                remaining: SPARK_PARTICLE_LIFETIME,
+            },
+        ));
+    }
+}
+
 // `parent` is Some when this stain should be attached to (and move with)
 // that entity instead of sitting still in world space.
 fn spawn_blood_stain(
@@ -1820,6 +1975,23 @@ fn update_blood_particles(
     }
 }
 
+fn update_spark_particles(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut query: Query<(Entity, &mut Transform, &mut SparkParticle)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut transform, mut particle) in &mut query {
+        particle.velocity.y += SPARK_PARTICLE_GRAVITY * dt;
+        transform.translation += particle.velocity * dt;
+
+        particle.remaining -= dt;
+        if particle.remaining <= 0.0 {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
 fn despawn_blood_stains(mut commands: Commands, time: Res<Time>, mut query: Query<(Entity, &mut BloodStain)>) {
     for (entity, mut stain) in &mut query {
         stain.remaining -= time.delta_secs();
@@ -1876,6 +2048,72 @@ fn column_footprint(x: f32, z: f32) -> Vec<Vec2> {
         Vec2::new(x + COLUMN_RADIUS, z + COLUMN_RADIUS),
         Vec2::new(x + COLUMN_RADIUS, z - COLUMN_RADIUS),
     ]
+}
+
+// A plain flat-floored square room (see USE_TEST_ARENA) — a proper level
+// editor/second .gltf asset wasn't available, so this is hand-built from
+// Bevy's own primitives: a floor plus four perimeter walls, each with a
+// matching Collider so avian3d treats them the same as Sponza's
+// mesh-derived colliders (RigidBody::Static + Collider::cuboid).
+fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+    let floor_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.35, 0.35, 0.38),
+        perceptual_roughness: 0.9,
+        ..default()
+    });
+    let wall_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.55, 0.5, 0.45),
+        perceptual_roughness: 0.85,
+        ..default()
+    });
+
+    let floor_size = ARENA_HALF_SIZE * 2.0;
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(floor_size, ARENA_WALL_THICKNESS, floor_size))),
+        MeshMaterial3d(floor_material),
+        Transform::from_xyz(0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0),
+        RigidBody::Static,
+        Collider::cuboid(floor_size, ARENA_WALL_THICKNESS, floor_size),
+    ));
+
+    // (offset from center, length) for each of the 4 perimeter walls — two
+    // run along X (north/south), two along Z (east/west), each centered on
+    // its own edge and long enough to span the full square including the
+    // corners (+ARENA_WALL_THICKNESS so adjacent walls overlap slightly
+    // there instead of leaving a gap).
+    let wall_span = floor_size + ARENA_WALL_THICKNESS;
+    let walls = [
+        // North/south (run along X, thin along Z)
+        (Vec3::new(0.0, ARENA_WALL_HEIGHT / 2.0, -ARENA_HALF_SIZE), wall_span, ARENA_WALL_THICKNESS),
+        (Vec3::new(0.0, ARENA_WALL_HEIGHT / 2.0, ARENA_HALF_SIZE), wall_span, ARENA_WALL_THICKNESS),
+        // East/west (run along Z, thin along X)
+        (Vec3::new(-ARENA_HALF_SIZE, ARENA_WALL_HEIGHT / 2.0, 0.0), ARENA_WALL_THICKNESS, wall_span),
+        (Vec3::new(ARENA_HALF_SIZE, ARENA_WALL_HEIGHT / 2.0, 0.0), ARENA_WALL_THICKNESS, wall_span),
+    ];
+    for (center, size_x, size_z) in walls {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size_x, ARENA_WALL_HEIGHT, size_z))),
+            MeshMaterial3d(wall_material.clone()),
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, ARENA_WALL_HEIGHT, size_z),
+        ));
+    }
+
+    // AmbientLight is per-camera in this Bevy version (not a global
+    // resource) — the main camera already gets its own in setup(). A single
+    // bright, wide-range PointLight overhead is enough to light this flat
+    // open room evenly (no columns/corners to leave dark, unlike Sponza).
+    commands.spawn((
+        PointLight {
+            color: Color::srgb(1.0, 0.98, 0.92),
+            intensity: 4_000_000.0,
+            range: ARENA_HALF_SIZE * 3.0,
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(0.0, ARENA_WALL_HEIGHT - 0.2, 0.0),
+    ));
 }
 
 fn spawn_hall_lights(commands: &mut Commands) {
@@ -2153,6 +2391,7 @@ fn update_debug_panel(
          2: Kill all zombies\n\
          3: Set nearest zombie to 1 HP\n\
          4: Heal nearest zombie to full\n\
+         5: Spawn another {} zombies\n\
          Zombies alive: {}",
         on_off(noclip.0),
         on_off(freeze.0),
@@ -2160,6 +2399,7 @@ fn update_debug_panel(
         on_off(god_mode.0),
         on_off(aim_blur.0),
         focal_distance,
+        ZOMBIE_SPAWNS.len(),
         zombies.iter().count(),
     );
 }
@@ -2219,6 +2459,11 @@ fn debug_panel_actions(
     }
     if keys.just_pressed(KeyCode::Digit4) {
         set_nearest_zombie_health(&mut zombies, player_transform.translation, ZOMBIE_MAX_HEALTH);
+    }
+    if keys.just_pressed(KeyCode::Digit5) {
+        for &spawn_pos in &ZOMBIE_SPAWNS {
+            spawn_zombie(&mut commands, &asset_server, spawn_pos);
+        }
     }
 }
 
@@ -2332,6 +2577,8 @@ fn grab_cursor(
 // this aim plus the current recoil kick, every frame.
 fn mouse_look(
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    zoom: Res<ScopeZoom>,
     mut motion: MessageReader<MouseMotion>,
     mut look_delta: ResMut<MouseLookDelta>,
     mut query: Query<&mut FpsCamera>,
@@ -2352,9 +2599,20 @@ fn mouse_look(
         return;
     }
 
+    // AIM_MOUSE_SENSITIVITY_MULTIPLIER is calibrated at SCOPE_DEFAULT_ZOOM;
+    // scaled further by how far the current scope zoom (adjustable via
+    // scroll wheel, see adjust_scope_zoom) is from that baseline, so a
+    // given mouse move covers the same angular slice of the zoomed view no
+    // matter the magnification — otherwise the same flat multiplier would
+    // feel twitchy at max zoom and sluggish at min zoom.
+    let sensitivity = if is_aiming(cursor, &mouse) {
+        MOUSE_SENSITIVITY * AIM_MOUSE_SENSITIVITY_MULTIPLIER * (SCOPE_DEFAULT_ZOOM / zoom.0)
+    } else {
+        MOUSE_SENSITIVITY
+    };
     for mut cam in &mut query {
-        cam.yaw -= delta.x * MOUSE_SENSITIVITY;
-        cam.pitch = (cam.pitch - delta.y * MOUSE_SENSITIVITY).clamp(-1.54, 1.54);
+        cam.yaw -= delta.x * sensitivity;
+        cam.pitch = (cam.pitch - delta.y * sensitivity).clamp(-1.54, 1.54);
     }
 }
 
@@ -2982,8 +3240,10 @@ fn shoot(
         // hit landed (zombie_hit_damage) — despawns once accumulated
         // damage reaches ZOMBIE_MAX_HEALTH.
         let mut current = hit_entity;
+        let mut hit_zombie = false;
         for _ in 0..20 {
             if let Ok((zombie_transform, mut health, bones, mut knockback)) = zombies.get_mut(current) {
+                hit_zombie = true;
                 let damage = zombie_hit_damage(hit_point, zombie_transform, bones, &globals);
                 health.0 -= damage;
                 spawn_floating_damage(&mut commands, hit_point, damage);
@@ -3020,6 +3280,10 @@ fn shoot(
                 break;
             };
             current = parent.0;
+        }
+
+        if !hit_zombie {
+            spawn_spark_effects(&mut commands, &vfx_assets.sparks, &time, hit_point, hit_normal);
         }
     }
 }
@@ -3442,22 +3706,30 @@ fn move_zombies(
             // nudging past whatever the raycast probe below happens to see.
             // Falls back to a straight line at the player (with the old
             // raycast-only avoidance) if the navmesh isn't built yet or no
-            // path exists between the two points.
-            let desired_direction = navmesh
-                .and_then(|navmesh| {
-                    navmesh.transformed_path(transform.translation, target_transform.translation)
-                })
-                .and_then(|path| path.path.first().copied())
-                .map(|waypoint| {
-                    Vec3::new(
-                        waypoint.x - transform.translation.x,
-                        0.0,
-                        waypoint.z - transform.translation.z,
-                    )
-                    .normalize_or_zero()
-                })
-                .filter(|direction| *direction != Vec3::ZERO)
-                .unwrap_or(horizontal / distance);
+            // path exists between the two points. Only recomputed every
+            // ZOMBIE_PATH_RECALC_INTERVAL (see ZombieMotion) instead of
+            // every frame — this pathfind call is the expensive part, and
+            // scales badly with a large zombie count otherwise.
+            motion.path_recalc_timer -= time.delta_secs();
+            if motion.path_recalc_timer <= 0.0 {
+                motion.path_recalc_timer = ZOMBIE_PATH_RECALC_INTERVAL;
+                motion.cached_path_dir = navmesh
+                    .and_then(|navmesh| {
+                        navmesh.transformed_path(transform.translation, target_transform.translation)
+                    })
+                    .and_then(|path| path.path.first().copied())
+                    .map(|waypoint| {
+                        Vec3::new(
+                            waypoint.x - transform.translation.x,
+                            0.0,
+                            waypoint.z - transform.translation.z,
+                        )
+                        .normalize_or_zero()
+                    })
+                    .filter(|direction| *direction != Vec3::ZERO)
+                    .unwrap_or(horizontal / distance);
+            }
+            let desired_direction = motion.cached_path_dir;
             // Raycast probing still runs on top of the navmesh direction —
             // cheap local avoidance for anything the (fairly coarse) navmesh
             // slice doesn't resolve, e.g. another zombie in the way.
@@ -3561,9 +3833,15 @@ fn wire_zombie_animations(
     mut new_players: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
 ) {
     for (player_entity, mut player) in &mut new_players {
+        // try_insert, not insert: with 100 zombies all loading their glTF
+        // scenes at once, one can despawn (killed instantly, or the
+        // respawn queue replacing it) between this query running and the
+        // command actually applying — same benign race chase_action_system
+        // already works around below. Plain insert() surfaced it as a
+        // "entity despawned" warning, once per zombie, right at startup.
         commands
             .entity(player_entity)
-            .insert(AnimationGraphHandle(anim.graph.clone()));
+            .try_insert(AnimationGraphHandle(anim.graph.clone()));
         player.play(anim.idle).repeat();
 
         let mut current = player_entity;
@@ -3571,7 +3849,7 @@ fn wire_zombie_animations(
             if zombies.contains(current) {
                 commands
                     .entity(current)
-                    .insert(ZombieAnimationPlayer(player_entity));
+                    .try_insert(ZombieAnimationPlayer(player_entity));
                 break;
             }
             let Ok(parent) = child_of.get(current) else {
