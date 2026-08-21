@@ -589,6 +589,12 @@ struct Gun {
     // clear a wall in front. Eased toward the camera's forward-wall-distance
     // probe in gun_view_animation.
     wall_raise: f32,
+    // 0.0 = right shoulder (normal), 1.0 = fully swapped to the left
+    // shoulder. Eased directly from the raw lean-left key, independently of
+    // Lean.current — its target only ever toggles between 0 and 1 (never a
+    // ±1 range), so a reversal never sees a doubled distance/speed the way
+    // driving it straight off Lean.current did.
+    shoulder_blend: f32,
 }
 
 // Marks the ammo counter text so update_ammo_ui can find it.
@@ -894,10 +900,6 @@ struct VfxAssets<'w, 's> {
     // needs the player's PlayerStance for current_bullet_spread and has no
     // room for a dedicated top-level param.
     stance: Query<'w, 's, &'static PlayerStance, With<Player>>,
-    // Same story — shoot() needs the camera's Lean to mirror the muzzle
-    // flash/smoke spawn point onto the left shoulder when leaning left,
-    // matching gun_view_animation's shoulder swap.
-    lean: Query<'w, 's, &'static Lean, With<FpsCamera>>,
 }
 
 #[derive(Resource)]
@@ -1113,6 +1115,7 @@ fn setup(
             reload_remaining: 0.0,
             ads_blend: 0.0,
             wall_raise: 0.0,
+            shoulder_blend: 0.0,
         },
         ChildOf(camera),
     ));
@@ -2018,7 +2021,7 @@ fn apply_lean_input(
     game_over: Res<GameOver>,
     mut query: Query<&mut Lean>,
 ) {
-    let target = if game_over.0 {
+    let target: f32 = if game_over.0 {
         0.0
     } else {
         match (keys.pressed(KeyCode::KeyQ), keys.pressed(KeyCode::KeyE)) {
@@ -2028,6 +2031,10 @@ fn apply_lean_input(
         }
     };
     for mut lean in &mut query {
+        // Plain proportional lerp — reacts immediately to input, no routing
+        // through center. The "fast on reversal" complaint turned out to be
+        // about the gun mesh's shoulder swap, not this camera roll value;
+        // see gun_view_animation's own shoulder_blend for that fix instead.
         let t = (LEAN_SPEED * time.delta_secs()).min(1.0);
         lean.current += (target - lean.current) * t;
     }
@@ -2461,12 +2468,13 @@ fn shoot(
     let direction = Dir3::new(spread_dir).unwrap_or(camera_transform.forward());
 
     // Mirror the same shoulder swap gun_view_animation applies to the gun
-    // mesh's X offset, so the flash/smoke spawn at the muzzle instead of
-    // floating on the old (right-shoulder) side while leaning left.
-    let lean_current = vfx_assets.lean.single().map(|lean| lean.current).unwrap_or(0.0);
-    let shoulder_swap = (-lean_current).clamp(0.0, 1.0);
+    // mesh's X offset (reading the same eased gun.shoulder_blend it writes,
+    // not Lean.current directly, so this stays in sync with the mesh's own
+    // independently-eased swap instead of the raw lean value), so the
+    // flash/smoke spawn at the muzzle instead of floating on the old
+    // (right-shoulder) side while leaning left.
     let swapped_muzzle_offset = Vec3::new(
-        MUZZLE_OFFSET.x * (1.0 - 2.0 * shoulder_swap),
+        MUZZLE_OFFSET.x * (1.0 - 2.0 * gun.shoulder_blend),
         MUZZLE_OFFSET.y,
         MUZZLE_OFFSET.z,
     );
@@ -2630,15 +2638,16 @@ fn reload_gun(keys: Res<ButtonInput<KeyCode>>, game_over: Res<GameOver>, mut gun
 // refills the magazine).
 fn gun_view_animation(
     time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    game_over: Res<GameOver>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     camera: Query<&Transform, (With<FpsCamera>, Without<Gun>)>,
-    lean: Query<&Lean, With<FpsCamera>>,
     spatial_query: SpatialQuery,
     mut query: Query<(&mut Transform, &mut Gun), Without<FpsCamera>>,
 ) {
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse));
-    let lean_current = lean.single().map(|lean| lean.current).unwrap_or(0.0);
+    let shoulder_target = if !game_over.0 && keys.pressed(KeyCode::KeyQ) { 1.0 } else { 0.0 };
     // Wall-raise probe: how close is the wall directly in front of the
     // camera? 0.0 = clear, 1.0 = right up against it.
     let wall_target = camera.single().ok().map_or(0.0, |camera_transform| {
@@ -2673,6 +2682,9 @@ fn gun_view_animation(
         let wall_raise_step = (WALL_GUN_RAISE_SPEED * time.delta_secs()).min(1.0);
         gun.wall_raise += (wall_target - gun.wall_raise) * wall_raise_step;
 
+        let shoulder_step = (LEAN_SPEED * time.delta_secs()).min(1.0);
+        gun.shoulder_blend += (shoulder_target - gun.shoulder_blend) * shoulder_step;
+
         let recoil_t = gun.recoil / RECOIL_DURATION;
         let reload_t = gun.reload_remaining / RELOAD_DURATION;
         // Parabola: 0 at both ends of the reload, 1 at the midpoint — the
@@ -2680,13 +2692,12 @@ fn gun_view_animation(
         let dip = 4.0 * reload_t * (1.0 - reload_t);
 
         let base_pos = gun.base_offset.lerp(GUN_ADS_OFFSET, gun.ads_blend);
-        // Leaning left (lean_current -1) swaps the gun over to the left
-        // shoulder by mirroring its X offset, instead of just nudging it —
-        // shoulder_swap eases 0 (right shoulder, normal) -> 1 (fully
-        // mirrored to the left) as the lean goes from upright to full left.
-        // Leaning right keeps the normal right-shoulder pose.
-        let shoulder_swap = (-lean_current).clamp(0.0, 1.0);
-        let swapped_x = base_pos.x * (1.0 - 2.0 * shoulder_swap);
+        // Holding the lean-left key swaps the gun over to the left shoulder
+        // by mirroring its X offset, instead of just nudging it —
+        // shoulder_blend eases 0 (right shoulder, normal) -> 1 (fully
+        // mirrored to the left). Leaning right keeps the normal right-
+        // shoulder pose.
+        let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
         transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)
             + Vec3::new(
                 0.0,
