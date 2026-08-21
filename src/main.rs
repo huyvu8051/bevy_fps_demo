@@ -2883,11 +2883,17 @@ fn sync_scope_camera(
     // GUN_OFFSET.x to GUN_ADS_OFFSET.x as ads_blend eases in (see
     // gun_view_animation's base_pos), so the scope camera's eyepoint
     // travels in sideways together with the gun instead of just rising
-    // straight up in place — same mirrored-shoulder treatment too.
+    // straight up in place — same mirrored-shoulder treatment too. Also
+    // syncs the "pulled in closer" part of the same motion (GUN_OFFSET.z ->
+    // GUN_ADS_OFFSET.z) along the camera's forward axis, so both halves of
+    // the gun's ADS travel (sideways AND closer) are mirrored, not just the
+    // sideways half.
     let sweep_x = (GUN_OFFSET.x - GUN_ADS_OFFSET.x) * (1.0 - gun.ads_blend);
     let swapped_sweep_x = sweep_x * (1.0 - 2.0 * gun.shoulder_blend);
+    let sweep_z = (GUN_OFFSET.z - GUN_ADS_OFFSET.z) * (1.0 - gun.ads_blend);
     scope_transform.translation += camera_transform.right() * swapped_sweep_x
-        + camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend;
+        + camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend
+        + camera_transform.forward() * sweep_z;
 }
 
 // Scroll wheel steps ScopeZoom up/down while aiming — ignored (and drained,
@@ -2940,14 +2946,15 @@ fn update_scope_lens(
     }
 
     if let Ok((mut transform, mut visibility)) = lens.single_mut() {
-        // X sweeps in from GUN_OFFSET.x to SCOPE_LENS_OFFSET.x with
-        // ads_blend — same lateral travel as the gun mesh and the scope
-        // camera (sync_scope_camera). Y also dips down a little below
-        // SCOPE_LENS_OFFSET.y while not aiming; Z stays pinned.
+        // X and Z both sweep in from GUN_OFFSET to SCOPE_LENS_OFFSET with
+        // ads_blend — same lateral + "pulled in closer" travel as the gun
+        // mesh and the scope camera (sync_scope_camera). Y also dips down a
+        // little below SCOPE_LENS_OFFSET.y while not aiming.
         let lens_x = GUN_OFFSET.x + (SCOPE_LENS_OFFSET.x - GUN_OFFSET.x) * gun.ads_blend;
         let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend);
         let lens_y = SCOPE_LENS_OFFSET.y - SCOPE_LENS_HIDDEN_DROP * (1.0 - gun.ads_blend);
-        transform.translation = Vec3::new(swapped_x, lens_y, SCOPE_LENS_OFFSET.z);
+        let lens_z = GUN_OFFSET.z + (SCOPE_LENS_OFFSET.z - GUN_OFFSET.z) * gun.ads_blend;
+        transform.translation = Vec3::new(swapped_x, lens_y, lens_z);
         *visibility = if visible { Visibility::Visible } else { Visibility::Hidden };
     }
 }
