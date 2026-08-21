@@ -87,6 +87,12 @@ const PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 3.0, 4.0);
 // How long a bullet-hole marker stays visible before despawning.
 const HIT_MARKER_LIFETIME: f32 = 3.0;
 
+const PLAYER_MAX_HEALTH: f32 = 100.0;
+// Applied continuously (per second) to any zombie within ZOMBIE_STOP_DISTANCE
+// of the player and actively chasing — no separate "attack" animation/timer,
+// same simplicity tradeoff as the zombies' one-shot-kill damage model.
+const ZOMBIE_DAMAGE_PER_SECOND: f32 = 20.0;
+
 // "Animated Zombie" by Quaternius (poly.pizza, CC-BY 3.0) —
 // https://poly.pizza/m/jkrEvQZb8J — keep this attribution if shared/published.
 // Calibrated in-game against a 1m reference cube: this comes out to a ~2m
@@ -113,6 +119,9 @@ const ZOMBIE_RESPAWN_DELAY: f32 = 1.0;
 const ZOMBIE_RADIUS: f32 = PLAYER_RADIUS;
 const ZOMBIE_LENGTH: f32 = PLAYER_LENGTH;
 const ZOMBIE_SPEED: f32 = 1.0;
+// Takes this many hits (any hitbox, not just a "headshot" zone) to kill.
+const ZOMBIE_MAX_HEALTH: f32 = 3.0;
+const BULLET_DAMAGE: f32 = 1.0;
 // Flip to false to spawn zombies without their chase AI, for isolating
 // whether apparent movement is the AI reacting or an actual bug.
 const ZOMBIE_AI_ENABLED: bool = true;
@@ -184,6 +193,23 @@ struct Player {
     vertical_velocity: f32,
     grounded: bool,
 }
+
+#[derive(Component)]
+struct Health(f32);
+
+// Global game-over flag. Checked (early-return) at the top of the systems
+// that should freeze once the player dies: move_player_physics, shoot,
+// move_zombies. Reset by restart_game.
+#[derive(Resource, Default)]
+struct GameOver(bool);
+
+// Marks the "GAME OVER" overlay so restart_game can find and despawn it.
+#[derive(Component)]
+struct GameOverUi;
+
+// Marks the always-visible health readout so update_health_ui can find it.
+#[derive(Component)]
+struct HealthUi;
 
 #[derive(Component)]
 struct Gun {
@@ -346,9 +372,13 @@ fn main() {
                 move_player_physics,
                 sync_camera_to_player,
                 move_zombies,
+                zombies_damage_player,
+                check_game_over,
+                restart_game,
                 respawn_zombies,
                 wire_zombie_animations,
                 update_zombie_animation,
+                update_health_ui,
                 gun_recoil,
                 despawn_hit_markers,
                 despawn_muzzle_flashes,
@@ -482,8 +512,10 @@ fn setup(
                 vertical_velocity: 0.0,
                 grounded: false,
             },
+            Health(PLAYER_MAX_HEALTH),
         ))
         .id();
+    commands.insert_resource(GameOver(false));
 
     let zombie_clips: Vec<Handle<AnimationClip>> = [ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_WALK]
         .into_iter()
@@ -540,6 +572,7 @@ fn setup(
     ));
 
     spawn_crosshair(&mut commands);
+    spawn_health_ui(&mut commands);
 }
 
 // Sponza.gltf ships as pure geometry with no KHR_lights_punctual data (single
@@ -562,6 +595,7 @@ fn spawn_zombie(commands: &mut Commands, asset_server: &AssetServer, spawn_pos: 
         Transform::from_translation(spawn_pos).with_scale(Vec3::splat(ZOMBIE_SCALE)),
         Zombie,
         ZombieMotion::default(),
+        Health(ZOMBIE_MAX_HEALTH),
     ));
     // Can be flipped off to test whether apparent zombie movement is the
     // chase AI reacting instantly, versus an actual movement-coupling bug.
@@ -636,6 +670,159 @@ fn spawn_hall_lights(commands: &mut Commands) {
             Transform::from_xyz(x, HALL_LIGHT_HEIGHT, 0.0),
         ));
     }
+}
+
+fn spawn_health_ui(commands: &mut Commands) {
+    commands.spawn((
+        Text::new("HP: 100"),
+        TextFont {
+            font_size: 24.0,
+            ..default()
+        },
+        TextColor(Color::srgb(1.0, 0.3, 0.3)),
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(16.0),
+            top: Val::Px(16.0),
+            ..default()
+        },
+        HealthUi,
+    ));
+}
+
+fn update_health_ui(
+    player: Query<&Health, (With<Player>, Changed<Health>)>,
+    mut text: Query<&mut Text, With<HealthUi>>,
+) {
+    let Ok(health) = player.single() else {
+        return;
+    };
+    let Ok(mut text) = text.single_mut() else {
+        return;
+    };
+    text.0 = format!("HP: {}", health.0.max(0.0).round() as i32);
+}
+
+// Any zombie actively chasing (has Chase) and within melee range continuously
+// drains player health — no attack animation/cooldown, same simplicity
+// tradeoff as the zombies' own one-shot-kill damage model in shoot().
+fn zombies_damage_player(
+    time: Res<Time>,
+    game_over: Res<GameOver>,
+    zombies: Query<&Transform, (With<Zombie>, With<Chase>)>,
+    mut player: Query<(&Transform, &mut Health), With<Player>>,
+) {
+    if game_over.0 {
+        return;
+    }
+    let Ok((player_transform, mut health)) = player.single_mut() else {
+        return;
+    };
+    let in_melee_range = zombies.iter().any(|zombie_transform| {
+        zombie_transform
+            .translation
+            .distance(player_transform.translation)
+            <= ZOMBIE_STOP_DISTANCE
+    });
+    if in_melee_range {
+        health.0 -= ZOMBIE_DAMAGE_PER_SECOND * time.delta_secs();
+    }
+}
+
+fn check_game_over(
+    mut commands: Commands,
+    mut game_over: ResMut<GameOver>,
+    player: Query<&Health, With<Player>>,
+    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
+) {
+    if game_over.0 {
+        return;
+    }
+    let Ok(health) = player.single() else {
+        return;
+    };
+    if health.0 > 0.0 {
+        return;
+    }
+    game_over.0 = true;
+
+    if let Ok(mut cursor) = cursor.single_mut() {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
+    }
+
+    commands
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(12.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+            GameOverUi,
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Text::new("GAME OVER"),
+                TextFont {
+                    font_size: 64.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.2, 0.2)),
+            ));
+            root.spawn((
+                Text::new("Press R to Restart"),
+                TextFont {
+                    font_size: 24.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+        });
+}
+
+// Resets the player, despawns and respawns zombies, and tears down the
+// GAME OVER overlay — everything spawn_zombie/setup did the first time,
+// minus the one-time asset loads (ZombieAnim, PlayerEntity are still valid).
+fn restart_game(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut game_over: ResMut<GameOver>,
+    asset_server: Res<AssetServer>,
+    mut player: Query<(&mut Transform, &mut Player, &mut Health)>,
+    zombies: Query<Entity, With<Zombie>>,
+    mut respawns: ResMut<PendingZombieRespawns>,
+    game_over_ui: Query<Entity, With<GameOverUi>>,
+) {
+    if !game_over.0 || !keys.just_pressed(KeyCode::KeyR) {
+        return;
+    }
+
+    let Ok((mut transform, mut player, mut health)) = player.single_mut() else {
+        return;
+    };
+    transform.translation = PLAYER_SPAWN;
+    player.vertical_velocity = 0.0;
+    player.grounded = false;
+    health.0 = PLAYER_MAX_HEALTH;
+
+    for entity in &zombies {
+        commands.entity(entity).despawn();
+    }
+    respawns.0.clear();
+    for &spawn_pos in &ZOMBIE_SPAWNS {
+        spawn_zombie(&mut commands, &asset_server, spawn_pos);
+    }
+
+    for entity in &game_over_ui {
+        commands.entity(entity).despawn();
+    }
+    game_over.0 = false;
 }
 
 fn spawn_crosshair(commands: &mut Commands) {
@@ -757,10 +944,14 @@ fn apply_view_recoil(time: Res<Time>, mut query: Query<(&mut Transform, &FpsCame
 fn move_player_physics(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
+    game_over: Res<GameOver>,
     camera_query: Query<&FpsCamera>,
     mut player_query: Query<(&mut Transform, &mut Player)>,
     mover: MoveAndSlide,
 ) {
+    if game_over.0 {
+        return;
+    }
     let Ok(cam) = camera_query.single() else {
         return;
     };
@@ -856,6 +1047,7 @@ fn sync_camera_to_player(
 fn shoot(
     mut commands: Commands,
     time: Res<Time>,
+    game_over: Res<GameOver>,
     mouse: Res<ButtonInput<MouseButton>>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut camera: Query<(&Transform, &mut ViewRecoil), With<FpsCamera>>,
@@ -864,12 +1056,15 @@ fn shoot(
     hit_assets: Res<HitMarkerAssets>,
     muzzle_fx: Res<MuzzleFxAssets>,
     child_of: Query<&ChildOf>,
-    zombies: Query<(), With<Zombie>>,
+    mut zombies: Query<&mut Health, With<Zombie>>,
     mut respawns: ResMut<PendingZombieRespawns>,
     mut cooldown: Local<f32>,
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
 
+    if game_over.0 {
+        return;
+    }
     let Ok(cursor) = cursor.single() else {
         return;
     };
@@ -954,12 +1149,17 @@ fn shoot(
 
         // The ray hits a mesh primitive somewhere deep inside the zombie's
         // glTF hierarchy, not the Zombie-tagged root itself — walk up the
-        // parent chain to find it. One-shot kill, no health tracking.
+        // parent chain to find it. Any hitbox does the same BULLET_DAMAGE
+        // (no headshot multiplier) — despawns once accumulated damage
+        // reaches ZOMBIE_MAX_HEALTH.
         let mut current = hit_entity;
         for _ in 0..20 {
-            if zombies.contains(current) {
-                commands.entity(current).despawn();
-                respawns.0.push(ZOMBIE_RESPAWN_DELAY);
+            if let Ok(mut health) = zombies.get_mut(current) {
+                health.0 -= BULLET_DAMAGE;
+                if health.0 <= 0.0 {
+                    commands.entity(current).despawn();
+                    respawns.0.push(ZOMBIE_RESPAWN_DELAY);
+                }
                 break;
             }
             let Ok(parent) = child_of.get(current) else {
@@ -1071,12 +1271,16 @@ fn steer_around_obstacles(
 // get the same wall/floor collision (and the same stairs caveat).
 fn move_zombies(
     time: Res<Time>,
+    game_over: Res<GameOver>,
     mut zombies: Query<(&mut Transform, &mut ZombieMotion, &Chase), With<Zombie>>,
     targets: Query<&Transform, Without<Zombie>>,
     navmesh: Query<&ManagedNavMesh>,
     navmeshes: Res<Assets<NavMesh>>,
     mover: MoveAndSlide,
 ) {
+    if game_over.0 {
+        return;
+    }
     // Built once per frame (not per zombie) — Direct update mode means this
     // is ready as soon as the level's collider finishes loading and the
     // first navmesh build completes; None until then, or if the entity
