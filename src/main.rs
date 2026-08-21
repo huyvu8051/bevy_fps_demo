@@ -52,6 +52,16 @@ const RECOIL_KICK_UP: f32 = 0.01;
 const RECOIL_TILT_UP_DEG: f32 = 4.0;
 const RECOIL_DURATION: f32 = 0.12;
 
+// Pitches the gun barrel up out of the way when standing close to a wall in
+// front (PUBG-style), so the viewmodel doesn't visibly clip through it.
+// Distance is measured from the camera along its forward ray; the raise
+// eases in as that distance shrinks below WALL_GUN_RAISE_DISTANCE, fully
+// raised (barrel pointing straight up) at 0.
+const WALL_GUN_RAISE_DISTANCE: f32 = 1.5;
+const WALL_GUN_RAISE_HEIGHT: f32 = 0.18;
+const WALL_GUN_RAISE_ROT_DEG: f32 = 90.0;
+const WALL_GUN_RAISE_SPEED: f32 = 10.0;
+
 const MAGAZINE_SIZE: u32 = 40;
 const RELOAD_DURATION: f32 = 1.6;
 // How far the gun dips down and tilts during a reload, peaking at the
@@ -575,6 +585,10 @@ struct Gun {
     // 0.0 = hip-fire pose (base_offset), 1.0 = fully raised to GUN_ADS_OFFSET.
     // Eases toward whichever is_aiming() currently says, in gun_view_animation.
     ads_blend: f32,
+    // 0.0 = normal height, 1.0 = fully raised (WALL_GUN_RAISE_HEIGHT) to
+    // clear a wall in front. Eased toward the camera's forward-wall-distance
+    // probe in gun_view_animation.
+    wall_raise: f32,
 }
 
 // Marks the ammo counter text so update_ammo_ui can find it.
@@ -1098,6 +1112,7 @@ fn setup(
             ammo: MAGAZINE_SIZE,
             reload_remaining: 0.0,
             ads_blend: 0.0,
+            wall_raise: 0.0,
         },
         ChildOf(camera),
     ));
@@ -2617,11 +2632,29 @@ fn gun_view_animation(
     time: Res<Time>,
     mouse: Res<ButtonInput<MouseButton>>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    camera: Query<&Transform, (With<FpsCamera>, Without<Gun>)>,
     lean: Query<&Lean, With<FpsCamera>>,
-    mut query: Query<(&mut Transform, &mut Gun)>,
+    spatial_query: SpatialQuery,
+    mut query: Query<(&mut Transform, &mut Gun), Without<FpsCamera>>,
 ) {
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse));
     let lean_current = lean.single().map(|lean| lean.current).unwrap_or(0.0);
+    // Wall-raise probe: how close is the wall directly in front of the
+    // camera? 0.0 = clear, 1.0 = right up against it.
+    let wall_target = camera.single().ok().map_or(0.0, |camera_transform| {
+        let filter = SpatialQueryFilter::default();
+        spatial_query
+            .cast_ray(
+                camera_transform.translation,
+                camera_transform.forward(),
+                WALL_GUN_RAISE_DISTANCE,
+                true,
+                &filter,
+            )
+            .map_or(0.0, |hit| {
+                1.0 - (hit.distance / WALL_GUN_RAISE_DISTANCE).clamp(0.0, 1.0)
+            })
+    });
     for (mut transform, mut gun) in &mut query {
         if gun.recoil > 0.0 {
             gun.recoil = (gun.recoil - time.delta_secs()).max(0.0);
@@ -2636,6 +2669,9 @@ fn gun_view_animation(
         let ads_target = if aiming { 1.0 } else { 0.0 };
         let ads_step = (GUN_ADS_SPEED * time.delta_secs()).min(1.0);
         gun.ads_blend += (ads_target - gun.ads_blend) * ads_step;
+
+        let wall_raise_step = (WALL_GUN_RAISE_SPEED * time.delta_secs()).min(1.0);
+        gun.wall_raise += (wall_target - gun.wall_raise) * wall_raise_step;
 
         let recoil_t = gun.recoil / RECOIL_DURATION;
         let reload_t = gun.reload_remaining / RELOAD_DURATION;
@@ -2654,7 +2690,8 @@ fn gun_view_animation(
         transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)
             + Vec3::new(
                 0.0,
-                RECOIL_KICK_UP * recoil_t - RELOAD_DIP * dip,
+                RECOIL_KICK_UP * recoil_t - RELOAD_DIP * dip
+                    + WALL_GUN_RAISE_HEIGHT * gun.wall_raise,
                 RECOIL_KICK * recoil_t,
             );
         // Recoil tilt is applied as the outer rotation (camera-local space),
@@ -2667,8 +2704,12 @@ fn gun_view_animation(
             * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * dip);
         // Sign flipped: the previous sign raised the stock/rear instead of
         // the muzzle.
-        transform.rotation =
-            Quat::from_rotation_x(RECOIL_TILT_UP_DEG.to_radians() * recoil_t) * base_rotation;
+        // Same outer/camera-space composition as the recoil tilt above, same
+        // sign so it pitches the muzzle up rather than down.
+        let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
+        transform.rotation = Quat::from_rotation_x(wall_raise_tilt)
+            * Quat::from_rotation_x(RECOIL_TILT_UP_DEG.to_radians() * recoil_t)
+            * base_rotation;
     }
 }
 
