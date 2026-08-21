@@ -168,12 +168,6 @@ const PRONE_SPREAD_MULTIPLIER: f32 = 0.2;
 const LEAN_SPEED: f32 = 6.0;
 const LEAN_ROLL_DEG: f32 = 15.0;
 const LEAN_SIDE_OFFSET: f32 = 0.4;
-// Gun is parented to the camera, so it already inherits the camera's lean
-// roll for free. These add an *extra* local roll + shoulder-ward shift on
-// top of that so the weapon visibly tucks into the shoulder on lean,
-// PUBG-style, instead of just rolling rigidly with the view.
-const LEAN_GUN_TILT_DEG: f32 = 12.0;
-const LEAN_GUN_SHOULDER_OFFSET: f32 = 0.06;
 
 // Player capsule: radius + cylinder length between the two hemispherical
 // caps, so total standing height = PLAYER_LENGTH + 2 * PLAYER_RADIUS ≈ 1.6m.
@@ -2634,9 +2628,16 @@ fn gun_view_animation(
         let dip = 4.0 * reload_t * (1.0 - reload_t);
 
         let base_pos = gun.base_offset.lerp(GUN_ADS_OFFSET, gun.ads_blend);
-        transform.translation = base_pos
+        // Leaning left (lean_current -1) swaps the gun over to the left
+        // shoulder by mirroring its X offset, instead of just nudging it —
+        // shoulder_swap eases 0 (right shoulder, normal) -> 1 (fully
+        // mirrored to the left) as the lean goes from upright to full left.
+        // Leaning right keeps the normal right-shoulder pose.
+        let shoulder_swap = (-lean_current).clamp(0.0, 1.0);
+        let swapped_x = base_pos.x * (1.0 - 2.0 * shoulder_swap);
+        transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)
             + Vec3::new(
-                -LEAN_GUN_SHOULDER_OFFSET * lean_current,
+                0.0,
                 RECOIL_KICK_UP * recoil_t - RELOAD_DIP * dip,
                 RECOIL_KICK * recoil_t,
             );
@@ -2650,13 +2651,8 @@ fn gun_view_animation(
             * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * dip);
         // Sign flipped: the previous sign raised the stock/rear instead of
         // the muzzle.
-        // Extra roll on top of the camera-inherited lean roll (gun is a
-        // child of the camera, so it already rolls with it) — same sign as
-        // apply_view_recoil's camera roll so it tucks the same direction.
-        let lean_roll = -LEAN_GUN_TILT_DEG.to_radians() * lean_current;
-        transform.rotation = Quat::from_rotation_z(lean_roll)
-            * Quat::from_rotation_x(RECOIL_TILT_UP_DEG.to_radians() * recoil_t)
-            * base_rotation;
+        transform.rotation =
+            Quat::from_rotation_x(RECOIL_TILT_UP_DEG.to_radians() * recoil_t) * base_rotation;
     }
 }
 
