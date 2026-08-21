@@ -74,6 +74,14 @@ const RELOAD_DURATION: f32 = 1.6;
 // ends (see the parabola in gun_view_animation).
 const RELOAD_DIP: f32 = 0.12;
 const RELOAD_TILT_DEG: f32 = 25.0;
+// RELOAD_TILT_DEG is composed *inside* the gun model's own -90° Y rotation
+// (unlike the recoil/wall tilts, which are applied outside it — see
+// gun_view_animation), which twists what's meant to be a forward/back pitch
+// into something that reads visually as a down-and-left lean instead
+// (reported in-game). The down half is already RELOAD_DIP; this is the
+// left half, kept separate/explicit here so the scope camera and lens can
+// mirror it without needing the same axis-twisted rotation composition.
+const RELOAD_LEFT_DIP: f32 = 0.05;
 
 // Rough position of the barrel tip, in the same camera-local space as
 // GUN_OFFSET. Muzzle flash/smoke spawn here. Since we can't see the model,
@@ -2879,21 +2887,46 @@ fn sync_scope_camera(
         return;
     };
     *scope_transform = *camera_transform;
-    // Mirrors the same lateral sweep the gun mesh itself makes from
-    // GUN_OFFSET.x to GUN_ADS_OFFSET.x as ads_blend eases in (see
-    // gun_view_animation's base_pos), so the scope camera's eyepoint
-    // travels in sideways together with the gun instead of just rising
-    // straight up in place — same mirrored-shoulder treatment too. Also
-    // syncs the "pulled in closer" part of the same motion (GUN_OFFSET.z ->
-    // GUN_ADS_OFFSET.z) along the camera's forward axis, so both halves of
-    // the gun's ADS travel (sideways AND closer) are mirrored, not just the
-    // sideways half.
+
+    // Converts a delta expressed in the same local X/Y/Z space Gun's own
+    // Transform.translation uses (see gun_view_animation) into a world
+    // offset for the (unparented) scope camera: local X/Y map straight onto
+    // right()/up(), but local Z is inverted relative to forward() since the
+    // camera faces its own local -Z.
+    let local_to_world = |local: Vec3| {
+        camera_transform.right() * local.x + camera_transform.up() * local.y
+            - camera_transform.forward() * local.z
+    };
+
+    // Mirrors the same lateral + "pulled in closer" sweep the gun mesh
+    // itself makes from GUN_OFFSET to GUN_ADS_OFFSET as ads_blend eases in
+    // (gun_view_animation's base_pos), so the scope camera's eyepoint
+    // travels together with the gun instead of just rising straight up in
+    // place — same mirrored-shoulder treatment on X too.
     let sweep_x = (GUN_OFFSET.x - GUN_ADS_OFFSET.x) * (1.0 - gun.ads_blend);
     let swapped_sweep_x = sweep_x * (1.0 - 2.0 * gun.shoulder_blend);
     let sweep_z = (GUN_OFFSET.z - GUN_ADS_OFFSET.z) * (1.0 - gun.ads_blend);
-    scope_transform.translation += camera_transform.right() * swapped_sweep_x
-        + camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend
-        + camera_transform.forward() * sweep_z;
+
+    // Same recoil kick (X/Y/Z) and reload dip/tilt gun_view_animation stacks
+    // on top of that base position — recoil_t/dip peak the same way they do
+    // there, so the whole view (not just position) wobbles along with the
+    // gun on every axis instead of holding rock-steady through recoil and
+    // reload.
+    let recoil_t = gun.recoil / RECOIL_DURATION;
+    let reload_t = gun.reload_remaining / RELOAD_DURATION;
+    let dip = 4.0 * reload_t * (1.0 - reload_t);
+    let recoil_and_reload = Vec3::new(
+        -RELOAD_LEFT_DIP * dip,
+        RECOIL_KICK_UP * recoil_t - RELOAD_DIP * dip,
+        RECOIL_KICK * recoil_t,
+    );
+
+    scope_transform.translation += local_to_world(Vec3::new(swapped_sweep_x, 0.0, sweep_z))
+        + local_to_world(recoil_and_reload)
+        + camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend;
+    scope_transform.rotation *= Quat::from_rotation_x(
+        (RELOAD_TILT_DEG * dip + RECOIL_TILT_UP_DEG * recoil_t).to_radians(),
+    );
 }
 
 // Scroll wheel steps ScopeZoom up/down while aiming — ignored (and drained,
@@ -2949,12 +2982,26 @@ fn update_scope_lens(
         // X and Z both sweep in from GUN_OFFSET to SCOPE_LENS_OFFSET with
         // ads_blend — same lateral + "pulled in closer" travel as the gun
         // mesh and the scope camera (sync_scope_camera). Y also dips down a
-        // little below SCOPE_LENS_OFFSET.y while not aiming.
+        // little below SCOPE_LENS_OFFSET.y while not aiming. Recoil kick and
+        // reload dip/tilt stack on top the same way they do on the gun
+        // mesh's own Transform.translation — this is a plain local-space
+        // translation just like Gun's, so no right()/forward() conversion
+        // is needed here (unlike sync_scope_camera, which has to rebuild a
+        // world offset for the free-floating scope camera).
         let lens_x = GUN_OFFSET.x + (SCOPE_LENS_OFFSET.x - GUN_OFFSET.x) * gun.ads_blend;
-        let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend);
-        let lens_y = SCOPE_LENS_OFFSET.y - SCOPE_LENS_HIDDEN_DROP * (1.0 - gun.ads_blend);
-        let lens_z = GUN_OFFSET.z + (SCOPE_LENS_OFFSET.z - GUN_OFFSET.z) * gun.ads_blend;
+        let recoil_t = gun.recoil / RECOIL_DURATION;
+        let reload_t = gun.reload_remaining / RELOAD_DURATION;
+        let dip = 4.0 * reload_t * (1.0 - reload_t);
+        let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend) - RELOAD_LEFT_DIP * dip;
+        let lens_y = SCOPE_LENS_OFFSET.y - SCOPE_LENS_HIDDEN_DROP * (1.0 - gun.ads_blend)
+            + RECOIL_KICK_UP * recoil_t
+            - RELOAD_DIP * dip;
+        let lens_z =
+            GUN_OFFSET.z + (SCOPE_LENS_OFFSET.z - GUN_OFFSET.z) * gun.ads_blend + RECOIL_KICK * recoil_t;
         transform.translation = Vec3::new(swapped_x, lens_y, lens_z);
+        transform.rotation = Quat::from_rotation_x(
+            (RELOAD_TILT_DEG * dip + RECOIL_TILT_UP_DEG * recoil_t).to_radians(),
+        );
         *visibility = if visible { Visibility::Visible } else { Visibility::Hidden };
     }
 }
