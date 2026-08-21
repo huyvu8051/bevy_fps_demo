@@ -442,7 +442,7 @@ const ZOMBIE_SPEED: f32 = 1.0;
 // instead and reusing the cached direction in between cuts the pathfind
 // call rate by ~24x at 60fps, at the cost of a zombie's steering being up
 // to this many seconds stale — imperceptible at this speed/interval.
-const ZOMBIE_PATH_RECALC_INTERVAL: f32 = 0.4;
+const ZOMBIE_PATH_RECALC_INTERVAL: f32 = 0.8;
 // Body-shot kills still take this many hits; a headshot always kills in one
 // (see zombie_hit_damage). Raised from 3.0 — zombies were dying too fast to
 // body shots.
@@ -586,6 +586,17 @@ const NAVMESH_COLUMN_OBSTACLES: [(f32, f32); 0] = [];
 // just walks straight through/into the player and rides along with every
 // move — this stops it a bit short instead, like a melee attack range.
 const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
+// Beyond this distance from the player, move_zombies skips the precise
+// avian3d MoveAndSlide sweep (a real collision-resolving physics query, the
+// most expensive part of the per-zombie cost at scale) and just adds
+// velocity straight to position instead, clamped to a fixed rest height
+// rather than doing real ground collision. A far zombie can clip through
+// walls/stairs a bit as a result — an accepted trade-off since it's not
+// close enough to be scrutinized anyway. Nothing here throttles time, only
+// which zombies pay for the expensive path each frame; a zombie switches
+// tiers automatically as it enters/leaves range.
+const ZOMBIE_LOD_DISTANCE: f32 = 20.0;
+const ZOMBIE_LOD_REST_HEIGHT: f32 = 0.9;
 
 // Cheap stand-in for real pathfinding (no navmesh — Sponza is a single
 // merged mesh with no per-object separation to build one from, and every
@@ -759,6 +770,22 @@ impl Default for AimBlurEnabled {
 #[derive(Resource, Default)]
 struct AimDofFocalDistanceAlt(bool);
 
+// Rough per-system CPU timings (wall-clock ms this frame), shown in the
+// debug panel so it's obvious which system is actually eating frame time as
+// the zombie count climbs, instead of guessing — measured with a plain
+// std::time::Instant around each system's own hot loop rather than pulling
+// in a real profiler (tracy/puffin) for what's meant to be a quick check.
+#[derive(Resource, Default)]
+struct PerfTimings {
+    move_zombies_ms: f32,
+    health_bars_ms: f32,
+    zombie_count: usize,
+    // How many zombies this frame were within ZOMBIE_LOD_DISTANCE and paid
+    // for the full navmesh+steering+MoveAndSlide path, vs the cheap
+    // straight-line fallback beyond it.
+    near_zombie_count: usize,
+}
+
 // This frame's raw mouse-look delta (set unconditionally every frame by
 // mouse_look, including to Vec2::ZERO when there's no motion or the cursor
 // isn't grabbed) — gun_view_animation reads it to drive the inertia lean
@@ -921,8 +948,10 @@ struct Zombie;
 
 // Gravity/ground state, same idea as Player but tracked per-zombie.
 // path_recalc_timer/cached_path_dir throttle move_zombies' navmesh
-// pathfinding (see ZOMBIE_PATH_RECALC_INTERVAL) instead of recomputing a
-// full path every single frame for every chasing zombie.
+// pathfinding AND local obstacle-avoidance raycasts (see
+// ZOMBIE_PATH_RECALC_INTERVAL) instead of recomputing both every single
+// frame for every chasing zombie — cached_path_dir holds the final,
+// already-steered movement direction.
 #[derive(Component, Default)]
 struct ZombieMotion {
     vertical_velocity: f32,
@@ -1089,6 +1118,7 @@ fn main() {
         .init_resource::<AimBlurEnabled>()
         .init_resource::<AimDofFocalDistanceAlt>()
         .init_resource::<MouseLookDelta>()
+        .init_resource::<PerfTimings>()
         .add_systems(Startup, (setup, log_window_resolution))
         .add_systems(
             PreUpdate,
@@ -1700,12 +1730,14 @@ fn spawn_zombie_health_bar(commands: &mut Commands, zombie: Entity) {
 // entity, not a child of the zombie.
 fn update_zombie_health_bars(
     mut commands: Commands,
+    mut timings: ResMut<PerfTimings>,
     camera: Query<(&Camera, &GlobalTransform), With<FpsCamera>>,
     zombies: Query<(&Transform, &Health), With<Zombie>>,
     mut bars: Query<(Entity, &ZombieHealthBar, &mut Node, &Children)>,
     mut fills: Query<&mut Node, (With<ZombieHealthBarFill>, Without<ZombieHealthBar>)>,
     mut texts: Query<&mut Text, With<ZombieHealthBarText>>,
 ) {
+    let perf_start = std::time::Instant::now();
     let Ok((camera, camera_transform)) = camera.single() else {
         return;
     };
@@ -1741,6 +1773,7 @@ fn update_zombie_health_bars(
             }
         }
     }
+    timings.health_bars_ms = perf_start.elapsed().as_secs_f32() * 1000.0;
 }
 
 fn spawn_floating_damage(commands: &mut Commands, world_pos: Vec3, damage: f32) {
@@ -2361,6 +2394,7 @@ fn update_debug_panel(
     god_mode: Res<GodMode>,
     aim_blur: Res<AimBlurEnabled>,
     dof_focal_alt: Res<AimDofFocalDistanceAlt>,
+    timings: Res<PerfTimings>,
     zombies: Query<(), With<Zombie>>,
     mut text: Query<(&mut Text, &mut Node), With<DebugPanelText>>,
 ) {
@@ -2392,6 +2426,7 @@ fn update_debug_panel(
          3: Set nearest zombie to 1 HP\n\
          4: Heal nearest zombie to full\n\
          5: Spawn another {} zombies\n\
+         move_zombies: {:.2}ms | health bars: {:.2}ms | zombies: {} (near: {})\n\
          Zombies alive: {}",
         on_off(noclip.0),
         on_off(freeze.0),
@@ -2400,6 +2435,10 @@ fn update_debug_panel(
         on_off(aim_blur.0),
         focal_distance,
         ZOMBIE_SPAWNS.len(),
+        timings.move_zombies_ms,
+        timings.health_bars_ms,
+        timings.zombie_count,
+        timings.near_zombie_count,
         zombies.iter().count(),
     );
 }
@@ -3673,6 +3712,7 @@ fn move_zombies(
     time: Res<Time>,
     game_over: Res<GameOver>,
     freeze: Res<FreezeZombies>,
+    mut timings: ResMut<PerfTimings>,
     mut zombies: Query<(&mut Transform, &mut ZombieMotion, &Chase, &mut KnockbackVelocity), With<Zombie>>,
     targets: Query<&Transform, Without<Zombie>>,
     navmesh: Query<&ManagedNavMesh>,
@@ -3682,6 +3722,7 @@ fn move_zombies(
     if game_over.0 || freeze.0 {
         return;
     }
+    let perf_start = std::time::Instant::now();
     // Built once per frame (not per zombie) — Direct update mode means this
     // is ready as soon as the level's collider finishes loading and the
     // first navmesh build completes; None until then, or if the entity
@@ -3690,6 +3731,7 @@ fn move_zombies(
         .single()
         .ok()
         .and_then(|handle| navmeshes.get(handle));
+    let mut near_zombie_count = 0usize;
 
     for (mut transform, mut motion, chase, mut knockback) in &mut zombies {
         let Ok(target_transform) = targets.get(chase.target) else {
@@ -3699,6 +3741,23 @@ fn move_zombies(
         let to_target = target_transform.translation - transform.translation;
         let horizontal = Vec3::new(to_target.x, 0.0, to_target.z);
         let distance = horizontal.length();
+
+        if distance > ZOMBIE_LOD_DISTANCE {
+            // Cheap LOD path — see ZOMBIE_LOD_DISTANCE's doc comment. No
+            // pathfinding, no obstacle-avoidance raycasts, no MoveAndSlide;
+            // just walk straight at the target and rest at a fixed height.
+            if distance > ZOMBIE_STOP_DISTANCE {
+                let direction = horizontal / distance;
+                transform.translation += direction * chase.speed * time.delta_secs();
+                transform.look_to(-direction, Vec3::Y);
+            }
+            transform.translation.y = ZOMBIE_LOD_REST_HEIGHT;
+            motion.grounded = true;
+            motion.vertical_velocity = 0.0;
+            continue;
+        }
+        near_zombie_count += 1;
+
         let filter = SpatialQueryFilter::default();
         let horizontal_velocity = if distance > ZOMBIE_STOP_DISTANCE {
             // Route via the navmesh's next waypoint when available — this is
@@ -3706,14 +3765,16 @@ fn move_zombies(
             // nudging past whatever the raycast probe below happens to see.
             // Falls back to a straight line at the player (with the old
             // raycast-only avoidance) if the navmesh isn't built yet or no
-            // path exists between the two points. Only recomputed every
-            // ZOMBIE_PATH_RECALC_INTERVAL (see ZombieMotion) instead of
-            // every frame — this pathfind call is the expensive part, and
-            // scales badly with a large zombie count otherwise.
+            // path exists between the two points. Both the pathfind AND the
+            // raycast steering are throttled together to
+            // ZOMBIE_PATH_RECALC_INTERVAL, not recomputed every frame —
+            // confirmed still fine at large zombie counts (the earlier
+            // "freeze" report turned out to be an accidental F-key press,
+            // not this).
             motion.path_recalc_timer -= time.delta_secs();
             if motion.path_recalc_timer <= 0.0 {
                 motion.path_recalc_timer = ZOMBIE_PATH_RECALC_INTERVAL;
-                motion.cached_path_dir = navmesh
+                let desired_direction = navmesh
                     .and_then(|navmesh| {
                         navmesh.transformed_path(transform.translation, target_transform.translation)
                     })
@@ -3728,19 +3789,15 @@ fn move_zombies(
                     })
                     .filter(|direction| *direction != Vec3::ZERO)
                     .unwrap_or(horizontal / distance);
+                motion.cached_path_dir = steer_around_obstacles(
+                    &mover.spatial_query,
+                    transform.translation,
+                    desired_direction,
+                    distance,
+                    &filter,
+                );
             }
-            let desired_direction = motion.cached_path_dir;
-            // Raycast probing still runs on top of the navmesh direction —
-            // cheap local avoidance for anything the (fairly coarse) navmesh
-            // slice doesn't resolve, e.g. another zombie in the way.
-            let steered = steer_around_obstacles(
-                &mover.spatial_query,
-                transform.translation,
-                desired_direction,
-                distance,
-                &filter,
-            );
-            steered * chase.speed
+            motion.cached_path_dir * chase.speed
         } else {
             Vec3::ZERO
         };
@@ -3793,6 +3850,9 @@ fn move_zombies(
             transform.look_to(-horizontal_velocity, Vec3::Y);
         }
     }
+    timings.move_zombies_ms = perf_start.elapsed().as_secs_f32() * 1000.0;
+    timings.zombie_count = zombies.iter().count();
+    timings.near_zombie_count = near_zombie_count;
 }
 
 // Ticks down each pending respawn timer (queued by shoot() when a zombie
