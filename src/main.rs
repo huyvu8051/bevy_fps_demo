@@ -33,6 +33,14 @@ const GUN_ROTATION_Y_DEG: f32 = -90.0;
 const RECOIL_KICK: f32 = 0.12;
 const RECOIL_DURATION: f32 = 0.12;
 
+const MAGAZINE_SIZE: u32 = 30;
+const RELOAD_DURATION: f32 = 1.6;
+// How far the gun dips down and tilts during a reload, peaking at the
+// midpoint of RELOAD_DURATION and easing back to the normal pose at both
+// ends (see the parabola in gun_view_animation).
+const RELOAD_DIP: f32 = 0.12;
+const RELOAD_TILT_DEG: f32 = 25.0;
+
 // Rough position of the barrel tip, in the same camera-local space as
 // GUN_OFFSET. Muzzle flash/smoke spawn here. Since we can't see the model,
 // this is a guess (further forward + a bit higher than the grip) — nudge it
@@ -65,6 +73,31 @@ const BULLET_SPREAD: f32 = 0.02;
 
 const MOVE_SPEED: f32 = 6.0;
 const MOUSE_SENSITIVITY: f32 = 0.002;
+
+// Right-click-to-aim: zooms the camera in (narrower FOV), tightens bullet
+// spread, and slows movement — no gun-position/ironsight alignment, since
+// that would need visually calibrating the viewmodel against the crosshair,
+// which isn't possible without seeing the game rendered.
+const BASE_FOV: f32 = std::f32::consts::PI / 4.0;
+const AIM_FOV_MULTIPLIER: f32 = 0.6;
+// How fast the FOV lerps toward its target each second (higher = snappier).
+const AIM_ZOOM_SPEED: f32 = 12.0;
+const AIM_MOVE_SPEED_MULTIPLIER: f32 = 0.5;
+const AIM_SPREAD_MULTIPLIER: f32 = 0.35;
+// Standing still (no WASD held) tightens spread further, stacking
+// multiplicatively with AIM_SPREAD_MULTIPLIER — e.g. stationary + aiming
+// ends up at STATIONARY_SPREAD_MULTIPLIER * AIM_SPREAD_MULTIPLIER of the
+// base spread.
+const STATIONARY_SPREAD_MULTIPLIER: f32 = 0.4;
+
+// Q/E lean: rolls the camera and shifts it sideways to peek around corners
+// without moving the player capsule itself. No collision awareness (won't
+// stop the peek at a wall) — a proper implementation would raycast sideways
+// before applying the offset, skipped since it can't be visually verified
+// here anyway.
+const LEAN_SPEED: f32 = 6.0;
+const LEAN_ROLL_DEG: f32 = 15.0;
+const LEAN_SIDE_OFFSET: f32 = 0.4;
 
 // Player capsule: radius + cylinder length between the two hemispherical
 // caps, so total standing height = PLAYER_LENGTH + 2 * PLAYER_RADIUS ≈ 1.6m.
@@ -119,9 +152,55 @@ const ZOMBIE_RESPAWN_DELAY: f32 = 1.0;
 const ZOMBIE_RADIUS: f32 = PLAYER_RADIUS;
 const ZOMBIE_LENGTH: f32 = PLAYER_LENGTH;
 const ZOMBIE_SPEED: f32 = 1.0;
-// Takes this many hits (any hitbox, not just a "headshot" zone) to kill.
+// Body-shot kills still take this many hits; a headshot always kills in one
+// (see zombie_hit_damage).
 const ZOMBIE_MAX_HEALTH: f32 = 3.0;
-const BULLET_DAMAGE: f32 = 1.0;
+
+// Per-region damage, picked by zombie_hit_damage from where the raycast hit
+// lands relative to the zombie's root. The zombie.glb rig has no separate
+// per-body-part meshes to hit-test against directly (single "Zombie_Cylinder"
+// mesh, see the model's own node list) — bones exist for skinning/animation
+// only, not as distinct raycast targets — so regions are approximated
+// geometrically from the hit point instead of a real hitbox lookup.
+const HEAD_DAMAGE: f32 = ZOMBIE_MAX_HEALTH; // always a one-shot kill
+const CHEST_DAMAGE: f32 = 1.5;
+const BELLY_DAMAGE: f32 = 1.0;
+const LIMB_DAMAGE: f32 = 0.5;
+
+// Height bands (world-space meters, relative to the zombie's root — which
+// per ZOMBIE_HEALTH_BAR_HEIGHT's own comment sits around the physics
+// capsule's center, roughly hip/waist height, not the feet) and a lateral
+// distance from the vertical axis through the root, used to tell an
+// out-flung arm from the torso at similar heights. Rough estimates for a
+// ~2m-tall zombie — not visually calibrated.
+const HITBOX_HEAD_MIN_Y: f32 = 0.9;
+const HITBOX_CHEST_MIN_Y: f32 = 0.3;
+const HITBOX_BELLY_MIN_Y: f32 = -0.2;
+const HITBOX_LIMB_LATERAL_MIN: f32 = 0.35;
+
+// Categorizes a raycast hit on a zombie into head/chest/belly/limb(-or-leg)
+// and returns the damage for that region. Works in the zombie's own local
+// space (undoes its current yaw) so the lateral-distance check means the
+// same thing regardless of which way the zombie is currently facing.
+fn zombie_hit_damage(hit_point: Vec3, zombie_transform: &Transform) -> f32 {
+    let relative = hit_point - zombie_transform.translation;
+    let local = zombie_transform.rotation.inverse() * relative;
+    let lateral = local.xz().length();
+
+    if local.y >= HITBOX_HEAD_MIN_Y {
+        HEAD_DAMAGE
+    } else if lateral >= HITBOX_LIMB_LATERAL_MIN {
+        // An arm (or, near the ground, a leg) sticking out from the torso.
+        LIMB_DAMAGE
+    } else if local.y >= HITBOX_CHEST_MIN_Y {
+        CHEST_DAMAGE
+    } else if local.y >= HITBOX_BELLY_MIN_Y {
+        BELLY_DAMAGE
+    } else {
+        // Below the belly band and close to the central axis: legs.
+        LIMB_DAMAGE
+    }
+}
 // Flip to false to spawn zombies without their chase AI, for isolating
 // whether apparent movement is the AI reacting or an actual bug.
 const ZOMBIE_AI_ENABLED: bool = true;
@@ -167,6 +246,18 @@ const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
 const ZOMBIE_AVOID_PROBE_DISTANCE: f32 = 2.5;
 const ZOMBIE_AVOID_ANGLES_DEG: [f32; 6] = [25.0, -25.0, 50.0, -50.0, 80.0, -80.0];
 
+// Screen-space (not 3D billboard) health bar floating above each zombie —
+// projected from its world position every frame via Camera::world_to_viewport.
+// The zombie's own Transform.translation is roughly its physics capsule's
+// center (avian3d capsule colliders are centered on the entity origin), not
+// its feet — measured around y=0.8-0.9 for a resting capsule. For a ~2m-tall
+// zombie (see ZOMBIE_SCALE) that puts the head roughly 1.1-1.3m above the
+// root; lowered from an earlier 2.1 (visually confirmed too high — was
+// floating a meter above the actual head).
+const ZOMBIE_HEALTH_BAR_HEIGHT: f32 = 1.3;
+const ZOMBIE_HEALTH_BAR_WIDTH_PX: f32 = 50.0;
+const ZOMBIE_HEALTH_BAR_HEIGHT_PX: f32 = 6.0;
+
 // Animation clip order inside zombie.glb: 0=Bite, 1=Crawl, 2=Idle, 3=Run,
 // 4=Walk (read from the file's own animations list).
 const ZOMBIE_ANIM_IDLE: usize = 2;
@@ -178,10 +269,26 @@ struct FpsCamera {
     pitch: f32,
 }
 
+// Shared by shoot(), move_player_physics, and apply_aim_zoom so "aiming"
+// means the same thing everywhere: cursor locked (actually playing, not
+// paused/menu'd out) and right mouse button held.
+fn is_aiming(cursor: &CursorOptions, mouse: &ButtonInput<MouseButton>) -> bool {
+    cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Right)
+}
+
 #[derive(Component, Default)]
 struct ViewRecoil {
     pitch_kick: f32,
     yaw_kick: f32,
+}
+
+// -1.0 (full lean left) .. 1.0 (full lean right), eased toward whichever of
+// Q/E is held (or back to 0.0 if neither/both are) by apply_lean_input.
+// apply_view_recoil turns this into camera roll, sync_camera_to_player turns
+// it into a sideways offset.
+#[derive(Component, Default)]
+struct Lean {
+    current: f32,
 }
 
 // The physics body: a capsule moved each frame via avian3d's MoveAndSlide.
@@ -211,11 +318,35 @@ struct GameOverUi;
 #[derive(Component)]
 struct HealthUi;
 
+// Screen-space health bar tracking a specific zombie — update_zombie_health_bars
+// repositions it every frame and despawns it once the tracked zombie is gone.
+#[derive(Component)]
+struct ZombieHealthBar {
+    zombie: Entity,
+}
+
+// The colored fill inside a ZombieHealthBar, whose width update_zombie_health_bars
+// scales to the tracked zombie's remaining health fraction.
+#[derive(Component)]
+struct ZombieHealthBarFill;
+
+// The "n.n/max" text above a ZombieHealthBar, kept in sync by
+// update_zombie_health_bars alongside the fill's width.
+#[derive(Component)]
+struct ZombieHealthBarText;
+
 #[derive(Component)]
 struct Gun {
     base_offset: Vec3,
     recoil: f32,
+    ammo: u32,
+    // 0.0 = not reloading. Ticks down from RELOAD_DURATION.
+    reload_remaining: f32,
 }
+
+// Marks the ammo counter text so update_ammo_ui can find it.
+#[derive(Component)]
+struct AmmoUi;
 
 #[derive(Component)]
 struct HitMarker {
@@ -365,24 +496,40 @@ fn main() {
         .add_systems(
             Update,
             (
-                grab_cursor,
-                mouse_look,
-                shoot,
-                apply_view_recoil,
-                move_player_physics,
-                sync_camera_to_player,
-                move_zombies,
-                zombies_damage_player,
-                check_game_over,
-                restart_game,
-                respawn_zombies,
-                wire_zombie_animations,
-                update_zombie_animation,
-                update_health_ui,
-                gun_recoil,
-                despawn_hit_markers,
-                despawn_muzzle_flashes,
-                update_smoke,
+                // Tuples of systems only implement IntoSystemConfigs up to
+                // arity 20, so this is split into two nested chained groups
+                // rather than one flat tuple — .chain() on the outer tuple
+                // still orders everything from grab_cursor through
+                // update_smoke, just via two hops instead of one.
+                (
+                    grab_cursor,
+                    mouse_look,
+                    shoot,
+                    reload_gun,
+                    apply_lean_input,
+                    apply_view_recoil,
+                    apply_aim_zoom,
+                    move_player_physics,
+                    sync_camera_to_player,
+                    move_zombies,
+                    zombies_damage_player,
+                )
+                    .chain(),
+                (
+                    check_game_over,
+                    restart_game,
+                    respawn_zombies,
+                    wire_zombie_animations,
+                    update_zombie_animation,
+                    update_health_ui,
+                    update_zombie_health_bars,
+                    gun_view_animation,
+                    update_ammo_ui,
+                    despawn_hit_markers,
+                    despawn_muzzle_flashes,
+                    update_smoke,
+                )
+                    .chain(),
             )
                 .chain(),
         )
@@ -538,9 +685,14 @@ fn setup(
     let camera = commands
         .spawn((
             Camera3d::default(),
+            Projection::Perspective(PerspectiveProjection {
+                fov: BASE_FOV,
+                ..default()
+            }),
             Transform::from_translation(PLAYER_SPAWN + Vec3::Y * EYE_HEIGHT_OFFSET),
             FpsCamera { yaw: 0.0, pitch: 0.0 },
             ViewRecoil::default(),
+            Lean::default(),
             AmbientLight {
                 color: Color::WHITE,
                 brightness: 250.0,
@@ -567,12 +719,15 @@ fn setup(
         Gun {
             base_offset: GUN_OFFSET,
             recoil: 0.0,
+            ammo: MAGAZINE_SIZE,
+            reload_remaining: 0.0,
         },
         ChildOf(camera),
     ));
 
     spawn_crosshair(&mut commands);
     spawn_health_ui(&mut commands);
+    spawn_ammo_ui(&mut commands);
 }
 
 // Sponza.gltf ships as pure geometry with no KHR_lights_punctual data (single
@@ -605,6 +760,110 @@ fn spawn_zombie(commands: &mut Commands, asset_server: &AssetServer, spawn_pos: 
                 .picker(FirstToScore { threshold: 0.8 })
                 .when(NearPlayer, ChaseAction),
         );
+    }
+    let zombie_entity = zombie.id();
+    spawn_zombie_health_bar(commands, zombie_entity);
+}
+
+fn spawn_zombie_health_bar(commands: &mut Commands, zombie: Entity) {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(ZOMBIE_HEALTH_BAR_WIDTH_PX),
+                height: Val::Px(ZOMBIE_HEALTH_BAR_HEIGHT_PX),
+                // Hidden until update_zombie_health_bars positions it — avoids
+                // a one-frame flash at the top-left corner (Val::Px(0.0)
+                // default) before the first world_to_viewport projection.
+                display: Display::None,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+            ZombieHealthBar { zombie },
+        ))
+        .with_children(|bar| {
+            bar.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.2, 0.9, 0.2)),
+                ZombieHealthBarFill,
+            ));
+            // Sits just above the bar itself rather than overlapping it —
+            // the bar is only ZOMBIE_HEALTH_BAR_HEIGHT_PX (6px) tall, too
+            // thin to hold readable text.
+            bar.spawn((
+                Text::new(format!("{ZOMBIE_MAX_HEALTH}/{ZOMBIE_MAX_HEALTH}")),
+                TextFont {
+                    font_size: 12.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(-14.0),
+                    width: Val::Percent(100.0),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                ZombieHealthBarText,
+            ));
+        });
+}
+
+// Projects each tracked zombie's head position to screen space every frame
+// and resizes its fill bar to match remaining health. Despawns the bar once
+// its zombie is gone (killed or otherwise despawned) instead of relying on
+// any despawn-children-together mechanism, since the bar is a sibling UI
+// entity, not a child of the zombie.
+fn update_zombie_health_bars(
+    mut commands: Commands,
+    camera: Query<(&Camera, &GlobalTransform), With<FpsCamera>>,
+    zombies: Query<(&Transform, &Health), With<Zombie>>,
+    mut bars: Query<(Entity, &ZombieHealthBar, &mut Node, &Children)>,
+    mut fills: Query<&mut Node, (With<ZombieHealthBarFill>, Without<ZombieHealthBar>)>,
+    mut texts: Query<&mut Text, With<ZombieHealthBarText>>,
+) {
+    let Ok((camera, camera_transform)) = camera.single() else {
+        return;
+    };
+    for (bar_entity, bar, mut node, children) in &mut bars {
+        let Ok((zombie_transform, health)) = zombies.get(bar.zombie) else {
+            // try_despawn instead of despawn: observed in testing that a bar
+            // can already be gone by the time this runs (exact interleaving
+            // with other despawn commands the same frame isn't pinned down),
+            // and a plain despawn logs a noisy "entity already despawned"
+            // warning for what's a harmless no-op either way.
+            commands.entity(bar_entity).try_despawn();
+            continue;
+        };
+
+        let head_pos = zombie_transform.translation + Vec3::Y * ZOMBIE_HEALTH_BAR_HEIGHT;
+        let Ok(screen_pos) = camera.world_to_viewport(camera_transform, head_pos) else {
+            // Behind the camera's near plane — hide instead of drawing a
+            // bar at some nonsensical projected position.
+            node.display = Display::None;
+            continue;
+        };
+        node.display = Display::Flex;
+        node.left = Val::Px(screen_pos.x - ZOMBIE_HEALTH_BAR_WIDTH_PX / 2.0);
+        node.top = Val::Px(screen_pos.y);
+
+        let fraction = (health.0 / ZOMBIE_MAX_HEALTH).clamp(0.0, 1.0);
+        for &child in children {
+            if let Ok(mut fill_node) = fills.get_mut(child) {
+                fill_node.width = Val::Percent(fraction * 100.0);
+            }
+            if let Ok(mut text) = texts.get_mut(child) {
+                text.0 = format!("{:.1}/{ZOMBIE_MAX_HEALTH}", health.0.max(0.0));
+            }
+        }
     }
 }
 
@@ -701,6 +960,38 @@ fn update_health_ui(
         return;
     };
     text.0 = format!("HP: {}", health.0.max(0.0).round() as i32);
+}
+
+fn spawn_ammo_ui(commands: &mut Commands) {
+    commands.spawn((
+        Text::new(format!("{MAGAZINE_SIZE} / {MAGAZINE_SIZE}")),
+        TextFont {
+            font_size: 24.0,
+            ..default()
+        },
+        TextColor(Color::WHITE),
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(16.0),
+            bottom: Val::Px(16.0),
+            ..default()
+        },
+        AmmoUi,
+    ));
+}
+
+fn update_ammo_ui(gun: Query<&Gun, Changed<Gun>>, mut text: Query<&mut Text, With<AmmoUi>>) {
+    let Ok(gun) = gun.single() else {
+        return;
+    };
+    let Ok(mut text) = text.single_mut() else {
+        return;
+    };
+    text.0 = if gun.reload_remaining > 0.0 {
+        "RELOADING...".to_string()
+    } else {
+        format!("{} / {MAGAZINE_SIZE}", gun.ammo)
+    };
 }
 
 // Any zombie actively chasing (has Chase) and within melee range continuously
@@ -918,16 +1209,75 @@ fn mouse_look(
 
 // Composes the camera's final rotation from the mouse-driven aim plus the
 // current recoil kick, and lets the kick spring back down over time.
-fn apply_view_recoil(time: Res<Time>, mut query: Query<(&mut Transform, &FpsCamera, &mut ViewRecoil)>) {
-    for (mut transform, cam, mut recoil) in &mut query {
+fn apply_view_recoil(
+    time: Res<Time>,
+    mut query: Query<(&mut Transform, &FpsCamera, &mut ViewRecoil, &Lean)>,
+) {
+    for (mut transform, cam, mut recoil, lean) in &mut query {
         let decay = (RECOIL_RECOVERY_SPEED * time.delta_secs()).min(1.0);
         recoil.pitch_kick *= 1.0 - decay;
         recoil.yaw_kick *= 1.0 - decay;
 
         let pitch = (cam.pitch + recoil.pitch_kick).clamp(-1.54, 1.54);
         let yaw = cam.yaw + recoil.yaw_kick;
-        transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+        // Negated: a positive Z rotation in Bevy's right-handed coords rolls
+        // the camera the opposite way from what "lean left tilts view left"
+        // intuitively expects (confirmed backwards when actually tested).
+        let roll = -LEAN_ROLL_DEG.to_radians() * lean.current;
+        transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
     }
+}
+
+// Q leans left, E leans right; releasing both (or holding both at once)
+// eases back to upright. Gated on !game_over like the other player-facing
+// input systems.
+fn apply_lean_input(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    game_over: Res<GameOver>,
+    mut query: Query<&mut Lean>,
+) {
+    let target = if game_over.0 {
+        0.0
+    } else {
+        match (keys.pressed(KeyCode::KeyQ), keys.pressed(KeyCode::KeyE)) {
+            (true, false) => -1.0,
+            (false, true) => 1.0,
+            _ => 0.0,
+        }
+    };
+    for mut lean in &mut query {
+        let t = (LEAN_SPEED * time.delta_secs()).min(1.0);
+        lean.current += (target - lean.current) * t;
+    }
+}
+
+// Lerps the camera's FOV toward a zoomed-in value while aiming, and back to
+// BASE_FOV otherwise — same lerp-toward-target shape as apply_view_recoil's
+// decay, just easing up instead of down.
+fn apply_aim_zoom(
+    time: Res<Time>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    mut camera: Query<&mut Projection, With<FpsCamera>>,
+) {
+    let Ok(cursor) = cursor.single() else {
+        return;
+    };
+    let target_fov = if is_aiming(cursor, &mouse) {
+        BASE_FOV * AIM_FOV_MULTIPLIER
+    } else {
+        BASE_FOV
+    };
+
+    let Ok(mut projection) = camera.single_mut() else {
+        return;
+    };
+    let Projection::Perspective(perspective) = projection.as_mut() else {
+        return;
+    };
+    let t = (AIM_ZOOM_SPEED * time.delta_secs()).min(1.0);
+    perspective.fov += (target_fov - perspective.fov) * t;
 }
 
 // Ground-based movement: WASD sets horizontal velocity relative to where the
@@ -943,9 +1293,11 @@ fn apply_view_recoil(time: Res<Time>, mut query: Query<(&mut Transform, &FpsCame
 // here.
 fn move_player_physics(
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
     time: Res<Time>,
     game_over: Res<GameOver>,
     camera_query: Query<&FpsCamera>,
+    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut player_query: Query<(&mut Transform, &mut Player)>,
     mover: MoveAndSlide,
 ) {
@@ -954,6 +1306,11 @@ fn move_player_physics(
     }
     let Ok(cam) = camera_query.single() else {
         return;
+    };
+    let move_speed = if cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse)) {
+        MOVE_SPEED * AIM_MOVE_SPEED_MULTIPLIER
+    } else {
+        MOVE_SPEED
     };
     let Ok((mut transform, mut player)) = player_query.single_mut() else {
         return;
@@ -977,7 +1334,7 @@ fn move_player_physics(
         horizontal -= right;
     }
     if horizontal != Vec3::ZERO {
-        horizontal = horizontal.normalize() * MOVE_SPEED;
+        horizontal = horizontal.normalize() * move_speed;
     }
 
     let mut vertical_velocity = player.vertical_velocity;
@@ -1028,15 +1385,20 @@ fn move_player_physics(
 // apply_view_recoil, which runs earlier in the chain.
 fn sync_camera_to_player(
     player_query: Query<&Transform, (With<Player>, Without<FpsCamera>)>,
-    mut camera_query: Query<&mut Transform, With<FpsCamera>>,
+    mut camera_query: Query<(&mut Transform, &Lean), With<FpsCamera>>,
 ) {
     let Ok(player_transform) = player_query.single() else {
         return;
     };
-    let Ok(mut camera_transform) = camera_query.single_mut() else {
+    let Ok((mut camera_transform, lean)) = camera_query.single_mut() else {
         return;
     };
-    camera_transform.translation = player_transform.translation + Vec3::Y * EYE_HEIGHT_OFFSET;
+    let eye = player_transform.translation + Vec3::Y * EYE_HEIGHT_OFFSET;
+    // Uses the rotation apply_view_recoil already set this frame (it runs
+    // earlier in the chain) so the peek offset follows whichever way the
+    // camera is actually facing, including its current lean roll.
+    let side_offset = *camera_transform.right() * LEAN_SIDE_OFFSET * lean.current;
+    camera_transform.translation = eye + side_offset;
 }
 
 // Holding left click (while the cursor is locked) fires automatically at
@@ -1048,6 +1410,7 @@ fn shoot(
     mut commands: Commands,
     time: Res<Time>,
     game_over: Res<GameOver>,
+    keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut camera: Query<(&Transform, &mut ViewRecoil), With<FpsCamera>>,
@@ -1056,7 +1419,7 @@ fn shoot(
     hit_assets: Res<HitMarkerAssets>,
     muzzle_fx: Res<MuzzleFxAssets>,
     child_of: Query<&ChildOf>,
-    mut zombies: Query<&mut Health, With<Zombie>>,
+    mut zombies: Query<(&Transform, &mut Health), With<Zombie>>,
     mut respawns: ResMut<PendingZombieRespawns>,
     mut cooldown: Local<f32>,
 ) {
@@ -1072,11 +1435,17 @@ fn shoot(
     if !firing || *cooldown > 0.0 {
         return;
     }
-    *cooldown = FIRE_RATE;
-
-    for mut gun in &mut gun {
-        gun.recoil = RECOIL_DURATION;
+    let Ok(mut gun) = gun.single_mut() else {
+        return;
+    };
+    // Out of ammo or mid-reload — click, no bang. Reload is manual (KeyR via
+    // reload_gun), not automatic-on-empty, matching most FPS conventions.
+    if gun.ammo == 0 || gun.reload_remaining > 0.0 {
+        return;
     }
+    *cooldown = FIRE_RATE;
+    gun.ammo -= 1;
+    gun.recoil = RECOIL_DURATION;
 
     let Ok((camera_transform, mut recoil)) = camera.single_mut() else {
         return;
@@ -1089,7 +1458,17 @@ fn shoot(
     recoil.yaw_kick += jitter * RECOIL_YAW_JITTER;
 
     let heat = recoil.pitch_kick / RECOIL_PITCH_KICK_MAX;
-    let spread = BULLET_SPREAD * (0.3 + heat);
+    let mut spread = BULLET_SPREAD * (0.3 + heat);
+    if is_aiming(cursor, &mouse) {
+        spread *= AIM_SPREAD_MULTIPLIER;
+    }
+    let moving = keys.pressed(KeyCode::KeyW)
+        || keys.pressed(KeyCode::KeyA)
+        || keys.pressed(KeyCode::KeyS)
+        || keys.pressed(KeyCode::KeyD);
+    if !moving {
+        spread *= STATIONARY_SPREAD_MULTIPLIER;
+    }
     let spread_x = ops::sin(time.elapsed_secs() * 613.0) * spread;
     let spread_y = ops::sin(time.elapsed_secs() * 811.0) * spread;
     let spread_dir = *camera_transform.forward()
@@ -1149,13 +1528,13 @@ fn shoot(
 
         // The ray hits a mesh primitive somewhere deep inside the zombie's
         // glTF hierarchy, not the Zombie-tagged root itself — walk up the
-        // parent chain to find it. Any hitbox does the same BULLET_DAMAGE
-        // (no headshot multiplier) — despawns once accumulated damage
-        // reaches ZOMBIE_MAX_HEALTH.
+        // parent chain to find it. Damage depends on where the hit landed
+        // (zombie_hit_damage) — despawns once accumulated damage reaches
+        // ZOMBIE_MAX_HEALTH.
         let mut current = hit_entity;
         for _ in 0..20 {
-            if let Ok(mut health) = zombies.get_mut(current) {
-                health.0 -= BULLET_DAMAGE;
+            if let Ok((zombie_transform, mut health)) = zombies.get_mut(current) {
+                health.0 -= zombie_hit_damage(hit.point, zombie_transform);
                 if health.0 <= 0.0 {
                     commands.entity(current).despawn();
                     respawns.0.push(ZOMBIE_RESPAWN_DELAY);
@@ -1170,14 +1549,50 @@ fn shoot(
     }
 }
 
-fn gun_recoil(time: Res<Time>, mut query: Query<(&mut Transform, &mut Gun)>) {
+// Pressing R starts a reload unless the mag's already full or a reload is
+// already running. The magazine refills instantly once RELOAD_DURATION
+// elapses (see gun_view_animation) — no partial reloads, no spare-mag count
+// (infinite reserve ammo), same simplicity tradeoff as the rest of the gun's
+// systems.
+fn reload_gun(keys: Res<ButtonInput<KeyCode>>, game_over: Res<GameOver>, mut gun: Query<&mut Gun>) {
+    if game_over.0 || !keys.just_pressed(KeyCode::KeyR) {
+        return;
+    }
+    let Ok(mut gun) = gun.single_mut() else {
+        return;
+    };
+    if gun.ammo == MAGAZINE_SIZE || gun.reload_remaining > 0.0 {
+        return;
+    }
+    gun.reload_remaining = RELOAD_DURATION;
+}
+
+// Drives the gun mesh's Transform from Gun's recoil/reload_remaining state —
+// both are just countdown timers, this is the only system that turns them
+// into an actual pose each frame (also where reload_remaining hitting 0
+// refills the magazine).
+fn gun_view_animation(time: Res<Time>, mut query: Query<(&mut Transform, &mut Gun)>) {
     for (mut transform, mut gun) in &mut query {
-        if gun.recoil <= 0.0 {
-            continue;
+        if gun.recoil > 0.0 {
+            gun.recoil = (gun.recoil - time.delta_secs()).max(0.0);
         }
-        gun.recoil = (gun.recoil - time.delta_secs()).max(0.0);
-        let t = gun.recoil / RECOIL_DURATION;
-        transform.translation = gun.base_offset + Vec3::new(0.0, 0.0, RECOIL_KICK * t);
+        if gun.reload_remaining > 0.0 {
+            gun.reload_remaining = (gun.reload_remaining - time.delta_secs()).max(0.0);
+            if gun.reload_remaining == 0.0 {
+                gun.ammo = MAGAZINE_SIZE;
+            }
+        }
+
+        let recoil_t = gun.recoil / RECOIL_DURATION;
+        let reload_t = gun.reload_remaining / RELOAD_DURATION;
+        // Parabola: 0 at both ends of the reload, 1 at the midpoint — the
+        // gun dips down/tilts away and comes back up as the reload finishes.
+        let dip = 4.0 * reload_t * (1.0 - reload_t);
+
+        transform.translation =
+            gun.base_offset + Vec3::new(0.0, -RELOAD_DIP * dip, RECOIL_KICK * recoil_t);
+        transform.rotation = Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians())
+            * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * dip);
     }
 }
 
