@@ -168,17 +168,22 @@ const AIM_SPREAD_MULTIPLIER: f32 = 0.35;
 // (unlike AIM_FOV_MULTIPLIER above, which just narrows the whole screen).
 // Scroll wheel adjusts the zoom level while aiming.
 const SCOPE_TEXTURE_SIZE: u32 = 512;
-const SCOPE_MIN_ZOOM: f32 = 2.0;
-const SCOPE_MAX_ZOOM: f32 = 8.0;
-const SCOPE_DEFAULT_ZOOM: f32 = 4.0;
-const SCOPE_ZOOM_STEP: f32 = 0.5;
+const SCOPE_MIN_ZOOM: f32 = 6.0;
+const SCOPE_MAX_ZOOM: f32 = 25.0;
+const SCOPE_DEFAULT_ZOOM: f32 = 8.0;
+// Multiplicative, not additive — fov = SCOPE_BASE_FOV / zoom means a fixed
+// +0.5-per-scroll step barely changes the FOV once zoom is already high
+// (1/x flattens out), so zooming in felt like it kept slowing down. A fixed
+// percentage step keeps the FOV change proportionally the same at every
+// zoom level instead.
+const SCOPE_ZOOM_STEP_FACTOR: f32 = 1.15;
 const SCOPE_BASE_FOV: f32 = BASE_FOV;
 // Guessed placement for the lens quad in the same camera-local space as
 // GUN_ADS_OFFSET/MUZZLE_OFFSET (can't see the model to calibrate exactly) —
 // closer to the camera than GUN_ADS_OFFSET.z so it renders in front of the
 // gun mesh instead of getting clipped inside it.
 const SCOPE_LENS_OFFSET: Vec3 = Vec3::new(0.0, 0.0, -0.2);
-const SCOPE_LENS_SIZE: f32 = 0.05;
+const SCOPE_LENS_SIZE: f32 = 0.03;
 // Raises the scope camera's eyepoint above the main camera's (the scope
 // sits on top of the barrel, not at eye level) — offset along the camera's
 // own local up so it stays correct regardless of pitch. See sync_scope_camera.
@@ -1238,7 +1243,7 @@ fn setup(
     ));
 
     commands.spawn((
-        Mesh3d(meshes.add(Rectangle::new(SCOPE_LENS_SIZE, SCOPE_LENS_SIZE))),
+        Mesh3d(meshes.add(Circle::new(SCOPE_LENS_SIZE / 2.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color_texture: Some(scope_image_handle),
             unlit: true,
@@ -2794,7 +2799,8 @@ fn adjust_scope_zoom(
         return;
     }
     for event in wheel.read() {
-        zoom.0 = (zoom.0 + event.y.signum() * SCOPE_ZOOM_STEP).clamp(SCOPE_MIN_ZOOM, SCOPE_MAX_ZOOM);
+        zoom.0 = (zoom.0 * SCOPE_ZOOM_STEP_FACTOR.powf(event.y.signum()))
+            .clamp(SCOPE_MIN_ZOOM, SCOPE_MAX_ZOOM);
     }
 }
 
