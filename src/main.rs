@@ -1,26 +1,17 @@
 use avian3d::prelude::*;
-// Not a glob import: bevior_tree::prelude also exports a `Node` trait that
-// collides with bevy::prelude's `Node` (UI) struct.
-use bevior_tree::prelude::{
-    BehaviorTree, BehaviorTreePlugin, BehaviorTreeRoot, InfiniteLoop, NodeResult, Sequence,
-    TaskBridge, TaskChecker, TaskDefinition, TaskEvent, TaskEventListener, TaskStatus,
-    insert_while_running,
-};
 use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex};
 use bevy::animation::AnimationPlayer;
-use bevy::dev_tools::diagnostics_overlay::{DiagnosticsOverlay, DiagnosticsOverlayPlugin};
 use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
 use bevy::input::mouse::MouseMotion;
 use bevy::math::ops;
-use bevy::pbr::diagnostic::MaterialAllocatorDiagnosticPlugin;
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
 use bevy::picking::mesh_picking::MeshPickingPlugin;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
-use bevy::render::diagnostic::MeshAllocatorDiagnosticPlugin;
 use bevy::render::view::Msaa;
+use bevy::scene::SceneRoot;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window};
-use bevy::world_serialization::WorldAssetRoot;
+use big_brain::prelude::*;
 
 // Downloaded once into assets/models/ so the app doesn't depend on a network
 // request (and a remote repo's file layout) every time it starts.
@@ -134,6 +125,16 @@ const ZOMBIE_CHASE_RANGE: f32 = 60.0;
 // move — this stops it a bit short instead, like a melee attack range.
 const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
 
+// Cheap stand-in for real pathfinding (no navmesh — Sponza is a single
+// merged mesh with no per-object separation to build one from, and every
+// navmesh crate checked either needs a physics-engine-specific Collider type
+// that conflicts with our avian3d version, or is pinned to an old Bevy). If
+// a raycast toward the player is blocked within this distance, the zombie
+// tries a handful of alternate angles and steers around whatever's in the
+// way instead of pushing straight into it forever.
+const ZOMBIE_AVOID_PROBE_DISTANCE: f32 = 2.5;
+const ZOMBIE_AVOID_ANGLES_DEG: [f32; 6] = [25.0, -25.0, 50.0, -50.0, 80.0, -80.0];
+
 // Animation clip order inside zombie.glb: 0=Bite, 1=Crawl, 2=Idle, 3=Run,
 // 4=Walk (read from the file's own animations list).
 const ZOMBIE_ANIM_IDLE: usize = 2;
@@ -196,14 +197,73 @@ struct ZombieMotion {
     grounded: bool,
 }
 
-// Inserted on a zombie by the ChaseTask while it's running (and removed when
-// it stops), following bevior_tree's `insert_while_running` pattern. Read by
-// move_zombies to know which entities should be walking toward the player,
-// and by update_zombie_animation to pick Walk vs Idle.
+// Driven by big-brain's Thinker/Scorer/Action below (NearPlayer scorer picks
+// ChaseAction once in range). ChaseAction's Requested/Cancelled handlers
+// insert/remove this component — move_zombies reads it to know which
+// entities should be walking, and update_zombie_animation reads its
+// presence/absence to pick Walk vs Idle, same as the rest of this file did
+// under seldom_state.
 #[derive(Component, Clone)]
+#[component(storage = "SparseSet")]
 struct Chase {
     target: Entity,
     speed: f32,
+}
+
+// Scorer: 1.0 when within ZOMBIE_CHASE_RANGE of the player, 0.0 otherwise.
+// big-brain's FirstToScore picker (threshold below) turns that into a
+// binary pick, same effect as seldom_state's near_player trigger/negation.
+#[derive(Clone, Component, Debug, ScorerBuilder)]
+struct NearPlayer;
+
+fn near_player_scorer(
+    player: Res<PlayerEntity>,
+    transforms: Query<&Transform>,
+    mut query: Query<(&Actor, &mut Score), With<NearPlayer>>,
+) {
+    for (Actor(actor), mut score) in &mut query {
+        let (Ok(actor_transform), Ok(player_transform)) =
+            (transforms.get(*actor), transforms.get(player.0))
+        else {
+            score.set(0.0);
+            continue;
+        };
+        let distance = actor_transform
+            .translation
+            .distance(player_transform.translation);
+        score.set(if distance <= ZOMBIE_CHASE_RANGE { 1.0 } else { 0.0 });
+    }
+}
+
+// Action: inserts Chase on Requested (entering the picked state), removes it
+// on Cancelled (score dropped below threshold, big-brain deselects it). Stays
+// Executing indefinitely otherwise — chasing has no "done" state, only
+// "no longer in range".
+#[derive(Clone, Component, Debug, ActionBuilder)]
+struct ChaseAction;
+
+fn chase_action_system(
+    player: Res<PlayerEntity>,
+    mut commands: Commands,
+    mut query: Query<(&Actor, &mut ActionState, &ActionSpan)>,
+) {
+    for (Actor(actor), mut state, span) in &mut query {
+        let _guard = span.span().enter();
+        match *state {
+            ActionState::Requested => {
+                commands.entity(*actor).insert(Chase {
+                    target: player.0,
+                    speed: ZOMBIE_SPEED,
+                });
+                *state = ActionState::Executing;
+            }
+            ActionState::Cancelled => {
+                commands.entity(*actor).remove::<Chase>();
+                *state = ActionState::Failure;
+            }
+            _ => {}
+        }
+    }
 }
 
 // Points a zombie's root entity at the specific descendant entity that
@@ -228,15 +288,20 @@ fn main() {
             DefaultPlugins,
             MeshPickingPlugin,
             PhysicsPlugins::default(),
-            BehaviorTreePlugin::default(),
-            // Draggable/collapsible perf panels + a lightweight always-on FPS overlay.
-            // FpsOverlayPlugin already pulls in FrameTimeDiagnosticsPlugin itself.
-            DiagnosticsOverlayPlugin,
+            BigBrainPlugin::new(PreUpdate),
+            // A lightweight always-on FPS overlay. Bevy 0.18 doesn't have the
+            // draggable DiagnosticsOverlay panels (that's 0.19-only), so this
+            // is the only diagnostics UI available here.
             FpsOverlayPlugin::default(),
-            MaterialAllocatorDiagnosticPlugin::<StandardMaterial>::default(),
-            MeshAllocatorDiagnosticPlugin,
         ))
         .add_systems(Startup, (setup, log_window_resolution))
+        .add_systems(
+            PreUpdate,
+            (
+                chase_action_system.in_set(BigBrainSet::Actions),
+                near_player_scorer.in_set(BigBrainSet::Scorers),
+            ),
+        )
         .add_systems(
             Update,
             (
@@ -317,7 +382,6 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
-    mut tree_assets: ResMut<Assets<BehaviorTreeRoot>>,
 ) {
     commands.insert_resource(HitMarkerAssets {
         mesh: meshes.add(Sphere::new(0.03)),
@@ -354,7 +418,7 @@ fn setup(
     });
 
     commands.spawn((
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(SCENE_PATH))),
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(SCENE_PATH))),
         Transform::default(),
         RigidBody::Static,
         // Waits for the scene to finish loading, then generates a trimesh
@@ -363,14 +427,10 @@ fn setup(
         ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
     ));
 
-    // Drag these windows around by their header; click the header to collapse.
-    commands.spawn(DiagnosticsOverlay::fps());
-    commands.spawn(DiagnosticsOverlay::mesh_and_standard_material());
-
     commands.spawn((
         DirectionalLight {
             illuminance: 8_000.0,
-            shadow_maps_enabled: true,
+            shadows_enabled: true,
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
@@ -400,7 +460,7 @@ fn setup(
     };
 
     for &spawn_pos in &ZOMBIE_SPAWNS {
-        spawn_zombie(&mut commands, &asset_server, &mut tree_assets, player, spawn_pos);
+        spawn_zombie(&mut commands, &asset_server, spawn_pos);
     }
     commands.insert_resource(zombie_anim);
     commands.insert_resource(PlayerEntity(player));
@@ -431,7 +491,7 @@ fn setup(
     // Viewmodel: parented to the camera so it stays fixed in the bottom-right
     // of the screen regardless of where the player looks.
     commands.spawn((
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(GUN_PATH))),
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(GUN_PATH))),
         Transform::from_translation(GUN_OFFSET)
             .with_rotation(Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians()))
             .with_scale(Vec3::splat(GUN_SCALE)),
@@ -459,15 +519,9 @@ const HALL_LIGHT_INTENSITY: f32 = 200_000.0;
 
 // Shared by the initial spawn in setup() and respawn_zombies, so a killed
 // zombie comes back identical to a freshly-spawned one.
-fn spawn_zombie(
-    commands: &mut Commands,
-    asset_server: &AssetServer,
-    tree_assets: &mut Assets<BehaviorTreeRoot>,
-    player: Entity,
-    spawn_pos: Vec3,
-) {
+fn spawn_zombie(commands: &mut Commands, asset_server: &AssetServer, spawn_pos: Vec3) {
     let mut zombie = commands.spawn((
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(ZOMBIE_PATH))),
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(ZOMBIE_PATH))),
         Transform::from_translation(spawn_pos).with_scale(Vec3::splat(ZOMBIE_SCALE)),
         Zombie,
         ZombieMotion::default(),
@@ -475,23 +529,11 @@ fn spawn_zombie(
     // Can be flipped off to test whether apparent zombie movement is the
     // chase AI reacting instantly, versus an actual movement-coupling bug.
     if ZOMBIE_AI_ENABLED {
-        // Wait until the player is within range, then chase until they
-        // leave it again — see NearTaskDefinition/ChaseTaskDefinition below
-        // for what each task actually checks.
-        zombie.insert(BehaviorTree::from_node(
-            InfiniteLoop::new(Sequence::new(vec![
-                Box::new(TaskBridge::new(Box::new(NearTaskDefinition {
-                    target: player,
-                    range: ZOMBIE_CHASE_RANGE,
-                }))),
-                Box::new(TaskBridge::new(Box::new(ChaseTaskDefinition {
-                    target: player,
-                    range: ZOMBIE_CHASE_RANGE,
-                    speed: ZOMBIE_SPEED,
-                }))),
-            ])),
-            tree_assets,
-        ));
+        zombie.insert(
+            Thinker::build()
+                .picker(FirstToScore { threshold: 0.8 })
+                .when(NearPlayer, ChaseAction),
+        );
     }
 }
 
@@ -502,7 +544,7 @@ fn spawn_hall_lights(commands: &mut Commands) {
                 color: Color::srgb(1.0, 0.78, 0.5),
                 intensity: HALL_LIGHT_INTENSITY,
                 range: 12.0,
-                shadow_maps_enabled: false,
+                shadows_enabled: false,
                 ..default()
             },
             Transform::from_xyz(x, HALL_LIGHT_HEIGHT, 0.0),
@@ -789,7 +831,7 @@ fn shoot(
             intensity: MUZZLE_LIGHT_INTENSITY,
             range: MUZZLE_LIGHT_RANGE,
             color: Color::srgb(1.0, 0.7, 0.3),
-            shadow_maps_enabled: false,
+            shadows_enabled: false,
             ..default()
         },
         MuzzleFlash {
@@ -894,77 +936,48 @@ fn update_smoke(mut commands: Commands, time: Res<Time>, mut query: Query<(Entit
     }
 }
 
-// --- Zombie AI (bevior_tree) ---
+// --- Zombie AI (big-brain, vendored fork ported to Bevy 0.18) ---
 //
-// Each zombie runs `InfiniteLoop(Sequence(NearTask, ChaseTask))`:
-//   - NearTask blocks (returns Running) until the player is within range,
-//     then succeeds and hands off to ChaseTask.
-//   - ChaseTask inserts a `Chase` component (read by move_zombies) for as
-//     long as the player stays in range, then fails once they leave it,
-//     which sends the loop back to NearTask to wait again.
-//
-// bevior_tree only manages *when* `Chase` is present — the actual walking
-// happens in the plain `move_zombies` system below, same pattern as the
-// crate's own `chase.rs` example.
+// Each zombie's Thinker picks ChaseAction once NearPlayer scores above the
+// FirstToScore threshold (defined above spawn_zombie). big-brain only
+// manages *when* the Chase component is present (chase_action_system
+// inserts/removes it on Requested/Cancelled) — the actual walking happens in
+// the plain move_zombies system below.
 
-#[derive(Debug)]
-struct NearTaskDefinition {
-    target: Entity,
-    range: f32,
-}
-impl TaskDefinition for NearTaskDefinition {
-    fn build_checker(&self) -> Box<TaskChecker> {
-        let target = self.target;
-        let range = self.range;
-        Box::new(IntoSystem::into_system(
-            move |In(entity): In<Entity>, transforms: Query<&Transform>| {
-                let (Ok(zombie), Ok(player)) = (transforms.get(entity), transforms.get(target))
-                else {
-                    return TaskStatus::Complete(NodeResult::Failure);
-                };
-                if zombie.translation.distance(player.translation) <= range {
-                    TaskStatus::Complete(NodeResult::Success)
-                } else {
-                    TaskStatus::Running
-                }
-            },
-        ))
-    }
-    fn build_event_listeners(&self) -> Vec<(TaskEvent, Box<TaskEventListener>)> {
-        vec![]
-    }
-}
-
-#[derive(Debug)]
-struct ChaseTaskDefinition {
-    target: Entity,
-    range: f32,
-    speed: f32,
-}
-impl TaskDefinition for ChaseTaskDefinition {
-    fn build_checker(&self) -> Box<TaskChecker> {
-        let target = self.target;
-        let range = self.range;
-        Box::new(IntoSystem::into_system(
-            move |In(entity): In<Entity>, transforms: Query<&Transform>| {
-                let (Ok(zombie), Ok(player)) = (transforms.get(entity), transforms.get(target))
-                else {
-                    return TaskStatus::Complete(NodeResult::Failure);
-                };
-                if zombie.translation.distance(player.translation) <= range {
-                    TaskStatus::Running
-                } else {
-                    TaskStatus::Complete(NodeResult::Failure)
-                }
-            },
-        ))
-    }
-    fn build_event_listeners(&self) -> Vec<(TaskEvent, Box<TaskEventListener>)> {
-        insert_while_running(Chase {
-            target: self.target,
-            speed: self.speed,
+// Casts a ray toward `desired_direction`; if it's blocked within
+// ZOMBIE_AVOID_PROBE_DISTANCE (or closer than the target itself), tries a
+// handful of angles rotated left/right around it and returns the first clear
+// one. This is a cheap stand-in for real pathfinding — good enough to route
+// around a single column, not a substitute for an actual navmesh. Falls back
+// to the original direction if every angle is blocked too.
+fn steer_around_obstacles(
+    spatial_query: &SpatialQuery,
+    origin: Vec3,
+    desired_direction: Vec3,
+    distance_to_target: f32,
+    filter: &SpatialQueryFilter,
+) -> Vec3 {
+    let probe_distance = ZOMBIE_AVOID_PROBE_DISTANCE.min(distance_to_target);
+    let is_clear = |direction: Vec3| {
+        Dir3::new(direction).is_ok_and(|dir| {
+            spatial_query
+                .cast_ray(origin, dir, probe_distance, false, filter)
+                .is_none()
         })
+    };
+
+    if is_clear(desired_direction) {
+        return desired_direction;
     }
+    for angle_deg in ZOMBIE_AVOID_ANGLES_DEG {
+        let rotated = Quat::from_rotation_y(angle_deg.to_radians()) * desired_direction;
+        if is_clear(rotated) {
+            return rotated;
+        }
+    }
+    // Every probed angle is blocked too — keep going straight. move_and_slide
+    // will still stop the zombie at the actual wall instead of clipping through.
+    desired_direction
 }
 
 // Walks every zombie with an active `Chase` toward its target using the same
@@ -983,12 +996,21 @@ fn move_zombies(
 
         let to_target = target_transform.translation - transform.translation;
         let horizontal = Vec3::new(to_target.x, 0.0, to_target.z);
-        let horizontal_velocity =
-            if horizontal.length_squared() > ZOMBIE_STOP_DISTANCE * ZOMBIE_STOP_DISTANCE {
-                horizontal.normalize() * chase.speed
-            } else {
-                Vec3::ZERO
-            };
+        let distance = horizontal.length();
+        let filter = SpatialQueryFilter::default();
+        let horizontal_velocity = if distance > ZOMBIE_STOP_DISTANCE {
+            let desired_direction = horizontal / distance;
+            let steered = steer_around_obstacles(
+                &mover.spatial_query,
+                transform.translation,
+                desired_direction,
+                distance,
+                &filter,
+            );
+            steered * chase.speed
+        } else {
+            Vec3::ZERO
+        };
 
         if motion.grounded && motion.vertical_velocity < 0.0 {
             motion.vertical_velocity = -1.0;
@@ -998,7 +1020,6 @@ fn move_zombies(
         let velocity = horizontal_velocity + Vec3::Y * motion.vertical_velocity;
         let shape = Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH);
         let config = MoveAndSlideConfig::default();
-        let filter = SpatialQueryFilter::default();
 
         let mut grounded_this_frame = false;
         let output = mover.move_and_slide(
@@ -1042,8 +1063,6 @@ fn respawn_zombies(
     time: Res<Time>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut tree_assets: ResMut<Assets<BehaviorTreeRoot>>,
-    player: Res<PlayerEntity>,
     mut respawns: ResMut<PendingZombieRespawns>,
     mut next_spawn_index: Local<usize>,
 ) {
@@ -1055,7 +1074,7 @@ fn respawn_zombies(
             respawns.0.swap_remove(i);
             let spawn_pos = ZOMBIE_SPAWNS[*next_spawn_index % ZOMBIE_SPAWNS.len()];
             *next_spawn_index += 1;
-            spawn_zombie(&mut commands, &asset_server, &mut tree_assets, player.0, spawn_pos);
+            spawn_zombie(&mut commands, &asset_server, spawn_pos);
         } else {
             i += 1;
         }
