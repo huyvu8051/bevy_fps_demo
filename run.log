@@ -1,0 +1,22 @@
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.22s
+     Running `target/debug/bevy_fps_demo`
+[2m2026-08-21T18:26:38.182086Z[0m [32m INFO[0m [2mbevy_diagnostic::system_information_diagnostics_plugin::internal[0m[2m:[0m SystemInfo { os: "macOS 26.2", kernel: "25.2.0", cpu: "Apple M1 Pro", core_count: "10", memory: "32.0 GiB" }
+[2m2026-08-21T18:26:38.182539Z[0m [32m INFO[0m [2mbevy_app::terminal_ctrl_c_handler[0m[2m:[0m Skipping installing `Ctrl+C` handler as one was already installed. Please call `TerminalCtrlCHandlerPlugin::gracefully_exit` in your own `Ctrl+C` handler if you want Bevy to gracefully exit on `Ctrl+C`.
+[2m2026-08-21T18:26:38.225399Z[0m [32m INFO[0m [2mbevy_render::renderer[0m[2m:[0m AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, driver: "", driver_info: "", backend: Metal }
+[2m2026-08-21T18:26:38.425407Z[0m [32m INFO[0m [2mbevy_render::batching::gpu_preprocessing[0m[2m:[0m GPU preprocessing is fully supported on this device.
+[2m2026-08-21T18:26:38.451238Z[0m [32m INFO[0m [2mbevy_winit::system[0m[2m:[0m Creating new window bevy_fps_demo (0v0)
+[2m2026-08-21T18:26:38.506462Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Window: 2560x1440 physical px, 1280.0x720.0 logical px, scale factor 2.00
+[2m2026-08-21T18:26:40.929571Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(-0.3977196, 1.4392104, 1.64067) (distance 2.40m)
+[2m2026-08-21T18:26:43.038548Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(3.3526423, 1.0206623, 3.5790243) (distance 3.79m)
+[2m2026-08-21T18:26:43.139151Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(3.5120122, 1.0165473, 3.6320653) (distance 3.95m)
+[2m2026-08-21T18:26:43.246383Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(3.7912183, 0.9868618, 3.5719209) (distance 4.23m)
+[2m2026-08-21T18:26:43.347905Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(4.127011, 0.9393188, 3.530276) (distance 4.57m)
+[2m2026-08-21T18:26:43.463072Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(4.5859094, 0.831569, 3.5422325) (distance 5.04m)
+[2m2026-08-21T18:26:43.571787Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(5.0437937, 0.6803645, 3.5637536) (distance 5.51m)
+[2m2026-08-21T18:26:43.679139Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(5.501618, 0.6045385, 3.5691063) (distance 5.97m)
+[2m2026-08-21T18:26:43.779604Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(5.888412, 0.556716, 3.48415) (distance 6.36m)
+[2m2026-08-21T18:26:43.888928Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(6.290607, 0.50813556, 3.4326231) (distance 6.77m)
+[2m2026-08-21T18:26:43.998827Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(6.7557063, 0.45255238, 3.4211445) (distance 7.24m)
+[2m2026-08-21T18:26:44.104230Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(7.017047, 0.46255237, 3.3209043) (distance 7.51m)
+[2m2026-08-21T18:26:44.205302Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(8.562439, 0.36358035, 3.2053857) (distance 9.06m)
+[2m2026-08-21T18:26:44.314004Z[0m [32m INFO[0m [2mbevy_fps_demo[0m[2m:[0m Hit at Vec3(8.606608, 0.44490913, 3.1214347) (distance 9.10m)

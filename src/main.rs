@@ -177,8 +177,12 @@ const SCOPE_BASE_FOV: f32 = BASE_FOV;
 // GUN_ADS_OFFSET/MUZZLE_OFFSET (can't see the model to calibrate exactly) —
 // closer to the camera than GUN_ADS_OFFSET.z so it renders in front of the
 // gun mesh instead of getting clipped inside it.
-const SCOPE_LENS_OFFSET: Vec3 = Vec3::new(0.0, -0.05, -0.2);
+const SCOPE_LENS_OFFSET: Vec3 = Vec3::new(0.0, 0.0, -0.2);
 const SCOPE_LENS_SIZE: f32 = 0.05;
+// Raises the scope camera's eyepoint above the main camera's (the scope
+// sits on top of the barrel, not at eye level) — offset along the camera's
+// own local up so it stays correct regardless of pitch. See sync_scope_camera.
+const SCOPE_CAMERA_HEIGHT_OFFSET: f32 = 0.0;
 // Only shown/rendered once ADS is nearly fully blended in, and hidden again
 // once the gun starts raising for a wall — no point paying for a second
 // render pass while the lens wouldn't be aligned with the scope anyway.
@@ -948,8 +952,15 @@ struct VfxAssets<'w, 's> {
     blood: Res<'w, BloodAssets>,
     // Folded in here too (rather than its own top-level param) for the same
     // 16-param-limit reason — see the SpatialQuery addition in shoot(). Also
-    // excludes GunMesh now — see its own doc comment for why.
-    vfx_meshes: Query<'w, 's, (), Or<(With<HitMarker>, With<MuzzleFlash>, With<Smoke>, With<GunMesh>)>>,
+    // excludes GunMesh and ScopeLens now — see their own doc comments for
+    // why (both sit right in front of the camera and would otherwise catch
+    // the shot raycast before it reaches anything downrange).
+    vfx_meshes: Query<
+        'w,
+        's,
+        (),
+        Or<(With<HitMarker>, With<MuzzleFlash>, With<Smoke>, With<GunMesh>, With<ScopeLens>)>,
+    >,
     // Also just along for the ride here (not vfx-related at all) — shoot()
     // needs the player's PlayerStance for current_bullet_spread and has no
     // room for a dedicated top-level param.
@@ -2763,6 +2774,7 @@ fn sync_scope_camera(
         return;
     };
     *scope_transform = *camera_transform;
+    scope_transform.translation += camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET;
 }
 
 // Scroll wheel steps ScopeZoom up/down while aiming — ignored (and drained,
