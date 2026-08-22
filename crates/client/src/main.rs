@@ -368,6 +368,19 @@ const ZOMBIE_ATTACK_DAMAGE: f32 = 12.0;
 const ZOMBIE_SCALE: f32 = 0.1;
 const ZOMBIE_PATH: &str = "models/zombie.glb";
 
+// "Soldier" by Quaternius (poly.pizza, CC-BY 3.0) —
+// https://poly.pizza/m/oAArCNHjFB — keep this attribution if shared/published.
+// Purely a debug visual for now (KeyT toggles it, see PlayerModelVisible) —
+// third-person games would parent something like this to every player, but
+// this project is first-person-only, so it's just there to eyeball whether
+// the local player's own position/orientation tracking looks right without
+// needing a second client. Unlike ZOMBIE_SCALE, this model's own node
+// hierarchy already bakes in a correcting scale (exported at 100x, common
+// for Blender-authored rigs), so it's spawned at Bevy's default scale (1.0)
+// — not independently calibrated against anything in-game, so it may need
+// visual tuning.
+const PLAYER_MODEL_PATH: &str = "models/soldier.glb";
+
 // Damage number popup: spawned at the hit point, drifts straight up in
 // world space, and fades out over its lifetime.
 const FLOATING_DAMAGE_LIFETIME: f32 = 0.9;
@@ -571,6 +584,16 @@ struct ZombieHealthBarsHidden(bool);
 // past ZOMBIE_LOD_DISTANCE.
 #[derive(Resource, Default)]
 struct ZombieLodDisabled(bool);
+
+// Debug/dev: toggled by KeyT. Shows/hides the local player's own third-person
+// PLAYER_MODEL_PATH visual — see its own doc comment for why this exists.
+#[derive(Resource, Default)]
+struct PlayerModelVisible(bool);
+
+// Marks the standalone entity spawned for PLAYER_MODEL_PATH — see
+// sync_player_model.
+#[derive(Component)]
+struct PlayerModel;
 
 // Rough per-system CPU timings (wall-clock ms this frame), shown in the
 // debug panel so it's obvious which system is actually eating frame time as
@@ -1117,6 +1140,7 @@ fn main() {
         .init_resource::<ZombieHealthBarsHidden>()
         .init_resource::<ZombieLodDisabled>()
         .init_resource::<PredictedInputs>()
+        .init_resource::<PlayerModelVisible>()
         .add_systems(Startup, (setup, log_window_resolution))
         .add_systems(
             Update,
@@ -1142,6 +1166,7 @@ fn main() {
                     send_player_input,
                     predict_player_movement,
                     sync_camera_to_player,
+                    sync_player_model,
                     update_zombie_lod,
                     zombies_damage_player,
                 )
@@ -1400,6 +1425,18 @@ fn setup(
             PlayerStance::default(),
         ));
     commands.insert_resource(GameOver(false));
+
+    // Not parented to the Player entity — sync_player_model copies position
+    // and (camera) yaw onto it each frame instead, same "separate entity,
+    // synced Transform" pattern move_zombies/zombies use for NetTransform,
+    // so this doesn't have to fight the Player entity's own physics-owned
+    // Transform or its avian3d collider.
+    commands.spawn((
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(PLAYER_MODEL_PATH))),
+        Transform::from_translation(PLAYER_SPAWN),
+        Visibility::Hidden,
+        PlayerModel,
+    ));
 
     let zombie_clips: Vec<Handle<AnimationClip>> = [ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_WALK]
         .into_iter()
@@ -2367,6 +2404,7 @@ fn update_debug_panel(
     zombie_anim_disabled: Res<ZombieAnimDisabled>,
     zombie_health_bars_hidden: Res<ZombieHealthBarsHidden>,
     zombie_lod_disabled: Res<ZombieLodDisabled>,
+    player_model_visible: Res<PlayerModelVisible>,
     zombies: Query<(), With<Zombie>>,
     mut text: Query<(&mut Text, &mut Node), With<DebugPanelText>>,
 ) {
@@ -2401,6 +2439,7 @@ fn update_debug_panel(
          M: Zombie animation [{}]\n\
          J: Zombie health bars [{}]\n\
          K: Zombie LOD (distance shortcut) [{}]\n\
+         T: Player model (debug visual) [{}]\n\
          move_zombies: {:.2}ms | health bars: {:.2}ms | zombies: {} (near: {})\n\
          Zombies alive: {}",
         on_off(noclip.0),
@@ -2413,6 +2452,7 @@ fn update_debug_panel(
         on_off(!zombie_anim_disabled.0),
         on_off(!zombie_health_bars_hidden.0),
         on_off(!zombie_lod_disabled.0),
+        on_off(player_model_visible.0),
         timings.move_zombies_ms,
         timings.health_bars_ms,
         timings.zombie_count,
@@ -2791,6 +2831,7 @@ fn toggle_debug_flags(
     mut zombie_anim_disabled: ResMut<ZombieAnimDisabled>,
     mut zombie_health_bars_hidden: ResMut<ZombieHealthBarsHidden>,
     mut zombie_lod_disabled: ResMut<ZombieLodDisabled>,
+    mut player_model_visible: ResMut<PlayerModelVisible>,
 ) {
     if keys.just_pressed(KeyCode::KeyF) {
         freeze.0 = !freeze.0;
@@ -2818,6 +2859,9 @@ fn toggle_debug_flags(
     }
     if keys.just_pressed(KeyCode::KeyK) {
         zombie_lod_disabled.0 = !zombie_lod_disabled.0;
+    }
+    if keys.just_pressed(KeyCode::KeyT) {
+        player_model_visible.0 = !player_model_visible.0;
     }
 }
 
@@ -3056,6 +3100,39 @@ fn sync_camera_to_player(
     // camera is actually facing, including its current lean roll.
     let side_offset = *camera_transform.right() * LEAN_SIDE_OFFSET * lean.current;
     camera_transform.translation = eye + side_offset;
+}
+
+// Best-guess vertical offset from the player capsule's center (Transform.
+// translation — see PLAYER_RADIUS/PLAYER_LENGTH in shared: capsule radius
+// 0.35 + half its 0.9 length) down to ground level, for whenever
+// PLAYER_MODEL_PATH's own rig root turns out to sit at its feet like most
+// humanoid exports. Unverified — nudge after actually looking at it in-game
+// (KeyT).
+const PLAYER_MODEL_Y_OFFSET: f32 = -0.8;
+
+// Keeps PlayerModel (see its own doc comment) glued to the local player's
+// position and look yaw every frame — not parented, so this is the
+// equivalent of what parenting would do automatically, minus fighting the
+// Player entity's own avian3d-owned Transform.
+fn sync_player_model(
+    visible: Res<PlayerModelVisible>,
+    player: Query<&Transform, (With<Player>, Without<PlayerModel>)>,
+    camera: Query<&FpsCamera>,
+    mut model: Query<(&mut Transform, &mut Visibility), (With<PlayerModel>, Without<Player>)>,
+) {
+    let Ok((mut transform, mut visibility)) = model.single_mut() else {
+        return;
+    };
+    *visibility = if visible.0 { Visibility::Visible } else { Visibility::Hidden };
+    if !visible.0 {
+        return;
+    }
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+    let yaw = camera.single().map(|cam| cam.yaw).unwrap_or(0.0);
+    transform.translation = player_transform.translation + Vec3::Y * PLAYER_MODEL_Y_OFFSET;
+    transform.rotation = Quat::from_rotation_y(yaw);
 }
 
 // Holding left click (while the cursor is locked) fires automatically at
