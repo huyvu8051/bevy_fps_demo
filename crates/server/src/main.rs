@@ -22,9 +22,11 @@ use shared::{
     NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PLAYER_SPAWN, ZOMBIE_AI_ENABLED,
     ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE, ZOMBIE_LENGTH,
     ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
-    PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY, ZOMBIE_RADIUS,
-    ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS, ZOMBIE_SEPARATION_STRENGTH,
-    ZOMBIE_SPAWNS, ZOMBIE_SPEED, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
+    DIRECTOR_CALM_DURATION_SECS, DIRECTOR_CALM_PRESSURE_THRESHOLD, DIRECTOR_HORDE_SIZE,
+    DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, PLAYER_THREAT_DECAY_RATE,
+    PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY,
+    ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS, ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS,
+    ZOMBIE_SPEED, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 use vleue_navigator::prelude::*;
@@ -71,6 +73,7 @@ fn main() {
         .init_resource::<PendingRespawns>()
         .init_resource::<GameOver>()
         .init_resource::<DebugBotIdCounter>()
+        .init_resource::<Director>()
         .add_systems(Startup, (start_server, spawn_arena_colliders, spawn_zombie_navmesh, spawn_initial_zombies))
         .add_systems(
             PreUpdate,
@@ -79,7 +82,10 @@ fn main() {
                 near_player_scorer.in_set(BigBrainSet::Scorers),
             ),
         )
-        .add_systems(Update, (move_players, move_zombies, move_debug_bots, tick_respawns, decay_player_threat))
+        .add_systems(
+            Update,
+            (move_players, move_zombies, move_debug_bots, tick_respawns, decay_player_threat, run_ai_director),
+        )
         .add_observer(spawn_player)
         .add_observer(log_client_disconnect)
         .add_observer(apply_client_input)
@@ -186,6 +192,65 @@ fn decay_player_threat(time: Res<Time>, mut threats: Query<&mut PlayerThreat>) {
     for mut threat in &mut threats {
         threat.0 *= decay;
     }
+}
+
+// Stress-based horde pacing: smooths "how many zombies are currently close
+// enough to bite someone" into `pressure`, and once that's stayed calm for
+// DIRECTOR_CALM_DURATION_SECS straight, spawns a DIRECTOR_HORDE_SIZE burst
+// near a connected player — the L4D-style "quiet, then a scare" beat. See
+// DIRECTOR_MELEE_RANGE's own doc comment for why pressure is measured this
+// way instead of from player Health (which the server can't see).
+#[derive(Resource, Default)]
+struct Director {
+    pressure: f32,
+    calm_timer: f32,
+}
+
+fn run_ai_director(
+    time: Res<Time>,
+    mut director: ResMut<Director>,
+    mut commands: Commands,
+    zombies: Query<(&Transform, &ChaseTarget), With<Zombie>>,
+    players: Query<(Entity, &Transform), (With<NetPlayer>, Without<Zombie>)>,
+) {
+    let dt = time.delta_secs();
+    let player_positions: Vec<(Entity, Vec3)> = players.iter().map(|(e, t)| (e, t.translation)).collect();
+    if player_positions.is_empty() {
+        return;
+    }
+
+    let in_melee_range = zombies
+        .iter()
+        .filter(|(transform, chase_target)| {
+            chase_target
+                .entity
+                .and_then(|target| player_positions.iter().find(|&&(e, _)| e == target))
+                .is_some_and(|&(_, pos)| transform.translation.distance(pos) <= DIRECTOR_MELEE_RANGE)
+        })
+        .count() as f32;
+
+    director.pressure += (in_melee_range - director.pressure) * (DIRECTOR_PRESSURE_SMOOTHING * dt).min(1.0);
+
+    if director.pressure <= DIRECTOR_CALM_PRESSURE_THRESHOLD {
+        director.calm_timer += dt;
+    } else {
+        director.calm_timer = 0.0;
+    }
+
+    if director.calm_timer < DIRECTOR_CALM_DURATION_SECS {
+        return;
+    }
+    director.calm_timer = 0.0;
+
+    let center = player_positions[(time.elapsed_secs() as usize) % player_positions.len()].1;
+    let spawns: Vec<Vec3> = (0..DIRECTOR_HORDE_SIZE)
+        .map(|i| {
+            let angle = i as f32 / DIRECTOR_HORDE_SIZE as f32 * std::f32::consts::TAU;
+            center + Vec3::new(angle.cos(), 0.0, angle.sin()) * DIRECTOR_HORDE_SPAWN_RADIUS
+        })
+        .collect();
+    info!("AI Director: sustained calm, spawning a {}-zombie horde near {center}", DIRECTOR_HORDE_SIZE);
+    spawn_zombies(&mut commands, &spawns, true);
 }
 
 fn log_client_disconnect(trigger: On<Remove, ConnectedClient>) {
@@ -319,14 +384,21 @@ fn column_footprint(x: f32, z: f32) -> Vec<Vec2> {
 }
 
 fn spawn_initial_zombies(mut commands: Commands) {
-    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS);
+    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, false);
 }
 
 fn spawn_more_zombies(_trigger: On<FromClient<SpawnMoreZombies>>, mut commands: Commands) {
-    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS);
+    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, false);
 }
 
-fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3]) {
+// Marks a zombie spawned by run_ai_director as a bonus horde rather than
+// baseline population — handle_fire_shot checks this to skip scheduling a
+// 1:1 respawn on kill, so a calm-triggered horde actually thins out once
+// dealt with instead of permanently growing the total zombie count.
+#[derive(Component)]
+struct DirectorSpawned;
+
+fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], director_spawned: bool) {
     for &spawn_pos in spawns {
         let mut zombie = commands.spawn((
             Transform::from_translation(spawn_pos),
@@ -355,6 +427,9 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3]) {
         ));
         if ZOMBIE_AI_ENABLED {
             zombie.insert(Thinker::build().picker(FirstToScore { threshold: 0.8 }).when(NearPlayer, ChaseAction));
+        }
+        if director_spawned {
+            zombie.insert(DirectorSpawned);
         }
     }
 }
@@ -633,7 +708,7 @@ fn tick_respawns(
         }
     }
     if !to_spawn.is_empty() {
-        spawn_zombies(&mut commands, &to_spawn);
+        spawn_zombies(&mut commands, &to_spawn, false);
     }
 }
 
@@ -649,6 +724,7 @@ fn handle_fire_shot(
     mut zombies: Query<(&Transform, &mut Health, &mut KnockbackVelocity), With<Zombie>>,
     mut respawns: ResMut<PendingRespawns>,
     mut threats: Query<&mut PlayerThreat>,
+    director_spawned: Query<(), With<DirectorSpawned>>,
 ) {
     // Gunfire is noise — it draws zombie attention even on a miss, so this
     // counts before the raycast below decides hit/miss.
@@ -673,8 +749,11 @@ fn handle_fire_shot(
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {
+            let was_director_spawn = director_spawned.contains(hit.entity);
             commands.entity(hit.entity).despawn();
-            respawns.0.push(ZOMBIE_RESPAWN_DELAY);
+            if !was_director_spawn {
+                respawns.0.push(ZOMBIE_RESPAWN_DELAY);
+            }
         } else {
             let push = Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
             knockback.0 += push;
@@ -733,6 +812,7 @@ fn on_request_restart(
     mut commands: Commands,
     mut game_over: ResMut<GameOver>,
     mut respawns: ResMut<PendingRespawns>,
+    mut director: ResMut<Director>,
     zombies: Query<Entity, With<Zombie>>,
     mut players: Query<(Entity, &mut Transform, &mut Player, &mut NetTransform), With<NetPlayer>>,
 ) {
@@ -741,11 +821,12 @@ fn on_request_restart(
     }
     game_over.0 = false;
     respawns.0.clear();
+    *director = Director::default();
 
     for entity in &zombies {
         commands.entity(entity).despawn();
     }
-    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS);
+    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, false);
 
     for (entity, mut transform, mut player, mut net_transform) in &mut players {
         commands.entity(entity).remove::<Dead>();

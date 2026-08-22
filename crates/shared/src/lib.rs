@@ -225,6 +225,26 @@ pub const ZOMBIE_THREAT_DISTANCE_BONUS: f32 = 8.0;
 // ZOMBIE_THREAT_DISTANCE_BONUS: it should only break close ties, not
 // override a real difference in distance or threat.
 pub const ZOMBIE_LOAD_BALANCE_PENALTY: f32 = 1.0;
+
+// --- AI Director (server-only, see crates/server) ---
+// Paces bonus zombie hordes on top of the fixed baseline population
+// (ZOMBIE_SPAWNS + 1:1 respawn-on-kill): if the server-visible "pressure"
+// (how many zombies are currently in melee range of a player) stays low for
+// a while, players are due for a scare — spawn a burst near one of them.
+// Player Health/damage is purely client-local (see PlayerDied's own doc
+// comment), so pressure is measured from something the server can actually
+// see instead: zombies close enough to bite. Director-spawned zombies don't
+// get 1:1 respawned on death (see crates/server's DirectorSpawned) so a
+// sustained-calm streak doesn't permanently grow the population every time
+// it fires.
+pub const DIRECTOR_MELEE_RANGE: f32 = 2.5;
+// How fast the smoothed pressure value chases the instantaneous melee-range
+// zombie count — higher reacts faster, lower is steadier/less twitchy.
+pub const DIRECTOR_PRESSURE_SMOOTHING: f32 = 0.5;
+pub const DIRECTOR_CALM_PRESSURE_THRESHOLD: f32 = 1.0;
+pub const DIRECTOR_CALM_DURATION_SECS: f32 = 20.0;
+pub const DIRECTOR_HORDE_SIZE: usize = 10;
+pub const DIRECTOR_HORDE_SPAWN_RADIUS: f32 = 6.0;
 pub const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
 pub const ZOMBIE_LOD_DISTANCE: f32 = 15.0;
 pub const ZOMBIE_LOD_REST_HEIGHT: f32 = 0.9;
