@@ -793,6 +793,63 @@ struct ZombieHitboxBones {
 const PROTOCOL_ID: u64 = 0;
 
 fn connect_to_server(mut commands: Commands, channels: Res<RepliconChannels>) {
+    spawn_client_connection(&mut commands, &channels);
+}
+
+// How often auto_reconnect retries after losing the connection — mainly a
+// dev-workflow thing: lets the server be killed and restarted (e.g. after
+// rebuilding it) without also having to restart the client every time.
+const RECONNECT_INTERVAL: f32 = 2.0;
+
+// Runs every frame; only actually does anything once ClientState has been
+// Disconnected for RECONNECT_INTERVAL seconds straight (the timer resets
+// otherwise, including while Connecting/Connected). The stale RenetClient/
+// NetcodeClientTransport left over from the dropped connection is removed
+// first — resource_added::<RenetClient> (see bevy_replicon_renet2's own
+// set_connecting) is what drives the Connecting state transition, and that
+// only fires on a genuine remove-then-insert, not an insert over an
+// already-present resource.
+fn auto_reconnect(
+    mut commands: Commands,
+    time: Res<Time>,
+    state: Res<State<ClientState>>,
+    channels: Res<RepliconChannels>,
+    mut disconnected_for: Local<f32>,
+) {
+    if *state.get() != ClientState::Disconnected {
+        *disconnected_for = 0.0;
+        return;
+    }
+    *disconnected_for += time.delta_secs();
+    if *disconnected_for < RECONNECT_INTERVAL {
+        return;
+    }
+    *disconnected_for = 0.0;
+
+    commands.remove_resource::<RenetClient>();
+    commands.remove_resource::<NetcodeClientTransport>();
+    info!("connection lost — retrying");
+    spawn_client_connection(&mut commands, &channels);
+}
+
+// bevy_replicon's own OnExit(ClientState::Connected) cleanup only clears its
+// internal server-entity-id bookkeeping (ServerEntityMap etc.) — it never
+// despawns the actual client-side entities that were spawned for
+// replication. Left alone, a reconnect (see auto_reconnect) to a fresh
+// server session would leave every zombie/player from the old session
+// sitting around frozen forever (no longer receiving updates, since the
+// new server has no idea they exist) while a whole new set spawns in on
+// top of them. Despawning Zombie/NetPlayer entities here — not the local
+// Player puppet, which isn't replicated — clears them out; things that
+// reference a zombie by Entity (health bars) already self-heal once their
+// target is gone (see update_zombie_health_bars).
+fn despawn_replicated_on_disconnect(mut commands: Commands, entities: Query<Entity, Or<(With<Zombie>, With<NetPlayer>)>>) {
+    for entity in &entities {
+        commands.entity(entity).despawn();
+    }
+}
+
+fn spawn_client_connection(commands: &mut Commands, channels: &RepliconChannels) {
     let server_addr: std::net::SocketAddr = std::env::var("SERVER_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:5031".to_string())
         .parse()
@@ -922,7 +979,8 @@ fn main() {
         .add_client_event::<RequestRestart>(Channel::Ordered)
         .add_server_event::<GameStateEvent>(Channel::Ordered)
         .add_systems(Startup, connect_to_server)
-        .add_systems(Update, (log_client_connection_state, mirror_net_transform))
+        .add_systems(Update, (log_client_connection_state, mirror_net_transform, auto_reconnect))
+        .add_systems(OnExit(ClientState::Connected), despawn_replicated_on_disconnect)
         .add_observer(mark_local_player)
         .add_observer(on_zombie_replicated)
         .add_observer(on_shot_fx)
