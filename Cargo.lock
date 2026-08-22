@@ -5429,6 +5429,7 @@ name = "shared"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "renet2_netcode",
  "serde",
 ]
 

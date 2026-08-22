@@ -26,6 +26,7 @@ use shared::{
     ZOMBIE_PATH_RECALC_INTERVAL, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_SEPARATION_RADIUS,
     ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS, ZOMBIE_SPEED, ZOMBIE_STOP_DISTANCE,
 };
+use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 use vleue_navigator::prelude::*;
 
 // Fixed debug port — the client connects here by default (see SERVER_ADDR
@@ -110,8 +111,8 @@ fn start_server(mut commands: Commands, channels: Res<RepliconChannels>) {
         authentication: ServerAuthentication::Unsecure,
         socket_addresses: vec![vec![public_addr]],
     };
-    let transport = NetcodeServerTransport::new(server_config, NativeSocket::new(socket).unwrap())
-        .expect("failed to set up netcode server transport");
+    let socket = LaggedSocket::new(NativeSocket::new(socket).unwrap(), sim_latency_from_env());
+    let transport = NetcodeServerTransport::new(server_config, socket).expect("failed to set up netcode server transport");
 
     commands.insert_resource(server);
     commands.insert_resource(transport);

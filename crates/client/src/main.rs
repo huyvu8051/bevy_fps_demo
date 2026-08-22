@@ -30,6 +30,7 @@ use shared::{
     ZombieAttackTimer, ZombieMotion, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH,
     ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
 };
+use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
 // Downloaded once into assets/models/ so the app doesn't depend on a network
 // request (and a remote repo's file layout) every time it starts.
@@ -873,7 +874,8 @@ fn spawn_client_connection(commands: &mut Commands, channels: &RepliconChannels)
         server_addr,
         user_data: None,
     };
-    let transport = NetcodeClientTransport::new(current_time, authentication, NativeSocket::new(socket).unwrap())
+    let socket = LaggedSocket::new(NativeSocket::new(socket).unwrap(), sim_latency_from_env());
+    let transport = NetcodeClientTransport::new(current_time, authentication, socket)
         .expect("failed to set up netcode client transport");
 
     commands.insert_resource(client);
@@ -909,14 +911,99 @@ fn mark_local_player(
     }
 }
 
-// Copies the server-replicated pose into the plain local Transform every
-// NetPlayer entity gets via its #[require(Transform)] — for the local
-// player this feeds apply_server_player_transform below; for everyone
-// else it's the pose a future remote-player visual would read.
-fn mirror_net_transform(mut players: Query<(&NetTransform, &mut Transform), Changed<NetTransform>>) {
+// The local player's own replicated pose is copied straight through,
+// uninterpolated — feeds apply_server_player_transform below. Adding
+// interpolation's fixed rendering delay here would double up with however
+// much round-trip latency input already has (see prediction, still future
+// work) instead of smoothing anything, since there's no "other player" to
+// smooth relative to; it's this client's own last-known-authoritative pose.
+fn mirror_local_player_net_transform(
+    mut players: Query<(&NetTransform, &mut Transform), (Changed<NetTransform>, With<LocalPlayer>)>,
+) {
     for (net_transform, mut transform) in &mut players {
         transform.translation = net_transform.translation;
         transform.rotation = Quat::from_rotation_y(net_transform.yaw);
+    }
+}
+
+// How far in the past (relative to local received-snapshot time) everyone
+// else's replicated position is rendered at — always enough of a buffer to
+// interpolate between two *actually received* snapshots instead of
+// snapping to each new one as it lands (choppy under network jitter/the
+// gaps between replication ticks). Time is measured by when this client
+// received each snapshot, not the server's own clock (no clock sync needed
+// for this simplified approach — it just smooths out this client's own
+// arrival jitter).
+const INTERP_DELAY_SECS: f32 = 0.1;
+// Snapshots older than this relative to the newest one are dropped —
+// keeps the buffer from growing unbounded if an entity stops replicating
+// (e.g. a zombie the LOD/crowd-hz throttle rarely updates) without needing
+// a fixed-size ring buffer.
+const INTERP_BUFFER_MAX_AGE_SECS: f32 = 0.5;
+
+// Timestamped position/yaw history for interpolate_net_transform — every
+// NetTransform-carrying entity gets one (see on_net_transform_replicated),
+// including the local player's, but mirror_local_player_net_transform
+// bypasses it for that one (Without<LocalPlayer> everywhere below).
+#[derive(Component, Default)]
+struct NetTransformBuffer {
+    snapshots: std::collections::VecDeque<(f32, Vec3, f32)>,
+}
+
+fn on_net_transform_replicated(trigger: On<Add, NetTransform>, mut commands: Commands) {
+    commands.entity(trigger.event().entity).insert(NetTransformBuffer::default());
+}
+
+// Appends a timestamped snapshot every time replication actually updates
+// NetTransform — this is the "actually received" data interpolate_net_transform
+// draws its two bracketing points from.
+fn buffer_net_transform(
+    time: Res<Time>,
+    mut entities: Query<(&NetTransform, &mut NetTransformBuffer), (Changed<NetTransform>, Without<LocalPlayer>)>,
+) {
+    let now = time.elapsed_secs();
+    for (net_transform, mut buffer) in &mut entities {
+        buffer.snapshots.push_back((now, net_transform.translation, net_transform.yaw));
+        while buffer.snapshots.len() > 2 && now - buffer.snapshots[1].0 > INTERP_BUFFER_MAX_AGE_SECS {
+            buffer.snapshots.pop_front();
+        }
+    }
+}
+
+// Renders every non-local NetTransform entity (zombies today; other
+// players once they have a visual — see mirror_local_player_net_transform's
+// comment on why the local player skips this) at INTERP_DELAY_SECS behind
+// its own snapshot buffer, lerped between whichever two received snapshots
+// bracket that render time. Falls back to the newest/oldest snapshot
+// (still no visible snap, just holds position) when render_time falls
+// outside the buffered range — before the first snapshot arrives, or once
+// the buffer catches up to real time between replication ticks.
+fn interpolate_net_transform(time: Res<Time>, mut entities: Query<(&NetTransformBuffer, &mut Transform), Without<LocalPlayer>>) {
+    let render_time = time.elapsed_secs() - INTERP_DELAY_SECS;
+    for (buffer, mut transform) in &mut entities {
+        let Some(&(_, latest_pos, latest_yaw)) = buffer.snapshots.back() else {
+            continue;
+        };
+        if buffer.snapshots.len() < 2 || render_time >= buffer.snapshots.back().unwrap().0 {
+            transform.translation = latest_pos;
+            transform.rotation = Quat::from_rotation_y(latest_yaw);
+            continue;
+        }
+
+        let bracket = buffer.snapshots.iter().zip(buffer.snapshots.iter().skip(1)).find(|(a, b)| render_time >= a.0 && render_time <= b.0);
+        let Some((&(t0, pos0, yaw0), &(t1, pos1, yaw1))) = bracket else {
+            // render_time is older than every buffered snapshot — hold at
+            // the oldest one rather than extrapolate backwards.
+            let &(_, pos, yaw) = buffer.snapshots.front().unwrap();
+            transform.translation = pos;
+            transform.rotation = Quat::from_rotation_y(yaw);
+            continue;
+        };
+
+        let span = (t1 - t0).max(f32::EPSILON);
+        let t = ((render_time - t0) / span).clamp(0.0, 1.0);
+        transform.translation = pos0.lerp(pos1, t);
+        transform.rotation = Quat::from_rotation_y(yaw0).slerp(Quat::from_rotation_y(yaw1), t);
     }
 }
 
@@ -979,10 +1066,19 @@ fn main() {
         .add_client_event::<RequestRestart>(Channel::Ordered)
         .add_server_event::<GameStateEvent>(Channel::Ordered)
         .add_systems(Startup, connect_to_server)
-        .add_systems(Update, (log_client_connection_state, mirror_net_transform, auto_reconnect))
+        .add_systems(
+            Update,
+            (
+                log_client_connection_state,
+                mirror_local_player_net_transform,
+                (buffer_net_transform, interpolate_net_transform).chain(),
+                auto_reconnect,
+            ),
+        )
         .add_systems(OnExit(ClientState::Connected), despawn_replicated_on_disconnect)
         .add_observer(mark_local_player)
         .add_observer(on_zombie_replicated)
+        .add_observer(on_net_transform_replicated)
         .add_observer(on_shot_fx)
         .add_observer(on_game_state_event)
         .init_resource::<Noclip>()

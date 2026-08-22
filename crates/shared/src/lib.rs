@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+pub mod sim_latency;
+
 // Plain gameplay data shared between the (future) authoritative server and
 // the client — no rendering/audio handles, no avian3d/big-brain types, so
 // this crate can compile headless. Doc comments trimmed to what's still
