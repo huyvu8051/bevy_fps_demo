@@ -92,14 +92,16 @@ impl Default for ZombieAttackTimer {
 }
 
 // Driven by big-brain's Thinker/Scorer/Action (NearPlayer scorer picks
-// ChaseAction once in range, both still defined in crates/client for now).
+// ChaseAction once in range — both server-only, see crates/server).
 // ChaseAction's Requested/Cancelled handlers insert/remove this component —
-// move_zombies reads it to know which entities should be walking, and
-// update_zombie_animation reads its presence/absence to pick Walk vs Idle.
+// move_zombies reads its presence to know which zombies should be walking
+// at all. No `target` field: with more than one player connected, the
+// nearest one can change moment to moment, so move_zombies just re-picks
+// the nearest connected player fresh every frame instead of chasing
+// whichever one happened to be nearest when this was first inserted.
 #[derive(Component, Clone)]
 #[component(storage = "SparseSet")]
 pub struct Chase {
-    pub target: Entity,
     pub speed: f32,
 }
 

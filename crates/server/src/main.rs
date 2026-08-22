@@ -62,7 +62,6 @@ fn main() {
         .add_client_event::<PlayerDied>(Channel::Ordered)
         .add_client_event::<RequestRestart>(Channel::Ordered)
         .add_server_event::<GameStateEvent>(Channel::Ordered)
-        .init_resource::<TargetPlayer>()
         .init_resource::<PendingRespawns>()
         .init_resource::<GameOver>()
         .add_systems(Startup, (start_server, spawn_arena_colliders, spawn_zombie_navmesh, spawn_initial_zombies))
@@ -83,14 +82,6 @@ fn main() {
         .add_observer(handle_fire_shot)
         .run();
 }
-
-// The single entity every zombie's Chase targets — currently "whichever
-// player connected first" (matches the game's original single-player-era
-// design, just extended to survive that player disconnecting). Picking the
-// *nearest* player per-zombie instead is real future work for proper co-op,
-// not needed to get zombie replication itself working.
-#[derive(Resource, Default)]
-struct TargetPlayer(Option<Entity>);
 
 fn start_server(mut commands: Commands, channels: Res<RepliconChannels>) {
     let server = RenetServer::new(ConnectionConfig::from_channels(
@@ -150,7 +141,7 @@ fn spawn_arena_colliders(mut commands: Commands) {
 // entity (same pattern bevy_replicon_renet2's tic_tac_toe example uses) —
 // no separate lookup/owner component needed, since ClientId::Client wraps
 // this exact Entity.
-fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands, mut target: ResMut<TargetPlayer>) {
+fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands) {
     let entity = trigger.event().entity;
     info!("client connected: {entity}");
     commands.entity(entity).insert((
@@ -170,17 +161,10 @@ fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands, mut t
         LastProcessedInput::default(),
         Replicated,
     ));
-    if target.0.is_none() {
-        target.0 = Some(entity);
-    }
 }
 
-fn log_client_disconnect(trigger: On<Remove, ConnectedClient>, mut target: ResMut<TargetPlayer>) {
-    let entity = trigger.event().entity;
-    info!("client disconnected: {entity}");
-    if target.0 == Some(entity) {
-        target.0 = None;
-    }
+fn log_client_disconnect(trigger: On<Remove, ConnectedClient>) {
+    info!("client disconnected: {}", trigger.event().entity);
 }
 
 // ClientId::Client(Entity) IS the connection entity spawn_player already
@@ -286,18 +270,25 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3]) {
 #[derive(Clone, Component, Debug, ScorerBuilder)]
 struct NearPlayer;
 
+// True as soon as ANY connected player is within range — which specific
+// player doesn't matter here, only whether there's someone worth chasing
+// at all. move_zombies picks whichever connected player is actually
+// nearest fresh every frame once Chase is present (see Chase's own doc
+// comment on why there's no fixed target to track).
 fn near_player_scorer(
-    target: Res<TargetPlayer>,
     transforms: Query<&Transform>,
+    players: Query<&Transform, With<NetPlayer>>,
     mut query: Query<(&Actor, &mut Score), With<NearPlayer>>,
 ) {
     for (Actor(actor), mut score) in &mut query {
-        let scored = target.0.and_then(|player| {
-            let actor_transform = transforms.get(*actor).ok()?;
-            let player_transform = transforms.get(player).ok()?;
-            Some(actor_transform.translation.distance(player_transform.translation) <= ZOMBIE_CHASE_RANGE)
-        });
-        score.set(if scored == Some(true) { 1.0 } else { 0.0 });
+        let Ok(actor_transform) = transforms.get(*actor) else {
+            score.set(0.0);
+            continue;
+        };
+        let in_range = players
+            .iter()
+            .any(|player_transform| actor_transform.translation.distance(player_transform.translation) <= ZOMBIE_CHASE_RANGE);
+        score.set(if in_range { 1.0 } else { 0.0 });
     }
 }
 
@@ -307,11 +298,7 @@ fn near_player_scorer(
 #[derive(Clone, Component, Debug, ActionBuilder)]
 struct ChaseAction;
 
-fn chase_action_system(
-    target: Res<TargetPlayer>,
-    mut commands: Commands,
-    mut query: Query<(&Actor, &mut ActionState, &ActionSpan)>,
-) {
+fn chase_action_system(mut commands: Commands, mut query: Query<(&Actor, &mut ActionState, &ActionSpan)>) {
     for (Actor(actor), mut state, span) in &mut query {
         let _guard = span.span().enter();
         match *state {
@@ -319,13 +306,7 @@ fn chase_action_system(
             // the time this command actually applies — same benign race the
             // single-player version worked around.
             ActionState::Requested => {
-                let Some(player) = target.0 else {
-                    continue;
-                };
-                commands.entity(*actor).try_insert(Chase {
-                    target: player,
-                    speed: ZOMBIE_SPEED,
-                });
+                commands.entity(*actor).try_insert(Chase { speed: ZOMBIE_SPEED });
                 *state = ActionState::Executing;
             }
             ActionState::Cancelled => {
@@ -364,7 +345,7 @@ fn steer_around_obstacles(
 fn move_zombies(
     time: Res<Time>,
     mut zombies: Query<(Entity, &mut Transform, &mut ZombieMotion, &Chase, &mut KnockbackVelocity, &mut NetTransform), With<Zombie>>,
-    targets: Query<&Transform, Without<Zombie>>,
+    players: Query<&Transform, (With<NetPlayer>, Without<Zombie>)>,
     navmesh: Query<&ManagedNavMesh>,
     navmeshes: Res<Assets<NavMesh>>,
     mover: MoveAndSlide,
@@ -372,13 +353,21 @@ fn move_zombies(
     let navmesh = navmesh.single().ok().and_then(|handle| navmeshes.get(handle));
 
     let positions: Vec<(Entity, Vec3)> = zombies.iter().map(|(e, t, ..)| (e, t.translation)).collect();
+    // Snapshot once per frame rather than re-querying per zombie — with
+    // more than one player connected, whichever is nearest can be a
+    // different one for each zombie (see Chase's own doc comment).
+    let player_positions: Vec<Vec3> = players.iter().map(|t| t.translation).collect();
 
     for (entity, mut transform, mut motion, chase, mut knockback, mut net_transform) in &mut zombies {
-        let Ok(target_transform) = targets.get(chase.target) else {
+        let Some(target_translation) = player_positions
+            .iter()
+            .copied()
+            .min_by(|a, b| transform.translation.distance_squared(*a).total_cmp(&transform.translation.distance_squared(*b)))
+        else {
             continue;
         };
 
-        let to_target = target_transform.translation - transform.translation;
+        let to_target = target_translation - transform.translation;
         let horizontal = Vec3::new(to_target.x, 0.0, to_target.z);
         let distance = horizontal.length();
 
@@ -405,7 +394,7 @@ fn move_zombies(
             if motion.path_recalc_timer <= 0.0 {
                 motion.path_recalc_timer = ZOMBIE_PATH_RECALC_INTERVAL;
                 let desired_direction = navmesh
-                    .and_then(|navmesh| navmesh.transformed_path(transform.translation, target_transform.translation))
+                    .and_then(|navmesh| navmesh.transformed_path(transform.translation, target_translation))
                     .and_then(|path| path.path.first().copied())
                     .map(|waypoint| {
                         Vec3::new(waypoint.x - transform.translation.x, 0.0, waypoint.z - transform.translation.z)
