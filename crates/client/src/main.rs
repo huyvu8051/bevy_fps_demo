@@ -1081,8 +1081,24 @@ fn interpolate_net_transform(time: Res<Time>, mut entities: Query<(&NetTransform
 // for ground movement (which is what player-vs-player visible drift would
 // mostly show up as); a mispredicted jump/fall can drift slightly from the
 // server's version until landing resets grounded.
+// Reconciliation: only runs when LastProcessedInput actually advances (the
+// server confirming a new input), not every render frame. Popping confirmed
+// entries recovers the exact vertical_velocity/grounded the local
+// simulation had right after applying the last-confirmed input (stashed in
+// PredictedInputs by send_player_input) — resuming from that exact state,
+// rather than whatever was left over from a previous reconciliation pass,
+// is what avoids double-integrating gravity into vertical_velocity every
+// frame. That old per-frame reset-and-replay-everything approach is exactly
+// what caused the jump stutter this replaced: pending inputs stayed queued
+// for several frames (RTT-sized), and each of those frames re-simulated
+// the whole queue on top of already-advanced velocity instead of a
+// consistent baseline, so gravity kept compounding until it visibly
+// snapped/jittered.
 fn predict_player_movement(
-    local: Query<(&NetTransform, &LastProcessedInput), (With<NetPlayer>, With<LocalPlayer>, Without<Player>)>,
+    local: Query<
+        (&NetTransform, &LastProcessedInput),
+        (With<NetPlayer>, With<LocalPlayer>, Without<Player>, Changed<LastProcessedInput>),
+    >,
     mut player: Query<(&mut Transform, &mut Player, &PlayerStance), Without<NetPlayer>>,
     mut pending: ResMut<PredictedInputs>,
     mover: MoveAndSlide,
@@ -1094,12 +1110,18 @@ fn predict_player_movement(
         return;
     };
 
+    let mut confirmed_baseline = None;
     while pending.0.front().is_some_and(|&(sequence, ..)| sequence <= last_processed.0) {
-        pending.0.pop_front();
+        let (_, _, _, vertical_velocity, grounded) = pending.0.pop_front().unwrap();
+        confirmed_baseline = Some((vertical_velocity, grounded));
+    }
+    if let Some((vertical_velocity, grounded)) = confirmed_baseline {
+        player.vertical_velocity = vertical_velocity;
+        player.grounded = grounded;
     }
 
     transform.translation = net_transform.translation;
-    for (_, input, dt) in &pending.0 {
+    for (_, input, dt, ..) in &pending.0 {
         shared::movement::simulate_player_step(&mover, &mut transform, &mut player, *stance, input, *dt);
     }
 }
@@ -3117,14 +3139,21 @@ fn draw_zombie_hitboxes(
 // Noclip's fly-through-walls behavior had no server-side equivalent when
 // this moved, so KeyN's toggle is now inert (kept only so the debug panel
 // line and toggle system don't need removing too).
-// Every unacknowledged input this client has sent, oldest first, along
-// with the dt it was generated with — see predict_player_movement, which
-// replays these on top of the server's last confirmed position every
-// frame. Entries are dropped once LastProcessedInput (replicated from the
+// Every unacknowledged input this client has sent, oldest first: the input
+// itself, the dt it was generated with, and the Player physics state
+// (vertical_velocity/grounded) immediately *after* send_player_input
+// applied it locally. That trailing state is what lets
+// predict_player_movement's reconciliation resume from an exact baseline
+// instead of guessing — see its own doc comment for why that matters.
+// Entries are dropped once LastProcessedInput (replicated from the
 // player's own NetPlayer entity) catches up to their sequence number.
 #[derive(Resource, Default)]
-struct PredictedInputs(std::collections::VecDeque<(u32, ClientInput, f32)>);
+struct PredictedInputs(std::collections::VecDeque<(u32, ClientInput, f32, f32, bool)>);
 
+// Captures the new input and applies it to the local Player immediately —
+// this is what makes movement feel instant instead of waiting a round trip.
+// predict_player_movement only reconciles (rare, network-tick-rate
+// frequency), it doesn't replay this per-frame application.
 fn send_player_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -3135,7 +3164,8 @@ fn send_player_input(
     mut sequence: Local<u32>,
     camera_query: Query<&FpsCamera>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    player_query: Query<&PlayerStance, With<Player>>,
+    mut player_query: Query<(&mut Transform, &mut Player, &PlayerStance), Without<NetPlayer>>,
+    mover: MoveAndSlide,
 ) {
     if game_over.0 {
         return;
@@ -3143,12 +3173,13 @@ fn send_player_input(
     let Ok(cam) = camera_query.single() else {
         return;
     };
-    let Ok(stance) = player_query.single() else {
+    let Ok((mut transform, mut player, stance)) = player_query.single_mut() else {
         return;
     };
+    let stance = *stance;
 
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse));
-    let sprinting = keys.pressed(KeyCode::ShiftLeft) && *stance == PlayerStance::Standing;
+    let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
 
     let mut move_axis = Vec2::ZERO;
     if keys.pressed(KeyCode::KeyW) {
@@ -3165,6 +3196,7 @@ fn send_player_input(
     }
 
     *sequence += 1;
+    let dt = time.delta_secs();
     let input = ClientInput {
         sequence: *sequence,
         move_axis,
@@ -3172,9 +3204,10 @@ fn send_player_input(
         jump: keys.just_pressed(KeyCode::Space),
         sprint: sprinting,
         aiming,
-        stance: *stance,
+        stance,
     };
-    pending.0.push_back((*sequence, input, time.delta_secs()));
+    shared::movement::simulate_player_step(&mover, &mut transform, &mut player, stance, &input, dt);
+    pending.0.push_back((*sequence, input, dt, player.vertical_velocity, player.grounded));
     commands.client_trigger(input);
 }
 
