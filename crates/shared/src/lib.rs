@@ -198,6 +198,33 @@ pub const ZOMBIE_SPEED: f32 = 1.0;
 pub const ZOMBIE_RADIUS: f32 = PLAYER_RADIUS;
 pub const ZOMBIE_LENGTH: f32 = PLAYER_LENGTH;
 pub const ZOMBIE_PATH_RECALC_INTERVAL: f32 = 0.8;
+// How long a zombie sticks with its current chase target before re-picking
+// the nearest connected player. Without this, two players standing close
+// together make a zombie flicker between them every frame (recomputed
+// "nearest" changes sign-flips with tiny position noise) — committing to a
+// target for a while and only re-evaluating periodically (or immediately if
+// that target disconnects) fixes the flicker while still adapting when
+// someone new gets closer.
+pub const ZOMBIE_RETARGET_INTERVAL: f32 = 1.5;
+// Threat/aggro scoring (server-only state, see crates/server's
+// PlayerThreat): recent gunfire makes a player "louder" to nearby zombies
+// than pure distance alone would — a player shooting from further away can
+// still pull a zombie's attention off someone standing closer but quiet.
+// PLAYER_THREAT_PER_SHOT is added per shot fired (hit or miss — the noise is
+// what matters); PLAYER_THREAT_DECAY_RATE is the fraction of remaining
+// threat lost per second; ZOMBIE_THREAT_DISTANCE_BONUS converts 1.0 threat
+// into meters subtracted from that player's effective distance when a
+// zombie compares candidates.
+pub const PLAYER_THREAT_PER_SHOT: f32 = 1.0;
+pub const PLAYER_THREAT_DECAY_RATE: f32 = 0.5;
+pub const ZOMBIE_THREAT_DISTANCE_BONUS: f32 = 8.0;
+// Meters added to a candidate's effective distance per zombie already
+// chasing them — a small nudge so re-evaluating zombies lean toward
+// under-targeted players instead of everyone piling onto whoever's already
+// getting the most attention. Deliberately small relative to
+// ZOMBIE_THREAT_DISTANCE_BONUS: it should only break close ties, not
+// override a real difference in distance or threat.
+pub const ZOMBIE_LOAD_BALANCE_PENALTY: f32 = 1.0;
 pub const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
 pub const ZOMBIE_LOD_DISTANCE: f32 = 15.0;
 pub const ZOMBIE_LOD_REST_HEIGHT: f32 = 0.9;
@@ -241,6 +268,30 @@ pub const ZOMBIE_SPAWNS: [Vec3; 100] = zombie_spawn_grid(ARENA_HALF_SIZE - 3.0, 
 // server decision now, since zombies are server-authoritative.
 #[derive(Event, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct SpawnMoreZombies;
+
+// --- Debug bots (client debug panel, see crates/client) ---
+// Fake NetPlayer stand-ins so multi-player zombie targeting can be tested
+// without launching a second real client. Identified by a small server-
+// assigned id rather than Entity, since client->server events don't need
+// cross-network entity mapping this way.
+#[derive(Component, Clone, Copy, Serialize, Deserialize)]
+pub struct DebugBot(pub u32);
+
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub struct SpawnDebugBot {
+    pub at: Vec3,
+}
+
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub struct MoveDebugBot {
+    pub id: u32,
+    pub target: Vec3,
+}
+
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub struct DespawnDebugBot {
+    pub id: u32,
+}
 
 // --- Shooting/damage (server-authoritative, see crates/server) ---
 

@@ -24,11 +24,12 @@ use bevy_replicon_renet2::{
     RenetChannelsExt, RepliconRenetPlugins,
 };
 use shared::{
-    ClientInput, FireShot, GameOver, GameStateEvent, Health, HEAD_DAMAGE, HITBOX_BELLY_MIN_Y,
-    HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN, KnockbackVelocity, LastProcessedInput,
-    NetPlayer, NetTransform, Player, PlayerDied, PlayerStance, RequestRestart, ShotFx, SpawnMoreZombies,
-    Zombie, ZombieAttackTimer, ZombieMotion, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE,
-    ZOMBIE_MAX_HEALTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
+    ClientInput, DebugBot, DespawnDebugBot, FireShot, GameOver, GameStateEvent, Health, HEAD_DAMAGE,
+    HITBOX_BELLY_MIN_Y, HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN, KnockbackVelocity,
+    LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform, Player, PlayerDied, PlayerStance,
+    RequestRestart, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieMotion,
+    MAX_SHOT_DISTANCE, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH, ZOMBIE_SPAWNS,
+    ZOMBIE_STOP_DISTANCE,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
@@ -595,6 +596,11 @@ struct PlayerModelVisible(bool);
 #[derive(Component)]
 struct PlayerModel;
 
+// Which debug bot (see shared::DebugBot) the C/[/]/X/O debug panel keybinds
+// currently act on — client-only, never sent over the network.
+#[derive(Resource, Default)]
+struct SelectedDebugBot(Option<u32>);
+
 // Rough per-system CPU timings (wall-clock ms this frame), shown in the
 // debug panel so it's obvious which system is actually eating frame time as
 // the zombie count climbs, instead of guessing — measured with a plain
@@ -934,6 +940,35 @@ fn mark_local_player(
     }
 }
 
+// Every non-local NetPlayer entity (a real second client OR a debug bot —
+// both look identical from here, they're just replicated NetPlayer/
+// NetTransform data) currently has zero visual mesh, since only the local
+// player has the optional T-toggle debug model. Attaches PLAYER_MODEL_PATH
+// as a child so it inherits the parent's yaw automatically from
+// mirror_local_player_net_transform/interpolate_net_transform — no extra
+// rotation code needed here. NetworkId is already present by the time
+// NetPlayer replicates in (it's assigned at connection time, before
+// spawn_player ever inserts NetPlayer server-side), so a bot — which has no
+// NetworkId at all — always falls through to "spawn a visual" below.
+fn on_net_player_replicated(
+    trigger: On<Add, NetPlayer>,
+    mut commands: Commands,
+    my_id: Res<MyClientId>,
+    network_ids: Query<&NetworkId>,
+    asset_server: Res<AssetServer>,
+) {
+    let entity = trigger.event().entity;
+    if network_ids.get(entity).is_ok_and(|id| id.get() == my_id.0) {
+        return;
+    }
+    commands.entity(entity).with_children(|parent| {
+        parent.spawn((
+            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(PLAYER_MODEL_PATH))),
+            Transform::from_xyz(0.0, PLAYER_MODEL_Y_OFFSET, 0.0),
+        ));
+    });
+}
+
 // The local player's own replicated pose is copied straight through,
 // uninterpolated — this is just the confirmed baseline predict_player_movement
 // replays unconfirmed inputs on top of, not what's actually rendered.
@@ -1104,6 +1139,7 @@ fn main() {
         .replicate::<Zombie>()
         .replicate::<Health>()
         .replicate::<LastProcessedInput>()
+        .replicate::<DebugBot>()
         .add_client_event::<ClientInput>(Channel::Unreliable)
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
         .add_client_event::<FireShot>(Channel::Ordered)
@@ -1111,6 +1147,9 @@ fn main() {
         .add_client_event::<PlayerDied>(Channel::Ordered)
         .add_client_event::<RequestRestart>(Channel::Ordered)
         .add_server_event::<GameStateEvent>(Channel::Ordered)
+        .add_client_event::<SpawnDebugBot>(Channel::Ordered)
+        .add_client_event::<MoveDebugBot>(Channel::Ordered)
+        .add_client_event::<DespawnDebugBot>(Channel::Ordered)
         .add_systems(Startup, connect_to_server)
         .add_systems(
             Update,
@@ -1125,6 +1164,7 @@ fn main() {
         .add_observer(mark_local_player)
         .add_observer(on_zombie_replicated)
         .add_observer(on_net_transform_replicated)
+        .add_observer(on_net_player_replicated)
         .add_observer(on_shot_fx)
         .add_observer(on_game_state_event)
         .init_resource::<Noclip>()
@@ -1141,6 +1181,7 @@ fn main() {
         .init_resource::<ZombieLodDisabled>()
         .init_resource::<PredictedInputs>()
         .init_resource::<PlayerModelVisible>()
+        .init_resource::<SelectedDebugBot>()
         .add_systems(Startup, (setup, log_window_resolution))
         .add_systems(
             Update,
@@ -2405,6 +2446,8 @@ fn update_debug_panel(
     zombie_health_bars_hidden: Res<ZombieHealthBarsHidden>,
     zombie_lod_disabled: Res<ZombieLodDisabled>,
     player_model_visible: Res<PlayerModelVisible>,
+    debug_bots: Query<&DebugBot>,
+    selected_bot: Res<SelectedDebugBot>,
     zombies: Query<(), With<Zombie>>,
     mut text: Query<(&mut Text, &mut Node), With<DebugPanelText>>,
 ) {
@@ -2440,6 +2483,9 @@ fn update_debug_panel(
          J: Zombie health bars [{}]\n\
          K: Zombie LOD (distance shortcut) [{}]\n\
          T: Player model (debug visual) [{}]\n\
+         C: Spawn debug bot at crosshair+2m | [/]: select prev/next bot\n\
+         X: Move selected bot to crosshair | O: Despawn selected bot\n\
+         Debug bots: {} (selected: {})\n\
          move_zombies: {:.2}ms | health bars: {:.2}ms | zombies: {} (near: {})\n\
          Zombies alive: {}",
         on_off(noclip.0),
@@ -2453,6 +2499,8 @@ fn update_debug_panel(
         on_off(!zombie_health_bars_hidden.0),
         on_off(!zombie_lod_disabled.0),
         on_off(player_model_visible.0),
+        debug_bots.iter().count(),
+        selected_bot.0.map_or("none".to_string(), |id| id.to_string()),
         timings.move_zombies_ms,
         timings.health_bars_ms,
         timings.zombie_count,
@@ -2487,8 +2535,12 @@ fn debug_panel_actions(
     asset_server: Res<AssetServer>,
     player: Query<&Transform, With<Player>>,
     camera: Query<&FpsCamera>,
+    camera_transform: Query<&Transform, (With<FpsCamera>, Without<Player>)>,
+    spatial_query: SpatialQuery,
     mut zombies: Query<(&Transform, &mut Health), With<Zombie>>,
     all_zombies: Query<Entity, With<Zombie>>,
+    debug_bots: Query<&DebugBot>,
+    mut selected_bot: ResMut<SelectedDebugBot>,
 ) {
     if !panel_visible.0 {
         return;
@@ -2518,6 +2570,56 @@ fn debug_panel_actions(
     if keys.just_pressed(KeyCode::Digit5) {
         // Real spawning is a server decision now — just ask for more.
         commands.client_trigger(SpawnMoreZombies);
+    }
+
+    // C: spawn a fake NetPlayer ("debug bot") a couple meters in front of
+    // the local player, so multi-player zombie targeting can be tested
+    // without a second real client — see on_net_player_replicated for how
+    // it becomes visible.
+    if keys.just_pressed(KeyCode::KeyC) {
+        let forward = camera
+            .single()
+            .map(|cam| Quat::from_rotation_y(cam.yaw) * Vec3::NEG_Z)
+            .unwrap_or(Vec3::NEG_Z);
+        commands.client_trigger(SpawnDebugBot {
+            at: player_transform.translation + forward * 2.0,
+        });
+    }
+    // [ / ]: cycle the selected bot through whichever ids are currently
+    // replicated (sorted for a stable, predictable cycle order).
+    if keys.just_pressed(KeyCode::BracketLeft) || keys.just_pressed(KeyCode::BracketRight) {
+        let mut ids: Vec<u32> = debug_bots.iter().map(|bot| bot.0).collect();
+        ids.sort_unstable();
+        if !ids.is_empty() {
+            let forward = keys.just_pressed(KeyCode::BracketRight);
+            let next_index = match selected_bot.0.and_then(|current| ids.iter().position(|&id| id == current)) {
+                Some(index) if forward => (index + 1) % ids.len(),
+                Some(index) => (index + ids.len() - 1) % ids.len(),
+                None => 0,
+            };
+            selected_bot.0 = Some(ids[next_index]);
+        }
+    }
+    // X: move the selected bot to wherever the local player is aiming
+    // (same forward raycast gun_view_animation/shoot already use).
+    if keys.just_pressed(KeyCode::KeyX) {
+        if let Some(id) = selected_bot.0 {
+            if let Ok(camera_transform) = camera_transform.single() {
+                let filter = SpatialQueryFilter::default();
+                let target = spatial_query
+                    .cast_ray(camera_transform.translation, camera_transform.forward(), MAX_SHOT_DISTANCE, true, &filter)
+                    .map(|hit| camera_transform.translation + camera_transform.forward() * hit.distance)
+                    .unwrap_or(camera_transform.translation + camera_transform.forward() * 5.0);
+                commands.client_trigger(MoveDebugBot { id, target });
+            }
+        }
+    }
+    // O: despawn the selected bot.
+    if keys.just_pressed(KeyCode::KeyO) {
+        if let Some(id) = selected_bot.0 {
+            commands.client_trigger(DespawnDebugBot { id });
+            selected_bot.0 = None;
+        }
     }
 }
 

@@ -14,15 +14,17 @@ use bevy_replicon_renet2::{
 };
 use big_brain::prelude::*;
 use shared::{
-    zombie_hit_damage_geometric, Chase, ClientInput, FireShot, GameOver, GameStateEvent, Health,
-    KnockbackVelocity, LastProcessedInput, NetPlayer, NetTransform, Player, PlayerDied, PlayerStance,
-    RequestRestart, ShotFx, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieMotion, ARENA_HALF_SIZE,
-    ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE,
-    KNOCKBACK_FORCE, MAX_SHOT_DISTANCE, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT,
-    PLAYER_SPAWN, ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE,
-    ZOMBIE_CHASE_RANGE, ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH,
-    ZOMBIE_PATH_RECALC_INTERVAL, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_SEPARATION_RADIUS,
-    ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS, ZOMBIE_SPEED, ZOMBIE_STOP_DISTANCE,
+    zombie_hit_damage_geometric, Chase, ClientInput, DebugBot, DespawnDebugBot, FireShot, GameOver,
+    GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform,
+    Player, PlayerDied, PlayerStance, RequestRestart, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
+    ZombieAttackTimer, ZombieMotion, ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS, GRAVITY,
+    GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE, MAX_SHOT_DISTANCE, MOVE_SPEED,
+    NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PLAYER_SPAWN, ZOMBIE_AI_ENABLED,
+    ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE, ZOMBIE_LENGTH,
+    ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
+    PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY, ZOMBIE_RADIUS,
+    ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS, ZOMBIE_SEPARATION_STRENGTH,
+    ZOMBIE_SPAWNS, ZOMBIE_SPEED, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 use vleue_navigator::prelude::*;
@@ -55,6 +57,7 @@ fn main() {
         .replicate::<Zombie>()
         .replicate::<Health>()
         .replicate::<LastProcessedInput>()
+        .replicate::<DebugBot>()
         .add_client_event::<ClientInput>(Channel::Unreliable)
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
         .add_client_event::<FireShot>(Channel::Ordered)
@@ -62,8 +65,12 @@ fn main() {
         .add_client_event::<PlayerDied>(Channel::Ordered)
         .add_client_event::<RequestRestart>(Channel::Ordered)
         .add_server_event::<GameStateEvent>(Channel::Ordered)
+        .add_client_event::<SpawnDebugBot>(Channel::Ordered)
+        .add_client_event::<MoveDebugBot>(Channel::Ordered)
+        .add_client_event::<DespawnDebugBot>(Channel::Ordered)
         .init_resource::<PendingRespawns>()
         .init_resource::<GameOver>()
+        .init_resource::<DebugBotIdCounter>()
         .add_systems(Startup, (start_server, spawn_arena_colliders, spawn_zombie_navmesh, spawn_initial_zombies))
         .add_systems(
             PreUpdate,
@@ -72,7 +79,7 @@ fn main() {
                 near_player_scorer.in_set(BigBrainSet::Scorers),
             ),
         )
-        .add_systems(Update, (move_players, move_zombies, tick_respawns))
+        .add_systems(Update, (move_players, move_zombies, move_debug_bots, tick_respawns, decay_player_threat))
         .add_observer(spawn_player)
         .add_observer(log_client_disconnect)
         .add_observer(apply_client_input)
@@ -80,6 +87,9 @@ fn main() {
         .add_observer(on_player_died)
         .add_observer(on_request_restart)
         .add_observer(handle_fire_shot)
+        .add_observer(spawn_debug_bot)
+        .add_observer(move_debug_bot_command)
+        .add_observer(despawn_debug_bot)
         .run();
 }
 
@@ -159,8 +169,23 @@ fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands) {
             moving: false,
         },
         LastProcessedInput::default(),
+        PlayerThreat::default(),
         Replicated,
     ));
+}
+
+// Server-only (not replicated) aggro state — see ZOMBIE_THREAT_DISTANCE_BONUS
+// in crates/shared for the full explanation. Every NetPlayer-carrying entity
+// needs one (including debug bots, which just never fire and so stay at 0),
+// since move_zombies' target query requires it alongside NetPlayer.
+#[derive(Component, Default)]
+struct PlayerThreat(f32);
+
+fn decay_player_threat(time: Res<Time>, mut threats: Query<&mut PlayerThreat>) {
+    let decay = (1.0 - PLAYER_THREAT_DECAY_RATE * time.delta_secs()).clamp(0.0, 1.0);
+    for mut threat in &mut threats {
+        threat.0 *= decay;
+    }
 }
 
 fn log_client_disconnect(trigger: On<Remove, ConnectedClient>) {
@@ -196,6 +221,75 @@ fn move_players(
         shared::movement::simulate_player_step(&mover, &mut transform, &mut player, *stance, input, time.delta_secs());
         net_transform.translation = transform.translation;
         net_transform.yaw = input.yaw;
+    }
+}
+
+// --- Debug bots ---
+// Fake NetPlayer stand-ins spawned/moved from the client's debug panel (see
+// crates/client) so multi-player zombie targeting can be tested without a
+// second real client. No Player/ClientInput/physics — move_debug_bots just
+// walks them in a straight line toward DebugBotTarget, kinematically.
+
+#[derive(Resource, Default)]
+struct DebugBotIdCounter(u32);
+
+#[derive(Component)]
+struct DebugBotTarget(Vec3);
+
+fn spawn_debug_bot(trigger: On<FromClient<SpawnDebugBot>>, mut commands: Commands, mut counter: ResMut<DebugBotIdCounter>) {
+    let id = counter.0;
+    counter.0 += 1;
+    let at = trigger.message.at;
+    commands.spawn((
+        Transform::from_translation(at),
+        NetPlayer,
+        NetTransform {
+            translation: at,
+            yaw: 0.0,
+            moving: false,
+        },
+        DebugBot(id),
+        DebugBotTarget(at),
+        PlayerThreat::default(),
+        Replicated,
+    ));
+    info!("debug bot {id} spawned at {at}");
+}
+
+fn move_debug_bot_command(
+    trigger: On<FromClient<MoveDebugBot>>,
+    mut bots: Query<(&DebugBot, &mut DebugBotTarget)>,
+) {
+    for (bot, mut target) in &mut bots {
+        if bot.0 == trigger.message.id {
+            target.0 = trigger.message.target;
+            break;
+        }
+    }
+}
+
+fn despawn_debug_bot(trigger: On<FromClient<DespawnDebugBot>>, mut commands: Commands, bots: Query<(Entity, &DebugBot)>) {
+    for (entity, bot) in &bots {
+        if bot.0 == trigger.message.id {
+            commands.entity(entity).despawn();
+            break;
+        }
+    }
+}
+
+fn move_debug_bots(time: Res<Time>, mut bots: Query<(&mut Transform, &mut NetTransform, &DebugBotTarget), With<DebugBot>>) {
+    for (mut transform, mut net_transform, target) in &mut bots {
+        let to_target = target.0 - transform.translation;
+        let horizontal = Vec3::new(to_target.x, 0.0, to_target.z);
+        let distance = horizontal.length();
+        if distance > 0.05 {
+            let direction = horizontal / distance;
+            let step = (MOVE_SPEED * time.delta_secs()).min(distance);
+            transform.translation += direction * step;
+            transform.look_to(-direction, Vec3::Y);
+            net_transform.yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
+        }
+        net_transform.translation = transform.translation;
     }
 }
 
@@ -298,6 +392,16 @@ fn near_player_scorer(
 #[derive(Clone, Component, Debug, ActionBuilder)]
 struct ChaseAction;
 
+// Server-only (not replicated): which player entity a chasing zombie is
+// currently committed to, plus a countdown to the next time it's allowed to
+// re-pick — see ZOMBIE_RETARGET_INTERVAL. `entity: None` forces an
+// immediate pick on the first move_zombies tick after Chase is inserted.
+#[derive(Component, Default)]
+struct ChaseTarget {
+    entity: Option<Entity>,
+    reevaluate_timer: f32,
+}
+
 fn chase_action_system(mut commands: Commands, mut query: Query<(&Actor, &mut ActionState, &ActionSpan)>) {
     for (Actor(actor), mut state, span) in &mut query {
         let _guard = span.span().enter();
@@ -306,11 +410,11 @@ fn chase_action_system(mut commands: Commands, mut query: Query<(&Actor, &mut Ac
             // the time this command actually applies — same benign race the
             // single-player version worked around.
             ActionState::Requested => {
-                commands.entity(*actor).try_insert(Chase { speed: ZOMBIE_SPEED });
+                commands.entity(*actor).try_insert((Chase { speed: ZOMBIE_SPEED }, ChaseTarget::default()));
                 *state = ActionState::Executing;
             }
             ActionState::Cancelled => {
-                commands.entity(*actor).try_remove::<Chase>();
+                commands.entity(*actor).try_remove::<(Chase, ChaseTarget)>();
                 *state = ActionState::Success;
             }
             _ => {}
@@ -344,8 +448,11 @@ fn steer_around_obstacles(
 
 fn move_zombies(
     time: Res<Time>,
-    mut zombies: Query<(Entity, &mut Transform, &mut ZombieMotion, &Chase, &mut KnockbackVelocity, &mut NetTransform), With<Zombie>>,
-    players: Query<&Transform, (With<NetPlayer>, Without<Zombie>)>,
+    mut zombies: Query<
+        (Entity, &mut Transform, &mut ZombieMotion, &Chase, &mut ChaseTarget, &mut KnockbackVelocity, &mut NetTransform),
+        With<Zombie>,
+    >,
+    players: Query<(Entity, &Transform, &PlayerThreat), (With<NetPlayer>, Without<Zombie>)>,
     navmesh: Query<&ManagedNavMesh>,
     navmeshes: Res<Assets<NavMesh>>,
     mover: MoveAndSlide,
@@ -354,15 +461,45 @@ fn move_zombies(
 
     let positions: Vec<(Entity, Vec3)> = zombies.iter().map(|(e, t, ..)| (e, t.translation)).collect();
     // Snapshot once per frame rather than re-querying per zombie — with
-    // more than one player connected, whichever is nearest can be a
+    // more than one player connected, whichever scores best can be a
     // different one for each zombie (see Chase's own doc comment).
-    let player_positions: Vec<Vec3> = players.iter().map(|t| t.translation).collect();
+    let candidates: Vec<(Entity, Vec3, f32)> = players.iter().map(|(e, t, threat)| (e, t.translation, threat.0)).collect();
+    // How many zombies are currently committed to each player, snapshotted
+    // before this frame's re-evaluations — see ZOMBIE_LOAD_BALANCE_PENALTY.
+    let mut chase_load: std::collections::HashMap<Entity, u32> = std::collections::HashMap::new();
+    for (.., chase_target, _, _) in &zombies {
+        if let Some(target) = chase_target.entity {
+            *chase_load.entry(target).or_insert(0) += 1;
+        }
+    }
 
-    for (entity, mut transform, mut motion, chase, mut knockback, mut net_transform) in &mut zombies {
-        let Some(target_translation) = player_positions
-            .iter()
-            .copied()
-            .min_by(|a, b| transform.translation.distance_squared(*a).total_cmp(&transform.translation.distance_squared(*b)))
+    for (entity, mut transform, mut motion, chase, mut chase_target, mut knockback, mut net_transform) in &mut zombies {
+        // Commit to the current target until it disconnects or the
+        // re-evaluate timer runs out — see ZOMBIE_RETARGET_INTERVAL's doc
+        // comment on why "nearest every frame" flickers with close players.
+        chase_target.reevaluate_timer -= time.delta_secs();
+        let target_still_connected = chase_target.entity.is_some_and(|target| candidates.iter().any(|&(e, ..)| e == target));
+        if !target_still_connected || chase_target.reevaluate_timer <= 0.0 {
+            // Lower score wins: plain distance minus a threat-driven bonus
+            // (see ZOMBIE_THREAT_DISTANCE_BONUS) — a player who's been
+            // shooting can pull attention off someone standing closer but
+            // quiet.
+            chase_target.entity = candidates
+                .iter()
+                .min_by(|(a_entity, a_pos, a_threat), (b_entity, b_pos, b_threat)| {
+                    let a_load = *chase_load.get(a_entity).unwrap_or(&0) as f32;
+                    let b_load = *chase_load.get(b_entity).unwrap_or(&0) as f32;
+                    let a_score = transform.translation.distance(*a_pos) - a_threat * ZOMBIE_THREAT_DISTANCE_BONUS
+                        + a_load * ZOMBIE_LOAD_BALANCE_PENALTY;
+                    let b_score = transform.translation.distance(*b_pos) - b_threat * ZOMBIE_THREAT_DISTANCE_BONUS
+                        + b_load * ZOMBIE_LOAD_BALANCE_PENALTY;
+                    a_score.total_cmp(&b_score)
+                })
+                .map(|&(e, ..)| e);
+            chase_target.reevaluate_timer = ZOMBIE_RETARGET_INTERVAL;
+        }
+        let Some(target_translation) =
+            chase_target.entity.and_then(|target| candidates.iter().find(|&&(e, ..)| e == target)).map(|&(_, p, _)| p)
         else {
             continue;
         };
@@ -511,7 +648,16 @@ fn handle_fire_shot(
     spatial_query: SpatialQuery,
     mut zombies: Query<(&Transform, &mut Health, &mut KnockbackVelocity), With<Zombie>>,
     mut respawns: ResMut<PendingRespawns>,
+    mut threats: Query<&mut PlayerThreat>,
 ) {
+    // Gunfire is noise — it draws zombie attention even on a miss, so this
+    // counts before the raycast below decides hit/miss.
+    if let Some(shooter) = trigger.client_id.entity() {
+        if let Ok(mut threat) = threats.get_mut(shooter) {
+            threat.0 += PLAYER_THREAT_PER_SHOT;
+        }
+    }
+
     let shot = trigger.message;
     let Ok(direction) = Dir3::new(shot.direction) else {
         return;
