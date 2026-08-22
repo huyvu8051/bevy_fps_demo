@@ -18,6 +18,16 @@ use bevy::render::view::Msaa;
 use bevy::scene::SceneRoot;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window};
 use big_brain::prelude::*;
+use bevy_replicon::prelude::*;
+use bevy_replicon_renet2::{
+    netcode::{ClientAuthentication, NativeSocket, NetcodeClientTransport},
+    renet2::{ConnectionConfig, RenetClient},
+    RenetChannelsExt, RepliconRenetPlugins,
+};
+use shared::{
+    Chase, GameOver, Health, KnockbackVelocity, Player, PlayerStance, Zombie, ZombieAttackTimer,
+    ZombieMotion, ZOMBIE_ATTACK_INTERVAL,
+};
 use vleue_navigator::prelude::*;
 
 // Downloaded once into assets/models/ so the app doesn't depend on a network
@@ -386,7 +396,6 @@ const PLAYER_MAX_HEALTH: f32 = 100.0;
 // — no separate attack animation, same simplicity tradeoff as the zombies'
 // own one-shot-kill damage model.
 const ZOMBIE_ATTACK_DAMAGE: f32 = 12.0;
-const ZOMBIE_ATTACK_INTERVAL: f32 = 1.0;
 
 // "Animated Zombie" by Quaternius (poly.pizza, CC-BY 3.0) —
 // https://poly.pizza/m/jkrEvQZb8J — keep this attribution if shared/published.
@@ -630,6 +639,15 @@ const ZOMBIE_ANIM_CROWD_HZ_3: f32 = 2.0;
 const ZOMBIE_AVOID_PROBE_DISTANCE: f32 = 2.5;
 const ZOMBIE_AVOID_ANGLES_DEG: [f32; 6] = [25.0, -25.0, 50.0, -50.0, 80.0, -80.0];
 
+// Boids-style separation (same idea Left 4 Dead's NextBot common-infected
+// AI uses): each zombie nudges its desired direction away from any other
+// zombie within this radius instead of treating them as solid obstacles
+// (GameLayer::Zombie is excluded from the raycast/MoveAndSlide filter
+// specifically so a crowd never jams up). Cheap because it's computed in
+// the same throttled block as the navmesh path recalc, not every frame.
+const ZOMBIE_SEPARATION_RADIUS: f32 = 1.1;
+const ZOMBIE_SEPARATION_STRENGTH: f32 = 1.2;
+
 // Screen-space (not 3D billboard) health bar floating above each zombie —
 // projected from its world position every frame via Camera::world_to_viewport.
 // The zombie's own Transform.translation is roughly its physics capsule's
@@ -716,36 +734,8 @@ struct Lean {
     current: f32,
 }
 
-// The physics body: a capsule moved each frame via avian3d's MoveAndSlide.
-// Separate from the camera entity (which just gets its translation copied
-// from this each frame) so look rotation and physics movement don't fight
-// over the same Transform.
-#[derive(Component)]
-struct Player {
-    vertical_velocity: f32,
-    grounded: bool,
-}
-
-// KeyC toggles Standing<->Crouching, KeyX toggles Standing<->Prone (see
-// toggle_player_stance). Affects move speed, the physics capsule's length
-// (move_player_physics — rebuilt fresh every frame anyway, so no persistent
-// Collider to keep in sync), and camera eye height (sync_camera_to_player).
-#[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
-enum PlayerStance {
-    #[default]
-    Standing,
-    Crouching,
-    Prone,
-}
-
-#[derive(Component)]
-struct Health(f32);
-
-// Global game-over flag. Checked (early-return) at the top of the systems
-// that should freeze once the player dies: move_player_physics, shoot,
-// move_zombies. Reset by restart_game.
-#[derive(Resource, Default)]
-struct GameOver(bool);
+// Player, PlayerStance, Health, GameOver now live in crates/shared (plain
+// gameplay data needed by both the future server and the client).
 
 // Marks the "GAME OVER" overlay so restart_game can find and despawn it.
 #[derive(Component)]
@@ -989,64 +979,22 @@ struct BloodStain {
     remaining: f32,
 }
 
-// Marks the root of a zombie's spawned scene, so a raycast hit anywhere in
-// its (deep, multi-node) hierarchy can be traced back up to something we can
-// despawn, and so move_zombies can find every zombie each frame.
-#[derive(Component)]
-struct Zombie;
+// Zombie, ZombieMotion, KnockbackVelocity, ZombieAttackTimer, Chase now live
+// in crates/shared (plain gameplay data needed by both the future server
+// and the client).
 
-// Gravity/ground state, same idea as Player but tracked per-zombie.
-// path_recalc_timer/cached_path_dir throttle move_zombies' navmesh
-// pathfinding AND local obstacle-avoidance raycasts (see
-// ZOMBIE_PATH_RECALC_INTERVAL) instead of recomputing both every single
-// frame for every chasing zombie — cached_path_dir holds the final,
-// already-steered movement direction.
-#[derive(Component, Default)]
-struct ZombieMotion {
-    vertical_velocity: f32,
-    grounded: bool,
-    path_recalc_timer: f32,
-    cached_path_dir: Vec3,
-    // Set by move_zombies each frame (distance > ZOMBIE_LOD_DISTANCE) —
-    // freeze_zombie_animations pauses animation/skinning for these, and
-    // update_zombie_health_bars hides their bar, since neither is worth
-    // paying for on a zombie too far away to be scrutinized.
-    far: bool,
-}
-
-// Horizontal impulse from a bullet hit, added on top of chase movement in
-// move_zombies and exponentially decayed back to zero (same decay shape as
-// ViewRecoil's kick) — a hit knocks a zombie back for a moment instead of
-// its position being unaffected by anything but its own chase logic.
-#[derive(Component, Default)]
-struct KnockbackVelocity(Vec3);
-
-// Counts down to the next bite — only ticks while the zombie is actually in
-// range (zombies_damage_player), so wandering out of melee range and back
-// doesn't let an attack "bank" while it was away. Starts at
-// ZOMBIE_ATTACK_INTERVAL rather than 0.0 so a zombie that just caught up
-// gets a beat before its first bite instead of landing one the instant it
-// arrives.
-#[derive(Component)]
-struct ZombieAttackTimer(f32);
-
-impl Default for ZombieAttackTimer {
-    fn default() -> Self {
-        Self(ZOMBIE_ATTACK_INTERVAL)
-    }
-}
-
-// Driven by big-brain's Thinker/Scorer/Action below (NearPlayer scorer picks
-// ChaseAction once in range). ChaseAction's Requested/Cancelled handlers
-// insert/remove this component — move_zombies reads it to know which
-// entities should be walking, and update_zombie_animation reads its
-// presence/absence to pick Walk vs Idle, same as the rest of this file did
-// under seldom_state.
-#[derive(Component, Clone)]
-#[component(storage = "SparseSet")]
-struct Chase {
-    target: Entity,
-    speed: f32,
+// Physics collision layer for zombies' persistent Sensor collider. Used
+// only to exclude other zombies from move_zombies' obstacle-avoidance
+// raycasts and MoveAndSlide sweep (see ZOMBIE_MOVE_FILTER) — without this,
+// zombies treat each other as solid obstacles and jam up instead of
+// routing around the crowd. shoot()'s raycast filter is untouched (still
+// SpatialQueryFilter::default(), i.e. all layers), so bullets still hit
+// zombies exactly as before.
+#[derive(PhysicsLayer, Clone, Copy, Debug, Default)]
+enum GameLayer {
+    #[default]
+    Default,
+    Zombie,
 }
 
 // Scorer: 1.0 when within ZOMBIE_CHASE_RANGE of the player, 0.0 otherwise.
@@ -1141,6 +1089,49 @@ struct ZombieHitboxBones {
 // the full collider before bounds are ever applied. See spawn_zombie_navmesh
 // for the hand-authored replacement.
 
+// Fixed debug server address — matches crates/server's PORT. Override with
+// SERVER_ADDR (e.g. "192.168.1.5:5031") to point at another machine on the
+// LAN; the common case is just starting both binaries on localhost.
+const PROTOCOL_ID: u64 = 0;
+
+fn connect_to_server(mut commands: Commands, channels: Res<RepliconChannels>) {
+    let server_addr: std::net::SocketAddr = std::env::var("SERVER_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1:5031".to_string())
+        .parse()
+        .expect("SERVER_ADDR must be a valid socket address, e.g. 127.0.0.1:5031");
+
+    let client = RenetClient::new(
+        ConnectionConfig::from_channels(channels.server_configs(), channels.client_configs()),
+        false,
+    );
+
+    let current_time = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .expect("system clock should be after the unix epoch");
+    let client_id = current_time.as_millis() as u64;
+    let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))
+        .expect("failed to bind client UDP socket");
+    let authentication = ClientAuthentication::Unsecure {
+        client_id,
+        protocol_id: PROTOCOL_ID,
+        socket_id: 0,
+        server_addr,
+        user_data: None,
+    };
+    let transport = NetcodeClientTransport::new(current_time, authentication, NativeSocket::new(socket).unwrap())
+        .expect("failed to set up netcode client transport");
+
+    commands.insert_resource(client);
+    commands.insert_resource(transport);
+    info!("connecting to server at {server_addr}");
+}
+
+fn log_client_connection_state(state: Res<State<ClientState>>) {
+    if state.is_changed() {
+        info!("client connection state: {:?}", state.get());
+    }
+}
+
 fn main() {
     App::new()
         .add_plugins((
@@ -1163,7 +1154,11 @@ fn main() {
             // draggable DiagnosticsOverlay panels (that's 0.19-only), so this
             // is the only diagnostics UI available here.
             FpsOverlayPlugin::default(),
+            RepliconPlugins,
+            RepliconRenetPlugins,
         ))
+        .add_systems(Startup, connect_to_server)
+        .add_systems(Update, log_client_connection_state)
         .init_resource::<Noclip>()
         .init_resource::<FreezeZombies>()
         .init_resource::<ShowHitboxes>()
@@ -1272,6 +1267,13 @@ struct HitMarkerAssets {
 #[derive(Resource)]
 struct GunshotSound(Handle<AudioSource>);
 
+// Synthesized mag-out/mag-in clack + bolt-release snap — see
+// assets/audio/reload.wav. Played once when a reload starts (both the
+// auto-reload in shoot() and the manual KeyR reload in reload_gun), not
+// synced frame-by-frame to RELOAD_DURATION's dip/tilt animation.
+#[derive(Resource)]
+struct ReloadSound(Handle<AudioSource>);
+
 // Bundles HitMarkerAssets + MuzzleFxAssets into a single system param.
 // shoot() was at 17 function parameters, one over Bevy's hard limit of 16
 // (see all_tuples!(impl_system_function, 0, 16, F) in bevy_ecs) — merging
@@ -1284,6 +1286,7 @@ struct VfxAssets<'w, 's> {
     blood: Res<'w, BloodAssets>,
     sparks: Res<'w, SparkAssets>,
     gunshot: Res<'w, GunshotSound>,
+    reload_sound: Res<'w, ReloadSound>,
     // Folded in here too (rather than its own top-level param) for the same
     // 16-param-limit reason — see the SpatialQuery addition in shoot(). Also
     // excludes GunMesh, ScopeLens and ScopeReticle (sit right in front of
@@ -1391,6 +1394,7 @@ fn setup(
     });
 
     commands.insert_resource(GunshotSound(asset_server.load("audio/gunshot.wav")));
+    commands.insert_resource(ReloadSound(asset_server.load("audio/reload.wav")));
 
     // Both are flat quads facing the camera at spawn time (a "billboard" that
     // doesn't track the camera afterwards — fine given how briefly they live).
@@ -1714,6 +1718,7 @@ fn spawn_zombie(commands: &mut Commands, asset_server: &AssetServer, spawn_pos: 
         // roughly ZOMBIE_SCALE (0.1x) the size it's declared here.
         Collider::capsule(ZOMBIE_RADIUS / ZOMBIE_SCALE, ZOMBIE_LENGTH / ZOMBIE_SCALE),
         Sensor,
+        CollisionLayers::new(GameLayer::Zombie, LayerMask::ALL),
     ));
     // Can be flipped off to test whether apparent zombie movement is the
     // chase AI reacting instantly, versus an actual movement-coupling bug.
@@ -3308,6 +3313,7 @@ fn shoot(
         // Auto-reload once the mag empties from firing — manual reload via
         // reload_gun (KeyR) is still how you top off early.
         gun.reload_remaining = RELOAD_DURATION;
+        commands.spawn((AudioPlayer(vfx_assets.reload_sound.0.clone()), PlaybackSettings::DESPAWN));
     }
 
     let Ok((camera_transform, mut recoil)) = camera.single_mut() else {
@@ -3494,7 +3500,13 @@ fn shoot(
 // elapses (see gun_view_animation) — no partial reloads, no spare-mag count
 // (infinite reserve ammo), same simplicity tradeoff as the rest of the gun's
 // systems.
-fn reload_gun(keys: Res<ButtonInput<KeyCode>>, game_over: Res<GameOver>, mut gun: Query<&mut Gun>) {
+fn reload_gun(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    game_over: Res<GameOver>,
+    reload_sound: Res<ReloadSound>,
+    mut gun: Query<&mut Gun>,
+) {
     if game_over.0 || !keys.just_pressed(KeyCode::KeyR) {
         return;
     }
@@ -3505,6 +3517,7 @@ fn reload_gun(keys: Res<ButtonInput<KeyCode>>, game_over: Res<GameOver>, mut gun
         return;
     }
     gun.reload_remaining = RELOAD_DURATION;
+    commands.spawn((AudioPlayer(reload_sound.0.clone()), PlaybackSettings::DESPAWN));
 }
 
 // Keeps the scope's render-to-texture camera glued to the main camera's
@@ -3876,7 +3889,7 @@ fn move_zombies(
     freeze: Res<FreezeZombies>,
     mut timings: ResMut<PerfTimings>,
     lod_disabled: Res<ZombieLodDisabled>,
-    mut zombies: Query<(&mut Transform, &mut ZombieMotion, &Chase, &mut KnockbackVelocity), With<Zombie>>,
+    mut zombies: Query<(Entity, &mut Transform, &mut ZombieMotion, &Chase, &mut KnockbackVelocity), With<Zombie>>,
     targets: Query<&Transform, Without<Zombie>>,
     navmesh: Query<&ManagedNavMesh>,
     navmeshes: Res<Assets<NavMesh>>,
@@ -3896,7 +3909,12 @@ fn move_zombies(
         .and_then(|handle| navmeshes.get(handle));
     let mut near_zombie_count = 0usize;
 
-    for (mut transform, mut motion, chase, mut knockback) in &mut zombies {
+    // Snapshot for the separation check below — read-only pass before the
+    // mutable loop, so a zombie's separation nudge this frame is based on
+    // where every zombie *started* the frame, not on already-moved ones.
+    let positions: Vec<(Entity, Vec3)> = zombies.iter().map(|(e, t, ..)| (e, t.translation)).collect();
+
+    for (entity, mut transform, mut motion, chase, mut knockback) in &mut zombies {
         let Ok(target_transform) = targets.get(chase.target) else {
             continue;
         };
@@ -3923,7 +3941,10 @@ fn move_zombies(
         motion.far = false;
         near_zombie_count += 1;
 
-        let filter = SpatialQueryFilter::default();
+        // Excludes the Zombie layer so a crowd of zombies doesn't treat
+        // each other as solid obstacles — only level geometry (Default
+        // layer) blocks the steering raycast and the MoveAndSlide sweep.
+        let filter = SpatialQueryFilter::from_mask(LayerMask::ALL ^ GameLayer::Zombie);
         let horizontal_velocity = if distance > ZOMBIE_STOP_DISTANCE {
             // Route via the navmesh's next waypoint when available — this is
             // what actually routes around a whole column instead of just
@@ -3954,6 +3975,32 @@ fn move_zombies(
                     })
                     .filter(|direction| *direction != Vec3::ZERO)
                     .unwrap_or(horizontal / distance);
+
+                // Push away from any other zombie within ZOMBIE_SEPARATION_RADIUS,
+                // stronger the closer they are, so the crowd doesn't walk
+                // through/stack on top of each other while still never
+                // treating one another as a hard blocker.
+                let mut separation = Vec3::ZERO;
+                for (other_entity, other_pos) in &positions {
+                    if *other_entity == entity {
+                        continue;
+                    }
+                    let away = transform.translation - *other_pos;
+                    let away = Vec3::new(away.x, 0.0, away.z);
+                    let dist_sq = away.length_squared();
+                    if dist_sq > 1e-6 && dist_sq < ZOMBIE_SEPARATION_RADIUS * ZOMBIE_SEPARATION_RADIUS {
+                        let dist = dist_sq.sqrt();
+                        separation += (away / dist) * (1.0 - dist / ZOMBIE_SEPARATION_RADIUS);
+                    }
+                }
+                let desired_direction =
+                    (desired_direction + separation * ZOMBIE_SEPARATION_STRENGTH).normalize_or_zero();
+                let desired_direction = if desired_direction == Vec3::ZERO {
+                    horizontal / distance
+                } else {
+                    desired_direction
+                };
+
                 motion.cached_path_dir = steer_around_obstacles(
                     &mover.spatial_query,
                     transform.translation,

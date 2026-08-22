@@ -1,0 +1,13 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+shared = { path = "../shared" }
+avian3d = "0.6"
+bevy = { version = "0.18", features = ["jpeg", "bevy_dev_tools", "wav"] }
+big-brain = { path = "../../vendor/big-brain" }
+vleue_navigator = { path = "../../vendor/vleue_navigator", default-features = false, features = ["avian3d"] }
+bevy_replicon = "0.38"
+bevy_replicon_renet2 = { version = "0.13", features = ["native_transport"] }

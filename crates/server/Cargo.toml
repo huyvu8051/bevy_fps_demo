@@ -1,0 +1,10 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+shared = { path = "../shared" }
+bevy = { version = "0.18", default-features = false, features = ["bevy_log"] }
+bevy_replicon = "0.38"
+bevy_replicon_renet2 = { version = "0.13", features = ["native_transport"] }
