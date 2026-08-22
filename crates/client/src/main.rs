@@ -25,10 +25,10 @@ use bevy_replicon_renet2::{
 };
 use shared::{
     ClientInput, FireShot, GameOver, GameStateEvent, Health, HEAD_DAMAGE, HITBOX_BELLY_MIN_Y,
-    HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN, KnockbackVelocity, NetPlayer,
-    NetTransform, Player, PlayerDied, PlayerStance, RequestRestart, ShotFx, SpawnMoreZombies, Zombie,
-    ZombieAttackTimer, ZombieMotion, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH,
-    ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
+    HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN, KnockbackVelocity, LastProcessedInput,
+    NetPlayer, NetTransform, Player, PlayerDied, PlayerStance, RequestRestart, ShotFx, SpawnMoreZombies,
+    Zombie, ZombieAttackTimer, ZombieMotion, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE,
+    ZOMBIE_MAX_HEALTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
@@ -912,11 +912,10 @@ fn mark_local_player(
 }
 
 // The local player's own replicated pose is copied straight through,
-// uninterpolated — feeds apply_server_player_transform below. Adding
-// interpolation's fixed rendering delay here would double up with however
-// much round-trip latency input already has (see prediction, still future
-// work) instead of smoothing anything, since there's no "other player" to
-// smooth relative to; it's this client's own last-known-authoritative pose.
+// uninterpolated — this is just the confirmed baseline predict_player_movement
+// replays unconfirmed inputs on top of, not what's actually rendered.
+// Interpolation's fixed rendering delay would only add latency here, since
+// there's no "other player" to smooth relative to.
 fn mirror_local_player_net_transform(
     mut players: Query<(&NetTransform, &mut Transform), (Changed<NetTransform>, With<LocalPlayer>)>,
 ) {
@@ -1007,21 +1006,44 @@ fn interpolate_net_transform(time: Res<Time>, mut entities: Query<(&NetTransform
     }
 }
 
-// The client's pre-existing local Player entity (see setup() and
-// PlayerEntity) is still what zombie AI/UI/damage all target — this is the
-// one remaining link back to it: copy the server-authoritative position
-// from our own replicated NetPlayer entity onto it every frame.
-fn apply_server_player_transform(
-    local: Query<&Transform, (With<NetPlayer>, With<LocalPlayer>, Without<Player>)>,
-    mut player: Query<&mut Transform, With<Player>>,
+// Client-side prediction + reconciliation for the client's pre-existing
+// local Player entity (see setup()) — still what zombie AI/UI/damage all
+// target, so this remains the one link back to it. Every frame: start from
+// the server's last confirmed position (our own replicated NetPlayer's
+// NetTransform), drop whichever buffered inputs the server has now
+// confirmed (LastProcessedInput), then replay everything still
+// unconfirmed through the exact same movement step the server itself
+// runs (shared::movement::simulate_player_step) — including the input
+// send_player_input just queued this frame, so movement is instant instead
+// of waiting a full round trip.
+//
+// Known simplification: only translation is resynced from the server;
+// vertical_velocity/grounded keep evolving from whatever this client last
+// had locally rather than also being replicated and corrected. Good enough
+// for ground movement (which is what player-vs-player visible drift would
+// mostly show up as); a mispredicted jump/fall can drift slightly from the
+// server's version until landing resets grounded.
+fn predict_player_movement(
+    local: Query<(&NetTransform, &LastProcessedInput), (With<NetPlayer>, With<LocalPlayer>, Without<Player>)>,
+    mut player: Query<(&mut Transform, &mut Player, &PlayerStance), Without<NetPlayer>>,
+    mut pending: ResMut<PredictedInputs>,
+    mover: MoveAndSlide,
 ) {
-    let Ok(net_transform) = local.single() else {
+    let Ok((net_transform, last_processed)) = local.single() else {
         return;
     };
-    let Ok(mut transform) = player.single_mut() else {
+    let Ok((mut transform, mut player, stance)) = player.single_mut() else {
         return;
     };
+
+    while pending.0.front().is_some_and(|&(sequence, ..)| sequence <= last_processed.0) {
+        pending.0.pop_front();
+    }
+
     transform.translation = net_transform.translation;
+    for (_, input, dt) in &pending.0 {
+        shared::movement::simulate_player_step(&mover, &mut transform, &mut player, *stance, input, *dt);
+    }
 }
 
 fn log_client_connection_state(state: Res<State<ClientState>>) {
@@ -1058,6 +1080,7 @@ fn main() {
         .replicate::<NetTransform>()
         .replicate::<Zombie>()
         .replicate::<Health>()
+        .replicate::<LastProcessedInput>()
         .add_client_event::<ClientInput>(Channel::Unreliable)
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
         .add_client_event::<FireShot>(Channel::Ordered)
@@ -1093,6 +1116,7 @@ fn main() {
         .init_resource::<ZombieAnimDisabled>()
         .init_resource::<ZombieHealthBarsHidden>()
         .init_resource::<ZombieLodDisabled>()
+        .init_resource::<PredictedInputs>()
         .add_systems(Startup, (setup, log_window_resolution))
         .add_systems(
             Update,
@@ -1116,7 +1140,7 @@ fn main() {
                     apply_aim_zoom,
                     apply_aim_dof,
                     send_player_input,
-                    apply_server_player_transform,
+                    predict_player_movement,
                     sync_camera_to_player,
                     update_zombie_lod,
                     zombies_damage_player,
@@ -2947,11 +2971,22 @@ fn draw_zombie_hitboxes(
 // Noclip's fly-through-walls behavior had no server-side equivalent when
 // this moved, so KeyN's toggle is now inert (kept only so the debug panel
 // line and toggle system don't need removing too).
+// Every unacknowledged input this client has sent, oldest first, along
+// with the dt it was generated with — see predict_player_movement, which
+// replays these on top of the server's last confirmed position every
+// frame. Entries are dropped once LastProcessedInput (replicated from the
+// player's own NetPlayer entity) catches up to their sequence number.
+#[derive(Resource, Default)]
+struct PredictedInputs(std::collections::VecDeque<(u32, ClientInput, f32)>);
+
 fn send_player_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    time: Res<Time>,
     game_over: Res<GameOver>,
     mut commands: Commands,
+    mut pending: ResMut<PredictedInputs>,
+    mut sequence: Local<u32>,
     camera_query: Query<&FpsCamera>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     player_query: Query<&PlayerStance, With<Player>>,
@@ -2983,14 +3018,18 @@ fn send_player_input(
         move_axis.x -= 1.0;
     }
 
-    commands.client_trigger(ClientInput {
+    *sequence += 1;
+    let input = ClientInput {
+        sequence: *sequence,
         move_axis,
         yaw: cam.yaw,
         jump: keys.just_pressed(KeyCode::Space),
         sprint: sprinting,
         aiming,
         stance: *stance,
-    });
+    };
+    pending.0.push_back((*sequence, input, time.delta_secs()));
+    commands.client_trigger(input);
 }
 
 // The camera doesn't move itself anymore — it just follows the physics body

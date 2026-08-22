@@ -1,13 +1,14 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+pub mod movement;
 pub mod sim_latency;
 
 // Plain gameplay data shared between the (future) authoritative server and
-// the client — no rendering/audio handles, no avian3d/big-brain types, so
-// this crate can compile headless. Doc comments trimmed to what's still
-// true from this crate's point of view; see the systems that use these in
-// crates/client/src/main.rs (later crates/server) for full context.
+// the client — no rendering/audio handles, so this crate can compile
+// headless (server side). Doc comments trimmed to what's still true from
+// this crate's point of view; see the systems that use these in
+// crates/client/src/main.rs / crates/server/src/main.rs for full context.
 
 // The physics body: a capsule moved each frame via avian3d's MoveAndSlide.
 // Separate from the camera entity (which just gets its translation copied
@@ -137,6 +138,12 @@ pub const GROUND_NORMAL_MIN_Y: f32 = 0.6;
 // for a debug-scope server with no anti-cheat goals.
 #[derive(Event, Component, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct ClientInput {
+    // Increments by 1 every time the client sends an input — lets the
+    // client-side predicted-movement buffer (see the client's
+    // send_player_input/apply_server_player_transform) match each
+    // replicated LastProcessedInput back to the exact input it was for, so
+    // it knows which of its own predictions to discard vs. replay.
+    pub sequence: u32,
     pub move_axis: Vec2,
     pub yaw: f32,
     pub jump: bool,
@@ -167,6 +174,16 @@ pub struct NetTransform {
 #[derive(Component, Clone, Copy, Default, Serialize, Deserialize)]
 #[require(Transform)]
 pub struct NetPlayer;
+
+// Replicated alongside NetTransform on a player's entity — the sequence
+// number of the newest ClientInput the server has actually simulated (see
+// movement::simulate_player_step and crates/server's move_players). The
+// client compares this against its own predicted-input buffer to know
+// which predictions are now confirmed (safe to discard) vs. still ahead of
+// the server and need replaying on top of the confirmed position — see
+// crates/client's apply_server_player_transform.
+#[derive(Component, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct LastProcessedInput(pub u32);
 
 // --- Zombies (server-authoritative AI/movement, see crates/server) ---
 

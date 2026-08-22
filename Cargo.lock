@@ -5428,6 +5428,7 @@ dependencies = [
 name = "shared"
 version = "0.1.0"
 dependencies = [
+ "avian3d",
  "bevy",
  "renet2_netcode",
  "serde",

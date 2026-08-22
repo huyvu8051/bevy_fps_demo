@@ -15,14 +15,12 @@ use bevy_replicon_renet2::{
 use big_brain::prelude::*;
 use shared::{
     zombie_hit_damage_geometric, Chase, ClientInput, FireShot, GameOver, GameStateEvent, Health,
-    KnockbackVelocity, NetPlayer, NetTransform, Player, PlayerDied, PlayerStance, RequestRestart,
-    ShotFx, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieMotion, ARENA_HALF_SIZE,
-    ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS, CROUCH_LENGTH, CROUCH_SPEED_MULTIPLIER, GRAVITY,
-    GROUND_NORMAL_MIN_Y, JUMP_SPEED, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE, MAX_SHOT_DISTANCE,
-    MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PLAYER_LENGTH,
-    PLAYER_RADIUS, PLAYER_SPAWN, PRONE_LENGTH, PRONE_SPEED_MULTIPLIER, SPRINT_MULTIPLIER,
-    ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
-    ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH,
+    KnockbackVelocity, LastProcessedInput, NetPlayer, NetTransform, Player, PlayerDied, PlayerStance,
+    RequestRestart, ShotFx, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieMotion, ARENA_HALF_SIZE,
+    ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE,
+    KNOCKBACK_FORCE, MAX_SHOT_DISTANCE, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT,
+    PLAYER_SPAWN, ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE,
+    ZOMBIE_CHASE_RANGE, ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH,
     ZOMBIE_PATH_RECALC_INTERVAL, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_SEPARATION_RADIUS,
     ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS, ZOMBIE_SPEED, ZOMBIE_STOP_DISTANCE,
 };
@@ -56,6 +54,7 @@ fn main() {
         .replicate::<NetTransform>()
         .replicate::<Zombie>()
         .replicate::<Health>()
+        .replicate::<LastProcessedInput>()
         .add_client_event::<ClientInput>(Channel::Unreliable)
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
         .add_client_event::<FireShot>(Channel::Ordered)
@@ -168,6 +167,7 @@ fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands, mut t
             yaw: 0.0,
             moving: false,
         },
+        LastProcessedInput::default(),
         Replicated,
     ));
     if target.0.is_none() {
@@ -185,89 +185,31 @@ fn log_client_disconnect(trigger: On<Remove, ConnectedClient>, mut target: ResMu
 
 // ClientId::Client(Entity) IS the connection entity spawn_player already
 // attached ClientInput to — no separate client-id-to-entity map needed.
-fn apply_client_input(trigger: On<FromClient<ClientInput>>, mut inputs: Query<&mut ClientInput>) {
+fn apply_client_input(
+    trigger: On<FromClient<ClientInput>>,
+    mut players: Query<(&mut ClientInput, &mut LastProcessedInput)>,
+) {
     let Some(entity) = trigger.client_id.entity() else {
         return;
     };
-    if let Ok(mut input) = inputs.get_mut(entity) {
+    if let Ok((mut input, mut last_processed)) = players.get_mut(entity) {
         *input = trigger.message;
+        last_processed.0 = trigger.message.sequence;
     }
 }
 
-// Same MoveAndSlide-based movement as the client used to run locally (see
-// git history), just driven by the latest received ClientInput instead of
-// ButtonInput<KeyCode>/mouse/camera — this process is now the only one that
-// actually decides where a player capsule ends up.
+// Same MoveAndSlide-based movement the client predicts locally (see
+// shared::movement::simulate_player_step's own doc comment) — driven here
+// by the latest received ClientInput instead of a locally-pressed key,
+// since this process is what actually decides where a player capsule
+// ends up.
 fn move_players(
     time: Res<Time>,
     mut players: Query<(&mut Transform, &mut Player, &PlayerStance, &ClientInput, &mut NetTransform)>,
     mover: MoveAndSlide,
 ) {
     for (mut transform, mut player, stance, input, mut net_transform) in &mut players {
-        let move_speed = if input.aiming {
-            MOVE_SPEED * shared::AIM_MOVE_SPEED_MULTIPLIER
-        } else {
-            match stance {
-                PlayerStance::Standing if input.sprint => MOVE_SPEED * SPRINT_MULTIPLIER,
-                PlayerStance::Standing => MOVE_SPEED,
-                PlayerStance::Crouching => MOVE_SPEED * CROUCH_SPEED_MULTIPLIER,
-                PlayerStance::Prone => MOVE_SPEED * PRONE_SPEED_MULTIPLIER,
-            }
-        };
-        let capsule_length = match stance {
-            PlayerStance::Standing => PLAYER_LENGTH,
-            PlayerStance::Crouching => CROUCH_LENGTH,
-            PlayerStance::Prone => PRONE_LENGTH,
-        };
-
-        let yaw_rotation = Quat::from_rotation_y(input.yaw);
-        let forward = yaw_rotation * Vec3::NEG_Z;
-        let right = yaw_rotation * Vec3::X;
-        let mut horizontal = forward * input.move_axis.y + right * input.move_axis.x;
-        if horizontal != Vec3::ZERO {
-            horizontal = horizontal.normalize() * move_speed;
-        }
-
-        let mut vertical_velocity = player.vertical_velocity;
-        if player.grounded {
-            if input.jump {
-                vertical_velocity = JUMP_SPEED;
-            } else if vertical_velocity < 0.0 {
-                vertical_velocity = -1.0;
-            }
-        }
-        vertical_velocity += GRAVITY * time.delta_secs();
-
-        let velocity = horizontal + Vec3::Y * vertical_velocity;
-        let shape = Collider::capsule(PLAYER_RADIUS, capsule_length);
-        let config = MoveAndSlideConfig::default();
-        let filter = SpatialQueryFilter::default();
-
-        let mut grounded_this_frame = false;
-        let output = mover.move_and_slide(
-            &shape,
-            transform.translation,
-            transform.rotation,
-            velocity,
-            time.delta(),
-            &config,
-            &filter,
-            |hit| {
-                if hit.normal.y > GROUND_NORMAL_MIN_Y {
-                    grounded_this_frame = true;
-                }
-                MoveAndSlideHitResponse::Accept
-            },
-        );
-
-        transform.translation = output.position;
-        player.grounded = grounded_this_frame;
-        player.vertical_velocity = if grounded_this_frame {
-            vertical_velocity.min(0.0)
-        } else {
-            vertical_velocity
-        };
-
+        shared::movement::simulate_player_step(&mover, &mut transform, &mut player, *stance, input, time.delta_secs());
         net_transform.translation = transform.translation;
         net_transform.yaw = input.yaw;
     }
