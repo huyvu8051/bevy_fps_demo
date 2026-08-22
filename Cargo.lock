@@ -2170,9 +2170,7 @@ dependencies = [
  "bevy",
  "bevy_replicon",
  "bevy_replicon_renet2",
- "big-brain",
  "shared",
- "vleue_navigator",
 ]
 
 [[package]]
@@ -5706,10 +5704,13 @@ dependencies = [
 name = "server"
 version = "0.1.0"
 dependencies = [
+ "avian3d",
  "bevy",
  "bevy_replicon",
  "bevy_replicon_renet2",
+ "big-brain",
  "shared",
+ "vleue_navigator",
 ]
 
 [[package]]
@@ -5726,6 +5727,7 @@ name = "shared"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "serde",
 ]
 
 [[package]]

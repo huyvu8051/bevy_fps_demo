@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 // Plain gameplay data shared between the (future) authoritative server and
 // the client — no rendering/audio handles, no avian3d/big-brain types, so
@@ -18,7 +19,7 @@ pub struct Player {
 
 // KeyC toggles Standing<->Crouching, KeyX toggles Standing<->Prone. Affects
 // move speed, the physics capsule's length, and camera eye height.
-#[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayerStance {
     #[default]
     Standing,
@@ -26,7 +27,7 @@ pub enum PlayerStance {
     Prone,
 }
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy, Serialize, Deserialize)]
 pub struct Health(pub f32);
 
 // Global game-over flag. Checked (early-return) at the top of the systems
@@ -37,8 +38,11 @@ pub struct GameOver(pub bool);
 
 // Marks the root of a zombie's spawned scene, so a raycast hit anywhere in
 // its (deep, multi-node) hierarchy can be traced back up to something we can
-// despawn, and so move_zombies can find every zombie each frame.
-#[derive(Component)]
+// despawn, and so move_zombies can find every zombie each frame. Replicated
+// (server spawns/AI-drives these; client reacts to Add<Zombie> to spawn the
+// cosmetic GLTF scene — see crates/client's spawn_zombie).
+#[derive(Component, Default, Serialize, Deserialize)]
+#[require(Transform)]
 pub struct Zombie;
 
 // Gravity/ground state, same idea as Player but tracked per-zombie.
@@ -94,4 +98,234 @@ impl Default for ZombieAttackTimer {
 pub struct Chase {
     pub target: Entity,
     pub speed: f32,
+}
+
+// --- Networking (client <-> server) ---
+// Both sides need to agree on arena geometry and player movement tuning so
+// the server's authoritative physics and the client's rendering line up.
+
+pub const ARENA_HALF_SIZE: f32 = 18.0;
+pub const ARENA_WALL_HEIGHT: f32 = 5.0;
+pub const ARENA_WALL_THICKNESS: f32 = 1.0;
+
+pub const PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 3.0, ARENA_HALF_SIZE - 4.0);
+pub const PLAYER_MAX_HEALTH: f32 = 100.0;
+
+pub const MOVE_SPEED: f32 = 4.0;
+pub const AIM_MOVE_SPEED_MULTIPLIER: f32 = 0.5;
+pub const SPRINT_MULTIPLIER: f32 = 1.6;
+pub const CROUCH_SPEED_MULTIPLIER: f32 = 0.5;
+pub const PRONE_SPEED_MULTIPLIER: f32 = 0.25;
+
+pub const PLAYER_RADIUS: f32 = 0.35;
+pub const PLAYER_LENGTH: f32 = 0.9;
+pub const CROUCH_LENGTH: f32 = PLAYER_LENGTH * 0.5;
+pub const PRONE_LENGTH: f32 = PLAYER_RADIUS * 0.3;
+
+pub const GRAVITY: f32 = -20.0;
+pub const JUMP_SPEED: f32 = 6.5;
+pub const GROUND_NORMAL_MIN_Y: f32 = 0.6;
+
+// Sent by the client every frame (Channel::Unreliable — the next one
+// supersedes a dropped one, no need to retransmit). move_axis is
+// pre-rotation: x = right(+)/left(-), y = forward(+)/back(-), matching the
+// WASD accumulation the client used to do locally before this move; the
+// server rotates it by `yaw` to get a world-space direction. stance is
+// decided (and animated) client-side and just trusted here — good enough
+// for a debug-scope server with no anti-cheat goals.
+#[derive(Event, Component, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct ClientInput {
+    pub move_axis: Vec2,
+    pub yaw: f32,
+    pub jump: bool,
+    pub sprint: bool,
+    pub aiming: bool,
+    pub stance: PlayerStance,
+}
+
+// Replicated pose (server -> client) for any networked entity — smaller and
+// serde-friendly unlike Transform, which isn't a plain `Serialize` type in
+// this Bevy version. `yaw` is enough to orient a capsule body; full look
+// pitch stays purely client-side (each client's own camera).
+#[derive(Component, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct NetTransform {
+    pub translation: Vec3,
+    pub yaw: f32,
+    // Only meaningful for Zombie entities — drives the client's Walk/Idle
+    // animation pick (see crates/client's update_zombie_animation). Chase
+    // itself isn't replicated (its `target: Entity` would need cross-network
+    // entity mapping for no real benefit), so this is the cheap stand-in.
+    pub moving: bool,
+}
+
+// Replicated marker for a connected player's entity (spawned by the server
+// directly on the connection entity — see crates/server). Requires
+// Transform so replicated NetPlayer entities have somewhere for
+// mirror_net_transform to write the pose into on the client.
+#[derive(Component, Clone, Copy, Default, Serialize, Deserialize)]
+#[require(Transform)]
+pub struct NetPlayer;
+
+// --- Zombies (server-authoritative AI/movement, see crates/server) ---
+
+pub const ZOMBIE_AI_ENABLED: bool = true;
+// Large enough that zombies start chasing basically as soon as they spawn —
+// this is meant as target practice, not a stealth encounter.
+pub const ZOMBIE_CHASE_RANGE: f32 = 60.0;
+pub const ZOMBIE_SPEED: f32 = 1.0;
+// Reuses the player's capsule dimensions (roughly human-sized).
+pub const ZOMBIE_RADIUS: f32 = PLAYER_RADIUS;
+pub const ZOMBIE_LENGTH: f32 = PLAYER_LENGTH;
+pub const ZOMBIE_PATH_RECALC_INTERVAL: f32 = 0.8;
+pub const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
+pub const ZOMBIE_LOD_DISTANCE: f32 = 15.0;
+pub const ZOMBIE_LOD_REST_HEIGHT: f32 = 0.9;
+pub const ZOMBIE_AVOID_PROBE_DISTANCE: f32 = 2.5;
+pub const ZOMBIE_AVOID_ANGLES_DEG: [f32; 6] = [25.0, -25.0, 50.0, -50.0, 80.0, -80.0];
+pub const ZOMBIE_SEPARATION_RADIUS: f32 = 1.1;
+pub const ZOMBIE_SEPARATION_STRENGTH: f32 = 1.2;
+pub const KNOCKBACK_DECAY_RATE: f32 = 6.0;
+
+pub const NAVMESH_HEIGHT: f32 = 1.0;
+pub const NAVMESH_BOUNDS: [Vec2; 4] = [
+    Vec2::new(-(ARENA_HALF_SIZE - 1.0), -(ARENA_HALF_SIZE - 1.0)),
+    Vec2::new(ARENA_HALF_SIZE - 1.0, -(ARENA_HALF_SIZE - 1.0)),
+    Vec2::new(ARENA_HALF_SIZE - 1.0, ARENA_HALF_SIZE - 1.0),
+    Vec2::new(-(ARENA_HALF_SIZE - 1.0), ARENA_HALF_SIZE - 1.0),
+];
+pub const NAVMESH_COLUMN_OBSTACLES: [(f32, f32); 0] = [];
+
+// A 10x10 grid spanning -half_x..half_x / -half_z..half_z at height y —
+// used to generate a large ZOMBIE_SPAWNS (100 entries) without writing them
+// out by hand. const fn, so this still runs at compile time.
+pub const fn zombie_spawn_grid(half_x: f32, half_z: f32, y: f32) -> [Vec3; 100] {
+    let mut spawns = [Vec3::ZERO; 100];
+    let mut i = 0usize;
+    while i < 100 {
+        let row = (i / 10) as f32;
+        let col = (i % 10) as f32;
+        let x = -half_x + col * (2.0 * half_x / 9.0);
+        let z = -half_z + row * (2.0 * half_z / 9.0);
+        spawns[i] = Vec3::new(x, y, z);
+        i += 1;
+    }
+    spawns
+}
+
+// Inset a few meters from the arena walls so nothing spawns stuck inside
+// geometry.
+pub const ZOMBIE_SPAWNS: [Vec3; 100] = zombie_spawn_grid(ARENA_HALF_SIZE - 3.0, ARENA_HALF_SIZE - 3.0, 0.9);
+
+// Sent by the client's "spawn 100 more" debug button — spawning must be a
+// server decision now, since zombies are server-authoritative.
+#[derive(Event, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct SpawnMoreZombies;
+
+// --- Shooting/damage (server-authoritative, see crates/server) ---
+
+// A dead zombie is replaced after this long, keeping the population topped
+// up instead of thinning out.
+pub const ZOMBIE_RESPAWN_DELAY: f32 = 1.0;
+// Horizontal-only impulse applied to a zombie that survives a hit, along
+// the bullet's own travel direction.
+pub const KNOCKBACK_FORCE: f32 = 3.5;
+// Same distance avian3d's physics raycast in shoot() used to go — far past
+// anything reachable inside the arena.
+pub const MAX_SHOT_DISTANCE: f32 = 200.0;
+
+// Body-shot kills still take this many hits; a headshot always kills in one
+// (see zombie_hit_damage_geometric).
+pub const ZOMBIE_MAX_HEALTH: f32 = 8.0;
+
+// Per-region damage, picked by zombie_hit_damage_geometric from where the
+// raycast hit lands relative to the zombie's root. The zombie.glb rig has
+// no separate per-body-part meshes to hit-test against directly (single
+// "Zombie_Cylinder" mesh) — bones exist for skinning/animation only, not as
+// distinct raycast targets — so regions are approximated geometrically from
+// the hit point instead of a real hitbox lookup. This used to have a
+// nearest-bone-preferred refinement client-side, but the server (which now
+// decides damage authoritatively) has no skeleton/bone data at all — this
+// geometric approximation, previously just a fallback, is now the only
+// method.
+pub const HEAD_DAMAGE: f32 = ZOMBIE_MAX_HEALTH; // always a one-shot kill
+pub const CHEST_DAMAGE: f32 = 1.5;
+pub const BELLY_DAMAGE: f32 = 1.0;
+pub const LIMB_DAMAGE: f32 = 0.5;
+
+// Height bands (world-space meters, relative to the zombie's root, which
+// sits around the physics capsule's center — roughly hip/waist height, not
+// the feet) and a lateral distance from the vertical axis through the root,
+// used to tell an out-flung arm from the torso at similar heights. Rough
+// estimates for a ~2m-tall zombie — not visually calibrated.
+pub const HITBOX_HEAD_MIN_Y: f32 = 0.9;
+pub const HITBOX_CHEST_MIN_Y: f32 = 0.3;
+pub const HITBOX_BELLY_MIN_Y: f32 = -0.2;
+pub const HITBOX_LIMB_LATERAL_MIN: f32 = 0.35;
+
+// Approximates head/chest/belly/limb from the hit point's height and
+// lateral distance from the zombie's own vertical axis. Works in the
+// zombie's own local space (undoes its current yaw) so the lateral-distance
+// check means the same thing regardless of which way the zombie is
+// currently facing.
+pub fn zombie_hit_damage_geometric(hit_point: Vec3, zombie_transform: &Transform) -> f32 {
+    let relative = hit_point - zombie_transform.translation;
+    let local = zombie_transform.rotation.inverse() * relative;
+    let lateral = local.x.hypot(local.z);
+
+    if local.y >= HITBOX_HEAD_MIN_Y {
+        HEAD_DAMAGE
+    } else if lateral >= HITBOX_LIMB_LATERAL_MIN {
+        LIMB_DAMAGE
+    } else if local.y >= HITBOX_CHEST_MIN_Y {
+        CHEST_DAMAGE
+    } else if local.y >= HITBOX_BELLY_MIN_Y {
+        BELLY_DAMAGE
+    } else {
+        LIMB_DAMAGE
+    }
+}
+
+// Sent by the client every time it fires (Channel::Ordered — unlike
+// per-frame movement input, a dropped shot shouldn't just be superseded).
+// The client computes the exact ray (including its own spread/recoil
+// jitter) and the server just casts it — trusting the client's aim, same
+// "no anti-cheat goals for a debug server" stance as ClientInput's stance
+// field.
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub struct FireShot {
+    pub origin: Vec3,
+    pub direction: Vec3,
+}
+
+// Broadcast by the server (ServerEventAppExt, SendMode::Broadcast) after
+// resolving a FireShot, so every client — not just the shooter — plays the
+// same hitmarker/blood/spark/floating-damage VFX at the same place.
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub enum ShotFx {
+    ZombieHit { point: Vec3, normal: Vec3, damage: f32, killed: bool },
+    SurfaceHit { point: Vec3, normal: Vec3 },
+}
+
+// --- Game state (server-authoritative, see crates/server) ---
+
+// Sent once by a client the moment its own local Health hits 0 — the
+// server tracks which connected players have reported dead and declares
+// GameOver once all of them have (see GameStateEvent).
+#[derive(Event, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct PlayerDied;
+
+// Sent by a client's restart keybind. Only meaningful once the server has
+// broadcast GameStateEvent::GameOver, but the server itself is the one that
+// actually decides whether/how to reset (despawn+respawn zombies, revive
+// all players) — same "server owns the shared world" principle as
+// everything else moved there in earlier phases.
+#[derive(Event, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct RequestRestart;
+
+// Broadcast by the server on the two game-state transitions clients need to
+// react to.
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub enum GameStateEvent {
+    GameOver,
+    Restarted,
 }

@@ -7,7 +7,6 @@ use bevy::camera::RenderTarget;
 use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::math::ops;
-use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
 use bevy::picking::mesh_picking::MeshPickingPlugin;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
@@ -17,18 +16,20 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, T
 use bevy::render::view::Msaa;
 use bevy::scene::SceneRoot;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window};
-use big_brain::prelude::*;
 use bevy_replicon::prelude::*;
+use bevy_replicon::shared::backend::connected_client::NetworkId;
 use bevy_replicon_renet2::{
     netcode::{ClientAuthentication, NativeSocket, NetcodeClientTransport},
     renet2::{ConnectionConfig, RenetClient},
     RenetChannelsExt, RepliconRenetPlugins,
 };
 use shared::{
-    Chase, GameOver, Health, KnockbackVelocity, Player, PlayerStance, Zombie, ZombieAttackTimer,
-    ZombieMotion, ZOMBIE_ATTACK_INTERVAL,
+    ClientInput, FireShot, GameOver, GameStateEvent, Health, HEAD_DAMAGE, HITBOX_BELLY_MIN_Y,
+    HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN, KnockbackVelocity, NetPlayer,
+    NetTransform, Player, PlayerDied, PlayerStance, RequestRestart, ShotFx, SpawnMoreZombies, Zombie,
+    ZombieAttackTimer, ZombieMotion, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH,
+    ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
 };
-use vleue_navigator::prelude::*;
 
 // Downloaded once into assets/models/ so the app doesn't depend on a network
 // request (and a remote repo's file layout) every time it starts.
@@ -181,12 +182,6 @@ const SPARK_PARTICLE_GRAVITY: f32 = -9.0;
 const SPARK_PARTICLE_LIFETIME: f32 = 0.25;
 const SPARK_PARTICLE_SIZE: f32 = 0.02;
 
-// Horizontal-only impulse (see KnockbackVelocity) applied to a zombie that
-// survives a hit, along the bullet's own travel direction. Headshots always
-// kill outright (HEAD_DAMAGE == ZOMBIE_MAX_HEALTH) so never actually get to
-// stagger — this only shows up on body/limb hits that don't finish the kill.
-const KNOCKBACK_FORCE: f32 = 3.5;
-const KNOCKBACK_DECAY_RATE: f32 = 6.0;
 
 // Automatic fire: how often a shot can go off while the mouse button is held.
 // ~0.1s ≈ 600 rounds/min, roughly AK47-like.
@@ -204,17 +199,10 @@ const RECOIL_RECOVERY_SPEED: f32 = 5.0;
 // drift off-target the longer you hold the trigger.
 const BULLET_SPREAD: f32 = 0.02;
 
-// Lowered from 6.0 — felt too fast.
-const MOVE_SPEED: f32 = 4.0;
 const MOUSE_SENSITIVITY: f32 = 0.002;
 // Mouse turns slower while ADS'd — real scopes/sights make fine aim
 // adjustments feel twitchy at full sensitivity.
 const AIM_MOUSE_SENSITIVITY_MULTIPLIER: f32 = 0.5;
-
-// Noclip flies faster than normal walking, along the full look direction
-// (including pitch) rather than the ground-projected one — see
-// move_player_physics.
-const NOCLIP_SPEED: f32 = 10.0;
 
 // Crosshair: 4 hash marks pushed apart from center by GAP, which grows with
 // the current bullet spread (see current_bullet_spread/update_crosshair).
@@ -236,7 +224,6 @@ const BASE_FOV: f32 = std::f32::consts::PI / 4.0;
 const AIM_FOV_MULTIPLIER: f32 = 0.6;
 // How fast the FOV lerps toward its target each second (higher = snappier).
 const AIM_ZOOM_SPEED: f32 = 12.0;
-const AIM_MOVE_SPEED_MULTIPLIER: f32 = 0.5;
 const AIM_SPREAD_MULTIPLIER: f32 = 0.35;
 // Blurs the background while aiming (see apply_aim_dof) — the player's eye
 // is focused on the scope, not the wider scene, so this sells that focus
@@ -346,32 +333,12 @@ const LEAN_SPEED: f32 = 6.0;
 const LEAN_ROLL_DEG: f32 = 15.0;
 const LEAN_SIDE_OFFSET: f32 = 0.4;
 
-// Player capsule: radius + cylinder length between the two hemispherical
-// caps, so total standing height = PLAYER_LENGTH + 2 * PLAYER_RADIUS ≈ 1.6m.
-const PLAYER_RADIUS: f32 = 0.35;
-const PLAYER_LENGTH: f32 = 0.9;
 const EYE_HEIGHT_OFFSET: f32 = 0.65;
 
-// Stance (PlayerStance, KeyC/KeyX) and sprint (ShiftLeft while standing)
-// each rebuild the capsule shorter and re-scale move speed every frame in
-// move_player_physics — no persistent Collider to keep in sync, since the
-// shape is already passed fresh to move_and_slide() each call. Crouch/prone
-// capsule lengths are shorter than PLAYER_LENGTH, so the character visually
-// (and physically) gets shorter, not just slower.
-const SPRINT_MULTIPLIER: f32 = 1.6;
-const CROUCH_SPEED_MULTIPLIER: f32 = 0.5;
-const PRONE_SPEED_MULTIPLIER: f32 = 0.25;
-const CROUCH_LENGTH: f32 = PLAYER_LENGTH * 0.5;
-const PRONE_LENGTH: f32 = PLAYER_RADIUS * 0.3;
+// Stance (PlayerStance, KeyC/KeyX) eye-height offsets — the movement-speed/
+// capsule-length side of stance now lives in crates/server's move_players.
 const CROUCH_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.55;
 const PRONE_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.15;
-// Snappier than real-world 9.81 — common for FPS games so jumps/falls don't
-// feel floaty.
-const GRAVITY: f32 = -20.0;
-const JUMP_SPEED: f32 = 6.5;
-// A hit surface counts as "ground" (for jumping/gravity reset) only if its
-// normal is at least this close to straight up; steeper slopes/walls don't.
-const GROUND_NORMAL_MIN_Y: f32 = 0.6;
 // We don't know the real scale of this Sponza export (its own bounding box
 // data was ambiguous — could be meters or centimeters), so the player spawns
 // well above y=0 and lets gravity fall it onto whatever the real floor turns
@@ -384,10 +351,6 @@ const PLAYER_SPAWN: Vec3 = if USE_TEST_ARENA {
 
 // How long a bullet-hole marker stays visible before despawning.
 const HIT_MARKER_LIFETIME: f32 = 3.0;
-
-// Max range for both the render-mesh raycast and the zombie-capsule
-// physics raycast in shoot() — far past anything reachable inside Sponza.
-const MAX_SHOT_DISTANCE: f32 = 200.0;
 
 const PLAYER_MAX_HEALTH: f32 = 100.0;
 // Discrete bites instead of continuous per-second drain: a zombie within
@@ -403,81 +366,6 @@ const ZOMBIE_ATTACK_DAMAGE: f32 = 12.0;
 // tall zombie, appropriately looming over the player.
 const ZOMBIE_SCALE: f32 = 0.1;
 const ZOMBIE_PATH: &str = "models/zombie.glb";
-// Y is the player's actual measured resting height (from the debug position
-// log: Player @ y≈0.79), not a guess-and-let-gravity-settle value like
-// before — needed because with ZOMBIE_AI_ENABLED off, zombies never get a
-// Chase component and so never run move_zombies (which is where gravity is
-// applied), meaning they'd otherwise just hang frozen at their spawn height
-// forever instead of falling to the floor.
-// A 10x10 grid spanning -half_x..half_x / -half_z..half_z at height y —
-// used to generate a large ZOMBIE_SPAWNS (100 entries) without writing them
-// out by hand. const fn, so this still runs at compile time like the old
-// hand-placed array literal did.
-const fn zombie_spawn_grid(half_x: f32, half_z: f32, y: f32) -> [Vec3; 100] {
-    let mut spawns = [Vec3::ZERO; 100];
-    let mut i = 0usize;
-    while i < 100 {
-        let row = (i / 10) as f32;
-        let col = (i % 10) as f32;
-        let x = -half_x + col * (2.0 * half_x / 9.0);
-        let z = -half_z + row * (2.0 * half_z / 9.0);
-        spawns[i] = Vec3::new(x, y, z);
-        i += 1;
-    }
-    spawns
-}
-
-// Stress-testing 100 zombies at once (to check move_zombies' pathfinding
-// load — see ZOMBIE_PATH_RECALC_INTERVAL) instead of the original 5
-// hand-placed spots. Inset a few meters from the walls/hall edges so
-// nothing spawns stuck inside geometry.
-const ZOMBIE_SPAWNS: [Vec3; 100] = if USE_TEST_ARENA {
-    zombie_spawn_grid(ARENA_HALF_SIZE - 3.0, ARENA_HALF_SIZE - 3.0, 0.9)
-} else {
-    zombie_spawn_grid(14.0, 4.0, 0.9)
-};
-// A dead zombie is replaced after this long, keeping the count topped up to
-// ZOMBIE_SPAWNS.len() (100) instead of slowly depleting to zero.
-const ZOMBIE_RESPAWN_DELAY: f32 = 1.0;
-// Reuses the player's capsule dimensions (roughly human-sized).
-const ZOMBIE_RADIUS: f32 = PLAYER_RADIUS;
-const ZOMBIE_LENGTH: f32 = PLAYER_LENGTH;
-const ZOMBIE_SPEED: f32 = 1.0;
-// move_zombies used to call navmesh.transformed_path() (a full pathfind)
-// every single frame for every chasing zombie — fine for a handful of
-// zombies, but scaled terribly once ZOMBIE_SPAWNS got large (reported as
-// lag once most zombies were chasing at once, e.g. from far away where more
-// of them are in range simultaneously). Recomputing on this interval
-// instead and reusing the cached direction in between cuts the pathfind
-// call rate by ~24x at 60fps, at the cost of a zombie's steering being up
-// to this many seconds stale — imperceptible at this speed/interval.
-const ZOMBIE_PATH_RECALC_INTERVAL: f32 = 0.8;
-// Body-shot kills still take this many hits; a headshot always kills in one
-// (see zombie_hit_damage). Raised from 3.0 — zombies were dying too fast to
-// body shots.
-const ZOMBIE_MAX_HEALTH: f32 = 8.0;
-
-// Per-region damage, picked by zombie_hit_damage from where the raycast hit
-// lands relative to the zombie's root. The zombie.glb rig has no separate
-// per-body-part meshes to hit-test against directly (single "Zombie_Cylinder"
-// mesh, see the model's own node list) — bones exist for skinning/animation
-// only, not as distinct raycast targets — so regions are approximated
-// geometrically from the hit point instead of a real hitbox lookup.
-const HEAD_DAMAGE: f32 = ZOMBIE_MAX_HEALTH; // always a one-shot kill
-const CHEST_DAMAGE: f32 = 1.5;
-const BELLY_DAMAGE: f32 = 1.0;
-const LIMB_DAMAGE: f32 = 0.5;
-
-// Height bands (world-space meters, relative to the zombie's root — which
-// per ZOMBIE_HEALTH_BAR_HEIGHT's own comment sits around the physics
-// capsule's center, roughly hip/waist height, not the feet) and a lateral
-// distance from the vertical axis through the root, used to tell an
-// out-flung arm from the torso at similar heights. Rough estimates for a
-// ~2m-tall zombie — not visually calibrated.
-const HITBOX_HEAD_MIN_Y: f32 = 0.9;
-const HITBOX_CHEST_MIN_Y: f32 = 0.3;
-const HITBOX_BELLY_MIN_Y: f32 = -0.2;
-const HITBOX_LIMB_LATERAL_MIN: f32 = 0.35;
 
 // Damage number popup: spawned at the hit point, drifts straight up in
 // world space, and fades out over its lifetime.
@@ -486,126 +374,16 @@ const FLOATING_DAMAGE_RISE_SPEED: f32 = 0.7;
 const FLOATING_DAMAGE_FONT_SIZE: f32 = 14.0;
 const FLOATING_DAMAGE_CRIT_FONT_SIZE: f32 = 24.0;
 
-// Categorizes a raycast hit on a zombie into head/chest/belly/limb(-or-leg)
-// and returns the damage for that region. Works in the zombie's own local
-// space (undoes its current yaw) so the lateral-distance check means the
-// same thing regardless of which way the zombie is currently facing.
-// Preferred path: nearest-bone. Picks whichever known bone (head/chest/
-// belly/limb) sits closest to the hit point in world space, using each
-// bone's own GlobalTransform — so this tracks the zombie's actual current
-// animated pose, not the bind pose the mesh raycast itself is stuck on.
-// Falls back to the geometric approximation (zombie_hit_damage_geometric)
-// for whichever bones haven't resolved yet (ZombieHitboxBones fills in
-// asynchronously as the glTF scene loads — see wire_zombie_hitbox_bones) or
-// if none have.
-fn zombie_hit_damage(
-    hit_point: Vec3,
-    zombie_transform: &Transform,
-    bones: &ZombieHitboxBones,
-    globals: &Query<&GlobalTransform>,
-) -> f32 {
-    let candidates = bones
-        .head
-        .into_iter()
-        .map(|e| (e, HEAD_DAMAGE))
-        .chain(bones.chest.into_iter().map(|e| (e, CHEST_DAMAGE)))
-        .chain(bones.belly.into_iter().map(|e| (e, BELLY_DAMAGE)))
-        .chain(bones.limbs.iter().map(|&e| (e, LIMB_DAMAGE)));
-
-    let nearest = candidates
-        .filter_map(|(entity, damage)| {
-            let bone_pos = globals.get(entity).ok()?.translation();
-            Some((damage, hit_point.distance_squared(bone_pos)))
-        })
-        .min_by(|a, b| a.1.total_cmp(&b.1));
-
-    match nearest {
-        Some((damage, _)) => damage,
-        None => zombie_hit_damage_geometric(hit_point, zombie_transform),
-    }
-}
-
-// Approximates head/chest/belly/limb from the hit point's height and
-// lateral distance from the zombie's own vertical axis — used only as a
-// fallback until wire_zombie_hitbox_bones resolves real bone entities. See
-// the comment on HITBOX_* for why there's no real per-part hitbox to test
-// against directly.
-fn zombie_hit_damage_geometric(hit_point: Vec3, zombie_transform: &Transform) -> f32 {
-    let relative = hit_point - zombie_transform.translation;
-    let local = zombie_transform.rotation.inverse() * relative;
-    let lateral = local.xz().length();
-
-    if local.y >= HITBOX_HEAD_MIN_Y {
-        HEAD_DAMAGE
-    } else if lateral >= HITBOX_LIMB_LATERAL_MIN {
-        // An arm (or, near the ground, a leg) sticking out from the torso.
-        LIMB_DAMAGE
-    } else if local.y >= HITBOX_CHEST_MIN_Y {
-        CHEST_DAMAGE
-    } else if local.y >= HITBOX_BELLY_MIN_Y {
-        BELLY_DAMAGE
-    } else {
-        // Below the belly band and close to the central axis: legs.
-        LIMB_DAMAGE
-    }
-}
-// Flip to false to spawn zombies without their chase AI, for isolating
-// whether apparent movement is the AI reacting or an actual bug.
-const ZOMBIE_AI_ENABLED: bool = true;
-// Large enough that zombies start chasing basically as soon as they spawn —
-// this is meant as target practice, not a stealth encounter.
-const ZOMBIE_CHASE_RANGE: f32 = 60.0;
-// Height at which the flat navmesh plane slices the Sponza collider to build
-// obstacle geometry — high enough to clear the floor slab (zombies/player
-// rest at y≈0.9), low enough to still intersect columns and walls.
-const NAVMESH_HEIGHT: f32 = 1.0;
-// Outer walkable boundary, wound counter-clockwise (matching
-// vleue_navigator's own examples). Shrunk to just the main hall (matches
-// HALL_LIGHT_XS's -14..14 span) rather than the whole building — tried in
-// case it reduces the obstacle-polygon count that comes out of slicing
-// Sponza's single merged collider. Note: NavmeshUpdaterPlugin slices that
-// collider in full regardless of these bounds (no pre-filtering), so this
-// is unlikely to fix the timeout on its own — see NAVMESH_HEIGHT build_timeout
-// comment.
-const NAVMESH_BOUNDS: [Vec2; 4] = if USE_TEST_ARENA {
-    // Matches the arena's own floor footprint, inset slightly from the
-    // walls (ARENA_HALF_SIZE) so the navmesh boundary doesn't sit exactly
-    // on/through the wall colliders.
-    [
-        Vec2::new(-(ARENA_HALF_SIZE - 1.0), -(ARENA_HALF_SIZE - 1.0)),
-        Vec2::new(ARENA_HALF_SIZE - 1.0, -(ARENA_HALF_SIZE - 1.0)),
-        Vec2::new(ARENA_HALF_SIZE - 1.0, ARENA_HALF_SIZE - 1.0),
-        Vec2::new(-(ARENA_HALF_SIZE - 1.0), ARENA_HALF_SIZE - 1.0),
-    ]
-} else {
-    [
-        Vec2::new(-15.0, -5.0),
-        Vec2::new(15.0, -5.0),
-        Vec2::new(15.0, 5.0),
-        Vec2::new(-15.0, 5.0),
-    ]
-};
-// (x, z) world positions of column obstacle holes to cut into the navmesh —
-// empty for now. Add entries here once the real column positions are known
-// (visually, in-game); see spawn_zombie_navmesh/column_footprint.
-const NAVMESH_COLUMN_OBSTACLES: [(f32, f32); 0] = [];
-// Zombies and the player have no collider registered against each other
-// (each only collides with the static Sponza level, per avian3d's spatial
-// index), so without a deliberate stopping distance a zombie that catches up
-// just walks straight through/into the player and rides along with every
-// move — this stops it a bit short instead, like a melee attack range.
-const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
-// Beyond this distance from the player, move_zombies skips the precise
-// avian3d MoveAndSlide sweep (a real collision-resolving physics query, the
-// most expensive part of the per-zombie cost at scale) and just adds
-// velocity straight to position instead, clamped to a fixed rest height
-// rather than doing real ground collision. A far zombie can clip through
-// walls/stairs a bit as a result — an accepted trade-off since it's not
-// close enough to be scrutinized anyway. Nothing here throttles time, only
-// which zombies pay for the expensive path each frame; a zombie switches
-// tiers automatically as it enters/leaves range.
-const ZOMBIE_LOD_DISTANCE: f32 = 15.0;
-const ZOMBIE_LOD_REST_HEIGHT: f32 = 0.9;
+// ZOMBIE_RESPAWN_DELAY, ZOMBIE_MAX_HEALTH, HEAD/CHEST/BELLY/LIMB_DAMAGE,
+// HITBOX_*, zombie_hit_damage_geometric, MAX_SHOT_DISTANCE now live in
+// crates/shared — hit detection/damage is server-authoritative (see
+// crates/server's handle_fire_shot). draw_zombie_hitboxes below still uses
+// the HITBOX_* values (imported) purely for its debug visualization.
+// ZOMBIE_AI_ENABLED, ZOMBIE_CHASE_RANGE, NAVMESH_*, ZOMBIE_STOP_DISTANCE,
+// ZOMBIE_LOD_DISTANCE/REST_HEIGHT now live in crates/shared — movement/AI is
+// server-authoritative now (see crates/server), but ZOMBIE_LOD_DISTANCE is
+// still reused here client-side for update_zombie_lod's own (purely
+// render-cost, not movement-cost) LOD decision.
 // Full animation fidelity within this distance. Between here and
 // ZOMBIE_LOD_DISTANCE (where freeze_zombie_animations pauses it outright),
 // animation is instead throttled to ZOMBIE_ANIM_THROTTLE_HZ — still
@@ -629,24 +407,8 @@ const ZOMBIE_ANIM_CROWD_HZ_2: f32 = 5.0;
 const ZOMBIE_ANIM_CROWD_THRESHOLD_3: usize = 500;
 const ZOMBIE_ANIM_CROWD_HZ_3: f32 = 2.0;
 
-// Cheap stand-in for real pathfinding (no navmesh — Sponza is a single
-// merged mesh with no per-object separation to build one from, and every
-// navmesh crate checked either needs a physics-engine-specific Collider type
-// that conflicts with our avian3d version, or is pinned to an old Bevy). If
-// a raycast toward the player is blocked within this distance, the zombie
-// tries a handful of alternate angles and steers around whatever's in the
-// way instead of pushing straight into it forever.
-const ZOMBIE_AVOID_PROBE_DISTANCE: f32 = 2.5;
-const ZOMBIE_AVOID_ANGLES_DEG: [f32; 6] = [25.0, -25.0, 50.0, -50.0, 80.0, -80.0];
-
-// Boids-style separation (same idea Left 4 Dead's NextBot common-infected
-// AI uses): each zombie nudges its desired direction away from any other
-// zombie within this radius instead of treating them as solid obstacles
-// (GameLayer::Zombie is excluded from the raycast/MoveAndSlide filter
-// specifically so a crowd never jams up). Cheap because it's computed in
-// the same throttled block as the navmesh path recalc, not every frame.
-const ZOMBIE_SEPARATION_RADIUS: f32 = 1.1;
-const ZOMBIE_SEPARATION_STRENGTH: f32 = 1.2;
+// ZOMBIE_AVOID_*/ZOMBIE_SEPARATION_* (obstacle avoidance/boids separation)
+// now live in crates/shared and only crates/server's move_zombies uses them.
 
 // Screen-space (not 3D billboard) health bar floating above each zombie —
 // projected from its world position every frame via Camera::world_to_viewport.
@@ -983,85 +745,21 @@ struct BloodStain {
 // in crates/shared (plain gameplay data needed by both the future server
 // and the client).
 
-// Physics collision layer for zombies' persistent Sensor collider. Used
-// only to exclude other zombies from move_zombies' obstacle-avoidance
-// raycasts and MoveAndSlide sweep (see ZOMBIE_MOVE_FILTER) — without this,
-// zombies treat each other as solid obstacles and jam up instead of
-// routing around the crowd. shoot()'s raycast filter is untouched (still
-// SpatialQueryFilter::default(), i.e. all layers), so bullets still hit
-// zombies exactly as before.
-#[derive(PhysicsLayer, Clone, Copy, Debug, Default)]
-enum GameLayer {
-    #[default]
-    Default,
-    Zombie,
-}
-
-// Scorer: 1.0 when within ZOMBIE_CHASE_RANGE of the player, 0.0 otherwise.
-// big-brain's FirstToScore picker (threshold below) turns that into a
-// binary pick, same effect as seldom_state's near_player trigger/negation.
-#[derive(Clone, Component, Debug, ScorerBuilder)]
-struct NearPlayer;
-
-fn near_player_scorer(
-    player: Res<PlayerEntity>,
-    transforms: Query<&Transform>,
-    mut query: Query<(&Actor, &mut Score), With<NearPlayer>>,
-) {
-    for (Actor(actor), mut score) in &mut query {
-        let (Ok(actor_transform), Ok(player_transform)) =
-            (transforms.get(*actor), transforms.get(player.0))
-        else {
-            score.set(0.0);
-            continue;
-        };
-        let distance = actor_transform
-            .translation
-            .distance(player_transform.translation);
-        score.set(if distance <= ZOMBIE_CHASE_RANGE { 1.0 } else { 0.0 });
-    }
-}
-
-// Action: inserts Chase on Requested (entering the picked state), removes it
-// on Cancelled (score dropped below threshold, big-brain deselects it). Stays
-// Executing indefinitely otherwise — chasing has no "done" state, only
-// "no longer in range".
-#[derive(Clone, Component, Debug, ActionBuilder)]
-struct ChaseAction;
-
-fn chase_action_system(
-    player: Res<PlayerEntity>,
-    mut commands: Commands,
-    mut query: Query<(&Actor, &mut ActionState, &ActionSpan)>,
-) {
-    for (Actor(actor), mut state, span) in &mut query {
-        let _guard = span.span().enter();
-        match *state {
-            // try_insert/try_remove instead of insert/remove: the actor can
-            // already be despawned (shoot() killed it) by the time this
-            // command actually applies — observed as a noisy but harmless
-            // "entity already despawned" warning in testing.
-            ActionState::Requested => {
-                commands.entity(*actor).try_insert(Chase {
-                    target: player.0,
-                    speed: ZOMBIE_SPEED,
-                });
-                *state = ActionState::Executing;
-            }
-            ActionState::Cancelled => {
-                commands.entity(*actor).try_remove::<Chase>();
-                *state = ActionState::Failure;
-            }
-            _ => {}
-        }
-    }
-}
+// GameLayer, NearPlayer/near_player_scorer, ChaseAction/chase_action_system
+// (big-brain Thinker AI) now live in crates/server — zombie AI/movement is
+// server-authoritative.
 
 // Points a zombie's root entity at the specific descendant entity that
 // carries its AnimationPlayer, recorded once wire_zombie_animations finds it
 // (the glTF scene loads asynchronously, so it doesn't exist yet at spawn time).
 #[derive(Component)]
 struct ZombieAnimationPlayer(Entity);
+
+// Tracks which clip update_zombie_animation last picked, so it only issues
+// a play() when NetTransform.moving actually flips instead of every frame
+// (NetTransform.translation itself changes nearly every frame regardless).
+#[derive(Component, Default)]
+struct ZombiePlayingWalk(bool);
 
 // Bone entities used for nearest-bone hit detection (see zombie_hit_damage).
 // zombie.glb's rig (single skinned mesh, bones only for animation — see the
@@ -1123,7 +821,63 @@ fn connect_to_server(mut commands: Commands, channels: Res<RepliconChannels>) {
 
     commands.insert_resource(client);
     commands.insert_resource(transport);
+    commands.insert_resource(MyClientId(client_id));
     info!("connecting to server at {server_addr}");
+}
+
+// The renet2 netcode client_id chosen in connect_to_server — also what the
+// server surfaces as NetworkId on the connection entity it spawns, so
+// comparing the two is how the client recognizes which replicated NetPlayer
+// entity is its own (see mark_local_player).
+#[derive(Resource)]
+struct MyClientId(u64);
+
+// Client-only marker (never sent over the network) for whichever replicated
+// NetPlayer entity turned out to be this client's own — see MyClientId.
+#[derive(Component)]
+struct LocalPlayer;
+
+fn mark_local_player(
+    trigger: On<Add, NetworkId>,
+    mut commands: Commands,
+    my_id: Res<MyClientId>,
+    players: Query<&NetworkId, With<NetPlayer>>,
+) {
+    let entity = trigger.event().entity;
+    let Ok(network_id) = players.get(entity) else {
+        return;
+    };
+    if network_id.get() == my_id.0 {
+        commands.entity(entity).insert(LocalPlayer);
+    }
+}
+
+// Copies the server-replicated pose into the plain local Transform every
+// NetPlayer entity gets via its #[require(Transform)] — for the local
+// player this feeds apply_server_player_transform below; for everyone
+// else it's the pose a future remote-player visual would read.
+fn mirror_net_transform(mut players: Query<(&NetTransform, &mut Transform), Changed<NetTransform>>) {
+    for (net_transform, mut transform) in &mut players {
+        transform.translation = net_transform.translation;
+        transform.rotation = Quat::from_rotation_y(net_transform.yaw);
+    }
+}
+
+// The client's pre-existing local Player entity (see setup() and
+// PlayerEntity) is still what zombie AI/UI/damage all target — this is the
+// one remaining link back to it: copy the server-authoritative position
+// from our own replicated NetPlayer entity onto it every frame.
+fn apply_server_player_transform(
+    local: Query<&Transform, (With<NetPlayer>, With<LocalPlayer>, Without<Player>)>,
+    mut player: Query<&mut Transform, With<Player>>,
+) {
+    let Ok(net_transform) = local.single() else {
+        return;
+    };
+    let Ok(mut transform) = player.single_mut() else {
+        return;
+    };
+    transform.translation = net_transform.translation;
 }
 
 fn log_client_connection_state(state: Res<State<ClientState>>) {
@@ -1148,8 +902,6 @@ fn main() {
             DefaultPlugins,
             MeshPickingPlugin,
             PhysicsPlugins::default(),
-            BigBrainPlugin::new(PreUpdate),
-            VleueNavigatorPlugin,
             // A lightweight always-on FPS overlay. Bevy 0.18 doesn't have the
             // draggable DiagnosticsOverlay panels (that's 0.19-only), so this
             // is the only diagnostics UI available here.
@@ -1157,8 +909,24 @@ fn main() {
             RepliconPlugins,
             RepliconRenetPlugins,
         ))
+        .replicate::<NetworkId>()
+        .replicate::<NetPlayer>()
+        .replicate::<NetTransform>()
+        .replicate::<Zombie>()
+        .replicate::<Health>()
+        .add_client_event::<ClientInput>(Channel::Unreliable)
+        .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
+        .add_client_event::<FireShot>(Channel::Ordered)
+        .add_server_event::<ShotFx>(Channel::Ordered)
+        .add_client_event::<PlayerDied>(Channel::Ordered)
+        .add_client_event::<RequestRestart>(Channel::Ordered)
+        .add_server_event::<GameStateEvent>(Channel::Ordered)
         .add_systems(Startup, connect_to_server)
-        .add_systems(Update, log_client_connection_state)
+        .add_systems(Update, (log_client_connection_state, mirror_net_transform))
+        .add_observer(mark_local_player)
+        .add_observer(on_zombie_replicated)
+        .add_observer(on_shot_fx)
+        .add_observer(on_game_state_event)
         .init_resource::<Noclip>()
         .init_resource::<FreezeZombies>()
         .init_resource::<ShowHitboxes>()
@@ -1172,13 +940,6 @@ fn main() {
         .init_resource::<ZombieHealthBarsHidden>()
         .init_resource::<ZombieLodDisabled>()
         .add_systems(Startup, (setup, log_window_resolution))
-        .add_systems(
-            PreUpdate,
-            (
-                chase_action_system.in_set(BigBrainSet::Actions),
-                near_player_scorer.in_set(BigBrainSet::Scorers),
-            ),
-        )
         .add_systems(
             Update,
             (
@@ -1200,16 +961,16 @@ fn main() {
                     apply_view_recoil,
                     apply_aim_zoom,
                     apply_aim_dof,
-                    move_player_physics,
+                    send_player_input,
+                    apply_server_player_transform,
                     sync_camera_to_player,
-                    move_zombies,
+                    update_zombie_lod,
                     zombies_damage_player,
                 )
                     .chain(),
                 (
                     check_game_over,
                     restart_game,
-                    respawn_zombies,
                     wire_zombie_animations,
                     wire_zombie_hitbox_bones,
                     wire_gun_mesh,
@@ -1287,28 +1048,6 @@ struct VfxAssets<'w, 's> {
     sparks: Res<'w, SparkAssets>,
     gunshot: Res<'w, GunshotSound>,
     reload_sound: Res<'w, ReloadSound>,
-    // Folded in here too (rather than its own top-level param) for the same
-    // 16-param-limit reason — see the SpatialQuery addition in shoot(). Also
-    // excludes GunMesh, ScopeLens and ScopeReticle (sit right in front of
-    // the camera and would otherwise catch the shot raycast before it
-    // reaches anything downrange) and BloodStain (a decal parented onto the
-    // zombie mesh — without this, a stain from an earlier hit sat in front
-    // of the zombie's own hitbox mesh and ate the raycast for follow-up
-    // shots instead of letting them reach the zombie).
-    vfx_meshes: Query<
-        'w,
-        's,
-        (),
-        Or<(
-            With<HitMarker>,
-            With<MuzzleFlash>,
-            With<Smoke>,
-            With<GunMesh>,
-            With<ScopeLens>,
-            With<ScopeReticle>,
-            With<BloodStain>,
-        )>,
-    >,
     // Also just along for the ride here (not vfx-related at all) — shoot()
     // needs the player's PlayerStance for current_bullet_spread and has no
     // room for a dedicated top-level param.
@@ -1321,17 +1060,6 @@ struct ZombieAnim {
     idle: AnimationNodeIndex,
     walk: AnimationNodeIndex,
 }
-
-// So systems outside setup() (like respawn_zombies) can still hand the
-// player entity to a freshly spawned zombie's chase AI.
-#[derive(Resource)]
-struct PlayerEntity(Entity);
-
-// Countdown timers for zombies killed in shoot(); respawn_zombies spawns a
-// replacement once each hits zero, keeping the population topped back up to
-// ZOMBIE_SPAWNS.len() instead of thinning out permanently.
-#[derive(Resource, Default)]
-struct PendingZombieRespawns(Vec<f32>);
 
 #[derive(Resource)]
 struct MuzzleFxAssets {
@@ -1380,7 +1108,6 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
-    mut navmeshes: ResMut<Assets<NavMesh>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     commands.insert_resource(HitMarkerAssets {
@@ -1468,8 +1195,6 @@ fn setup(
         ));
     }
 
-    spawn_zombie_navmesh(&mut commands, &mut navmeshes);
-
     commands.spawn((
         DirectionalLight {
             illuminance: 8_000.0,
@@ -1486,7 +1211,7 @@ fn setup(
         spawn_hall_lights(&mut commands);
     }
 
-    let player = commands
+    commands
         .spawn((
             Transform::from_translation(PLAYER_SPAWN),
             Player {
@@ -1495,8 +1220,7 @@ fn setup(
             },
             Health(PLAYER_MAX_HEALTH),
             PlayerStance::default(),
-        ))
-        .id();
+        ));
     commands.insert_resource(GameOver(false));
 
     let zombie_clips: Vec<Handle<AnimationClip>> = [ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_WALK]
@@ -1510,12 +1234,9 @@ fn setup(
         walk: zombie_nodes[1],
     };
 
-    for &spawn_pos in &ZOMBIE_SPAWNS {
-        spawn_zombie(&mut commands, &asset_server, spawn_pos);
-    }
+    // No local zombie spawning here anymore — zombies are server-spawned
+    // and replicated; see the on_zombie_replicated observer.
     commands.insert_resource(zombie_anim);
-    commands.insert_resource(PlayerEntity(player));
-    commands.insert_resource(PendingZombieRespawns::default());
 
     let camera = commands
         .spawn((
@@ -1687,50 +1408,59 @@ const HALL_LIGHT_INTENSITY: f32 = 200_000.0;
 
 // Shared by the initial spawn in setup() and respawn_zombies, so a killed
 // zombie comes back identical to a freshly-spawned one.
-fn spawn_zombie(commands: &mut Commands, asset_server: &AssetServer, spawn_pos: Vec3) {
-    let mut zombie = commands.spawn((
+// Reactive spawn: the server owns Zombie AI/movement now (see
+// crates/server) — this fires when a replicated Zombie entity shows up
+// (already carrying Transform/NetTransform via Zombie's own
+// #[require(Transform)]) and just attaches the purely cosmetic/client-local
+// pieces onto that same entity: the GLTF scene, health, hitbox bones for
+// zombie_hit_damage, and a persistent Sensor collider so shoot() can
+// raycast against it (see the collider's own comment below).
+fn on_zombie_replicated(
+    trigger: On<Add, Zombie>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut transforms: Query<&mut Transform>,
+) {
+    let entity = trigger.event().entity;
+    if let Ok(mut transform) = transforms.get_mut(entity) {
+        transform.scale = Vec3::splat(ZOMBIE_SCALE);
+    }
+    commands.entity(entity).insert(zombie_cosmetic_bundle(&asset_server));
+    spawn_zombie_health_bar(&mut commands, entity);
+}
+
+// Debug-only: spawns a brand new, non-networked zombie purely on this
+// client (Digit1's "spawn one in front of me" and the respawn-on-kill
+// stand-in — see ZOMBIE_RESPAWN_DELAY's comment on why that one's a stopgap
+// until damage/death is server-authoritative too). Stationary — no AI runs
+// for it since that's server-only now, so it's really just a target dummy.
+fn spawn_local_zombie(commands: &mut Commands, asset_server: &AssetServer, spawn_pos: Vec3) {
+    let zombie_entity = commands
+        .spawn((
+            Transform::from_translation(spawn_pos).with_scale(Vec3::splat(ZOMBIE_SCALE)),
+            Zombie,
+            // Not replicated, so unlike a real zombie it needs its own local
+            // Health — nothing will ever set one via replication for it.
+            // Also unkillable via shoot() now: the server has never heard of
+            // this entity, so its raycast can't land on it.
+            Health(ZOMBIE_MAX_HEALTH),
+            zombie_cosmetic_bundle(asset_server),
+        ))
+        .id();
+    spawn_zombie_health_bar(commands, zombie_entity);
+}
+
+// No collider here anymore — hit detection is server-authoritative now
+// (crates/server's handle_fire_shot raycasts against its own zombie
+// colliders), so the client doesn't need one of its own to shoot with.
+fn zombie_cosmetic_bundle(asset_server: &AssetServer) -> impl Bundle {
+    (
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(ZOMBIE_PATH))),
-        Transform::from_translation(spawn_pos).with_scale(Vec3::splat(ZOMBIE_SCALE)),
-        Zombie,
-        ZombieMotion {
-            // Jittered from spawn_pos (deterministic, cheap — same
-            // sin-hash trick used elsewhere for pseudo-randomness) so 100
-            // zombies spawned at once don't all recompute their path on
-            // the exact same frame forever after.
-            path_recalc_timer: ops::sin(spawn_pos.x * 12.9898 + spawn_pos.z * 78.233).abs()
-                * ZOMBIE_PATH_RECALC_INTERVAL,
-            ..default()
-        },
-        Health(ZOMBIE_MAX_HEALTH),
         ZombieHitboxBones::default(),
         KnockbackVelocity::default(),
         ZombieAttackTimer::default(),
-        // A persistent collider so shoot() can raycast against the zombie's
-        // actual current position/orientation (avian3d's SpatialQuery)
-        // instead of only the render mesh, which is stuck testing against
-        // the animation's bind pose (see zombie_hit_damage's doc comment on
-        // why the visible, animated silhouette isn't what gets hit-tested).
-        // Sensor: detectable by queries but produces no contact response,
-        // so it doesn't fight move_zombies' manual MoveAndSlide sweep.
-        // Divided by ZOMBIE_SCALE because avian3d scales colliders by the
-        // entity's own Transform.scale, and this entity's scale is
-        // ZOMBIE_SCALE — without compensating, the capsule would end up
-        // roughly ZOMBIE_SCALE (0.1x) the size it's declared here.
-        Collider::capsule(ZOMBIE_RADIUS / ZOMBIE_SCALE, ZOMBIE_LENGTH / ZOMBIE_SCALE),
-        Sensor,
-        CollisionLayers::new(GameLayer::Zombie, LayerMask::ALL),
-    ));
-    // Can be flipped off to test whether apparent zombie movement is the
-    // chase AI reacting instantly, versus an actual movement-coupling bug.
-    if ZOMBIE_AI_ENABLED {
-        zombie.insert(
-            Thinker::build()
-                .picker(FirstToScore { threshold: 0.8 })
-                .when(NearPlayer, ChaseAction),
-        );
-    }
-    let zombie_entity = zombie.id();
-    spawn_zombie_health_bar(commands, zombie_entity);
+        ZombiePlayingWalk::default(),
+    )
 }
 
 fn spawn_zombie_health_bar(commands: &mut Commands, zombie: Entity) {
@@ -2130,54 +1860,8 @@ fn despawn_blood_stains(mut commands: Commands, time: Res<Time>, mut query: Quer
     }
 }
 
-// Builds the navmesh directly from hand-authored edges instead of slicing
-// Sponza's collider (see the comment above ChaseAction... no — see the
-// comment block near NAVMESH_HEIGHT: auto-generation from the collider timed
-// out on the full ~262k-triangle merged mesh). This is instant and exact
-// instead of an async build with a timeout, but the tradeoff is that
-// NAVMESH_COLUMN_OBSTACLES has to be measured/placed by hand — currently
-// empty, since column positions can't be measured without seeing the
-// rendered level. steer_around_obstacles (local raycast avoidance, still
-// active in move_zombies) is what currently keeps zombies off columns;
-// this navmesh only contributes a straight-line route within NAVMESH_BOUNDS
-// until real obstacle polygons are added here.
-fn spawn_zombie_navmesh(commands: &mut Commands, navmeshes: &mut Assets<NavMesh>) {
-    let mut navmesh = NavMesh::from_edge_and_obstacles(
-        NAVMESH_BOUNDS.to_vec(),
-        NAVMESH_COLUMN_OBSTACLES
-            .iter()
-            .map(|&(x, z)| column_footprint(x, z))
-            .collect(),
-    );
-    // Local mesh-space (x, y) maps to world (x, NAVMESH_HEIGHT, z) — same
-    // horizontal-plane rotation used by vleue_navigator's own avian3d
-    // example, just applied to the asset's transform directly instead of an
-    // entity's, since there's no NavMeshSettings/NavmeshUpdaterPlugin
-    // involved in this hand-authored path.
-    navmesh.set_transform(
-        Transform::from_xyz(0.0, NAVMESH_HEIGHT, 0.0)
-            .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
-    );
-    // Assets::insert only errors for Index-based ids with a stale
-    // generation; get_single() is a fixed Uuid id, which per its own docs
-    // never errors.
-    navmeshes
-        .insert(ManagedNavMesh::get_single().id(), navmesh)
-        .expect("inserting under a Uuid asset id never fails");
-    commands.spawn(ManagedNavMesh::single());
-}
-
-// A small square hole, wound clockwise (opposite NAVMESH_BOUNDS' CCW winding
-// — polyanya/geo's convention for interior rings/holes) around (x, z).
-fn column_footprint(x: f32, z: f32) -> Vec<Vec2> {
-    const COLUMN_RADIUS: f32 = 0.5;
-    vec![
-        Vec2::new(x - COLUMN_RADIUS, z - COLUMN_RADIUS),
-        Vec2::new(x - COLUMN_RADIUS, z + COLUMN_RADIUS),
-        Vec2::new(x + COLUMN_RADIUS, z + COLUMN_RADIUS),
-        Vec2::new(x + COLUMN_RADIUS, z - COLUMN_RADIUS),
-    ]
-}
+// spawn_zombie_navmesh/column_footprint now live in crates/server —
+// pathfinding is server-authoritative.
 
 // A plain flat-floored square room (see USE_TEST_ARENA) — a proper level
 // editor/second .gltf asset wasn't available, so this is hand-built from
@@ -2331,7 +2015,10 @@ fn zombies_damage_player(
     game_over: Res<GameOver>,
     freeze: Res<FreezeZombies>,
     god_mode: Res<GodMode>,
-    mut zombies: Query<(&Transform, &mut ZombieAttackTimer), (With<Zombie>, With<Chase>)>,
+    // Chase is server-only now (big-brain runs server-side) — this just
+    // checks distance instead of requiring the zombie to also carry a
+    // locally-nonexistent Chase marker.
+    mut zombies: Query<(&Transform, &mut ZombieAttackTimer), With<Zombie>>,
     mut player: Query<(&Transform, &mut Health), With<Player>>,
 ) {
     if game_over.0 || freeze.0 || god_mode.0 {
@@ -2370,6 +2057,10 @@ fn check_game_over(
         return;
     }
     game_over.0 = true;
+    // Tells the server this player is down — it declares GameOver once
+    // every connected player has reported the same (see on_player_died on
+    // the server, and this client's own on_game_state_event observer).
+    commands.client_trigger(PlayerDied);
 
     if let Ok(mut cursor) = cursor.single_mut() {
         cursor.grab_mode = CursorGrabMode::None;
@@ -2411,43 +2102,47 @@ fn check_game_over(
         });
 }
 
-// Resets the player, despawns and respawns zombies, and tears down the
-// GAME OVER overlay — everything spawn_zombie/setup did the first time,
-// minus the one-time asset loads (ZombieAnim, PlayerEntity are still valid).
-fn restart_game(
-    mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut game_over: ResMut<GameOver>,
-    asset_server: Res<AssetServer>,
-    mut player: Query<(&mut Transform, &mut Player, &mut Health)>,
-    zombies: Query<Entity, With<Zombie>>,
-    mut respawns: ResMut<PendingZombieRespawns>,
-    game_over_ui: Query<Entity, With<GameOverUi>>,
-) {
+// Just asks the server to restart — it's the one that actually decides how
+// (despawn+respawn zombies, revive every connected player), same as every
+// other piece of shared world state moved there in earlier phases. Any
+// client whose own GameOver is set can trigger it; see on_game_state_event
+// for the actual local reset once the server confirms via GameStateEvent.
+fn restart_game(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, game_over: Res<GameOver>) {
     if !game_over.0 || !keys.just_pressed(KeyCode::KeyR) {
         return;
     }
+    commands.client_trigger(RequestRestart);
+}
 
-    let Ok((mut transform, mut player, mut health)) = player.single_mut() else {
-        return;
-    };
-    transform.translation = PLAYER_SPAWN;
-    player.vertical_velocity = 0.0;
-    player.grounded = false;
-    health.0 = PLAYER_MAX_HEALTH;
-
-    for entity in &zombies {
-        commands.entity(entity).try_despawn();
+// Reacts to the server's two game-state broadcasts. GameOver mainly matters
+// for a client that somehow hasn't already noticed locally (see
+// check_game_over); Restarted is what actually resets this client's player
+// and tears down the GAME OVER overlay — deliberately the only place that
+// does so, whether this client was the one who pressed Restart or not.
+fn on_game_state_event(
+    trigger: On<GameStateEvent>,
+    mut commands: Commands,
+    mut game_over: ResMut<GameOver>,
+    mut player: Query<(&mut Transform, &mut Player, &mut Health)>,
+    game_over_ui: Query<Entity, With<GameOverUi>>,
+) {
+    match trigger.event() {
+        GameStateEvent::GameOver => {
+            game_over.0 = true;
+        }
+        GameStateEvent::Restarted => {
+            game_over.0 = false;
+            if let Ok((mut transform, mut player, mut health)) = player.single_mut() {
+                transform.translation = PLAYER_SPAWN;
+                player.vertical_velocity = 0.0;
+                player.grounded = false;
+                health.0 = PLAYER_MAX_HEALTH;
+            }
+            for entity in &game_over_ui {
+                commands.entity(entity).try_despawn();
+            }
+        }
     }
-    respawns.0.clear();
-    for &spawn_pos in &ZOMBIE_SPAWNS {
-        spawn_zombie(&mut commands, &asset_server, spawn_pos);
-    }
-
-    for entity in &game_over_ui {
-        commands.entity(entity).try_despawn();
-    }
-    game_over.0 = false;
 }
 
 // Four independent hash marks instead of a fixed cross, so update_crosshair
@@ -2576,7 +2271,6 @@ fn debug_panel_actions(
     camera: Query<&FpsCamera>,
     mut zombies: Query<(&Transform, &mut Health), With<Zombie>>,
     all_zombies: Query<Entity, With<Zombie>>,
-    mut respawns: ResMut<PendingZombieRespawns>,
 ) {
     if !panel_visible.0 {
         return;
@@ -2590,13 +2284,12 @@ fn debug_panel_actions(
             .single()
             .map(|cam| Quat::from_rotation_y(cam.yaw) * Vec3::NEG_Z)
             .unwrap_or(Vec3::NEG_Z);
-        spawn_zombie(&mut commands, &asset_server, player_transform.translation + forward * 2.0);
+        spawn_local_zombie(&mut commands, &asset_server, player_transform.translation + forward * 2.0);
     }
     if keys.just_pressed(KeyCode::Digit2) {
         for entity in &all_zombies {
             commands.entity(entity).try_despawn();
         }
-        respawns.0.clear();
     }
     if keys.just_pressed(KeyCode::Digit3) {
         set_nearest_zombie_health(&mut zombies, player_transform.translation, 1.0);
@@ -2605,9 +2298,8 @@ fn debug_panel_actions(
         set_nearest_zombie_health(&mut zombies, player_transform.translation, ZOMBIE_MAX_HEALTH);
     }
     if keys.just_pressed(KeyCode::Digit5) {
-        for &spawn_pos in &ZOMBIE_SPAWNS {
-            spawn_zombie(&mut commands, &asset_server, spawn_pos);
-        }
+        // Real spawning is a server decision now — just ask for more.
+        commands.client_trigger(SpawnMoreZombies);
     }
 }
 
@@ -3094,16 +2786,21 @@ fn draw_zombie_hitboxes(
     }
 }
 
-fn move_player_physics(
+// Player movement is now server-authoritative (see crates/server's
+// move_players) — this no longer touches Transform or avian3d at all, it
+// just packages input into a ClientInput and sends it. The resulting
+// position comes back later via replication (see apply_server_player_transform).
+// Noclip's fly-through-walls behavior had no server-side equivalent when
+// this moved, so KeyN's toggle is now inert (kept only so the debug panel
+// line and toggle system don't need removing too).
+fn send_player_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
-    time: Res<Time>,
     game_over: Res<GameOver>,
-    noclip: Res<Noclip>,
+    mut commands: Commands,
     camera_query: Query<&FpsCamera>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    mut player_query: Query<(&mut Transform, &mut Player, &PlayerStance)>,
-    mover: MoveAndSlide,
+    player_query: Query<&PlayerStance, With<Player>>,
 ) {
     if game_over.0 {
         return;
@@ -3111,125 +2808,35 @@ fn move_player_physics(
     let Ok(cam) = camera_query.single() else {
         return;
     };
-    let Ok((mut transform, mut player, stance)) = player_query.single_mut() else {
+    let Ok(stance) = player_query.single() else {
         return;
     };
-
-    if noclip.0 {
-        // Flies along the full look direction (yaw + pitch), not just the
-        // ground-projected one, so looking up/down and holding W moves you
-        // up/down too — no gravity, no collision, no MoveAndSlide at all.
-        let rotation = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
-        let forward = rotation * Vec3::NEG_Z;
-        let right = rotation * Vec3::X;
-
-        let mut direction = Vec3::ZERO;
-        if keys.pressed(KeyCode::KeyW) {
-            direction += forward;
-        }
-        if keys.pressed(KeyCode::KeyS) {
-            direction -= forward;
-        }
-        if keys.pressed(KeyCode::KeyD) {
-            direction += right;
-        }
-        if keys.pressed(KeyCode::KeyA) {
-            direction -= right;
-        }
-        if keys.pressed(KeyCode::Space) {
-            direction += Vec3::Y;
-        }
-        if keys.pressed(KeyCode::ShiftLeft) {
-            direction -= Vec3::Y;
-        }
-        if direction != Vec3::ZERO {
-            transform.translation += direction.normalize() * NOCLIP_SPEED * time.delta_secs();
-        }
-        player.vertical_velocity = 0.0;
-        player.grounded = false;
-        return;
-    }
 
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse));
     let sprinting = keys.pressed(KeyCode::ShiftLeft) && *stance == PlayerStance::Standing;
-    let move_speed = if aiming {
-        MOVE_SPEED * AIM_MOVE_SPEED_MULTIPLIER
-    } else {
-        match stance {
-            PlayerStance::Standing if sprinting => MOVE_SPEED * SPRINT_MULTIPLIER,
-            PlayerStance::Standing => MOVE_SPEED,
-            PlayerStance::Crouching => MOVE_SPEED * CROUCH_SPEED_MULTIPLIER,
-            PlayerStance::Prone => MOVE_SPEED * PRONE_SPEED_MULTIPLIER,
-        }
-    };
-    let capsule_length = match stance {
-        PlayerStance::Standing => PLAYER_LENGTH,
-        PlayerStance::Crouching => CROUCH_LENGTH,
-        PlayerStance::Prone => PRONE_LENGTH,
-    };
 
-    let yaw_rotation = Quat::from_rotation_y(cam.yaw);
-    let forward = yaw_rotation * Vec3::NEG_Z;
-    let right = yaw_rotation * Vec3::X;
-
-    let mut horizontal = Vec3::ZERO;
+    let mut move_axis = Vec2::ZERO;
     if keys.pressed(KeyCode::KeyW) {
-        horizontal += forward;
+        move_axis.y += 1.0;
     }
     if keys.pressed(KeyCode::KeyS) {
-        horizontal -= forward;
+        move_axis.y -= 1.0;
     }
     if keys.pressed(KeyCode::KeyD) {
-        horizontal += right;
+        move_axis.x += 1.0;
     }
     if keys.pressed(KeyCode::KeyA) {
-        horizontal -= right;
-    }
-    if horizontal != Vec3::ZERO {
-        horizontal = horizontal.normalize() * move_speed;
+        move_axis.x -= 1.0;
     }
 
-    let mut vertical_velocity = player.vertical_velocity;
-    if player.grounded {
-        if keys.just_pressed(KeyCode::Space) {
-            vertical_velocity = JUMP_SPEED;
-        } else if vertical_velocity < 0.0 {
-            // Small downward bias keeps the capsule pressed against the
-            // ground/slope instead of endlessly re-detecting "just landed".
-            vertical_velocity = -1.0;
-        }
-    }
-    vertical_velocity += GRAVITY * time.delta_secs();
-
-    let velocity = horizontal + Vec3::Y * vertical_velocity;
-    let shape = Collider::capsule(PLAYER_RADIUS, capsule_length);
-    let config = MoveAndSlideConfig::default();
-    let filter = SpatialQueryFilter::default();
-
-    let mut grounded_this_frame = false;
-    let output = mover.move_and_slide(
-        &shape,
-        transform.translation,
-        transform.rotation,
-        velocity,
-        time.delta(),
-        &config,
-        &filter,
-        |hit| {
-            if hit.normal.y > GROUND_NORMAL_MIN_Y {
-                grounded_this_frame = true;
-            }
-            MoveAndSlideHitResponse::Accept
-        },
-    );
-
-    transform.translation = output.position;
-    player.grounded = grounded_this_frame;
-    player.vertical_velocity = if grounded_this_frame {
-        vertical_velocity.min(0.0)
-    } else {
-        vertical_velocity
-    };
+    commands.client_trigger(ClientInput {
+        move_axis,
+        yaw: cam.yaw,
+        jump: keys.just_pressed(KeyCode::Space),
+        sprint: sprinting,
+        aiming,
+        stance: *stance,
+    });
 }
 
 // The camera doesn't move itself anymore — it just follows the physics body
@@ -3272,13 +2879,7 @@ fn shoot(
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut camera: Query<(&Transform, &mut ViewRecoil), With<FpsCamera>>,
     mut gun: Query<&mut Gun>,
-    mut raycast: MeshRayCast,
     vfx_assets: VfxAssets,
-    child_of: Query<&ChildOf>,
-    mut zombies: Query<(&Transform, &mut Health, &ZombieHitboxBones, &mut KnockbackVelocity), With<Zombie>>,
-    globals: Query<&GlobalTransform>,
-    spatial_query: SpatialQuery,
-    mut respawns: ResMut<PendingZombieRespawns>,
     mut cooldown: Local<f32>,
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
@@ -3390,107 +2991,68 @@ fn shoot(
         },
     ));
 
-    let ray = Ray3d::new(camera_transform.translation, direction);
-    // Excludes our own decorative VFX meshes from the raycast — HitMarker in
-    // particular sits proud of whatever surface it was spawned on (offset
-    // along the hit normal, toward the camera), which puts it directly in
-    // the path of a follow-up shot at the same spot. Without this filter, a
-    // second shot could hit the first shot's leftover marker sphere instead
-    // of whatever's behind it (e.g. a zombie), registering as a "hit" with
-    // no damage applied — this was reported as shots on a zombie not
-    // registering damage.
-    let filter = |entity: Entity| !vfx_assets.vfx_meshes.contains(entity);
-    let settings = MeshRayCastSettings::default().with_filter(&filter);
-    let mesh_hit = raycast
-        .cast_ray(ray, &settings)
-        .first()
-        .map(|(entity, hit)| (*entity, hit.point, hit.normal, hit.distance));
+    // Hit detection/damage is server-authoritative now (see crates/server's
+    // handle_fire_shot) — this just sends the exact ray (already carrying
+    // this shot's own spread/recoil jitter) and waits for the broadcast
+    // ShotFx to actually spawn hitmarker/blood/spark/floating-damage VFX
+    // (see on_shot_fx), same as every other client watching this shot land.
+    commands.client_trigger(FireShot {
+        origin: camera_transform.translation,
+        direction: *direction,
+    });
+}
 
-    // Also raycasts against zombies' physics capsules (the Collider/Sensor
-    // added in spawn_zombie). The render-mesh raycast above only ever tests
-    // the animation's bind pose, not whatever pose is actually being
-    // displayed this frame (Bevy's mesh_picking doesn't read GPU skinning
-    // results back to the CPU) — a shot that visually lands on a swinging
-    // arm can miss entirely because that arm only exists there once
-    // animation has deformed the mesh. The capsule instead tracks the
-    // zombie's real Transform every frame, independent of animation, so
-    // this is what actually makes hits land reliably on a moving zombie.
-    let spatial_filter = SpatialQueryFilter::default();
-    let physics_hit = spatial_query
-        .cast_ray(ray.origin, direction, MAX_SHOT_DISTANCE, true, &spatial_filter)
-        .map(|hit| (hit.entity, ray.origin + *direction * hit.distance, hit.normal, hit.distance));
+// Plays the actual, server-decided outcome of a shot — hitmarker always,
+// plus either blood+floating-damage (zombie) or sparks (wall/floor). Runs
+// on every client, including the shooter, so what everyone sees always
+// matches what the server actually resolved.
+fn on_shot_fx(
+    trigger: On<ShotFx>,
+    mut commands: Commands,
+    time: Res<Time>,
+    vfx_assets: VfxAssets,
+    spatial_query: SpatialQuery,
+    zombies: Query<(Entity, &Transform), With<Zombie>>,
+    globals: Query<&GlobalTransform>,
+) {
+    match *trigger.event() {
+        ShotFx::ZombieHit { point, normal, damage, killed } => {
+            commands.spawn((
+                Mesh3d(vfx_assets.hit_assets.mesh.clone()),
+                MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
+                Transform::from_translation(point + normal.normalize_or_zero() * 0.01),
+                HitMarker {
+                    remaining: HIT_MARKER_LIFETIME,
+                },
+            ));
+            spawn_floating_damage(&mut commands, point, damage);
 
-    // Whichever is closer wins — a zombie's capsule can be behind a wall
-    // relative to the mesh hit (or vice versa), so this isn't just "prefer
-    // the physics hit".
-    let closest = match (mesh_hit, physics_hit) {
-        (Some(mesh), Some(physics)) if physics.3 < mesh.3 => Some(physics),
-        (Some(mesh), _) => Some(mesh),
-        (None, physics) => physics,
-    };
-
-    if let Some((hit_entity, hit_point, hit_normal, hit_distance)) = closest {
-        info!("Hit at {:?} (distance {:.2}m)", hit_point, hit_distance);
-        commands.spawn((
-            Mesh3d(vfx_assets.hit_assets.mesh.clone()),
-            MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
-            Transform::from_translation(hit_point + hit_normal.normalize_or_zero() * 0.01),
-            HitMarker {
-                remaining: HIT_MARKER_LIFETIME,
-            },
-        ));
-
-        // The ray hits a mesh primitive somewhere deep inside the zombie's
-        // glTF hierarchy (mesh_hit) or the zombie root's own capsule
-        // collider directly (physics_hit) — walk up the parent chain either
-        // way to find the Zombie-tagged root. Damage depends on where the
-        // hit landed (zombie_hit_damage) — despawns once accumulated
-        // damage reaches ZOMBIE_MAX_HEALTH.
-        let mut current = hit_entity;
-        let mut hit_zombie = false;
-        for _ in 0..20 {
-            if let Ok((zombie_transform, mut health, bones, mut knockback)) = zombies.get_mut(current) {
-                hit_zombie = true;
-                let damage = zombie_hit_damage(hit_point, zombie_transform, bones, &globals);
-                health.0 -= damage;
-                spawn_floating_damage(&mut commands, hit_point, damage);
-
-                // Only parent the wound stain onto the zombie if it's about
-                // to keep existing to carry it around.
-                let alive = health.0 > 0.0;
-                let zombie_for_blood = alive.then(|| globals.get(current).ok().map(|g| (current, g))).flatten();
-                spawn_blood_effects(
-                    &mut commands,
-                    &vfx_assets.blood,
-                    &spatial_query,
-                    &time,
-                    hit_point,
-                    hit_normal,
-                    zombie_for_blood,
-                );
-
-                // A stagger from the bullet's own travel direction — only
-                // meaningful if the zombie is still around to be knocked
-                // (headshots kill outright, so never reach this).
-                if alive {
-                    let push = Vec3::new(direction.x, 0.0, direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
-                    knockback.0 += push;
-                }
-
-                if !alive {
-                    commands.entity(current).try_despawn();
-                    respawns.0.push(ZOMBIE_RESPAWN_DELAY);
-                }
-                break;
-            }
-            let Ok(parent) = child_of.get(current) else {
-                break;
+            // The server doesn't send which zombie entity it was (avoiding
+            // cross-network entity mapping for a purely cosmetic detail) —
+            // parenting the wound stain onto whichever zombie is nearest
+            // the hit point is visually indistinguishable and much simpler.
+            let zombie_for_blood = if killed {
+                None
+            } else {
+                zombies
+                    .iter()
+                    .min_by(|(_, a), (_, b)| {
+                        a.translation.distance_squared(point).total_cmp(&b.translation.distance_squared(point))
+                    })
+                    .and_then(|(entity, _)| globals.get(entity).ok().map(|g| (entity, g)))
             };
-            current = parent.0;
+            spawn_blood_effects(&mut commands, &vfx_assets.blood, &spatial_query, &time, point, normal, zombie_for_blood);
         }
-
-        if !hit_zombie {
-            spawn_spark_effects(&mut commands, &vfx_assets.sparks, &time, hit_point, hit_normal);
+        ShotFx::SurfaceHit { point, normal } => {
+            commands.spawn((
+                Mesh3d(vfx_assets.hit_assets.mesh.clone()),
+                MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
+                Transform::from_translation(point + normal.normalize_or_zero() * 0.01),
+                HitMarker {
+                    remaining: HIT_MARKER_LIFETIME,
+                },
+            ));
+            spawn_spark_effects(&mut commands, &vfx_assets.sparks, &time, point, normal);
         }
     }
 }
@@ -3836,262 +3398,42 @@ fn update_smoke(mut commands: Commands, time: Res<Time>, mut query: Query<(Entit
     }
 }
 
-// --- Zombie AI (big-brain, vendored fork ported to Bevy 0.18) ---
+// Zombie AI/pathfinding/movement (big-brain + vleue_navigator +
+// move_zombies/steer_around_obstacles) now live in crates/server —
+// zombies are server-authoritative, replicated down as NetTransform.
 //
-// Each zombie's Thinker picks ChaseAction once NearPlayer scores above the
-// FirstToScore threshold (defined above spawn_zombie). big-brain only
-// manages *when* the Chase component is present (chase_action_system
-// inserts/removes it on Requested/Cancelled) — the actual walking happens in
-// the plain move_zombies system below.
-
-// Casts a ray toward `desired_direction`; if it's blocked within
-// ZOMBIE_AVOID_PROBE_DISTANCE (or closer than the target itself), tries a
-// handful of angles rotated left/right around it and returns the first clear
-// one. This is a cheap stand-in for real pathfinding — good enough to route
-// around a single column, not a substitute for an actual navmesh. Falls back
-// to the original direction if every angle is blocked too.
-fn steer_around_obstacles(
-    spatial_query: &SpatialQuery,
-    origin: Vec3,
-    desired_direction: Vec3,
-    distance_to_target: f32,
-    filter: &SpatialQueryFilter,
-) -> Vec3 {
-    let probe_distance = ZOMBIE_AVOID_PROBE_DISTANCE.min(distance_to_target);
-    let is_clear = |direction: Vec3| {
-        Dir3::new(direction).is_ok_and(|dir| {
-            spatial_query
-                .cast_ray(origin, dir, probe_distance, false, filter)
-                .is_none()
-        })
-    };
-
-    if is_clear(desired_direction) {
-        return desired_direction;
-    }
-    for angle_deg in ZOMBIE_AVOID_ANGLES_DEG {
-        let rotated = Quat::from_rotation_y(angle_deg.to_radians()) * desired_direction;
-        if is_clear(rotated) {
-            return rotated;
-        }
-    }
-    // Every probed angle is blocked too — keep going straight. move_and_slide
-    // will still stop the zombie at the actual wall instead of clipping through.
-    desired_direction
-}
-
-// Walks every zombie with an active `Chase` toward its target using the same
-// avian3d move-and-slide + manual gravity approach as the player, so zombies
-// get the same wall/floor collision (and the same stairs caveat).
-fn move_zombies(
-    time: Res<Time>,
-    game_over: Res<GameOver>,
-    freeze: Res<FreezeZombies>,
+// This client only decides its own render-cost LOD tier per zombie —
+// distinct from (and simpler than) the server's movement-cost LOD, but
+// reusing the same ZOMBIE_LOD_DISTANCE threshold — since ZombieMotion.far is
+// still what freeze_zombie_animations/update_zombie_health_bars key off of.
+fn update_zombie_lod(
     mut timings: ResMut<PerfTimings>,
     lod_disabled: Res<ZombieLodDisabled>,
-    mut zombies: Query<(Entity, &mut Transform, &mut ZombieMotion, &Chase, &mut KnockbackVelocity), With<Zombie>>,
-    targets: Query<&Transform, Without<Zombie>>,
-    navmesh: Query<&ManagedNavMesh>,
-    navmeshes: Res<Assets<NavMesh>>,
-    mover: MoveAndSlide,
+    player: Query<&Transform, With<Player>>,
+    mut zombies: Query<(&Transform, &mut ZombieMotion), (With<Zombie>, Without<Player>)>,
 ) {
-    if game_over.0 || freeze.0 {
-        return;
-    }
     let perf_start = std::time::Instant::now();
-    // Built once per frame (not per zombie) — Direct update mode means this
-    // is ready as soon as the level's collider finishes loading and the
-    // first navmesh build completes; None until then, or if the entity
-    // hasn't spawned/query fails for any reason.
-    let navmesh = navmesh
-        .single()
-        .ok()
-        .and_then(|handle| navmeshes.get(handle));
-    let mut near_zombie_count = 0usize;
-
-    // Snapshot for the separation check below — read-only pass before the
-    // mutable loop, so a zombie's separation nudge this frame is based on
-    // where every zombie *started* the frame, not on already-moved ones.
-    let positions: Vec<(Entity, Vec3)> = zombies.iter().map(|(e, t, ..)| (e, t.translation)).collect();
-
-    for (entity, mut transform, mut motion, chase, mut knockback) in &mut zombies {
-        let Ok(target_transform) = targets.get(chase.target) else {
-            continue;
-        };
-
-        let to_target = target_transform.translation - transform.translation;
-        let horizontal = Vec3::new(to_target.x, 0.0, to_target.z);
-        let distance = horizontal.length();
-
-        if distance > ZOMBIE_LOD_DISTANCE && !lod_disabled.0 {
-            // Cheap LOD path — see ZOMBIE_LOD_DISTANCE's doc comment. No
-            // pathfinding, no obstacle-avoidance raycasts, no MoveAndSlide;
-            // just walk straight at the target and rest at a fixed height.
-            if distance > ZOMBIE_STOP_DISTANCE {
-                let direction = horizontal / distance;
-                transform.translation += direction * chase.speed * time.delta_secs();
-                transform.look_to(-direction, Vec3::Y);
-            }
-            transform.translation.y = ZOMBIE_LOD_REST_HEIGHT;
-            motion.grounded = true;
-            motion.vertical_velocity = 0.0;
-            motion.far = true;
-            continue;
-        }
-        motion.far = false;
-        near_zombie_count += 1;
-
-        // Excludes the Zombie layer so a crowd of zombies doesn't treat
-        // each other as solid obstacles — only level geometry (Default
-        // layer) blocks the steering raycast and the MoveAndSlide sweep.
-        let filter = SpatialQueryFilter::from_mask(LayerMask::ALL ^ GameLayer::Zombie);
-        let horizontal_velocity = if distance > ZOMBIE_STOP_DISTANCE {
-            // Route via the navmesh's next waypoint when available — this is
-            // what actually routes around a whole column instead of just
-            // nudging past whatever the raycast probe below happens to see.
-            // Falls back to a straight line at the player (with the old
-            // raycast-only avoidance) if the navmesh isn't built yet or no
-            // path exists between the two points. Both the pathfind AND the
-            // raycast steering are throttled together to
-            // ZOMBIE_PATH_RECALC_INTERVAL, not recomputed every frame —
-            // confirmed still fine at large zombie counts (the earlier
-            // "freeze" report turned out to be an accidental F-key press,
-            // not this).
-            motion.path_recalc_timer -= time.delta_secs();
-            if motion.path_recalc_timer <= 0.0 {
-                motion.path_recalc_timer = ZOMBIE_PATH_RECALC_INTERVAL;
-                let desired_direction = navmesh
-                    .and_then(|navmesh| {
-                        navmesh.transformed_path(transform.translation, target_transform.translation)
-                    })
-                    .and_then(|path| path.path.first().copied())
-                    .map(|waypoint| {
-                        Vec3::new(
-                            waypoint.x - transform.translation.x,
-                            0.0,
-                            waypoint.z - transform.translation.z,
-                        )
-                        .normalize_or_zero()
-                    })
-                    .filter(|direction| *direction != Vec3::ZERO)
-                    .unwrap_or(horizontal / distance);
-
-                // Push away from any other zombie within ZOMBIE_SEPARATION_RADIUS,
-                // stronger the closer they are, so the crowd doesn't walk
-                // through/stack on top of each other while still never
-                // treating one another as a hard blocker.
-                let mut separation = Vec3::ZERO;
-                for (other_entity, other_pos) in &positions {
-                    if *other_entity == entity {
-                        continue;
-                    }
-                    let away = transform.translation - *other_pos;
-                    let away = Vec3::new(away.x, 0.0, away.z);
-                    let dist_sq = away.length_squared();
-                    if dist_sq > 1e-6 && dist_sq < ZOMBIE_SEPARATION_RADIUS * ZOMBIE_SEPARATION_RADIUS {
-                        let dist = dist_sq.sqrt();
-                        separation += (away / dist) * (1.0 - dist / ZOMBIE_SEPARATION_RADIUS);
-                    }
-                }
-                let desired_direction =
-                    (desired_direction + separation * ZOMBIE_SEPARATION_STRENGTH).normalize_or_zero();
-                let desired_direction = if desired_direction == Vec3::ZERO {
-                    horizontal / distance
-                } else {
-                    desired_direction
-                };
-
-                motion.cached_path_dir = steer_around_obstacles(
-                    &mover.spatial_query,
-                    transform.translation,
-                    desired_direction,
-                    distance,
-                    &filter,
-                );
-            }
-            motion.cached_path_dir * chase.speed
-        } else {
-            Vec3::ZERO
-        };
-
-        if motion.grounded && motion.vertical_velocity < 0.0 {
-            motion.vertical_velocity = -1.0;
-        }
-        motion.vertical_velocity += GRAVITY * time.delta_secs();
-
-        // Same exponential-decay shape as ViewRecoil's kick — knockback.0
-        // is set (once, an instant impulse) in shoot() and just fades back
-        // to zero here every frame after.
-        let decay = (KNOCKBACK_DECAY_RATE * time.delta_secs()).min(1.0);
-        knockback.0 *= 1.0 - decay;
-
-        let velocity = horizontal_velocity + knockback.0 + Vec3::Y * motion.vertical_velocity;
-        let shape = Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH);
-        let config = MoveAndSlideConfig::default();
-
-        let mut grounded_this_frame = false;
-        let output = mover.move_and_slide(
-            &shape,
-            transform.translation,
-            transform.rotation,
-            velocity,
-            time.delta(),
-            &config,
-            &filter,
-            |hit| {
-                if hit.normal.y > GROUND_NORMAL_MIN_Y {
-                    grounded_this_frame = true;
-                }
-                MoveAndSlideHitResponse::Accept
-            },
-        );
-
-        transform.translation = output.position;
-        motion.grounded = grounded_this_frame;
-        motion.vertical_velocity = if grounded_this_frame {
-            motion.vertical_velocity.min(0.0)
-        } else {
-            motion.vertical_velocity
-        };
-
-        // Face the walk direction. look_to() points local -Z at the target,
-        // but this model's rig treats local +Z as forward (confirmed: with
-        // the un-negated direction, zombies walked toward the player with
-        // their back turned), hence the negation.
-        if horizontal_velocity != Vec3::ZERO {
-            transform.look_to(-horizontal_velocity, Vec3::Y);
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+    let mut near_count = 0usize;
+    let mut total = 0usize;
+    for (zombie_transform, mut motion) in &mut zombies {
+        total += 1;
+        let distance = zombie_transform.translation.distance(player_transform.translation);
+        motion.far = !lod_disabled.0 && distance > ZOMBIE_LOD_DISTANCE;
+        if !motion.far {
+            near_count += 1;
         }
     }
     timings.move_zombies_ms = perf_start.elapsed().as_secs_f32() * 1000.0;
-    timings.zombie_count = zombies.iter().count();
-    timings.near_zombie_count = near_zombie_count;
+    timings.zombie_count = total;
+    timings.near_zombie_count = near_count;
 }
 
 // Ticks down each pending respawn timer (queued by shoot() when a zombie
 // dies) and spawns a replacement once it hits zero, cycling through
 // ZOMBIE_SPAWNS so the population stays at 3 instead of thinning out.
-fn respawn_zombies(
-    time: Res<Time>,
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut respawns: ResMut<PendingZombieRespawns>,
-    mut next_spawn_index: Local<usize>,
-) {
-    let dt = time.delta_secs();
-    let mut i = 0;
-    while i < respawns.0.len() {
-        respawns.0[i] -= dt;
-        if respawns.0[i] <= 0.0 {
-            respawns.0.swap_remove(i);
-            let spawn_pos = ZOMBIE_SPAWNS[*next_spawn_index % ZOMBIE_SPAWNS.len()];
-            *next_spawn_index += 1;
-            spawn_zombie(&mut commands, &asset_server, spawn_pos);
-        } else {
-            i += 1;
-        }
-    }
-}
-
 // The zombie scene's AnimationPlayer only exists once its glTF finishes
 // loading (async), so this watches for new ones, wires up the shared
 // AnimationGraph, starts them on Idle, and records which zombie root each
@@ -4221,23 +3563,24 @@ fn wire_zombie_hitbox_bones(
 
 // Switches a zombie between its Walk and Idle clips exactly when `Chase` is
 // added/removed, rather than every frame.
+// Switches a zombie between its Walk and Idle clips based on the server's
+// replicated NetTransform.moving flag (Chase itself isn't replicated — see
+// NetTransform's own comment on why).
 fn update_zombie_animation(
     anim: Res<ZombieAnim>,
-    started_chasing: Query<&ZombieAnimationPlayer, Added<Chase>>,
-    mut stopped_chasing: RemovedComponents<Chase>,
-    zombies: Query<&ZombieAnimationPlayer, With<Zombie>>,
+    mut zombies: Query<(&NetTransform, &ZombieAnimationPlayer, &mut ZombiePlayingWalk), With<Zombie>>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    for link in &started_chasing {
+    for (net_transform, link, mut playing_walk) in &mut zombies {
+        if net_transform.moving == playing_walk.0 {
+            continue;
+        }
+        playing_walk.0 = net_transform.moving;
         if let Ok(mut player) = players.get_mut(link.0) {
             player.stop_all();
-            player.play(anim.walk).repeat();
-        }
-    }
-    for entity in stopped_chasing.read() {
-        if let Ok(link) = zombies.get(entity) {
-            if let Ok(mut player) = players.get_mut(link.0) {
-                player.stop_all();
+            if net_transform.moving {
+                player.play(anim.walk).repeat();
+            } else {
                 player.play(anim.idle).repeat();
             }
         }
