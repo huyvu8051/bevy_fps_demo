@@ -22,10 +22,11 @@ use shared::{
     ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE, ZOMBIE_LENGTH,
     ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
     DIRECTOR_CALM_DURATION_SECS, DIRECTOR_CALM_PRESSURE_THRESHOLD, DIRECTOR_HORDE_SIZE,
-    DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, PLAYER_THREAT_DECAY_RATE,
-    PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY,
-    ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS, ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS,
-    ZOMBIE_SPEED, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS, ZOMBIE_TURN_RATE_DEG,
+    DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, INTERP_DELAY_SECS,
+    LAG_COMPENSATION_MAX_SECS, PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
+    ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
+    ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS, ZOMBIE_SPEED, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
+    ZOMBIE_TURN_RATE_DEG,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 use vleue_navigator::prelude::*;
@@ -97,7 +98,14 @@ fn main() {
         )
         .add_systems(
             Update,
-            (move_players, move_zombies, move_debug_bots, tick_respawns, decay_player_threat, run_ai_director),
+            (
+                move_players,
+                (move_zombies, record_zombie_history).chain(),
+                move_debug_bots,
+                tick_respawns,
+                decay_player_threat,
+                run_ai_director,
+            ),
         )
         .add_observer(spawn_player)
         .add_observer(log_client_disconnect)
@@ -411,6 +419,36 @@ fn spawn_more_zombies(_trigger: On<FromClient<SpawnMoreZombies>>, mut commands: 
 #[derive(Component)]
 struct DirectorSpawned;
 
+// Recent (translation, rotation) snapshots for lag-compensated hit
+// detection — see handle_fire_shot and record_zombie_history. Not
+// replicated (server-only bookkeeping, like ChaseTarget/PlayerThreat).
+#[derive(Component, Default)]
+struct ZombieHistory(std::collections::VecDeque<(f32, Vec3, Quat)>);
+
+// Runs after move_zombies each tick: records where every zombie is right
+// now, and prunes anything older than LAG_COMPENSATION_MAX_SECS needs.
+fn record_zombie_history(time: Res<Time>, mut zombies: Query<(&Transform, &mut ZombieHistory), With<Zombie>>) {
+    let now = time.elapsed_secs();
+    for (transform, mut history) in &mut zombies {
+        history.0.push_back((now, transform.translation, transform.rotation));
+        while history.0.front().is_some_and(|&(t, ..)| now - t > LAG_COMPENSATION_MAX_SECS) {
+            history.0.pop_front();
+        }
+    }
+}
+
+// Nearest recorded snapshot to `target_time` — history is only sampled once
+// per server tick (30Hz), so this is a "closest sample" lookup rather than
+// interpolating between two, which is plenty precise for what's ultimately
+// a cosmetic-accuracy-tolerant debug shooter.
+fn zombie_history_at(history: &ZombieHistory, target_time: f32) -> Option<(Vec3, Quat)> {
+    history
+        .0
+        .iter()
+        .min_by(|(a, ..), (b, ..)| (a - target_time).abs().total_cmp(&(b - target_time).abs()))
+        .map(|&(_, translation, rotation)| (translation, rotation))
+}
+
 // Fractional part of entity_index * the golden ratio — a cheap
 // low-discrepancy sequence that spreads out well across however many
 // zombies exist, regardless of spawn order or position. Used to stagger
@@ -452,6 +490,7 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], director_spawned: boo
             // client-side before zombies moved server-side — avian3d's
             // spatial queries pick up a bare Collider fine.
             Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH),
+            ZombieHistory::default(),
         ));
         if ZOMBIE_AI_ENABLED {
             zombie.insert(Thinker::build().picker(FirstToScore { threshold: 0.8 }).when(NearPlayer, ChaseAction));
@@ -768,8 +807,11 @@ fn tick_respawns(
 fn handle_fire_shot(
     trigger: On<FromClient<FireShot>>,
     mut commands: Commands,
+    time: Res<Time>,
+    renet_server: Res<RenetServer>,
+    network_ids: Query<&NetworkId>,
     spatial_query: SpatialQuery,
-    mut zombies: Query<(&Transform, &mut Health, &mut KnockbackVelocity), With<Zombie>>,
+    mut zombies: Query<(Entity, &mut Health, &mut KnockbackVelocity, &ZombieHistory), With<Zombie>>,
     mut respawns: ResMut<PendingRespawns>,
     mut threats: Query<&mut PlayerThreat>,
     director_spawned: Query<(), With<DirectorSpawned>>,
@@ -786,31 +828,79 @@ fn handle_fire_shot(
     let Ok(direction) = Dir3::new(shot.direction) else {
         return;
     };
-    let filter = SpatialQueryFilter::default();
-    let Some(hit) = spatial_query.cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &filter) else {
-        return;
-    };
-    let hit_point = shot.origin + *direction * hit.distance;
 
-    if let Ok((transform, mut health, mut knockback)) = zombies.get_mut(hit.entity) {
-        let damage = zombie_hit_damage_geometric(hit_point, transform);
-        health.0 -= damage;
-        let killed = health.0 <= 0.0;
-        if killed {
-            let was_director_spawn = director_spawned.contains(hit.entity);
-            commands.entity(hit.entity).despawn();
-            if !was_director_spawn {
-                respawns.0.push(ZOMBIE_RESPAWN_DELAY);
+    let filter = SpatialQueryFilter::default();
+    // Live world raycast — bounds how far a lag-compensated zombie hit
+    // below is allowed to be (nothing past whatever's really there right
+    // now, e.g. a wall), and doubles as the SurfaceHit fallback if no
+    // zombie ends up qualifying.
+    let live_hit = spatial_query.cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &filter);
+    let search_distance = live_hit.map_or(MAX_SHOT_DISTANCE, |hit| hit.distance);
+
+    // Lag compensation: rewind to roughly what the shooter's own screen
+    // showed when they fired (their network latency + the client's own
+    // render-side interpolation delay — see INTERP_DELAY_SECS) and test
+    // the ray against each zombie's capsule at ITS position back then,
+    // instead of live. Without this, a shot that looked like a clean hit
+    // on a laggy client's screen could whiff here just because the zombie
+    // has since moved on — same idea Source engine's server-side lag
+    // compensation uses for L4D.
+    let rtt = trigger
+        .client_id
+        .entity()
+        .and_then(|entity| network_ids.get(entity).ok())
+        .map_or(0.0, |network_id| renet_server.rtt(network_id.get()));
+    let rewind_secs = (rtt as f32 / 2.0 + INTERP_DELAY_SECS).min(LAG_COMPENSATION_MAX_SECS);
+    let rewind_time = time.elapsed_secs() - rewind_secs;
+
+    let capsule = Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH);
+    let rewound_hit = zombies
+        .iter()
+        .filter_map(|(entity, _, _, history)| {
+            let (position, rotation) = zombie_history_at(history, rewind_time)?;
+            let (distance, normal) = capsule.cast_ray(position, rotation, shot.origin, *direction, search_distance, true)?;
+            Some((distance, entity, position, rotation, normal))
+        })
+        .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
+
+    if let Some((distance, entity, position, rotation, normal)) = rewound_hit {
+        let hit_point = shot.origin + *direction * distance;
+        if let Ok((_, mut health, mut knockback, _)) = zombies.get_mut(entity) {
+            let rewound_transform = Transform {
+                translation: position,
+                rotation,
+                scale: Vec3::ONE,
+            };
+            let damage = zombie_hit_damage_geometric(hit_point, &rewound_transform);
+            health.0 -= damage;
+            let killed = health.0 <= 0.0;
+            if killed {
+                let was_director_spawn = director_spawned.contains(entity);
+                commands.entity(entity).despawn();
+                if !was_director_spawn {
+                    respawns.0.push(ZOMBIE_RESPAWN_DELAY);
+                }
+            } else {
+                let push = Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
+                knockback.0 += push;
             }
-        } else {
-            let push = Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
-            knockback.0 += push;
+            // Excludes the shooter, not a plain Broadcast: their own
+            // client already predicted and showed this same blood/
+            // hitmarker/damage-number the instant they fired (see the
+            // client's shoot()), so echoing it back would just double it
+            // up. Same "weapon prediction" approach Source engine uses for
+            // L4D. SurfaceHit isn't predicted client-side, so that one
+            // stays a full Broadcast.
+            commands.server_trigger(ToClients {
+                mode: SendMode::BroadcastExcept(trigger.client_id),
+                message: ShotFx::ZombieHit { point: hit_point, normal, damage, killed },
+            });
         }
-        commands.server_trigger(ToClients {
-            mode: SendMode::Broadcast,
-            message: ShotFx::ZombieHit { point: hit_point, normal: hit.normal, damage, killed },
-        });
-    } else {
+        return;
+    }
+
+    if let Some(hit) = live_hit {
+        let hit_point = shot.origin + *direction * hit.distance;
         commands.server_trigger(ToClients {
             mode: SendMode::Broadcast,
             message: ShotFx::SurfaceHit { point: hit_point, normal: hit.normal },

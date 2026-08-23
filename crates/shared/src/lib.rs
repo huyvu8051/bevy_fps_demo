@@ -131,6 +131,22 @@ pub const GRAVITY: f32 = -20.0;
 pub const JUMP_SPEED: f32 = 6.5;
 pub const GROUND_NORMAL_MIN_Y: f32 = 0.6;
 
+// How far in the past (relative to local received-snapshot time) the
+// client renders everyone else's replicated position at — see the client's
+// interpolate_net_transform for the full explanation. Also used by the
+// server's lag-compensated hit detection (handle_fire_shot): a shooter's
+// screen reflects the world from roughly (their network latency +
+// this render delay) ago, so that's how far back to rewind zombie
+// positions when checking whether their shot looked like a hit to them.
+pub const INTERP_DELAY_SECS: f32 = 0.1;
+// Upper bound on how far handle_fire_shot will rewind zombie positions for
+// lag compensation, regardless of a shooter's actual measured RTT — caps
+// how far back a laggy/malicious client could shift hit detection in its
+// favor (a real server would care about this for fairness/anti-cheat; here
+// it's mostly just to keep the rewind sane if RTT ever reports something
+// absurd).
+pub const LAG_COMPENSATION_MAX_SECS: f32 = 0.3;
+
 // Debug flight mode (KeyN) — no gravity/collision, flies in whatever
 // direction move_axis+yaw points horizontally, jump/crouch to ascend/
 // descend. See ClientInput.noclip and simulate_player_step.

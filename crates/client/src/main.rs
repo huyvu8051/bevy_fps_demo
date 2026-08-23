@@ -28,8 +28,8 @@ use shared::{
     HITBOX_BELLY_MIN_Y, HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN, KnockbackVelocity,
     LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform, Player, PlayerDied, PlayerStance,
     RequestRestart, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieMotion,
-    MAX_SHOT_DISTANCE, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH,
-    ZOMBIE_RADIUS, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
+    zombie_hit_damage_geometric, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LENGTH,
+    ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH, ZOMBIE_RADIUS, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
@@ -998,15 +998,10 @@ fn mirror_local_player_net_transform(
     }
 }
 
-// How far in the past (relative to local received-snapshot time) everyone
-// else's replicated position is rendered at — always enough of a buffer to
-// interpolate between two *actually received* snapshots instead of
-// snapping to each new one as it lands (choppy under network jitter/the
-// gaps between replication ticks). Time is measured by when this client
-// received each snapshot, not the server's own clock (no clock sync needed
-// for this simplified approach — it just smooths out this client's own
-// arrival jitter).
-const INTERP_DELAY_SECS: f32 = 0.1;
+// INTERP_DELAY_SECS now lives in crates/shared — crates/server's
+// handle_fire_shot needs the same value for lag compensation (rewinding to
+// roughly what the shooter's screen actually showed = network latency +
+// this render delay).
 // Snapshots older than this relative to the newest one are dropped —
 // keeps the buffer from growing unbounded if an entity stops replicating
 // (e.g. a zombie the LOD/crowd-hz throttle rarely updates) without needing
@@ -3358,6 +3353,7 @@ fn sync_player_model(
     transform.rotation = Quat::from_rotation_y(yaw);
 }
 
+
 // Holding left click (while the cursor is locked) fires automatically at
 // FIRE_RATE: each shot kicks the gun model back, kicks the camera's view up
 // with a bit of random jitter, and raycasts from the camera into the scene
@@ -3373,6 +3369,8 @@ fn shoot(
     mut camera: Query<(&Transform, &mut ViewRecoil), With<FpsCamera>>,
     mut gun: Query<&mut Gun>,
     vfx_assets: VfxAssets,
+    spatial_query: SpatialQuery,
+    zombies: Query<(Entity, &Transform, &GlobalTransform), With<Zombie>>,
     mut cooldown: Local<f32>,
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
@@ -3484,21 +3482,58 @@ fn shoot(
         },
     ));
 
-    // Hit detection/damage is server-authoritative now (see crates/server's
-    // handle_fire_shot) — this just sends the exact ray (already carrying
-    // this shot's own spread/recoil jitter) and waits for the broadcast
-    // ShotFx to actually spawn hitmarker/blood/spark/floating-damage VFX
-    // (see on_shot_fx), same as every other client watching this shot land.
+    // Hit detection/damage is still server-authoritative (see crates/server's
+    // handle_fire_shot) — this sends the exact ray (already carrying this
+    // shot's own spread/recoil jitter) for the server to resolve for real.
+    // But waiting a full round trip just to show the shooter their own hit
+    // response reads as input lag, so this also does its own local
+    // capsule-vs-zombie raycast (client-side zombies have no Collider
+    // component to test against via SpatialQuery, unlike the server, so
+    // this builds one manually — see ZOMBIE_RADIUS/ZOMBIE_LENGTH) and, on a
+    // hit, predicts hitmarker/blood/damage-number immediately using the same
+    // shared zombie_hit_damage_geometric the server itself uses — same
+    // approach Source engine's "weapon prediction" uses for L4D: the client
+    // predicts its own shot's effects entirely, and the server (see
+    // handle_fire_shot's BroadcastExcept) knows not to echo them back to
+    // this same client, only to everyone else. No wall-occlusion check
+    // against this predicted ray — acceptable for the current open arena
+    // layout (NAVMESH_COLUMN_OBSTACLES is empty), but a zombie visible
+    // through/behind level geometry could show a mispredicted hit if that
+    // ever changes.
+    let zombie_capsule = Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH);
+    let predicted_hit = zombies
+        .iter()
+        .filter_map(|(entity, transform, global)| {
+            zombie_capsule
+                .cast_ray(transform.translation, transform.rotation, camera_transform.translation, *direction, MAX_SHOT_DISTANCE, true)
+                .map(|(distance, normal)| (distance, entity, transform, global, normal))
+        })
+        .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
+    if let Some((distance, entity, transform, global, normal)) = predicted_hit {
+        let point = camera_transform.translation + *direction * distance;
+        commands.spawn((
+            Mesh3d(vfx_assets.hit_assets.mesh.clone()),
+            MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
+            Transform::from_translation(point + normal.normalize_or_zero() * 0.01),
+            HitMarker {
+                remaining: HIT_MARKER_LIFETIME,
+            },
+        ));
+        spawn_floating_damage(&mut commands, point, zombie_hit_damage_geometric(point, transform));
+        spawn_blood_effects(&mut commands, &vfx_assets.blood, &spatial_query, &time, point, normal, Some((entity, global)));
+    }
+
     commands.client_trigger(FireShot {
         origin: camera_transform.translation,
         direction: *direction,
     });
 }
 
-// Plays the actual, server-decided outcome of a shot — hitmarker always,
-// plus either blood+floating-damage (zombie) or sparks (wall/floor). Runs
-// on every client, including the shooter, so what everyone sees always
-// matches what the server actually resolved.
+// Plays the server-decided outcome of a shot — for every client EXCEPT the
+// shooter, who already predicted and showed this same hit locally in
+// shoot() and is excluded from receiving it at all (see handle_fire_shot's
+// SendMode::BroadcastExcept). A remote player's shot was never predicted by
+// this client, so it always gets the full effect here.
 fn on_shot_fx(
     trigger: On<ShotFx>,
     mut commands: Commands,
@@ -3510,6 +3545,8 @@ fn on_shot_fx(
 ) {
     match *trigger.event() {
         ShotFx::ZombieHit { point, normal, damage, killed } => {
+            spawn_floating_damage(&mut commands, point, damage);
+
             commands.spawn((
                 Mesh3d(vfx_assets.hit_assets.mesh.clone()),
                 MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
@@ -3518,7 +3555,6 @@ fn on_shot_fx(
                     remaining: HIT_MARKER_LIFETIME,
                 },
             ));
-            spawn_floating_damage(&mut commands, point, damage);
 
             // The server doesn't send which zombie entity it was (avoiding
             // cross-network entity mapping for a purely cosmetic detail) —
