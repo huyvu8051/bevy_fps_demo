@@ -16,11 +16,13 @@ use shared::{
     zombie_hit_damage_geometric, Chase, ClientInput, DebugBot, DespawnDebugBot, FireShot, GameOver,
     GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform,
     Player, PlayerDied, PlayerStance, RequestRestart, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
-    ZombieAttackTimer, ZombieMotion, ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS, GRAVITY,
-    GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE, MAX_SHOT_DISTANCE, MOVE_SPEED,
-    NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PLAYER_SPAWN, ZOMBIE_AI_ENABLED,
-    ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE, ZOMBIE_LENGTH,
-    ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
+    ZombieAttackTimer, ZombieMotion, ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
+    DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
+    DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
+    MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PLAYER_LENGTH,
+    PLAYER_RADIUS, PLAYER_SPAWN,
+    ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
+    ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
     DIRECTOR_CALM_DURATION_SECS, DIRECTOR_CALM_PRESSURE_THRESHOLD, DIRECTOR_HORDE_SIZE,
     DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, INTERP_DELAY_SECS,
     LAG_COMPENSATION_MAX_SECS, PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
@@ -101,7 +103,7 @@ fn main() {
             (
                 move_players,
                 (move_zombies, record_zombie_history).chain(),
-                move_debug_bots,
+                (bot_pick_target, move_debug_bots, debug_bot_fire).chain(),
                 tick_respawns,
                 decay_player_threat,
                 run_ai_director,
@@ -323,16 +325,49 @@ fn move_players(
 }
 
 // --- Debug bots ---
-// Fake NetPlayer stand-ins spawned/moved from the client's debug panel (see
+// Fake NetPlayer stand-ins spawned from the client's debug panel (see
 // crates/client) so multi-player zombie targeting can be tested without a
-// second real client. No Player/ClientInput/physics — move_debug_bots just
-// walks them in a straight line toward DebugBotTarget, kinematically.
+// second real client. No Player/ClientInput/physics — they're kinematic,
+// driven entirely by these three chained systems (bot_pick_target ->
+// move_debug_bots -> debug_bot_fire) instead of real input. They now hunt on
+// their own: whenever a zombie is within DEBUG_BOT_DETECT_RANGE, a bot walks
+// into DEBUG_BOT_ENGAGE_RANGE and fires on it, reusing the exact same
+// damage/knockback path handle_fire_shot uses for real players (just without
+// lag compensation — a bot has no network latency to compensate for).
+// MoveDebugBot (the "9" debug-panel key) still writes DebugBotTarget
+// directly, but bot_pick_target overwrites it again next tick as soon as a
+// zombie is in range — so manual placement is really only useful for
+// positioning a bot before/between fights, not for pulling one out of one.
 
 #[derive(Resource, Default)]
 struct DebugBotIdCounter(u32);
 
 #[derive(Component)]
 struct DebugBotTarget(Vec3);
+
+// Server-only, mirrors ZombieMotion — bots previously had no gravity or
+// ground collision at all (move_debug_bots just teleported translation.x/z
+// toward DebugBotTarget, never touching .y), so a bot spawned off the
+// ground (e.g. via noclip) hung in the air forever instead of falling, and
+// since bot_pick_target's distance check is full 3D, hanging far above the
+// arena could also put every zombie out of DEBUG_BOT_DETECT_RANGE, making
+// the bot look completely inert rather than just floating.
+#[derive(Component, Default)]
+struct DebugBotMotion {
+    vertical_velocity: f32,
+    grounded: bool,
+}
+
+// Server-only (not replicated) — which zombie a bot is currently hunting,
+// plus its own retarget/fire cooldowns. Mirrors ChaseTarget's
+// commit-and-periodically-reevaluate pattern for the same reason (flicker
+// avoidance when two zombies are similarly close).
+#[derive(Component, Default)]
+struct DebugBotAi {
+    target_zombie: Option<Entity>,
+    retarget_timer: f32,
+    fire_timer: f32,
+}
 
 fn spawn_debug_bot(trigger: On<FromClient<SpawnDebugBot>>, mut commands: Commands, mut counter: ResMut<DebugBotIdCounter>) {
     let id = counter.0;
@@ -348,6 +383,8 @@ fn spawn_debug_bot(trigger: On<FromClient<SpawnDebugBot>>, mut commands: Command
         },
         DebugBot(id),
         DebugBotTarget(at),
+        DebugBotAi::default(),
+        DebugBotMotion::default(),
         PlayerThreat::default(),
         Replicated,
     ));
@@ -375,20 +412,178 @@ fn despawn_debug_bot(trigger: On<FromClient<DespawnDebugBot>>, mut commands: Com
     }
 }
 
-fn move_debug_bots(time: Res<Time>, mut bots: Query<(&mut Transform, &mut NetTransform, &DebugBotTarget), With<DebugBot>>) {
-    for (mut transform, mut net_transform, target) in &mut bots {
+// Nearest-zombie-in-range targeting, committed to like ChaseTarget rather
+// than re-picked every frame (see DebugBotAi's own doc comment). Writes the
+// chosen zombie's live position into DebugBotTarget so move_debug_bots'
+// walk-toward-target logic below doesn't need to know about zombies at all.
+fn bot_pick_target(
+    time: Res<Time>,
+    mut bots: Query<(Entity, &Transform, &mut DebugBotAi, &mut DebugBotTarget), With<DebugBot>>,
+    zombies: Query<(Entity, &Transform), (With<Zombie>, Without<DebugBot>)>,
+) {
+    for (entity, transform, mut ai, mut manual_target) in &mut bots {
+        ai.retarget_timer -= time.delta_secs();
+        let target_alive = ai.target_zombie.is_some_and(|target| zombies.contains(target));
+        if !target_alive || ai.retarget_timer <= 0.0 {
+            ai.target_zombie = zombies
+                .iter()
+                .map(|(zombie, zombie_transform)| (zombie, transform.translation.distance(zombie_transform.translation)))
+                .filter(|&(_, distance)| distance <= DEBUG_BOT_DETECT_RANGE)
+                .min_by(|(_, a), (_, b)| a.total_cmp(b))
+                .map(|(zombie, _)| zombie);
+            // Staggered like ZOMBIE_RETARGET_INTERVAL — see entity_phase's
+            // own doc comment for why a flat reset would let bots' retarget
+            // checks drift back into lockstep.
+            ai.retarget_timer = DEBUG_BOT_RETARGET_INTERVAL * (0.75 + entity_phase(entity) * 0.5);
+        }
+        if let Some(target) = ai.target_zombie {
+            if let Ok((_, zombie_transform)) = zombies.get(target) {
+                manual_target.0 = zombie_transform.translation;
+            }
+        }
+    }
+}
+
+fn move_debug_bots(
+    time: Res<Time>,
+    mut bots: Query<
+        (&mut Transform, &mut NetTransform, &DebugBotTarget, &DebugBotAi, &mut DebugBotMotion),
+        With<DebugBot>,
+    >,
+    mover: MoveAndSlide,
+) {
+    let filter = SpatialQueryFilter::default();
+    for (mut transform, mut net_transform, target, ai, mut motion) in &mut bots {
+        // Stop at engage range when hunting, so debug_bot_fire has room to
+        // shoot instead of walking the bot into melee — otherwise stop
+        // right on top of a manually-placed DebugBotTarget as before.
+        let stop_distance = if ai.target_zombie.is_some() { DEBUG_BOT_ENGAGE_RANGE } else { 0.05 };
         let to_target = target.0 - transform.translation;
         let horizontal = Vec3::new(to_target.x, 0.0, to_target.z);
         let distance = horizontal.length();
-        net_transform.moving = distance > 0.05;
-        if distance > 0.05 {
-            let direction = horizontal / distance;
-            let step = (MOVE_SPEED * time.delta_secs()).min(distance);
-            transform.translation += direction * step;
-            transform.look_to(-direction, Vec3::Y);
-            net_transform.yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
+        let moving = distance > stop_distance;
+        net_transform.moving = moving;
+        let horizontal_velocity = if moving { (horizontal / distance) * MOVE_SPEED } else { Vec3::ZERO };
+
+        // Gravity + ground collision, same shape/response as move_zombies —
+        // without this a bot spawned off the ground (or one whose target
+        // happens to be at a different height) never comes back down, it
+        // just teleports its x/z toward the target while y sits wherever it
+        // was last placed.
+        if motion.grounded && motion.vertical_velocity < 0.0 {
+            motion.vertical_velocity = -1.0;
         }
+        motion.vertical_velocity += GRAVITY * time.delta_secs();
+
+        let velocity = horizontal_velocity + Vec3::Y * motion.vertical_velocity;
+        let shape = Collider::capsule(PLAYER_RADIUS, PLAYER_LENGTH);
+        let config = MoveAndSlideConfig::default();
+        let mut grounded_this_frame = false;
+        let output = mover.move_and_slide(
+            &shape,
+            transform.translation,
+            transform.rotation,
+            velocity,
+            time.delta(),
+            &config,
+            &filter,
+            |hit| {
+                if hit.normal.y > GROUND_NORMAL_MIN_Y {
+                    grounded_this_frame = true;
+                }
+                MoveAndSlideHitResponse::Accept
+            },
+        );
+        transform.translation = output.position;
+        motion.grounded = grounded_this_frame;
+        motion.vertical_velocity = if grounded_this_frame { motion.vertical_velocity.min(0.0) } else { motion.vertical_velocity };
+
+        if horizontal_velocity != Vec3::ZERO {
+            let target_rotation = Transform::default().looking_to(-horizontal_velocity, Vec3::Y).rotation;
+            turn_towards(&mut transform.rotation, target_rotation, ZOMBIE_TURN_RATE_DEG.to_radians() * time.delta_secs());
+        } else if ai.target_zombie.is_some() && distance > 0.05 {
+            // Already in engage range but not facing the target (e.g. it
+            // just moved) — keep aiming at it even while standing still, so
+            // debug_bot_fire's raycast actually points at the zombie.
+            let direction = horizontal / distance;
+            let target_rotation = Transform::default().looking_to(-direction, Vec3::Y).rotation;
+            turn_towards(&mut transform.rotation, target_rotation, ZOMBIE_TURN_RATE_DEG.to_radians() * time.delta_secs());
+        }
+
         net_transform.translation = transform.translation;
+        net_transform.yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
+    }
+}
+
+// Fires at whatever bot_pick_target committed to, once in range and off
+// cooldown. No lag compensation and no ZombieHistory rewind (unlike
+// handle_fire_shot) — a bot fires against the zombie's live position since
+// it has no client round-trip to compensate for.
+fn debug_bot_fire(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut bots: Query<(&Transform, &mut DebugBotAi), With<DebugBot>>,
+    mut zombies: Query<(Entity, &Transform, &mut Health, &mut KnockbackVelocity), (With<Zombie>, Without<DebugBot>)>,
+    mut respawns: ResMut<PendingRespawns>,
+    director_spawned: Query<(), With<DirectorSpawned>>,
+) {
+    for (transform, mut ai) in &mut bots {
+        ai.fire_timer -= time.delta_secs();
+        let Some(target) = ai.target_zombie else { continue };
+        let Ok((entity, zombie_transform, mut health, mut knockback)) = zombies.get_mut(target) else {
+            continue;
+        };
+
+        let origin = transform.translation + Vec3::Y * DEBUG_BOT_EYE_HEIGHT;
+        // Small slack over DEBUG_BOT_ENGAGE_RANGE: move_debug_bots stops the
+        // bot at that range measured to the zombie's translation, but the
+        // shot origin is offset up by DEBUG_BOT_EYE_HEIGHT, so the straight-
+        // line distance to the zombie's capsule center is very slightly
+        // larger — without slack the bot would arrive and then wait one
+        // extra retarget cycle before its first shot ever counts as "in range".
+        if origin.distance(zombie_transform.translation) > DEBUG_BOT_ENGAGE_RANGE + 1.0 || ai.fire_timer > 0.0 {
+            continue;
+        }
+        ai.fire_timer = DEBUG_BOT_FIRE_INTERVAL_SECS;
+
+        let Ok(direction) = Dir3::new(zombie_transform.translation - origin) else {
+            continue;
+        };
+        let capsule = Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH);
+        let Some((hit_distance, normal)) = capsule.cast_ray(
+            zombie_transform.translation,
+            zombie_transform.rotation,
+            origin,
+            *direction,
+            MAX_SHOT_DISTANCE,
+            true,
+        ) else {
+            continue;
+        };
+
+        let hit_point = origin + *direction * hit_distance;
+        let damage = zombie_hit_damage_geometric(hit_point, zombie_transform);
+        health.0 -= damage;
+        let killed = health.0 <= 0.0;
+        if killed {
+            let was_director_spawn = director_spawned.contains(entity);
+            commands.entity(entity).despawn();
+            if !was_director_spawn {
+                respawns.0.push(ZOMBIE_RESPAWN_DELAY);
+            }
+        } else {
+            let push = Vec3::new(zombie_transform.translation.x - origin.x, 0.0, zombie_transform.translation.z - origin.z)
+                .normalize_or_zero()
+                * KNOCKBACK_FORCE;
+            knockback.0 += push;
+        }
+        // No shooter to exclude (a bot has no client of its own predicting
+        // this locally) — full Broadcast, unlike handle_fire_shot's
+        // BroadcastExcept.
+        commands.server_trigger(ToClients {
+            mode: SendMode::Broadcast,
+            message: ShotFx::ZombieHit { point: hit_point, normal, damage, killed },
+        });
     }
 }
 
