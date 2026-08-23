@@ -27,6 +27,13 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
+# vendor/big-brain and vendor/vleue_navigator are local path dependencies
+# (excluded from the workspace, not crates.io/git deps) — cargo-chef can
+# stub out registry/git deps with empty source files during `cook`, but a
+# path dependency's own real Cargo.toml has to actually be on disk for
+# cargo to resolve it at all, or `cook` fails with "failed to get
+# `big-brain` as a dependency" before it even gets to compiling anything.
+COPY vendor vendor
 RUN cargo chef cook --release --recipe-path recipe.json -p server
 COPY . .
 RUN cargo build --release -p server
