@@ -1150,8 +1150,15 @@ fn main() {
             PhysicsPlugins::default(),
             // A lightweight always-on FPS overlay. Bevy 0.18 doesn't have the
             // draggable DiagnosticsOverlay panels (that's 0.19-only), so this
-            // is the only diagnostics UI available here.
-            FpsOverlayPlugin::default(),
+            // is the only diagnostics UI available here. Default
+            // refresh_interval (100ms, 10x/sec) reads as a flicker rather
+            // than a number — slowed down to something actually readable.
+            FpsOverlayPlugin {
+                config: bevy::dev_tools::fps_overlay::FpsOverlayConfig {
+                    refresh_interval: std::time::Duration::from_millis(500),
+                    ..default()
+                },
+            },
             RepliconPlugins,
             RepliconRenetPlugins,
         ))
@@ -2299,8 +2306,24 @@ fn spawn_ping_ui(commands: &mut Commands) {
 // live connection — reflects real network conditions plus whatever
 // SIM_LATENCY_MS/SIM_LATENCY_JITTER_MS is currently simulating (see
 // shared::sim_latency), so this doubles as a way to verify the simulated
-// latency/jitter config is actually taking effect.
-fn update_ping_ui(client: Option<Res<RenetClient>>, mut text: Query<&mut Text, With<PingUi>>) {
+// latency/jitter config is actually taking effect. Rewriting the text every
+// render frame made the number flicker too fast to actually read, so this
+// only updates a few times a second (same idea as FpsOverlayConfig's own
+// refresh_interval).
+const PING_UI_REFRESH_SECS: f32 = 0.5;
+
+fn update_ping_ui(
+    time: Res<Time>,
+    client: Option<Res<RenetClient>>,
+    mut timer: Local<f32>,
+    mut text: Query<&mut Text, With<PingUi>>,
+) {
+    *timer -= time.delta_secs();
+    if *timer > 0.0 {
+        return;
+    }
+    *timer = PING_UI_REFRESH_SECS;
+
     let Ok(mut text) = text.single_mut() else {
         return;
     };
