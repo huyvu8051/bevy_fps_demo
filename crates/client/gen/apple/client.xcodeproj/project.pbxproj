@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0B310B00C67A1C61725EB2F5 /* libclient.a in Frameworks */ = {isa = PBXBuildFile; fileRef = AE4236430A124E5BC54D138B /* libclient.a */; };
+		0B60F6695008BB8329540EEE /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 770648097A9E2E989D5CE066 /* LaunchScreen.storyboard */; };
 		0BA758F135E0C335839D2C44 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E7EB0AC997395514E1587B7C /* AudioToolbox.framework */; };
 		3E42C523E0C0B3C783D3EB95 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 388931674CB64713714003E0 /* assets */; };
 		3EA88FB0C0C50F7708732D10 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 9DE51FDED01B746CAF9B460D /* main.mm */; };
@@ -24,6 +25,7 @@
 		388931674CB64713714003E0 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		45896A6D7DF53B9A7E6A9B33 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		661EA9136F5C5A8ED38DC24F /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		770648097A9E2E989D5CE066 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		88BD059FC400A857072DCFCA /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		9DE51FDED01B746CAF9B460D /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		AE4236430A124E5BC54D138B /* libclient.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libclient.a; sourceTree = "<group>"; };
@@ -55,6 +57,15 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		12070800CAF5C5183E45555C /* Base.lproj */ = {
+			isa = PBXGroup;
+			children = (
+				770648097A9E2E989D5CE066 /* LaunchScreen.storyboard */,
+			);
+			name = Base.lproj;
+			path = client_iOS/Base.lproj;
+			sourceTree = "<group>";
+		};
 		3B573905F04F5ED68831AAF5 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -74,6 +85,7 @@
 			isa = PBXGroup;
 			children = (
 				388931674CB64713714003E0 /* assets */,
+				12070800CAF5C5183E45555C /* Base.lproj */,
 				739C76D43A92331916BE4CE7 /* Sources */,
 				D4E367EEF3870D65469BB032 /* src */,
 				3B573905F04F5ED68831AAF5 /* Frameworks */,
@@ -185,6 +197,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0B60F6695008BB8329540EEE /* LaunchScreen.storyboard in Resources */,
 				3E42C523E0C0B3C783D3EB95 /* assets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -211,7 +224,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "PATH=/Users/huyvu8051/.antigravity-ide/antigravity-ide/bin:/Users/huyvu8051/.local/bin:/Users/huyvu8051/.local/bin:/Users/huyvu8051/.antigravity/antigravity/bin:/Users/huyvu8051/.nvm/versions/node/v24.11.1/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/opt/pmk/env/global/bin:/opt/homebrew/bin:/Users/huyvu8051/.antigravity-ide/antigravity-ide/bin:/Users/huyvu8051/.local/bin:/Users/huyvu8051/.antigravity/antigravity/bin:/Users/huyvu8051/.nvm/versions/node/v24.11.1/bin:/Users/huyvu8051/.sdkman/candidates/maven/current/bin:/Users/huyvu8051/.sdkman/candidates/java/current/bin:/Users/huyvu8051/.cargo/bin:/Users/huyvu8051/.lmstudio/bin:/Users/huyvu8051/.lmstudio/bin:/Users/huyvu8051/.claude/plugins/cache/vercel/vercel-plugin/b4803caa71cf/bin:/Users/huyvu8051/.claude/plugins/cache/claude-plugins-official/rust-analyzer-lsp/1.0.0/bin:/Users/huyvu8051/.claude/plugins/cache/claude-plugins-official/frontend-design/unknown/bin:/Users/huyvu8051/.claude/plugins/cache/claude-plugins-official/typescript-lsp/1.0.0/bin:${HOME:?}/.cargo/bin\n# cargo-apple's own internal check for the built .a (separate from\n# LIBRARY_SEARCH_PATHS above, which only controls Xcode's linker)\n# has a hardcoded relative path assuming target/ sits 2 levels\n# above gen/apple/ — true for a single-crate (non-workspace)\n# project, but this workspace's real shared target/ sits 4 levels\n# up (apple -> gen -> client -> crates -> workspace root). Scheme-\n# level environmentVariables (tried first) don't reach build-phase\n# scripts at all — those only apply to the launched app at Run\n# time — so this has to be exported right here instead, redirecting\n# cargo's output to the 2-levels-up location cargo-apple expects\n# (crates/client/target/, not shared with the normal desktop\n# `cargo build`, which still uses the real workspace target/).\nexport CARGO_TARGET_DIR=\"${SRCROOT}/../../target\"\nCARGO_APPLE=`which cargo-apple`\n${CARGO_APPLE} xcode-script -v --platform \"${PLATFORM_DISPLAY_NAME:?}\" --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:?}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?} ${FEATURES}";
+			shellScript = "PATH=/Users/huyvu8051/.antigravity-ide/antigravity-ide/bin:/Users/huyvu8051/.local/bin:/Users/huyvu8051/.local/bin:/Users/huyvu8051/.antigravity/antigravity/bin:/Users/huyvu8051/.nvm/versions/node/v24.11.1/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/opt/pmk/env/global/bin:/opt/homebrew/bin:/Users/huyvu8051/.antigravity-ide/antigravity-ide/bin:/Users/huyvu8051/.local/bin:/Users/huyvu8051/.antigravity/antigravity/bin:/Users/huyvu8051/.nvm/versions/node/v24.11.1/bin:/Users/huyvu8051/.sdkman/candidates/maven/current/bin:/Users/huyvu8051/.sdkman/candidates/java/current/bin:/Users/huyvu8051/.cargo/bin:/Users/huyvu8051/.lmstudio/bin:/Users/huyvu8051/.lmstudio/bin:/Users/huyvu8051/.claude/plugins/cache/vercel/vercel-plugin/b4803caa71cf/bin:/Users/huyvu8051/.claude/plugins/cache/claude-plugins-official/rust-analyzer-lsp/1.0.0/bin:/Users/huyvu8051/.claude/plugins/cache/claude-plugins-official/frontend-design/unknown/bin:/Users/huyvu8051/.claude/plugins/cache/claude-plugins-official/typescript-lsp/1.0.0/bin:${HOME:?}/.cargo/bin\n# cargo-apple's own internal check for the built .a (separate from\n# LIBRARY_SEARCH_PATHS above, which only controls Xcode's linker)\n# has a hardcoded relative path assuming target/ sits 2 levels\n# above gen/apple/ — true for a single-crate (non-workspace)\n# project, but this workspace's real shared target/ sits 4 levels\n# up (apple -> gen -> client -> crates -> workspace root). Scheme-\n# level environmentVariables (tried first) don't reach build-phase\n# scripts at all — those only apply to the launched app at Run\n# time — so this has to be exported right here instead, redirecting\n# cargo's output to the 2-levels-up location cargo-apple expects\n# (crates/client/target/, not shared with the normal desktop\n# `cargo build`, which still uses the real workspace target/).\nexport CARGO_TARGET_DIR=\"${SRCROOT}/../../target\"\nCARGO_APPLE=`which cargo-apple`\n# GCC_PREPROCESSOR_DEFINITIONS is only ever set for Debug (Xcode's\n# own default adds e.g. DEBUG=1 there) — Release/Profile builds\n# (Product > Profile, used for Instruments) legitimately have it\n# empty, which the old `:?` (\"error if unset/null\") made fail\n# outright with \"parameter null or not set\" the first time anyone\n# tried to profile. `:-` (default to empty string instead) is fine\n# here since cargo-apple just forwards this list of defines to the\n# Rust build — an empty list is a completely valid value, not a\n# missing one.\n${CARGO_APPLE} xcode-script -v --platform \"${PLATFORM_DISPLAY_NAME:?}\" --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?} ${FEATURES}";
 		};
 /* End PBXShellScriptBuildPhase section */
 

@@ -13,9 +13,10 @@ use bevy_replicon_renet2::{
 };
 use big_brain::prelude::*;
 use shared::{
-    zombie_hit_damage_geometric, Chase, ClientInput, DebugBot, DespawnDebugBot, FireShot, GameOver,
-    GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform,
-    Player, PlayerDied, PlayerStance, RequestRestart, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
+    zombie_hit_damage_geometric, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
+    GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
+    NetTransform, Player, PlayerDied, PlayerStance, RequestRestart, SetAutoMaintainZombies, SetZombieCount,
+    ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
     ZombieAttackTimer, ZombieMotion, ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
@@ -86,10 +87,16 @@ fn main() {
         .add_client_event::<SpawnDebugBot>(Channel::Ordered)
         .add_client_event::<MoveDebugBot>(Channel::Ordered)
         .add_client_event::<DespawnDebugBot>(Channel::Ordered)
+        .add_client_event::<SetZombieCount>(Channel::Ordered)
+        .add_client_event::<ClearAllZombies>(Channel::Ordered)
+        .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
         .init_resource::<PendingRespawns>()
         .init_resource::<GameOver>()
         .init_resource::<DebugBotIdCounter>()
         .init_resource::<Director>()
+        .init_resource::<ZombieTargetCount>()
+        .init_resource::<AutoMaintainZombies>()
+        .init_resource::<NextZombieSpawnIndex>()
         .add_systems(Startup, (start_server, spawn_arena_colliders, spawn_zombie_navmesh, spawn_initial_zombies))
         .add_systems(
             PreUpdate,
@@ -106,13 +113,20 @@ fn main() {
                 (bot_pick_target, move_debug_bots, debug_bot_fire).chain(),
                 tick_respawns,
                 decay_player_threat,
-                run_ai_director,
+                // TEMPORARILY disabled — was stacking more hordes on top of
+                // the cheat panel's zombie count target every ~20s of calm,
+                // fighting with it. Re-add once ZombieTargetCount/director
+                // hordes are reconciled to coexist properly.
+                // run_ai_director,
             ),
         )
         .add_observer(spawn_player)
         .add_observer(log_client_disconnect)
         .add_observer(apply_client_input)
         .add_observer(spawn_more_zombies)
+        .add_observer(on_set_zombie_count)
+        .add_observer(on_clear_all_zombies)
+        .add_observer(on_set_auto_maintain_zombies)
         .add_observer(on_player_died)
         .add_observer(on_request_restart)
         .add_observer(handle_fire_shot)
@@ -612,8 +626,94 @@ fn column_footprint(x: f32, z: f32) -> Vec<Vec2> {
     ]
 }
 
-fn spawn_initial_zombies(mut commands: Commands) {
-    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, false);
+// Mobile cheat panel's zombie population target (crates/client's
+// ZombieCountUi mirrors this locally so the UI has something to show/adjust
+// without waiting on a round-trip). 10, not ZOMBIE_SPAWNS.len() (100) — set
+// low for on-device perf testing; bump via the cheat panel's +/- buttons.
+#[derive(Resource)]
+struct ZombieTargetCount(u32);
+
+impl Default for ZombieTargetCount {
+    fn default() -> Self {
+        Self(10)
+    }
+}
+
+// Gates whether tick_respawns/maintain_zombie_population actually replace
+// killed baseline zombies — off lets the population drain down through
+// normal play instead of staying pinned at ZombieTargetCount.
+#[derive(Resource)]
+struct AutoMaintainZombies(bool);
+
+impl Default for AutoMaintainZombies {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+// Shared with tick_respawns (was a Local there before this needed to be
+// reused by maintain_zombie_population too) — which ZOMBIE_SPAWNS slot the
+// next new baseline zombie gets, cycling regardless of which system
+// actually does the spawning.
+#[derive(Resource, Default)]
+struct NextZombieSpawnIndex(usize);
+
+fn spawn_initial_zombies(mut commands: Commands, target: Res<ZombieTargetCount>, mut next_spawn_index: ResMut<NextZombieSpawnIndex>) {
+    let count = (target.0 as usize).min(ZOMBIE_SPAWNS.len());
+    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS[..count], false);
+    next_spawn_index.0 = count;
+}
+
+// Reconciles the live baseline (non-director) zombie count to
+// ZombieTargetCount whenever it changes (see on_set_zombie_count) — spawns
+// more at the next cycling ZOMBIE_SPAWNS slots if under target, despawns
+// arbitrary baseline zombies (whichever the query happens to iterate first,
+// no particular selection logic — this is a debug tool, not gameplay) if
+// over.
+fn on_set_zombie_count(
+    trigger: On<FromClient<SetZombieCount>>,
+    mut commands: Commands,
+    mut target: ResMut<ZombieTargetCount>,
+    mut next_spawn_index: ResMut<NextZombieSpawnIndex>,
+    baseline_zombies: Query<Entity, (With<Zombie>, Without<DirectorSpawned>)>,
+) {
+    target.0 = trigger.message.0.min(ZOMBIE_SPAWNS.len() as u32);
+    let current = baseline_zombies.iter().count() as u32;
+    if current < target.0 {
+        let to_spawn: Vec<Vec3> = (0..target.0 - current)
+            .map(|_| {
+                let pos = ZOMBIE_SPAWNS[next_spawn_index.0 % ZOMBIE_SPAWNS.len()];
+                next_spawn_index.0 += 1;
+                pos
+            })
+            .collect();
+        spawn_zombies(&mut commands, &to_spawn, false);
+    } else if current > target.0 {
+        for entity in baseline_zombies.iter().take((current - target.0) as usize) {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
+// Authoritative clear — despawns every zombie (baseline AND
+// director-spawned) and drops pending respawns, unlike the old desktop-only
+// debug panel's Digit2 action (which only ever despawned the CLIENT's own
+// local replicated copy, so it silently came back on the next replication
+// update).
+fn on_clear_all_zombies(
+    _trigger: On<FromClient<ClearAllZombies>>,
+    mut commands: Commands,
+    all_zombies: Query<Entity, With<Zombie>>,
+    mut respawns: ResMut<PendingRespawns>,
+) {
+    for entity in &all_zombies {
+        commands.entity(entity).try_despawn();
+    }
+    respawns.0.clear();
+}
+
+fn on_set_auto_maintain_zombies(trigger: On<FromClient<SetAutoMaintainZombies>>, mut auto_maintain: ResMut<AutoMaintainZombies>) {
+    auto_maintain.0 = trigger.message.0;
 }
 
 fn spawn_more_zombies(_trigger: On<FromClient<SpawnMoreZombies>>, mut commands: Commands) {
@@ -987,7 +1087,8 @@ fn tick_respawns(
     time: Res<Time>,
     mut commands: Commands,
     mut respawns: ResMut<PendingRespawns>,
-    mut next_spawn_index: Local<usize>,
+    mut next_spawn_index: ResMut<NextZombieSpawnIndex>,
+    auto_maintain: Res<AutoMaintainZombies>,
 ) {
     let dt = time.delta_secs();
     let mut i = 0;
@@ -996,8 +1097,14 @@ fn tick_respawns(
         respawns.0[i] -= dt;
         if respawns.0[i] <= 0.0 {
             respawns.0.swap_remove(i);
-            to_spawn.push(ZOMBIE_SPAWNS[*next_spawn_index % ZOMBIE_SPAWNS.len()]);
-            *next_spawn_index += 1;
+            // Still consumes the pending-respawn slot either way — only
+            // whether it actually results in a new zombie depends on the
+            // toggle, so flipping auto-maintain back on later doesn't
+            // suddenly spawn a backlog of everything killed while it was off.
+            if auto_maintain.0 {
+                to_spawn.push(ZOMBIE_SPAWNS[next_spawn_index.0 % ZOMBIE_SPAWNS.len()]);
+                next_spawn_index.0 += 1;
+            }
         } else {
             i += 1;
         }

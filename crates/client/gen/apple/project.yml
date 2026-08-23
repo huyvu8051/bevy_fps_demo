@@ -50,8 +50,23 @@ targets:
       - path: assets
         buildPhase: resources
         type: folder
-      
-       
+      # Info.plist declares UILaunchStoryboardName: LaunchScreen, but this
+      # scaffold never actually shipped a LaunchScreen.storyboard — iOS
+      # falling back silently (no file = no crash) instead of erroring is
+      # the likely reason the app's initial frame/geometry ended up wrong
+      # on-device (reported as "only shows a corner" after rotating to
+      # landscape). Without a real, orientation-flexible launch storyboard,
+      # UIKit has no correct reference for the app's initial bounds before
+      # winit's own view takes over. Referenced as an individual file
+      # (not a folder resource — first attempt at this used `path:
+      # client_iOS/Base.lproj` with `type: folder`, which made Xcode treat
+      # the whole directory as an opaque resource blob and just copy the
+      # raw .storyboard verbatim instead of routing it through the
+      # Interface Builder storyboard compiler, so it never actually became
+      # a loadable LaunchScreen.storyboardc). A plain per-file source
+      # reference gets Xcode's normal per-extension build-phase assignment,
+      # same as any other recognized file type.
+      - path: client_iOS/Base.lproj/LaunchScreen.storyboard
     info:
       path: client_iOS/Info.plist
       properties:
@@ -78,6 +93,14 @@ targets:
         # potentially portrait-shaped) window size regardless of the
         # orientation lock above.
         UIRequiresFullScreen: true
+        # Required for >60Hz on iPhone (iPad doesn't need this) — without it,
+        # iOS silently caps every app to 60Hz regardless of the display's
+        # real ProMotion capability or anything the app itself requests, as
+        # a battery-life default. This is the actual opt-in switch; the
+        # WinitSettings reactive interval (see client's main()) only sets an
+        # upper bound the app is willing to update at, it doesn't unlock the
+        # display's own refresh rate ceiling by itself.
+        CADisableMinimumFrameDurationOnPhone: true
         CFBundleShortVersionString: 1.0.0
         CFBundleVersion: 1.0.0
         
@@ -146,7 +169,16 @@ targets:
           # `cargo build`, which still uses the real workspace target/).
           export CARGO_TARGET_DIR="${SRCROOT}/../../target"
           CARGO_APPLE=`which cargo-apple`
-          ${CARGO_APPLE} xcode-script -v --platform "${PLATFORM_DISPLAY_NAME:?}" --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:?}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?} ${FEATURES}
+          # GCC_PREPROCESSOR_DEFINITIONS is only ever set for Debug (Xcode's
+          # own default adds e.g. DEBUG=1 there) — Release/Profile builds
+          # (Product > Profile, used for Instruments) legitimately have it
+          # empty, which the old `:?` ("error if unset/null") made fail
+          # outright with "parameter null or not set" the first time anyone
+          # tried to profile. `:-` (default to empty string instead) is fine
+          # here since cargo-apple just forwards this list of defines to the
+          # Rust build — an empty list is a completely valid value, not a
+          # missing one.
+          ${CARGO_APPLE} xcode-script -v --platform "${PLATFORM_DISPLAY_NAME:?}" --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?} ${FEATURES}
         name: Build Rust Code
         basedOnDependencyAnalysis: false
         outputFiles:

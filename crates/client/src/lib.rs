@@ -5,9 +5,11 @@ use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::RenderTarget;
 use bevy::ecs::system::SystemParam;
-use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::math::ops;
+use bevy::picking::hover::HoverMap;
 use bevy::picking::mesh_picking::MeshPickingPlugin;
+use bevy::picking::pointer::PointerId;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
@@ -15,7 +17,8 @@ use bevy::asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::view::Msaa;
 use bevy::scene::SceneRoot;
-use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window};
+use bevy::window::{CursorGrabMode, CursorOptions, MonitorSelection, PrimaryWindow, Window, WindowMode};
+use bevy::winit::{UpdateMode, WinitSettings};
 use bevy_replicon::prelude::*;
 use bevy_replicon::shared::backend::connected_client::NetworkId;
 use bevy_replicon_renet2::{
@@ -24,12 +27,14 @@ use bevy_replicon_renet2::{
     RenetChannelsExt, RepliconRenetPlugins,
 };
 use shared::{
-    ClientInput, DebugBot, DespawnDebugBot, FireShot, GameOver, GameStateEvent, Health, HEAD_DAMAGE,
-    HITBOX_BELLY_MIN_Y, HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN, KnockbackVelocity,
-    LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform, Player, PlayerDied, PlayerStance,
-    RequestRestart, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieMotion,
-    zombie_hit_damage_geometric, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LENGTH,
-    ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH, ZOMBIE_RADIUS, ZOMBIE_SCALE, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
+    ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot, GameOver, GameStateEvent, Health,
+    HEAD_DAMAGE, HITBOX_BELLY_MIN_Y, HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN,
+    KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform, Player, PlayerDied,
+    PlayerStance, RequestRestart, SetAutoMaintainZombies, SetZombieCount, ShotFx, SpawnDebugBot,
+    SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieMotion,
+    zombie_hit_damage_geometric, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED, ZOMBIE_ATTACK_INTERVAL,
+    ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH, ZOMBIE_RADIUS, ZOMBIE_SCALE, ZOMBIE_SPAWNS,
+    ZOMBIE_STOP_DISTANCE,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
@@ -250,6 +255,12 @@ struct TouchJoystickBase;
 struct TouchJoystickKnob;
 #[derive(Component)]
 struct TouchFireButton;
+#[derive(Component)]
+struct TouchAimButton;
+#[derive(Component)]
+struct TouchJumpButton;
+#[derive(Component)]
+struct TouchCrouchButton;
 
 // Which touch (Bevy's own per-touch id) is currently driving the joystick,
 // and where it started — drag-from-start is the whole joystick model, no
@@ -275,6 +286,23 @@ struct TouchLookState {
 
 #[derive(Resource, Default)]
 struct TouchFiring(bool);
+
+// Toggled by TouchAimButton (touch_aim_button) — unlike TouchFiring (held),
+// this is a toggle since there's no natural "hold to aim" gesture that
+// doesn't also fight with the fire button under a thumb. Read by every
+// is_aiming() call site the same way TouchFiring is read by shoot().
+#[derive(Resource, Default)]
+struct TouchAiming(bool);
+
+// One-frame pulse, not a held state: touch_jump_button resets this to false
+// every tick and only sets it true on the exact frame TouchJumpButton's
+// Interaction changes to Pressed, matching keys.just_pressed(KeyCode::Space)
+// (the real game's jump gate — see send_player_input) rather than
+// keys.pressed (which would jump repeatedly every frame the button stays
+// down). Generic across the real game and minimal_map_probe_main, which
+// each consume it differently (physics jump vs. a simple bounce).
+#[derive(Resource, Default)]
+struct TouchJump(bool);
 
 // Crosshair: 4 hash marks pushed apart from center by GAP, which grows with
 // the current bullet spread (see current_bullet_spread/update_crosshair).
@@ -317,6 +345,17 @@ const AIM_SPREAD_MULTIPLIER: f32 = 0.35;
 const AIM_DOF_FOCAL_DISTANCE_A: f32 = 0.2;
 const AIM_DOF_FOCAL_DISTANCE_B: f32 = 0.25;
 const AIM_DOF_APERTURE_F_STOPS: f32 = 11.0;
+
+// Dynamic resolution scaling: the main 3D camera renders into an offscreen
+// texture sized at `window physical size * RenderResolutionScale`, instead
+// of directly to the window — see the main camera's own setup() comment for
+// why. RESOLUTION_SCALE_PRESETS drives the settings menu's buttons; the
+// underlying texture supports any scale in (0, 1], these are just the ones
+// exposed in the UI. MIN_TEXTURE_PX guards against a degenerate/zero-size
+// render target on a tiny window at a low scale.
+const RESOLUTION_SCALE_PRESETS: [f32; 4] = [0.5, 0.65, 0.8, 1.0];
+const RESOLUTION_SCALE_DEFAULT: f32 = 1.0;
+const RESOLUTION_SCALE_MIN_TEXTURE_PX: u32 = 64;
 
 // AK47 scope: a second camera renders the actual zoomed-in view to a small
 // texture, which is displayed on a lens quad sitting in the scope's tube
@@ -535,9 +574,13 @@ struct FpsCamera {
 
 // Shared by shoot(), move_player_physics, and apply_aim_zoom so "aiming"
 // means the same thing everywhere: cursor locked (actually playing, not
-// paused/menu'd out) and right mouse button held.
-fn is_aiming(cursor: &CursorOptions, mouse: &ButtonInput<MouseButton>) -> bool {
-    cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Right)
+// paused/menu'd out) and right mouse button held — or, on touch, the
+// TouchAimButton toggle (see touch_aim_button) is on. There's no touch
+// equivalent of "cursor grab" gating this the way there is for mouse, since
+// touch has no OS-level pointer lock concept — a touch player is just always
+// considered "playing" for this check's purposes.
+fn is_aiming(cursor: &CursorOptions, mouse: &ButtonInput<MouseButton>, touch_aiming: bool) -> bool {
+    (cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Right)) || touch_aiming
 }
 
 fn is_moving(keys: &ButtonInput<KeyCode>) -> bool {
@@ -598,6 +641,9 @@ struct Lean {
 #[derive(Component)]
 struct GameOverUi;
 
+#[derive(Component)]
+struct RestartButton;
+
 // Debug/dev flight mode: toggled by KeyN. Sent to the server as part of
 // ClientInput (see its own doc comment) and simulated by the shared
 // simulate_player_step on both sides — bypasses MoveAndSlide (and thus
@@ -627,6 +673,43 @@ struct GodMode(bool);
 // current state of every other debug toggle, via update_debug_panel.
 #[derive(Resource, Default)]
 struct DebugPanelVisible(bool);
+
+// User-facing (not a debug toggle): scales the main camera's offscreen
+// render target — see RESOLUTION_SCALE_PRESETS' own comment. 1.0 = native
+// resolution. resize_scene_render_target reads this every frame and resizes
+// SceneRenderTarget's Image whenever it (or the window) changes.
+#[derive(Resource)]
+struct RenderResolutionScale(f32);
+
+impl Default for RenderResolutionScale {
+    fn default() -> Self {
+        Self(RESOLUTION_SCALE_DEFAULT)
+    }
+}
+
+// The Image the main 3D camera renders into instead of the window directly
+// — see the camera's own setup() comment. Held as a resource (not just a
+// local in setup()) so resize_scene_render_target can reach it later.
+#[derive(Resource)]
+struct SceneRenderTarget(Handle<Image>);
+
+// Toggled by F1 or tapping SettingsToggleButton (desktop key + touch button,
+// since this is a real user-facing menu, unlike the debug panel above which
+// is keyboard-only). Drives the settings panel's Node.display in
+// update_settings_menu, same show/hide pattern as DebugPanelVisible.
+#[derive(Resource, Default)]
+struct SettingsMenuVisible(bool);
+
+#[derive(Component)]
+struct SettingsMenuRoot;
+
+// One per RESOLUTION_SCALE_PRESETS entry — resolution_scale_buttons reads
+// Interaction on these to know which preset was tapped/clicked.
+#[derive(Component)]
+struct ResolutionScaleButton(f32);
+
+#[derive(Component)]
+struct SettingsToggleButton;
 
 // Debug/dev: toggled by KeyB. Lets apply_aim_dof's background blur be
 // switched off quickly to check whether DoF is the cause of some visual
@@ -989,7 +1072,13 @@ fn spawn_client_connection(commands: &mut Commands, channels: &RepliconChannels)
     // hostname, not just a literal IP — needed for e.g. playit.gg's
     // assigned tunnel domain (foo.tun.ply.gg:PORT), which a plain
     // SocketAddr parse rejects outright since it never resolves DNS.
-    let server_addr_str = std::env::var("SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:5031".to_string());
+    // TEMPORARY — default flipped to this Mac's Tailscale IP for an
+    // on-device test build (icon-tap launches can't pick up an env var
+    // override, same reasoning as minimal_map_probe_main's own forced-true
+    // toggle). Only reachable while the test phone is on the same Tailscale
+    // network and `cargo run -p server` is running locally. Revert to
+    // "127.0.0.1:5031" once this test is done.
+    let server_addr_str = std::env::var("SERVER_ADDR").unwrap_or_else(|_| "100.97.13.68:5031".to_string());
     let server_addr: std::net::SocketAddr = std::net::ToSocketAddrs::to_socket_addrs(&server_addr_str)
         .unwrap_or_else(|_| panic!("SERVER_ADDR must be a resolvable host:port (DNS lookup failed for \"{server_addr_str}\"), e.g. 127.0.0.1:5031 or foo.tun.ply.gg:5031"))
         .next()
@@ -1242,6 +1331,223 @@ fn log_client_connection_state(state: Res<State<ClientState>>) {
     }
 }
 
+// Diagnostic probe for the iOS fps/CPU investigation — camera + Sponza map
+// and nothing else (no networking, zombies, physics, UI, or touch controls,
+// nothing beyond what DefaultPlugins itself runs). On Simulator this used
+// about half the CPU of the full game (~48% vs ~110%), flat over 60s with no
+// growth either way, so the map's own render cost is already a big chunk of
+// the baseline — but Simulator doesn't reproduce real Metal/device behavior,
+// so this still needs a real-device run to mean anything for the actual bug.
+// Toggle with the MINIMAL_MAP_PROBE env var (Xcode: Edit Scheme > Run >
+// Arguments > Environment Variables — same place RUST_LOG already lives, no
+// code changes needed to flip it) — set it to anything to run this instead
+// of the real game.
+fn minimal_map_probe_main() {
+    App::new()
+        .add_plugins((
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    mode: if cfg!(target_os = "ios") || cfg!(target_os = "android") {
+                        WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+                    } else {
+                        WindowMode::Windowed
+                    },
+                    ..default()
+                }),
+                ..default()
+            }),
+            // touch_look/touch_move_axis need Res<HoverMap>, which comes
+            // from bevy_picking's core plugin — the real game gets it as a
+            // side effect of adding MeshPickingPlugin (for its zombie/gun
+            // raycasts), but this probe never picks any 3D meshes, so
+            // without adding it explicitly here too, HoverMap never gets
+            // inserted and both touch systems panic on a missing resource
+            // the moment they run.
+            MeshPickingPlugin,
+        ))
+        .insert_resource(if cfg!(target_os = "ios") || cfg!(target_os = "android") {
+            WinitSettings {
+                focused_mode: UpdateMode::reactive(std::time::Duration::from_secs_f32(1.0 / 60.0)),
+                ..WinitSettings::game()
+            }
+        } else {
+            WinitSettings::game()
+        })
+        // Same FPS overlay + refresh rate as the real game (see its own
+        // FpsOverlayPlugin comment) — the whole point of this probe build is
+        // to have a number to read while eyeballing whether it stutters.
+        .add_plugins(FpsOverlayPlugin {
+            config: bevy::dev_tools::fps_overlay::FpsOverlayConfig {
+                refresh_interval: std::time::Duration::from_secs_f32(1.0 / 60.0),
+                ..default()
+            },
+        })
+        // Touch controls wired in for this probe too — same joystick/look
+        // systems the real game uses, reused as-is (they only need
+        // FpsCamera + the Touch* resources, nothing else from the real
+        // game), so this can test whether the controller UI still
+        // randomly disappears / stops responding in an otherwise-trivial
+        // scene with none of the real game's networking/zombie/UI
+        // complexity around it.
+        .init_resource::<TouchMoveState>()
+        .init_resource::<TouchMoveAxis>()
+        .init_resource::<TouchLookState>()
+        // touch_look writes into this every frame it's dragging (mirrors
+        // mouse_look) — the real game inits it alongside its own input
+        // setup; missed here the first time, which is why touch_look
+        // panicked on "Resource does not exist" the moment a drag started.
+        .init_resource::<MouseLookDelta>()
+        // Jump/crouch buttons — same UI (spawn_touch_controls spawns them
+        // unconditionally) and the same generic TouchJump edge-pulse the
+        // real game uses, but this probe has no Player/PlayerStance to
+        // toggle, so it gets its own tiny crouch-toggle resource + a
+        // probe-only button handler (probe_crouch_button) instead of the
+        // real game's touch_crouch_button.
+        .init_resource::<TouchJump>()
+        .init_resource::<ProbeCrouching>()
+        .add_systems(Startup, |mut commands: Commands,
+                                asset_server: Res<AssetServer>,
+                                mut meshes: ResMut<Assets<Mesh>>,
+                                mut materials: ResMut<Assets<StandardMaterial>>| {
+            commands.spawn((
+                Camera3d::default(),
+                Transform::from_xyz(0.0, 3.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+                FpsCamera { yaw: 0.0, pitch: 0.0 },
+            ));
+            commands.spawn((
+                DirectionalLight {
+                    illuminance: 3000.0,
+                    ..default()
+                },
+                Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+            ));
+            // PROBE_SIMPLE_SCENE=1 swaps the (fairly heavy, many-material)
+            // Sponza gltf for a bare cube + floor plane — isolates whether
+            // the ~20% idle CPU on-device comes from scene/asset complexity
+            // at all, vs. being pure wgpu/Metal render-thread overhead that
+            // shows up even with next to nothing on screen.
+            let scene_label = if std::env::var("PROBE_SIMPLE_SCENE").is_ok() {
+                commands.spawn((
+                    Mesh3d(meshes.add(Plane3d::default().mesh().size(50.0, 50.0))),
+                    MeshMaterial3d(materials.add(Color::srgb(0.3, 0.3, 0.35))),
+                    Transform::from_xyz(0.0, 0.0, 0.0),
+                ));
+                commands.spawn((
+                    Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+                    MeshMaterial3d(materials.add(Color::srgb(0.8, 0.2, 0.2))),
+                    Transform::from_xyz(0.0, 0.5, 0.0),
+                ));
+                "bare cube"
+            } else {
+                commands.spawn(SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(SCENE_PATH))));
+                "Sponza"
+            };
+            spawn_touch_controls(&mut commands);
+            // Small label so it's obvious at a glance this is the stripped-
+            // down probe build, not the real game with a blank screen.
+            commands.spawn((
+                Text::new(format!("MINIMAL MAP PROBE — camera + {scene_label} only, no game logic")),
+                TextFont {
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 1.0, 0.3)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(16.0),
+                    bottom: Val::Px(16.0),
+                    ..default()
+                },
+            ));
+        })
+        .add_systems(
+            Update,
+            (
+                touch_move_axis,
+                update_joystick_knob_visual,
+                touch_look,
+                touch_jump_button,
+                probe_crouch_button,
+                probe_apply_look,
+                probe_move,
+            )
+                .chain(),
+        )
+        .run();
+}
+
+// Probe-only stand-in for PlayerStance (which doesn't exist here — no
+// Player entity, no shared::movement simulation) — just enough to offset
+// the camera's height, see probe_move.
+#[derive(Resource, Default)]
+struct ProbeCrouching(bool);
+
+// Tap-edge toggle, same pattern as touch_aim_button/touch_crouch_button —
+// reacts to the exact same TouchCrouchButton UI entity the real game's
+// touch_crouch_button does, just with a different (probe-only) target to
+// mutate since there's no PlayerStance here.
+fn probe_crouch_button(mut crouching: ResMut<ProbeCrouching>, button: Query<&Interaction, (With<TouchCrouchButton>, Changed<Interaction>)>) {
+    for interaction in &button {
+        if *interaction == Interaction::Pressed {
+            crouching.0 = !crouching.0;
+        }
+    }
+}
+
+// Copies FpsCamera.yaw/pitch (written by touch_look) straight into the
+// camera's own Transform.rotation — the real game does this indirectly via
+// apply_view_recoil (which also layers in recoil kick on top), way more
+// than this probe needs. No clamping beyond what touch_look itself already
+// applies to pitch.
+fn probe_apply_look(camera: Query<(&FpsCamera, &mut Transform), With<Camera3d>>) {
+    for (cam, mut transform) in camera {
+        transform.rotation = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
+    }
+}
+
+// Camera's spawn height (see Startup system above) — also doubles as the
+// probe's "ground" floor for the fake jump/gravity below, since there's no
+// real collider to land on here.
+const PROBE_GROUND_Y: f32 = 3.0;
+const PROBE_JUMP_SPEED: f32 = 6.0;
+const PROBE_GRAVITY: f32 = -18.0;
+const PROBE_CROUCH_OFFSET: f32 = -0.6;
+
+// Same move_axis-rotated-by-yaw math send_player_input/simulate_player_step
+// use for the real game, minus everything about server prediction/physics
+// collision — this probe has no server and no colliders to run into, so a
+// flat translate is all that's needed to test whether the joystick itself
+// still works. Jump/crouch are a simple fake: no real ground collider here,
+// so "grounded" is just "at or below the crouch-adjusted PROBE_GROUND_Y",
+// and TouchJump's edge pulse (see its own doc comment) only does anything
+// while grounded, same as the real game's simulate_player_step gate.
+fn probe_move(
+    time: Res<Time>,
+    touch_axis: Res<TouchMoveAxis>,
+    touch_jump: Res<TouchJump>,
+    crouching: Res<ProbeCrouching>,
+    mut vertical_velocity: Local<f32>,
+    camera: Query<(&FpsCamera, &mut Transform), With<Camera3d>>,
+) {
+    let dt = time.delta_secs();
+    let ground_y = PROBE_GROUND_Y + if crouching.0 { PROBE_CROUCH_OFFSET } else { 0.0 };
+    for (cam, mut transform) in camera {
+        if touch_axis.0 != Vec2::ZERO {
+            let move_dir = Quat::from_rotation_y(cam.yaw) * Vec3::new(touch_axis.0.x, 0.0, -touch_axis.0.y);
+            transform.translation += move_dir * MOVE_SPEED * dt;
+        }
+
+        let grounded = transform.translation.y <= ground_y;
+        if grounded {
+            transform.translation.y = ground_y;
+            *vertical_velocity = if touch_jump.0 { PROBE_JUMP_SPEED } else { 0.0 };
+        } else {
+            *vertical_velocity += PROBE_GRAVITY * dt;
+        }
+        transform.translation.y += *vertical_velocity * dt;
+    }
+}
+
 // #[bevy_main] requires the fn to be named exactly `main` — see its own
 // macro's compile-error message. Desktop's src/main.rs (a thin `fn main() {
 // client::main(); }`) and iOS's start_app extern shim below both call this
@@ -1249,19 +1555,69 @@ fn log_client_connection_state(state: Res<State<ClientState>>) {
 // regardless of platform.
 #[bevy_main]
 pub fn main() {
+    // See minimal_map_probe_main's own doc comment — flips to the stripped-
+    // down probe scene when MINIMAL_MAP_PROBE is set (Xcode scheme env var;
+    // does nothing for an icon-tap launch, only Xcode Run — see the real
+    // game's SERVER_ADDR default above for the same caveat handled the
+    // other way, by temporarily changing the hardcoded fallback instead).
+    if std::env::var("MINIMAL_MAP_PROBE").is_ok() {
+        minimal_map_probe_main();
+        return;
+    }
+
     App::new()
         .add_plugins((
-            // Window resolution is intentionally left at its default (native
-            // window size). Shrinking it also shrinks how big the window
-            // looks on screen (and the HUD with it) — Bevy 0.19 has no
-            // built-in render-scale/upscale feature to reduce GPU pixel cost
-            // independently of window size (checked bevy_render/bevy_camera/
-            // bevy_anti_alias — no FSR/dynamic-resolution equivalent exists).
-            // Doing that properly would mean a custom low-res render target
-            // + upscale blit pass. The real perf wins here are elsewhere:
-            // SSAO removed, Sponza textures downscaled to 512px, Bloom kept
-            // modest — see earlier changes.
-            DefaultPlugins,
+            // Desktop: WindowResolution is left at Bevy's default (a plain
+            // resizable 1280x720 window) — real render-cost scaling is done
+            // independently via RenderResolutionScale's offscreen render
+            // target (see setup()), not by shrinking the window itself.
+            //
+            // iOS/Android: WindowMode explicitly forced to
+            // BorderlessFullscreen instead of leaving it at the same
+            // default. Without this, winit still requests that same fixed
+            // 1280x720-logical window on a phone — there's no "maximize" or
+            // user-resize concept on mobile, so the OS just gives the app a
+            // literal 1280x720-sized surface positioned somewhere on the
+            // real screen instead of the actual full display bounds. On a
+            // landscape-locked device this showed up as the game only
+            // filling one corner of the screen after rotating (reported
+            // in-game) — this is what actually caused that, not the
+            // orientation lock or the missing LaunchScreen storyboard
+            // (both real bugs, both already fixed, but neither was this).
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        mode: if cfg!(target_os = "ios") || cfg!(target_os = "android") {
+                            WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+                        } else {
+                            WindowMode::Windowed
+                        },
+                        ..default()
+                    }),
+                    ..default()
+                })
+                // Bevy's default TaskPoolOptions sizes its thread pools off
+                // std::thread::available_parallelism(), which counts EVERY
+                // logical core — on an iPhone that includes the slow
+                // efficiency cores alongside the 2 fast performance cores,
+                // unlike this dev Mac where all cores are genuinely fast.
+                // Instruments' Time Profiler (Invert Call Tree + Hide
+                // System Libraries) on-device showed >30% of CPU self-time
+                // going to objc::rc::autorelease::autoreleasepool churn plus
+                // parking_lot/std::sync::Mutex lock contention — both
+                // classic symptoms of more worker threads than the hardware
+                // can actually run in parallel, fighting over the same
+                // locks instead of doing real work. Capped to 4 total
+                // threads on iOS/Android as an experiment; desktop keeps
+                // Bevy's normal auto-sized default (10 real cores on this
+                // Mac, no contention observed there).
+                .set(TaskPoolPlugin {
+                    task_pool_options: if cfg!(target_os = "ios") || cfg!(target_os = "android") {
+                        TaskPoolOptions::with_num_threads(4)
+                    } else {
+                        TaskPoolOptions::default()
+                    },
+                }),
             MeshPickingPlugin,
             PhysicsPlugins::default(),
             // A lightweight always-on FPS overlay. Bevy 0.18 doesn't have the
@@ -1279,6 +1635,37 @@ pub fn main() {
             RepliconPlugins,
             RepliconRenetPlugins,
         ))
+        // WinitSettings::game()'s default focused_mode is UpdateMode::Continuous
+        // ("update as fast as possible, rely on VSync to actually cap it") —
+        // a well-documented Bevy-on-iOS problem (bevyengine/bevy#16734: an
+        // EMPTY scene still burns ~50% CPU and runs under 60fps on iOS) is
+        // that iOS's winit backend doesn't reliably throttle Continuous mode
+        // via VSync the way desktop does, so the main loop just spins,
+        // repeatedly logging "processing non RedrawRequested event after the
+        // main event loop: AboutToWait" — the exact message seen in this
+        // project's own on-device logs. Forcing an explicit Reactive wait
+        // (the fix Bevy's own official mobile example adopted after hitting
+        // this) caps the update rate directly in winit's event loop,
+        // independent of whatever Metal/CAMetalLayer vsync is or isn't
+        // doing. iOS/Android only — desktop's Continuous default is fine
+        // here (no equivalent throttling bug observed on macOS).
+        //
+        // 120Hz, not 60 — this is just the *ceiling* the app is willing to
+        // update at, not a request that overrides the display's own
+        // capability; a 60Hz-only screen (or a non-ProMotion iPhone) simply
+        // never hits this ceiling and behaves the same as before. Getting
+        // an actual 120Hz-capable device to render above 60Hz also requires
+        // CADisableMinimumFrameDurationOnPhone in Info.plist (iOS caps
+        // every app to 60Hz by default regardless of anything set here,
+        // unless that key opts out) — see project.yml's own comment on it.
+        .insert_resource(if cfg!(target_os = "ios") || cfg!(target_os = "android") {
+            WinitSettings {
+                focused_mode: UpdateMode::reactive(std::time::Duration::from_secs_f32(1.0 / 120.0)),
+                ..WinitSettings::game()
+            }
+        } else {
+            WinitSettings::game()
+        })
         .replicate::<NetworkId>()
         .replicate::<NetPlayer>()
         .replicate::<NetTransform>()
@@ -1296,6 +1683,11 @@ pub fn main() {
         .add_client_event::<SpawnDebugBot>(Channel::Ordered)
         .add_client_event::<MoveDebugBot>(Channel::Ordered)
         .add_client_event::<DespawnDebugBot>(Channel::Ordered)
+        .add_client_event::<SetZombieCount>(Channel::Ordered)
+        .add_client_event::<ClearAllZombies>(Channel::Ordered)
+        .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
+        .init_resource::<ZombieCountUi>()
+        .init_resource::<AutoMaintainUi>()
         .add_systems(Startup, connect_to_server)
         .add_systems(
             Update,
@@ -1318,6 +1710,7 @@ pub fn main() {
         .init_resource::<ShowHitboxes>()
         .init_resource::<GodMode>()
         .init_resource::<DebugPanelVisible>()
+        .init_resource::<SettingsMenuVisible>()
         .init_resource::<AimBlurEnabled>()
         .init_resource::<AimDofFocalDistanceAlt>()
         .init_resource::<MouseLookDelta>()
@@ -1334,6 +1727,8 @@ pub fn main() {
         .init_resource::<TouchMoveAxis>()
         .init_resource::<TouchLookState>()
         .init_resource::<TouchFiring>()
+        .init_resource::<TouchAiming>()
+        .init_resource::<TouchJump>()
         .add_systems(Startup, (setup, log_window_resolution))
         .add_systems(
             Update,
@@ -1343,7 +1738,36 @@ pub fn main() {
                 // FpsCamera/MouseLookDelta in apply_view_recoil) — a
                 // separate leading group rather than folding into the next
                 // one below, which is already at the 20-arity tuple limit.
-                (touch_move_axis, update_joystick_knob_visual, touch_look, touch_fire_button),
+                (
+                    touch_move_axis,
+                    update_joystick_knob_visual,
+                    touch_look,
+                    touch_fire_button,
+                    touch_aim_button,
+                    touch_jump_button,
+                    touch_crouch_button,
+                ),
+                // Settings menu (resolution scale) — independent of the
+                // gameplay chain below, so its own small group rather than
+                // pushed into an already near-the-20-arity-limit tuple (see
+                // that group's own comment on why it's already split up).
+                (
+                    toggle_settings_menu,
+                    update_settings_menu,
+                    resolution_scale_buttons,
+                    resize_scene_render_target,
+                    scroll_settings_menu,
+                    cheat_toggle_buttons,
+                    cheat_toggle_buttons_2,
+                    update_cheat_toggle_colors,
+                    cheat_kill_all_button,
+                    cheat_zombie_health_buttons,
+                    zombie_count_buttons,
+                    update_zombie_count_text,
+                    auto_maintain_button,
+                    update_auto_maintain_button_color,
+                )
+                    .chain(),
                 // Tuples of systems only implement IntoSystemConfigs up to
                 // arity 20, so this is split into nested chained groups
                 // rather than one flat tuple — .chain() on the outer tuple
@@ -1373,6 +1797,7 @@ pub fn main() {
                 (
                     check_game_over,
                     restart_game,
+                    restart_button,
                     wire_zombie_animations,
                     wire_zombie_hitbox_bones,
                     wire_gun_mesh,
@@ -1523,7 +1948,72 @@ fn setup(
     mut graphs: ResMut<Assets<AnimationGraph>>,
     mut images: ResMut<Assets<Image>>,
     touch_enabled: Res<TouchControlsEnabled>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
+    // Dynamic resolution scaling render target: the main 3D camera below
+    // renders into this offscreen texture instead of straight to the
+    // window, and a dedicated present_camera (also spawned below) displays
+    // it stretched to fill the actual window — same render-to-texture-then-
+    // display-on-a-quad idea the AK scope lens already uses, just for the
+    // whole screen via a fullscreen UI ImageNode instead of a 3D quad, and
+    // resizable instead of fixed. RESOLUTION_SCALE_PRESETS/
+    // RenderResolutionScale controls the scale; resize_scene_render_target
+    // keeps this texture's actual size in sync with it (and with the
+    // window, if that changes too) every frame.
+    let (window_width, window_height) = windows
+        .single()
+        .map(|window| (window.resolution.physical_width(), window.resolution.physical_height()))
+        .unwrap_or((1280, 720));
+    let mut scene_image = Image::new_fill(
+        scaled_scene_extent(window_width, window_height, RESOLUTION_SCALE_DEFAULT),
+        TextureDimension::D2,
+        &[0, 0, 0, 255],
+        TextureFormat::Bgra8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    scene_image.texture_descriptor.usage =
+        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+    let scene_image_handle = images.add(scene_image);
+    commands.insert_resource(SceneRenderTarget(scene_image_handle.clone()));
+    commands.insert_resource(RenderResolutionScale::default());
+
+    // present_camera: a 2D camera targeting the actual window (default
+    // RenderTarget, unlike the 3D camera below). IsDefaultUiCamera routes
+    // every UI node spawned without an explicit UiTargetCamera to this
+    // camera instead of the 3D one — meaning all of this project's existing
+    // UI (crosshair, health bar, debug panel, touch controls, the settings
+    // menu below) keeps rendering at full native resolution regardless of
+    // RenderResolutionScale, same as any real game's HUD. Only the 3D scene
+    // itself (via the fullscreen ImageNode right below) gets scaled.
+    commands.spawn((Camera2d, IsDefaultUiCamera));
+
+    // Fullscreen quad showing the scaled-down 3D render, stretched to fill
+    // the window — Bevy UI lays this out at the window's real (100%) size
+    // regardless of the source texture's actual pixel dimensions, so this
+    // node itself never needs touching when the scale changes, only the
+    // Image behind it (see resize_scene_render_target). Spawned before any
+    // other UI below so it's the back-most sibling (Bevy UI draws root
+    // nodes in insertion order) — otherwise it would paint over the
+    // crosshair/health bar/etc.
+    commands.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            position_type: PositionType::Absolute,
+            ..default()
+        },
+        ImageNode::new(scene_image_handle.clone()),
+        // Without this, this node — covering the entire screen — counted as
+        // "the touch is over UI" for every single touch anywhere on screen
+        // (see touch_over_ui's own doc comment), since bevy_picking treats
+        // any UI Node as hoverable/blocking by default. That broke
+        // touch_move_axis/touch_look outright the moment touch_over_ui was
+        // added: every touch looked like it was over a UI element, so
+        // neither system would ever claim one for movement/look. This is
+        // just the background — it should never itself count as "UI" for
+        // that purpose, only real interactive elements (buttons) should.
+        Pickable::IGNORE,
+    ));
     commands.insert_resource(HitMarkerAssets {
         mesh: meshes.add(Sphere::new(0.03)),
         material: materials.add(StandardMaterial {
@@ -1703,6 +2193,11 @@ fn setup(
             // Sees the world (0) and the gun viewmodel/scope lens (1) — the
             // scope camera below only sees layer 0.
             RenderLayers::from_layers(&[WORLD_LAYER, VIEWMODEL_LAYER]),
+            // Renders into the resolution-scaled offscreen texture instead
+            // of the window — see this fn's own comment on scene_image up
+            // top for why (and present_camera/the fullscreen ImageNode for
+            // how it actually reaches the screen).
+            RenderTarget::from(scene_image_handle),
         ))
         .id();
 
@@ -1831,8 +2326,681 @@ fn setup(
     spawn_ammo_ui(&mut commands);
     spawn_ping_ui(&mut commands);
     spawn_debug_panel(&mut commands);
+    spawn_settings_menu(&mut commands);
+    spawn_settings_toggle_button(&mut commands);
     if touch_enabled.0 {
         spawn_touch_controls(&mut commands);
+    }
+}
+
+// window physical size * scale, floored at RESOLUTION_SCALE_MIN_TEXTURE_PX
+// on each axis so a tiny window at a low scale never asks wgpu for a
+// zero-size (or otherwise degenerate) render target.
+fn scaled_scene_extent(window_width: u32, window_height: u32, scale: f32) -> Extent3d {
+    Extent3d {
+        width: ((window_width as f32 * scale) as u32).max(RESOLUTION_SCALE_MIN_TEXTURE_PX),
+        height: ((window_height as f32 * scale) as u32).max(RESOLUTION_SCALE_MIN_TEXTURE_PX),
+        depth_or_array_layers: 1,
+    }
+}
+
+// Resizes SceneRenderTarget's backing Image whenever the window size or
+// RenderResolutionScale changes — the fullscreen ImageNode in setup() always
+// stretches it to 100%/100% regardless of its actual pixel size, so this is
+// the only place that needs to react to either changing.
+// Requires the new size to hold for RESIZE_DEBOUNCE_FRAMES straight ticks
+// before actually resizing the texture — on iOS the window's reported
+// physical size can apparently flicker by a pixel or two frame-to-frame
+// (safe-area/notch geometry recomputing, most likely), and reacting to
+// every single one of those with a real GPU texture reallocation was a
+// plausible contributor to touch buttons intermittently not rendering for a
+// frame (reported in-game, no other reproducible pattern found). A real
+// resize (rotation, actually changing RenderResolutionScale) still reacts
+// within a handful of frames — not perceptible as input lag — while
+// single-frame noise gets filtered out before ever reaching image.resize().
+const RESIZE_DEBOUNCE_FRAMES: u8 = 5;
+
+fn resize_scene_render_target(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    scale: Res<RenderResolutionScale>,
+    target: Res<SceneRenderTarget>,
+    mut images: ResMut<Assets<Image>>,
+    mut applied: Local<(u32, u32, f32)>,
+    mut pending: Local<Option<((u32, u32, f32), u8)>>,
+) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let current = (window.resolution.physical_width(), window.resolution.physical_height(), scale.0);
+    if current == *applied {
+        *pending = None;
+        return;
+    }
+    match *pending {
+        Some((size, streak)) if size == current => {
+            if streak + 1 >= RESIZE_DEBOUNCE_FRAMES {
+                *applied = current;
+                *pending = None;
+                if let Some(image) = images.get_mut(&target.0) {
+                    image.resize(scaled_scene_extent(current.0, current.1, current.2));
+                }
+            } else {
+                *pending = Some((size, streak + 1));
+            }
+        }
+        _ => *pending = Some((current, 0)),
+    }
+}
+
+fn spawn_settings_menu(commands: &mut Commands) {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(16.0),
+                top: Val::Px(16.0),
+                // Capped well under a landscape phone's typical height, with
+                // the full merged desktop-panel content this now holds —
+                // see scroll_settings_menu (mouse wheel) for how it actually
+                // scrolls. There's no touch-drag scroll yet (only wheel) —
+                // a real gap on mobile if the panel ends up taller than the
+                // screen, flagged rather than silently left out.
+                max_height: Val::Px(520.0),
+                overflow: Overflow::scroll_y(),
+                padding: UiRect::all(Val::Px(12.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(8.0),
+                display: Display::None,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+            ScrollPosition::default(),
+            SettingsMenuRoot,
+        ))
+        .with_children(|menu| {
+            menu.spawn((
+                Text::new("Resolution scale"),
+                TextFont {
+                    font_size: 16.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+            menu.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|row| {
+                for &scale in &RESOLUTION_SCALE_PRESETS {
+                    row.spawn((
+                        Node {
+                            width: Val::Px(60.0),
+                            height: Val::Px(32.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border_radius: BorderRadius::all(Val::Px(4.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                        Button,
+                        Interaction::default(),
+                        ResolutionScaleButton(scale),
+                    ))
+                    .with_children(|btn| {
+                        btn.spawn((
+                            Text::new(format!("{:.0}%", scale * 100.0)),
+                            TextFont {
+                                font_size: 14.0,
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                        ));
+                    });
+                }
+            });
+
+            // Touch equivalent of the desktop debug panel's keyboard-only
+            // cheats (KeyN/KeyG/KeyF/Digit1/Digit2) — that panel is
+            // unreachable on mobile (no keyboard), so none of it existed
+            // there before. Reuses the exact same Noclip/GodMode/
+            // FreezeZombies resources and kill-all/spawn-one actions the
+            // desktop keys already drive, just from a tap instead of a
+            // keypress — same underlying behavior on both platforms.
+            menu.spawn((
+                Text::new("Cheats"),
+                TextFont {
+                    font_size: 16.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+            menu.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|row| {
+                spawn_cheat_toggle_button(row, "Noclip", CheatNoclipButton);
+                spawn_cheat_toggle_button(row, "God", CheatGodModeButton);
+                spawn_cheat_toggle_button(row, "Freeze", CheatFreezeButton);
+            });
+            menu.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|row| {
+                spawn_cheat_toggle_button(row, "Hitboxes", CheatHitboxesButton);
+                spawn_cheat_toggle_button(row, "AimBlur", CheatAimBlurButton);
+                spawn_cheat_toggle_button(row, "PlayerMdl", CheatPlayerModelButton);
+            });
+            menu.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|row| {
+                spawn_cheat_toggle_button(row, "NoZAnim", CheatZombieAnimButton);
+                spawn_cheat_toggle_button(row, "NoHPBar", CheatZombieHealthBarsButton);
+                spawn_cheat_toggle_button(row, "FullLOD", CheatZombieLodButton);
+            });
+            menu.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                align_items: AlignItems::Center,
+                ..default()
+            })
+            .with_children(|row| {
+                spawn_cheat_action_button(row, "-10", ZombieCountDecButton);
+                row.spawn((
+                    Text::new("10"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    ZombieCountText,
+                ));
+                spawn_cheat_action_button(row, "+10", ZombieCountIncButton);
+                spawn_cheat_toggle_button(row, "Auto", AutoMaintainButton);
+            });
+            menu.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|row| {
+                spawn_cheat_action_button(row, "Kill All", CheatKillAllButton);
+                spawn_cheat_action_button(row, "+100", SpawnMoreZombiesButton);
+            });
+            menu.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|row| {
+                spawn_cheat_action_button(row, "Heal Nearest", HealNearestButton);
+                spawn_cheat_action_button(row, "1HP Nearest", NearDeathNearestButton);
+            });
+        });
+}
+
+// Shared visual style for both cheat button flavors below — toggle buttons
+// additionally get recolored by update_cheat_toggle_colors once spawned;
+// action buttons (momentary, no on/off state) stay this same color always.
+fn spawn_cheat_button_node(parent: &mut ChildSpawnerCommands, label: &str, marker: impl Component) {
+    parent
+        .spawn((
+            Node {
+                width: Val::Px(96.0),
+                height: Val::Px(36.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.5)),
+            Button,
+            Interaction::default(),
+            marker,
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: 13.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+        });
+}
+
+fn spawn_cheat_toggle_button(parent: &mut ChildSpawnerCommands, label: &str, marker: impl Component) {
+    spawn_cheat_button_node(parent, label, marker);
+}
+
+fn spawn_cheat_action_button(parent: &mut ChildSpawnerCommands, label: &str, marker: impl Component) {
+    spawn_cheat_button_node(parent, label, marker);
+}
+
+#[derive(Component)]
+struct CheatNoclipButton;
+#[derive(Component)]
+struct CheatGodModeButton;
+#[derive(Component)]
+struct CheatFreezeButton;
+#[derive(Component)]
+struct CheatKillAllButton;
+#[derive(Component)]
+struct ZombieCountDecButton;
+#[derive(Component)]
+struct ZombieCountIncButton;
+#[derive(Component)]
+struct ZombieCountText;
+#[derive(Component)]
+struct AutoMaintainButton;
+
+// Client's own best guess at the server's current zombie population
+// target, so the cheat panel has a number to show and step from without
+// waiting on a round-trip — SetZombieCount is fire-and-forget (see its own
+// doc comment in crates/shared), the server never echoes the value back.
+// Default matches ZombieTargetCount's own default on the server so the
+// displayed number is right from the start, not just after the first tap.
+#[derive(Resource)]
+struct ZombieCountUi(u32);
+
+impl Default for ZombieCountUi {
+    fn default() -> Self {
+        Self(10)
+    }
+}
+
+// Same "client's own best guess" reasoning as ZombieCountUi — defaults to
+// true to match AutoMaintainZombies' own server-side default.
+#[derive(Resource)]
+struct AutoMaintainUi(bool);
+
+impl Default for AutoMaintainUi {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+// True if any entity matching `T` was tapped/clicked this frame — shared by
+// every touch/click button in this file that just needs a plain
+// Changed<Interaction>-gated Pressed check (most of the cheat panel).
+fn tapped<T: Component>(q: &Query<&Interaction, (With<T>, Changed<Interaction>)>) -> bool {
+    q.iter().any(|i| *i == Interaction::Pressed)
+}
+
+#[derive(Component)]
+struct CheatHitboxesButton;
+#[derive(Component)]
+struct CheatAimBlurButton;
+#[derive(Component)]
+struct CheatZombieAnimButton;
+#[derive(Component)]
+struct CheatZombieHealthBarsButton;
+#[derive(Component)]
+struct CheatZombieLodButton;
+#[derive(Component)]
+struct CheatPlayerModelButton;
+
+// Changed<Interaction>-gated like every other touch button in this file —
+// each tap flips the same resource the matching desktop key
+// (N/G/F/H/B/M/J/K/T respectively) does. The full merged set of desktop
+// debug_panel_actions' keyboard-only toggles — none of them were reachable
+// on mobile at all before (no keyboard), see this fn's own callers.
+fn cheat_toggle_buttons(
+    mut noclip: ResMut<Noclip>,
+    mut god_mode: ResMut<GodMode>,
+    mut freeze: ResMut<FreezeZombies>,
+    noclip_btn: Query<&Interaction, (With<CheatNoclipButton>, Changed<Interaction>)>,
+    god_btn: Query<&Interaction, (With<CheatGodModeButton>, Changed<Interaction>)>,
+    freeze_btn: Query<&Interaction, (With<CheatFreezeButton>, Changed<Interaction>)>,
+) {
+    if tapped(&noclip_btn) {
+        noclip.0 = !noclip.0;
+    }
+    if tapped(&god_btn) {
+        god_mode.0 = !god_mode.0;
+    }
+    if tapped(&freeze_btn) {
+        freeze.0 = !freeze.0;
+    }
+}
+
+// Split from cheat_toggle_buttons — one function with all 9 toggles' worth
+// of params (18 total: 9 ResMut + 9 Query) exceeded the max arity Bevy's
+// blanket impl supports for turning a plain fn into a System.
+fn cheat_toggle_buttons_2(
+    mut show_hitboxes: ResMut<ShowHitboxes>,
+    mut aim_blur: ResMut<AimBlurEnabled>,
+    mut zombie_anim: ResMut<ZombieAnimDisabled>,
+    mut zombie_health_bars: ResMut<ZombieHealthBarsHidden>,
+    mut zombie_lod: ResMut<ZombieLodDisabled>,
+    mut player_model: ResMut<PlayerModelVisible>,
+    hitboxes_btn: Query<&Interaction, (With<CheatHitboxesButton>, Changed<Interaction>)>,
+    aim_blur_btn: Query<&Interaction, (With<CheatAimBlurButton>, Changed<Interaction>)>,
+    zombie_anim_btn: Query<&Interaction, (With<CheatZombieAnimButton>, Changed<Interaction>)>,
+    zombie_health_bars_btn: Query<&Interaction, (With<CheatZombieHealthBarsButton>, Changed<Interaction>)>,
+    zombie_lod_btn: Query<&Interaction, (With<CheatZombieLodButton>, Changed<Interaction>)>,
+    player_model_btn: Query<&Interaction, (With<CheatPlayerModelButton>, Changed<Interaction>)>,
+) {
+    if tapped(&hitboxes_btn) {
+        show_hitboxes.0 = !show_hitboxes.0;
+    }
+    if tapped(&aim_blur_btn) {
+        aim_blur.0 = !aim_blur.0;
+    }
+    if tapped(&zombie_anim_btn) {
+        zombie_anim.0 = !zombie_anim.0;
+    }
+    if tapped(&zombie_health_bars_btn) {
+        zombie_health_bars.0 = !zombie_health_bars.0;
+    }
+    if tapped(&zombie_lod_btn) {
+        zombie_lod.0 = !zombie_lod.0;
+    }
+    if tapped(&player_model_btn) {
+        player_model.0 = !player_model.0;
+    }
+}
+
+// Recolors the 3 toggle buttons green-ish while their cheat is active —
+// desktop's debug panel shows this as "[ON]"/"[OFF]" text instead, but
+// these buttons have no room for that plus a label, so color stands in.
+// One query with Option<&Marker> per button instead of 9 separate
+// Query<&mut BackgroundColor, With<Marker>> params — Bevy's borrow checker
+// can't prove 9 differently-filtered `&mut BackgroundColor` queries never
+// alias the same entity without spelling out all 36 pairwise Without<>
+// combinations, which Has<T>-via-Option sidesteps entirely by only ever
+// borrowing BackgroundColor once per matched entity.
+#[allow(clippy::type_complexity)]
+fn update_cheat_toggle_colors(
+    noclip: Res<Noclip>,
+    god_mode: Res<GodMode>,
+    freeze: Res<FreezeZombies>,
+    show_hitboxes: Res<ShowHitboxes>,
+    aim_blur: Res<AimBlurEnabled>,
+    zombie_anim: Res<ZombieAnimDisabled>,
+    zombie_health_bars: Res<ZombieHealthBarsHidden>,
+    zombie_lod: Res<ZombieLodDisabled>,
+    player_model: Res<PlayerModelVisible>,
+    mut buttons: Query<
+        (
+            &mut BackgroundColor,
+            Option<&CheatNoclipButton>,
+            Option<&CheatGodModeButton>,
+            Option<&CheatFreezeButton>,
+            Option<&CheatHitboxesButton>,
+            Option<&CheatAimBlurButton>,
+            Option<&CheatZombieAnimButton>,
+            Option<&CheatZombieHealthBarsButton>,
+            Option<&CheatZombieLodButton>,
+            Option<&CheatPlayerModelButton>,
+        ),
+        Or<(
+            With<CheatNoclipButton>,
+            With<CheatGodModeButton>,
+            With<CheatFreezeButton>,
+            With<CheatHitboxesButton>,
+            With<CheatAimBlurButton>,
+            With<CheatZombieAnimButton>,
+            With<CheatZombieHealthBarsButton>,
+            With<CheatZombieLodButton>,
+            With<CheatPlayerModelButton>,
+        )>,
+    >,
+) {
+    let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
+    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, zombie_lod_m, player_model_m) in &mut buttons {
+        let on = if noclip_m.is_some() {
+            noclip.0
+        } else if god_m.is_some() {
+            god_mode.0
+        } else if freeze_m.is_some() {
+            freeze.0
+        } else if hitboxes_m.is_some() {
+            show_hitboxes.0
+        } else if aim_blur_m.is_some() {
+            aim_blur.0
+        } else if zombie_anim_m.is_some() {
+            zombie_anim.0
+        } else if zombie_hp_m.is_some() {
+            zombie_health_bars.0
+        } else if zombie_lod_m.is_some() {
+            zombie_lod.0
+        } else {
+            player_model_m.is_some() && player_model.0
+        };
+        *bg = BackgroundColor(color_for(on));
+    }
+}
+
+// Kill All is authoritative (ClearAllZombies), unlike the old desktop-only
+// debug panel's Digit2 action which just despawned the client's own local
+// replicated copy and silently got it back on the next replication update
+// (see ClearAllZombies' own doc comment in crates/shared) — worth fixing
+// here since a real button inviting repeated taps would make that bug much
+// more obvious/annoying than an easy-to-forget keyboard shortcut did.
+fn cheat_kill_all_button(mut commands: Commands, kill_btn: Query<&Interaction, (With<CheatKillAllButton>, Changed<Interaction>)>) {
+    for interaction in &kill_btn {
+        if *interaction == Interaction::Pressed {
+            commands.client_trigger(ClearAllZombies);
+        }
+    }
+}
+
+#[derive(Component)]
+struct SpawnMoreZombiesButton;
+#[derive(Component)]
+struct HealNearestButton;
+#[derive(Component)]
+struct NearDeathNearestButton;
+
+// Same 3 actions as debug_panel_actions' Digit5/Digit4/Digit3. Health writes
+// here have the same caveat the desktop keys already had — Health is
+// server-authoritative/replicated, so a client-side write like
+// set_nearest_zombie_health's is cosmetic and gets overwritten by the next
+// replication update; pre-existing behavior, not something new introduced
+// by wiring it to a button instead of a key.
+fn cheat_zombie_health_buttons(
+    mut commands: Commands,
+    player: Query<&Transform, With<Player>>,
+    mut zombies: Query<(&Transform, &mut Health), With<Zombie>>,
+    spawn_more_btn: Query<&Interaction, (With<SpawnMoreZombiesButton>, Changed<Interaction>)>,
+    heal_btn: Query<&Interaction, (With<HealNearestButton>, Changed<Interaction>)>,
+    near_death_btn: Query<&Interaction, (With<NearDeathNearestButton>, Changed<Interaction>)>,
+) {
+    if tapped(&spawn_more_btn) {
+        commands.client_trigger(SpawnMoreZombies);
+    }
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+    if tapped(&heal_btn) {
+        set_nearest_zombie_health(&mut zombies, player_transform.translation, ZOMBIE_MAX_HEALTH);
+    }
+    if tapped(&near_death_btn) {
+        set_nearest_zombie_health(&mut zombies, player_transform.translation, 1.0);
+    }
+}
+
+// -/+ step the client's own tracked target by 10 (clamped to
+// 0..=ZOMBIE_SPAWNS.len(), same bounds the server itself clamps to — see
+// on_set_zombie_count) and send the new absolute value; update_zombie_count_text
+// reflects ZombieCountUi.0 on screen immediately, no round-trip needed.
+fn zombie_count_buttons(
+    mut commands: Commands,
+    mut count: ResMut<ZombieCountUi>,
+    dec_btn: Query<&Interaction, (With<ZombieCountDecButton>, Changed<Interaction>)>,
+    inc_btn: Query<&Interaction, (With<ZombieCountIncButton>, Changed<Interaction>)>,
+) {
+    let mut changed = false;
+    for interaction in &dec_btn {
+        if *interaction == Interaction::Pressed {
+            count.0 = count.0.saturating_sub(10);
+            changed = true;
+        }
+    }
+    for interaction in &inc_btn {
+        if *interaction == Interaction::Pressed {
+            count.0 = (count.0 + 10).min(ZOMBIE_SPAWNS.len() as u32);
+            changed = true;
+        }
+    }
+    if changed {
+        commands.client_trigger(SetZombieCount(count.0));
+    }
+}
+
+fn update_zombie_count_text(count: Res<ZombieCountUi>, mut text: Query<&mut Text, With<ZombieCountText>>) {
+    if !count.is_changed() {
+        return;
+    }
+    for mut text in &mut text {
+        text.0 = format!("{}", count.0);
+    }
+}
+
+fn auto_maintain_button(
+    mut commands: Commands,
+    mut auto_maintain: ResMut<AutoMaintainUi>,
+    btn: Query<&Interaction, (With<AutoMaintainButton>, Changed<Interaction>)>,
+) {
+    for interaction in &btn {
+        if *interaction == Interaction::Pressed {
+            auto_maintain.0 = !auto_maintain.0;
+            commands.client_trigger(SetAutoMaintainZombies(auto_maintain.0));
+        }
+    }
+}
+
+fn update_auto_maintain_button_color(auto_maintain: Res<AutoMaintainUi>, mut btn: Query<&mut BackgroundColor, With<AutoMaintainButton>>) {
+    if !auto_maintain.is_changed() {
+        return;
+    }
+    let color = if auto_maintain.0 { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
+    for mut bg in &mut btn {
+        *bg = BackgroundColor(color);
+    }
+}
+
+// Small always-visible gear button (top-right) so touch users — who have no
+// F1 key — can still reach the settings menu; toggle_settings_menu reads
+// Interaction on it the same way touch_fire_button reads the fire button.
+fn spawn_settings_toggle_button(commands: &mut Commands) {
+    commands
+        .spawn((
+            Node {
+                width: Val::Px(40.0),
+                height: Val::Px(40.0),
+                position_type: PositionType::Absolute,
+                right: Val::Px(16.0),
+                top: Val::Px(16.0),
+                border: UiRect::all(Val::Px(2.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border_radius: BorderRadius::all(Val::Px(20.0)),
+                ..default()
+            },
+            // Alpha bumped + a border outline added, same reasoning as
+            // spawn_touch_controls' own comment on why (too faint to notice
+            // against a bright scene, reported as "can't see the menu
+            // button" on-device).
+            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+            Button,
+            Interaction::default(),
+            SettingsToggleButton,
+        ))
+        .with_children(|btn| {
+            // Plain ASCII, not a Unicode glyph (e.g. gear "\u{2699}") —
+            // Bevy's default bundled font is a Latin-subset font that
+            // doesn't include most symbol-block characters, so a glyph
+            // there would silently render as nothing instead of an error,
+            // making the whole button look empty/invisible even though its
+            // background+border were still there.
+            btn.spawn((
+                Text::new("=="),
+                TextFont {
+                    font_size: 20.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+        });
+}
+
+// F1 (desktop) or tapping SettingsToggleButton (any platform) flips
+// SettingsMenuVisible; update_settings_menu applies it to the panel's
+// Node.display. Changed<Interaction> (not a plain iter) so holding the
+// button down doesn't toggle every single frame — only the instant it
+// transitions to Pressed.
+fn toggle_settings_menu(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut visible: ResMut<SettingsMenuVisible>,
+    toggle_button: Query<&Interaction, (With<SettingsToggleButton>, Changed<Interaction>)>,
+) {
+    if keys.just_pressed(KeyCode::F1) {
+        visible.0 = !visible.0;
+    }
+    for interaction in &toggle_button {
+        if *interaction == Interaction::Pressed {
+            visible.0 = !visible.0;
+        }
+    }
+}
+
+fn update_settings_menu(visible: Res<SettingsMenuVisible>, mut menu: Query<&mut Node, With<SettingsMenuRoot>>) {
+    let Ok(mut node) = menu.single_mut() else {
+        return;
+    };
+    node.display = if visible.0 { Display::Flex } else { Display::None };
+}
+
+// Desktop mouse wheel scroll for the settings menu — only while it's open
+// (avoids stealing the same wheel adjust_scope_zoom already uses for scope
+// zoom while aiming). MouseScrollUnit::Line (typical mouse wheel "clicks")
+// vs ::Pixel (trackpad) get different multipliers since a "line" is a much
+// bigger logical step than a trackpad pixel delta.
+fn scroll_settings_menu(
+    visible: Res<SettingsMenuVisible>,
+    mut wheel: MessageReader<MouseWheel>,
+    mut scroll_pos: Query<&mut ScrollPosition, With<SettingsMenuRoot>>,
+) {
+    if !visible.0 {
+        wheel.clear();
+        return;
+    }
+    let Ok(mut scroll_pos) = scroll_pos.single_mut() else {
+        return;
+    };
+    for event in wheel.read() {
+        let delta_y = match event.unit {
+            MouseScrollUnit::Line => event.y * 24.0,
+            MouseScrollUnit::Pixel => event.y,
+        };
+        scroll_pos.y = (scroll_pos.y - delta_y).max(0.0);
+    }
+}
+
+// Same Changed<Interaction>-gated Pressed check as toggle_settings_menu — a
+// tap/click sets RenderResolutionScale directly; resize_scene_render_target
+// picks up the change next frame.
+fn resolution_scale_buttons(
+    mut scale: ResMut<RenderResolutionScale>,
+    buttons: Query<(&Interaction, &ResolutionScaleButton), Changed<Interaction>>,
+) {
+    for (interaction, button) in &buttons {
+        if *interaction == Interaction::Pressed {
+            scale.0 = button.0;
+        }
     }
 }
 
@@ -2612,6 +3780,35 @@ fn check_game_over(
                 },
                 TextColor(Color::WHITE),
             ));
+            // Touch/click equivalent of the KeyR restart — mobile has no
+            // keyboard, so the text-only hint above was unreachable there.
+            root.spawn((
+                Node {
+                    width: Val::Px(180.0),
+                    height: Val::Px(56.0),
+                    margin: UiRect::top(Val::Px(12.0)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(1.0, 0.2, 0.2, 0.5)),
+                BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.7)),
+                Button,
+                Interaction::default(),
+                RestartButton,
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    Text::new("RESTART"),
+                    TextFont {
+                        font_size: 20.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+            });
         });
 }
 
@@ -2625,6 +3822,17 @@ fn restart_game(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, game_ov
         return;
     }
     commands.client_trigger(RequestRestart);
+}
+
+// Touch/click path for the same request — see RestartButton's own spawn
+// site. Changed<Interaction>-gated like the other touch buttons, so a tap
+// only fires once instead of every frame it's held.
+fn restart_button(mut commands: Commands, buttons: Query<&Interaction, (With<RestartButton>, Changed<Interaction>)>) {
+    for interaction in &buttons {
+        if *interaction == Interaction::Pressed {
+            commands.client_trigger(RequestRestart);
+        }
+    }
 }
 
 // Reacts to the server's two game-state broadcasts. GameOver mainly matters
@@ -2931,6 +4139,7 @@ fn spawn_crosshair(commands: &mut Commands) {
 fn update_crosshair(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     camera: Query<&ViewRecoil, With<FpsCamera>>,
     player: Query<&PlayerStance, With<Player>>,
@@ -2941,7 +4150,7 @@ fn update_crosshair(
         return;
     };
     let stance = player.single().copied().unwrap_or_default();
-    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse));
+    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
     // Hidden entirely while ADS'd — the scope's own reticle takes over.
     if let Ok(mut root) = root.single_mut() {
         root.display = if aiming { Display::None } else { Display::Flex };
@@ -2983,10 +4192,17 @@ fn spawn_touch_controls(commands: &mut Commands) {
                 position_type: PositionType::Absolute,
                 left: Val::Px(32.0),
                 bottom: Val::Px(32.0),
+                border: UiRect::all(Val::Px(2.0)),
                 border_radius: BorderRadius::all(Val::Px(TOUCH_JOYSTICK_BASE_PX / 2.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.15)),
+            // Alpha bumped from the original 0.15/0.35 (barely visible
+            // against a bright in-game background — reported as "can't see
+            // the buttons at all" on-device) plus an opaque-ish white border
+            // outline so the button's outline reads even over a
+            // similarly-light patch of scene behind it.
+            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
             TouchJoystickBase,
         ))
         .with_children(|base| {
@@ -3000,7 +4216,7 @@ fn spawn_touch_controls(commands: &mut Commands) {
                     border_radius: BorderRadius::all(Val::Px(TOUCH_JOYSTICK_KNOB_PX / 2.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.35)),
+                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.55)),
                 TouchJoystickKnob,
             ));
         });
@@ -3012,14 +4228,140 @@ fn spawn_touch_controls(commands: &mut Commands) {
             position_type: PositionType::Absolute,
             right: Val::Px(32.0),
             bottom: Val::Px(48.0),
+            border: UiRect::all(Val::Px(2.0)),
             border_radius: BorderRadius::all(Val::Px(TOUCH_FIRE_BUTTON_PX / 2.0)),
             ..default()
         },
-        BackgroundColor(Color::srgba(1.0, 0.3, 0.3, 0.35)),
+        BackgroundColor(Color::srgba(1.0, 0.3, 0.3, 0.55)),
+        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
         Button,
         Interaction::default(),
         TouchFireButton,
     ));
+
+    // Toggle (not hold) — see TouchAiming's own doc comment for why. Sits
+    // just above the fire button, out of the way of a firing thumb.
+    commands
+        .spawn((
+            Node {
+                width: Val::Px(TOUCH_FIRE_BUTTON_PX * 0.7),
+                height: Val::Px(TOUCH_FIRE_BUTTON_PX * 0.7),
+                position_type: PositionType::Absolute,
+                right: Val::Px(32.0 + (TOUCH_FIRE_BUTTON_PX - TOUCH_FIRE_BUTTON_PX * 0.7) / 2.0),
+                bottom: Val::Px(48.0 + TOUCH_FIRE_BUTTON_PX + 16.0),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(TOUCH_FIRE_BUTTON_PX * 0.35)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.3, 0.5, 1.0, 0.4)),
+            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+            Button,
+            Interaction::default(),
+            TouchAimButton,
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                Text::new("ADS"),
+                TextFont {
+                    font_size: 12.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+        });
+
+    // Jump/Crouch sit just above the joystick, out of the thumb's drag path
+    // (which stays within TOUCH_JOYSTICK_RADIUS_PX of the base) — side by
+    // side rather than stacked so neither ends up directly above the other
+    // under a moving thumb.
+    let stance_btn_px = TOUCH_FIRE_BUTTON_PX * 0.6;
+    let stance_btn_bottom = 32.0 + TOUCH_JOYSTICK_BASE_PX + 16.0;
+    spawn_touch_round_button(commands, "JUMP", 32.0, stance_btn_bottom, stance_btn_px, Color::srgba(0.3, 1.0, 0.4, 0.4), TouchJumpButton);
+    spawn_touch_round_button(
+        commands,
+        "CROUCH",
+        32.0 + stance_btn_px + 12.0,
+        stance_btn_bottom,
+        stance_btn_px,
+        Color::srgba(1.0, 0.8, 0.3, 0.4),
+        TouchCrouchButton,
+    );
+}
+
+// Shared helper for the small round left/right/right-labeled touch buttons
+// (Jump, Crouch) — mirrors the TouchAimButton node built by hand just above,
+// factored out since there are now two more of these with only position/
+// label/color/marker differing.
+fn spawn_touch_round_button(commands: &mut Commands, label: &str, left_px: f32, bottom_px: f32, size_px: f32, color: Color, marker: impl Component) {
+    commands
+        .spawn((
+            Node {
+                width: Val::Px(size_px),
+                height: Val::Px(size_px),
+                position_type: PositionType::Absolute,
+                left: Val::Px(left_px),
+                bottom: Val::Px(bottom_px),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(size_px / 2.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(color),
+            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+            Button,
+            Interaction::default(),
+            marker,
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: 10.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+        });
+}
+
+// Toggles TouchAiming on the instant a tap lands (Changed<Interaction>, same
+// debounce pattern as toggle_settings_menu — without it, holding the button
+// down would flip the toggle every single frame instead of once per tap).
+fn touch_aim_button(mut aiming: ResMut<TouchAiming>, button: Query<&Interaction, (With<TouchAimButton>, Changed<Interaction>)>) {
+    for interaction in &button {
+        if *interaction == Interaction::Pressed {
+            aiming.0 = !aiming.0;
+        }
+    }
+}
+
+// Resets to false every tick and only goes true on the exact frame the
+// button's Interaction changes to Pressed — see TouchJump's own doc comment
+// for why this has to be an edge, not a held level. Shared by the real game
+// and minimal_map_probe_main; each has its own consumer of TouchJump.
+fn touch_jump_button(mut jump: ResMut<TouchJump>, button: Query<&Interaction, (With<TouchJumpButton>, Changed<Interaction>)>) {
+    jump.0 = button.iter().any(|interaction| *interaction == Interaction::Pressed);
+}
+
+// Same tap-edge toggle as touch_aim_button, mirroring toggle_player_stance's
+// own KeyC branch (Standing<->Crouching, switches straight over from Prone
+// too) so a touch tap and a desktop KeyC press behave identically.
+fn touch_crouch_button(button: Query<&Interaction, (With<TouchCrouchButton>, Changed<Interaction>)>, mut player: Query<&mut PlayerStance, With<Player>>) {
+    for interaction in &button {
+        if *interaction == Interaction::Pressed {
+            let Ok(mut stance) = player.single_mut() else {
+                return;
+            };
+            *stance = if *stance == PlayerStance::Crouching {
+                PlayerStance::Standing
+            } else {
+                PlayerStance::Crouching
+            };
+        }
+    }
 }
 
 // Claims whichever touch starts on the left half of the screen as the
@@ -3028,9 +4370,35 @@ fn spawn_touch_controls(commands: &mut Commands) {
 // TouchMoveAxis — send_player_input adds this straight into the same
 // move_axis WASD builds. Dropping the touch (finger lifted) snaps back to
 // zero; there's no separate "spring back to center" tween.
+// True if this touch is currently hovering/pressing any UI element (a
+// settings-menu button, in practice — nothing else in this game's UI sits
+// over the movement/look halves of the screen). Without this check,
+// touch_move_axis/touch_look would ALSO claim the exact same touch a
+// button tap uses as a gameplay input (a settings-menu button lives on the
+// left half, right where the joystick claims any new touch) — the button's
+// own Interaction still fires correctly either way, but the joystick
+// snapping to a touch that's really tapping a menu button (and staying
+// claimed after release, since the touch never started as a "real"
+// movement drag) was the actual cause of the settings menu closing itself
+// right back up on the very next tap.
+// Only counts a hover as "real UI" if the hovered entity also has
+// Interaction (i.e. an actual Button) — every Node is hoverable by default
+// in bevy_picking regardless of whether it's interactive, so without this
+// filter, touching purely decorative UI (crosshair, health bar text, even
+// the joystick's own base/knob visuals, which have no Button either) would
+// ALSO count as "over UI" and block touch_move_axis/touch_look, including
+// the joystick blocking its own drag.
+fn touch_over_ui(touch_id: u64, hover_map: &HoverMap, interactive: &Query<(), With<Interaction>>) -> bool {
+    hover_map
+        .get(&PointerId::Touch(touch_id))
+        .is_some_and(|hits| hits.keys().any(|&entity| interactive.contains(entity)))
+}
+
 fn touch_move_axis(
     touches: Res<Touches>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    hover_map: Res<HoverMap>,
+    interactive: Query<(), With<Interaction>>,
     mut state: ResMut<TouchMoveState>,
     mut axis: ResMut<TouchMoveAxis>,
 ) {
@@ -3046,7 +4414,10 @@ fn touch_move_axis(
         }
     }
     if state.touch_id.is_none() {
-        if let Some(touch) = touches.iter_just_pressed().find(|touch| touch.position().x < half_width) {
+        if let Some(touch) = touches
+            .iter_just_pressed()
+            .find(|touch| touch.position().x < half_width && !touch_over_ui(touch.id(), &hover_map, &interactive))
+        {
             state.touch_id = Some(touch.id());
             state.origin = touch.position();
         }
@@ -3087,6 +4458,8 @@ fn update_joystick_knob_visual(state: Res<TouchMoveState>, touches: Res<Touches>
 fn touch_look(
     touches: Res<Touches>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    hover_map: Res<HoverMap>,
+    interactive: Query<(), With<Interaction>>,
     mut state: ResMut<TouchLookState>,
     mut look_delta: ResMut<MouseLookDelta>,
     mut query: Query<&mut FpsCamera>,
@@ -3102,7 +4475,10 @@ fn touch_look(
         }
     }
     if state.touch_id.is_none() {
-        if let Some(touch) = touches.iter_just_pressed().find(|touch| touch.position().x >= half_width) {
+        if let Some(touch) = touches
+            .iter_just_pressed()
+            .find(|touch| touch.position().x >= half_width && !touch_over_ui(touch.id(), &hover_map, &interactive))
+        {
             state.touch_id = Some(touch.id());
             state.last_pos = touch.position();
         }
@@ -3157,6 +4533,7 @@ fn grab_cursor(
 fn mouse_look(
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    touch_aiming: Res<TouchAiming>,
     zoom: Res<ScopeZoom>,
     mut motion: MessageReader<MouseMotion>,
     mut look_delta: ResMut<MouseLookDelta>,
@@ -3184,7 +4561,7 @@ fn mouse_look(
     // given mouse move covers the same angular slice of the zoomed view no
     // matter the magnification — otherwise the same flat multiplier would
     // feel twitchy at max zoom and sluggish at min zoom.
-    let sensitivity = if is_aiming(cursor, &mouse) {
+    let sensitivity = if is_aiming(cursor, &mouse, touch_aiming.0) {
         MOUSE_SENSITIVITY * AIM_MOUSE_SENSITIVITY_MULTIPLIER * (SCOPE_DEFAULT_ZOOM / zoom.0)
     } else {
         MOUSE_SENSITIVITY
@@ -3250,13 +4627,14 @@ fn apply_lean_input(
 fn apply_aim_zoom(
     time: Res<Time>,
     mouse: Res<ButtonInput<MouseButton>>,
+    touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut camera: Query<&mut Projection, With<FpsCamera>>,
 ) {
     let Ok(cursor) = cursor.single() else {
         return;
     };
-    let target_fov = if is_aiming(cursor, &mouse) {
+    let target_fov = if is_aiming(cursor, &mouse, touch_aiming.0) {
         BASE_FOV * AIM_FOV_MULTIPLIER
     } else {
         BASE_FOV
@@ -3278,6 +4656,7 @@ fn apply_aim_zoom(
 fn apply_aim_dof(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
+    touch_aiming: Res<TouchAiming>,
     aim_blur: Res<AimBlurEnabled>,
     dof_focal_alt: Res<AimDofFocalDistanceAlt>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
@@ -3286,7 +4665,7 @@ fn apply_aim_dof(
     let (Ok(cursor), Ok(camera_entity)) = (cursor.single(), camera.single()) else {
         return;
     };
-    if aim_blur.0 && is_aiming(cursor, &mouse) {
+    if aim_blur.0 && is_aiming(cursor, &mouse, touch_aiming.0) {
         let focal_distance = if dof_focal_alt.0 {
             AIM_DOF_FOCAL_DISTANCE_B
         } else {
@@ -3562,6 +4941,8 @@ struct PredictedInputs(std::collections::VecDeque<(u32, ClientInput, f32, f32, b
 fn send_player_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    touch_aiming: Res<TouchAiming>,
+    touch_jump: Res<TouchJump>,
     time: Res<Time>,
     game_over: Res<GameOver>,
     mut commands: Commands,
@@ -3586,7 +4967,7 @@ fn send_player_input(
     };
     let stance = *stance;
 
-    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse));
+    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
     let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
 
     let mut move_axis = Vec2::ZERO;
@@ -3619,7 +5000,11 @@ fn send_player_input(
         // (noclip vs normal) never both read this in the same frame, so
         // it's safe to give it different semantics per mode instead of
         // adding a second field.
-        jump: if noclip.0 { keys.pressed(KeyCode::Space) } else { keys.just_pressed(KeyCode::Space) },
+        jump: if noclip.0 {
+            keys.pressed(KeyCode::Space)
+        } else {
+            keys.just_pressed(KeyCode::Space) || touch_jump.0
+        },
         sprint: sprinting,
         aiming,
         stance,
@@ -3701,6 +5086,7 @@ fn shoot(
     game_over: Res<GameOver>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut camera: Query<(&Transform, &mut ViewRecoil), With<FpsCamera>>,
     mut gun: Query<&mut Gun>,
@@ -3759,7 +5145,7 @@ fn shoot(
     let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
     let spread = current_bullet_spread(
         recoil.pitch_kick,
-        is_aiming(cursor, &mouse),
+        is_aiming(cursor, &mouse, touch_aiming.0),
         is_moving(&keys),
         stance,
         sprinting,
@@ -4021,13 +5407,14 @@ fn sync_scope_camera(
 fn adjust_scope_zoom(
     mut wheel: MessageReader<MouseWheel>,
     mouse: Res<ButtonInput<MouseButton>>,
+    touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut zoom: ResMut<ScopeZoom>,
 ) {
     let Ok(cursor) = cursor.single() else {
         return;
     };
-    if !is_aiming(cursor, &mouse) {
+    if !is_aiming(cursor, &mouse, touch_aiming.0) {
         wheel.clear();
         return;
     }
@@ -4117,6 +5504,7 @@ fn gun_view_animation(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    touch_aiming: Res<TouchAiming>,
     game_over: Res<GameOver>,
     look_delta: Res<MouseLookDelta>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
@@ -4124,7 +5512,7 @@ fn gun_view_animation(
     spatial_query: SpatialQuery,
     mut query: Query<(&mut Transform, &mut Gun), Without<FpsCamera>>,
 ) {
-    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse));
+    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
     let shoulder_target = if !game_over.0 && keys.pressed(KeyCode::KeyQ) { 1.0 } else { 0.0 };
     // Wall-raise probe: how close is the wall directly in front of the
     // camera? 0.0 = clear, 1.0 = right up against it.

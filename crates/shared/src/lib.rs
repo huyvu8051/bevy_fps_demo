@@ -395,6 +395,28 @@ pub const ZOMBIE_SPAWNS: [Vec3; 100] =
 #[derive(Event, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct SpawnMoreZombies;
 
+// Mobile cheat panel's zombie population controls (crates/server's
+// maintain_zombie_population/on_clear_all_zombies). Absolute target, not a
+// delta — the client tracks its own last-set value locally (see
+// ZombieCountUi) and sends the new total each tap, simplest way to stay in
+// sync without the server needing to echo the current target back.
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub struct SetZombieCount(pub u32);
+
+// Despawns every zombie server-side (baseline AND director-spawned) and
+// clears pending respawns — unlike a client just despawning its own local
+// replicated copy (what the old desktop-only "Digit2: kill all" debug
+// action does), this is authoritative, so they don't just reappear on the
+// next replication update.
+#[derive(Event, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct ClearAllZombies;
+
+// Toggles whether tick_respawns actually replaces a killed baseline zombie
+// — off lets the population drain down through normal play instead of
+// staying pinned at the target count.
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub struct SetAutoMaintainZombies(pub bool);
+
 // --- Debug bots (client debug panel, see crates/client) ---
 // Fake NetPlayer stand-ins so multi-player zombie targeting can be tested
 // without launching a second real client. Identified by a small server-
