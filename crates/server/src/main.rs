@@ -2,7 +2,6 @@ use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::SystemTime;
 
 use avian3d::prelude::*;
-use bevy::math::ops;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use bevy_replicon::prelude::*;
@@ -412,17 +411,32 @@ fn spawn_more_zombies(_trigger: On<FromClient<SpawnMoreZombies>>, mut commands: 
 #[derive(Component)]
 struct DirectorSpawned;
 
+// Fractional part of entity_index * the golden ratio — a cheap
+// low-discrepancy sequence that spreads out well across however many
+// zombies exist, regardless of spawn order or position. Used to stagger
+// per-zombie timers (path_recalc_timer here, ChaseTarget's
+// reevaluate_timer in move_zombies) so 100 zombies spawned in the same
+// frame don't all recompute on the exact same later frame forever after.
+// The previous approach hashed spawn_pos itself (sin(x*12.9898+z*78.233)),
+// but ZOMBIE_SPAWNS is a regular 10x10 grid — only 10 distinct x/z values —
+// and that specific hash constant is known to alias badly on grid-aligned
+// input, so many zombies ended up with near-identical phase anyway
+// (visible as the whole horde recalculating, and re-steering, in
+// lockstep). Keying off entity index instead has no such structure to
+// alias against.
+fn entity_phase(entity: Entity) -> f32 {
+    (entity.index().index() as f32 * 0.618_034).fract()
+}
+
 fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], director_spawned: bool) {
     for &spawn_pos in spawns {
-        let mut zombie = commands.spawn((
+        let mut zombie = commands.spawn_empty();
+        let phase = entity_phase(zombie.id());
+        zombie.insert((
             Transform::from_translation(spawn_pos),
             Zombie,
             ZombieMotion {
-                // Jittered from spawn_pos (deterministic, cheap) so 100
-                // zombies spawned at once don't all recompute their path on
-                // the exact same frame forever after.
-                path_recalc_timer: ops::sin(spawn_pos.x * 12.9898 + spawn_pos.z * 78.233).abs()
-                    * ZOMBIE_PATH_RECALC_INTERVAL,
+                path_recalc_timer: phase * ZOMBIE_PATH_RECALC_INTERVAL,
                 ..default()
             },
             KnockbackVelocity::default(),
@@ -585,7 +599,11 @@ fn move_zombies(
                     a_score.total_cmp(&b_score)
                 })
                 .map(|&(e, ..)| e);
-            chase_target.reevaluate_timer = ZOMBIE_RETARGET_INTERVAL;
+            // Staggered per-zombie (0.75x..1.25x) instead of a flat
+            // interval — see entity_phase's own doc comment for why a flat
+            // reset here would let every zombie's retarget checks drift
+            // back into lockstep even if they started out spread apart.
+            chase_target.reevaluate_timer = ZOMBIE_RETARGET_INTERVAL * (0.75 + entity_phase(entity) * 0.5);
         }
         let Some(target_translation) =
             chase_target.entity.and_then(|target| candidates.iter().find(|&&(e, ..)| e == target)).map(|&(_, p, _)| p)
