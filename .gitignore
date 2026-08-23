@@ -3,12 +3,31 @@ run.log
 server.log
 .DS_Store
 
-# iOS build: crates/client/gen/apple's build-phase script redirects cargo's
-# own output here (CARGO_TARGET_DIR) instead of the workspace's shared
-# /target above — see the script's own comment on why. Xcode's DerivedData
-# (build products, .app bundles, xcodeproj's own user state) is left out of
-# this repo entirely, same convention as /target.
+# Legacy CARGO_TARGET_DIR from the retired cargo-apple/xcodegen build
+# script (see crates/client/gen/apple_winit_legacy/) — some tooling in
+# there still redirects cargo's output here instead of the workspace's
+# shared /target above.
 crates/client/target/
-crates/client/gen/apple/*.xcodeproj/project.xcworkspace/xcuserdata/
-crates/client/gen/apple/*.xcodeproj/xcuserdata/
-crates/client/gen/apple/Sources/*-apple-ios*/
+
+# iOS build (CADisplayLink, default since crates/client/src/cadisplaylink/
+# replaced the winit-driven app — see crates/client/gen/apple_winit_legacy/
+# for the retired approach, kept for reference/rollback). The Xcode project
+# copies the real libclient.a in as iOS/libs/debug/libbevy_in_app.a for
+# local testing — a large build artifact, not source.
+crates/client/gen/apple/iOS/libs/
+crates/client/gen/apple/iOS/bevy_in_iOS.xcodeproj/project.xcworkspace/xcuserdata/
+crates/client/gen/apple/iOS/bevy_in_iOS.xcodeproj/xcuserdata/
+
+# Retired winit-driven iOS build — see crates/client/gen/apple/ (its
+# replacement) for why. Kept for reference/rollback, not actively built, so
+# its own build artifacts are still worth ignoring if anyone does build it.
+crates/client/gen/apple_winit_legacy/target/
+crates/client/gen/apple_winit_legacy/*.xcodeproj/project.xcworkspace/xcuserdata/
+crates/client/gen/apple_winit_legacy/*.xcodeproj/xcuserdata/
+crates/client/gen/apple_winit_legacy/Sources/*-apple-ios*/
+
+# CADisplayLink probe experiment sandbox (see
+# crates/client/src/cadisplaylink/) — a standalone crate under experiments/
+# with its own target/ (a separate cargo workspace, not a member of the
+# root one), kept around for future CPU/FPS comparisons.
+experiments/cadisplaylink_probe/target/

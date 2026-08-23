@@ -1,0 +1,52 @@
+[package]
+name = "bevy-in-app"
+version = "0.6.0"
+authors = ["jinleili"]
+edition = "2024"
+rust-version = "1.92"
+
+[workspace.metadata.rustflags]
+# 禁用 unexpected_cfgs 检查，解决 objc crate 的警告
+RUSTFLAGS = "--cfg=unexpected_cfgs"
+
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[features]
+# default = ["bevy_debug_stepping"]
+bevy_debug_stepping = ["bevy/bevy_debug_stepping"]
+
+[dependencies]
+libc = "*"
+raw-window-handle = "0.6"
+wgpu = "27"
+bevy = { version = "0.18" }
+bevy_asset = { version = "0.18" }
+bevy_ecs = { version = "0.18" }
+bevy_platform = { version = "0.18" }
+bevy_tasks = { version = "0.18" }
+uuid = { version = "1.20", features = ["v4"] }
+log = "0.4"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+core-graphics = "*"
+objc = "0.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.13"
+jni = "0.21"
+jni_fn = "0.1"
+ndk-sys = "0.6.0+11769913"
+ndk = "0.9.0"
+ndk-context = "*"
+log-panics = "*"
+
+[profile.dev]
+opt-level = 1 # 1 for minimal optimization and good debugging.
+
+# Without this, gltf/image-decoding dependencies build at the Cargo
+# default of opt-level 0 in dev profile, which is dramatically slower at
+# runtime for parsing Sponza's ~9MB binary + ~65 JPEG textures — matches
+# our main project's root Cargo.toml, which sets this for the same reason.
+[profile.dev.package."*"]
+opt-level = 3

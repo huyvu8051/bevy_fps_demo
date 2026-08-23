@@ -27,3 +27,13 @@ avian3d = "0.6"
 bevy = { version = "0.18", features = ["jpeg", "bevy_dev_tools", "wav"] }
 bevy_replicon = "0.38"
 bevy_replicon_renet2 = { version = "0.13", features = ["native_transport"] }
+
+# CADisplayLink probe experiment (crates/client/src/cadisplaylink/) — an
+# alternate iOS entry point bypassing WinitPlugin entirely, driven by a
+# native CADisplayLink instead. iOS-only; harmless to keep out of the
+# normal desktop/Android dependency graph.
+[target.'cfg(target_os = "ios")'.dependencies]
+raw-window-handle = "0.6"
+objc = "0.2"
+core-graphics = "0.25"
+uuid = { version = "1", features = ["v4"] }

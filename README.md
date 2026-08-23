@@ -50,25 +50,25 @@ Khi build cho iOS (hoặc set `TOUCH_UI_PREVIEW=1` trên desktop để xem trư�
 
 ## Build & chạy trên iOS
 
-Scaffold nằm ở `crates/client/gen/apple` (dùng `cargo-mobile2` + `xcodegen`).
+Project chính thức nằm ở `crates/client/gen/apple` — Xcode project viết tay (Swift `ViewController`+`MetalView`+`CADisplayLink`, **không dùng winit trên iOS nữa**), link thẳng vào `libclient.a` build từ `crates/client`. Bản winit cũ (dùng `cargo-mobile2`/`xcodegen`) vẫn còn giữ lại ở `crates/client/gen/apple_winit_legacy` để tham khảo/rollback nếu cần, không còn build/dùng mặc định.
 
-Sau khi sửa `project.yml`, luôn phải chạy lại:
-```bash
-cd crates/client/gen/apple
-xcodegen generate
-```
+Lý do đổi: winit trên iOS có bug đã biết (không đạt đúng tốc độ khung hình cấu hình — đo thực tế chỉ ~50fps dù set target 120fps) do cách nó điều khiển event loop trên iOS; CADisplayLink (API native của Apple cho vsync-driven rendering) điều khiển vòng lặp render trực tiếp, đạt đúng 120fps mượt trên ProMotion. Chi tiết implementation ở `crates/client/src/cadisplaylink/`.
 
 **Build + cài lên thiết bị thật** (thay UUID bằng thiết bị của bạn, xem qua `xcrun devicectl list devices`):
 ```bash
 cd crates/client/gen/apple
-xcodebuild -project client.xcodeproj -scheme client_iOS -sdk iphoneos -configuration debug \
+cargo build -p client --target aarch64-apple-ios   # từ workspace root
+cp target/aarch64-apple-ios/debug/libclient.a crates/client/gen/apple/iOS/libs/debug/libbevy_in_app.a
+
+cd crates/client/gen/apple/iOS
+xcodebuild -project bevy_in_iOS.xcodeproj -scheme bevy_in_iOS -sdk iphoneos -configuration Debug \
   -allowProvisioningUpdates -destination 'id=<DEVICE_UUID>' build
 
 xcrun devicectl device install app --device <DEVICE_UUID> \
-  "$(xcodebuild -project client.xcodeproj -scheme client_iOS -sdk iphoneos -configuration debug -showBuildSettings 2>/dev/null | awk -F'= ' '/ CONFIGURATION_BUILD_DIR/{d=$2} / FULL_PRODUCT_NAME /{n=$2} END{print d"/"n}')"
+  "$(xcodebuild -project bevy_in_iOS.xcodeproj -scheme bevy_in_iOS -sdk iphoneos -configuration Debug -showBuildSettings 2>/dev/null | awk -F'= ' '/ CONFIGURATION_BUILD_DIR/{d=$2} / FULL_PRODUCT_NAME /{n=$2} END{print d"/"n}')"
 ```
 
-Mở app bằng cách bấm icon trên máy như bình thường.
+Mở app bằng cách bấm icon trên máy như bình thường — mặc định chạy game đầy đủ.
 
 ### Chế độ "minimal map probe" (debug UI/perf)
 
@@ -81,7 +81,7 @@ xcrun devicectl device process launch --device <DEVICE_UUID> \
 
 Bấm lại icon trên máy như bình thường sẽ quay về game đầy đủ.
 
-Trên desktop cũng test được probe này:
+Trên desktop cũng test được probe này (vẫn dùng đường winit bình thường trên desktop, chỉ iOS đổi sang CADisplayLink):
 ```bash
 MINIMAL_MAP_PROBE=1 TOUCH_UI_PREVIEW=1 cargo run -p client
 ```
@@ -95,6 +95,6 @@ MINIMAL_MAP_PROBE=1 TOUCH_UI_PREVIEW=1 cargo run -p client
 ## Ghi chú khác
 
 - Xem `RECOIL.md` để biết chi tiết hệ thống recoil súng.
-- iOS: cần bật `CADisableMinimumFrameDurationOnPhone` trong Info.plist mới lên được ProMotion 120Hz trên iPhone (đã bật sẵn trong `project.yml`).
+- iOS: cần bật `CADisableMinimumFrameDurationOnPhone` trong Info.plist mới lên được ProMotion 120Hz trên iPhone (đã bật sẵn trong `crates/client/gen/apple/iOS/bevy_in_iOS/Info.plist`).
 - Chưa hỗ trợ Android (chưa có scaffold `gen/android`).
-- Chuột/bàn phím Bluetooth **không** điều khiển được game trên iOS — `winit` (thư viện windowing Bevy dùng) hiện chưa hỗ trợ `GCMouse`/`GCKeyboard` của Apple.
+- Chuột/bàn phím Bluetooth **không** điều khiển được game trên iOS — không liên quan gì đến CADisplayLink, đây là do UIKit/GameController framework, chưa có code bridge riêng cho việc này.

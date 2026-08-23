@@ -38,6 +38,13 @@ use shared::{
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
+// Experimental CADisplayLink-driven entry point for MINIMAL_MAP_PROBE — see
+// its own module doc comment. iOS-only; the extern "C" functions in
+// cadisplaylink::ffi are the only way into it, called from a separate
+// Xcode target's Swift code, never from the normal winit-driven app.
+#[cfg(target_os = "ios")]
+mod cadisplaylink;
+
 // Downloaded once into assets/models/ so the app doesn't depend on a network
 // request (and a remote repo's file layout) every time it starts.
 // To load from a URL instead, add the WebAssetPlugin back (see bevy::asset::io::web)
@@ -1343,36 +1350,47 @@ fn log_client_connection_state(state: Res<State<ClientState>>) {
 // code changes needed to flip it) — set it to anything to run this instead
 // of the real game.
 fn minimal_map_probe_main() {
-    App::new()
-        .add_plugins((
-            DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    mode: if cfg!(target_os = "ios") || cfg!(target_os = "android") {
-                        WindowMode::BorderlessFullscreen(MonitorSelection::Current)
-                    } else {
-                        WindowMode::Windowed
-                    },
-                    ..default()
-                }),
+    let mut app = App::new();
+    app.add_plugins((
+        DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                mode: if cfg!(target_os = "ios") || cfg!(target_os = "android") {
+                    WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+                } else {
+                    WindowMode::Windowed
+                },
                 ..default()
             }),
-            // touch_look/touch_move_axis need Res<HoverMap>, which comes
-            // from bevy_picking's core plugin — the real game gets it as a
-            // side effect of adding MeshPickingPlugin (for its zombie/gun
-            // raycasts), but this probe never picks any 3D meshes, so
-            // without adding it explicitly here too, HoverMap never gets
-            // inserted and both touch systems panic on a missing resource
-            // the moment they run.
-            MeshPickingPlugin,
-        ))
-        .insert_resource(if cfg!(target_os = "ios") || cfg!(target_os = "android") {
-            WinitSettings {
-                focused_mode: UpdateMode::reactive(std::time::Duration::from_secs_f32(1.0 / 60.0)),
-                ..WinitSettings::game()
-            }
-        } else {
-            WinitSettings::game()
-        })
+            ..default()
+        }),
+        // touch_look/touch_move_axis need Res<HoverMap>, which comes
+        // from bevy_picking's core plugin — the real game gets it as a
+        // side effect of adding MeshPickingPlugin (for its zombie/gun
+        // raycasts), but this probe never picks any 3D meshes, so
+        // without adding it explicitly here too, HoverMap never gets
+        // inserted and both touch systems panic on a missing resource
+        // the moment they run.
+        MeshPickingPlugin,
+    ))
+    .insert_resource(if cfg!(target_os = "ios") || cfg!(target_os = "android") {
+        WinitSettings {
+            focused_mode: UpdateMode::reactive(std::time::Duration::from_secs_f32(1.0 / 60.0)),
+            ..WinitSettings::game()
+        }
+    } else {
+        WinitSettings::game()
+    });
+    build_probe_common(&mut app);
+    app.run();
+}
+
+// Everything the probe needs that has nothing to do with which windowing
+// backend is driving it (winit vs. the CADisplayLink FFI entry point below)
+// — factored out so both can build the exact same scene/systems and the
+// CPU/FPS comparison between the two is apples-to-apples on identical game
+// logic, not just similarly-shaped logic.
+fn build_probe_common(app: &mut App) {
+    app
         // Same FPS overlay + refresh rate as the real game (see its own
         // FpsOverlayPlugin comment) — the whole point of this probe build is
         // to have a number to read while eyeballing whether it stutters.
@@ -1472,8 +1490,7 @@ fn minimal_map_probe_main() {
                 probe_move,
             )
                 .chain(),
-        )
-        .run();
+        );
 }
 
 // Probe-only stand-in for PlayerStance (which doesn't exist here — no
@@ -1565,8 +1582,8 @@ pub fn main() {
         return;
     }
 
-    App::new()
-        .add_plugins((
+    let mut app = App::new();
+    app.add_plugins((
             // Desktop: WindowResolution is left at Bevy's default (a plain
             // resizable 1280x720 window) — real render-cost scaling is done
             // independently via RenderResolutionScale's offscreen render
@@ -1665,8 +1682,20 @@ pub fn main() {
             }
         } else {
             WinitSettings::game()
-        })
-        .replicate::<NetworkId>()
+        });
+    build_game_common(&mut app);
+    app.run();
+}
+
+// Everything the real game needs that has nothing to do with which
+// windowing backend is driving it (winit vs. the experimental
+// CADisplayLink FFI entry point in cadisplaylink::ffi) — mirrors
+// build_probe_common's own reasoning. DefaultPlugins/WindowPlugin/
+// TaskPoolPlugin/WinitSettings stay in each entry point's own setup since
+// they genuinely differ (WinitPlugin disabled + no WinitSettings on the
+// CADisplayLink path), everything else is identical.
+fn build_game_common(app: &mut App) {
+    app.replicate::<NetworkId>()
         .replicate::<NetPlayer>()
         .replicate::<NetTransform>()
         .replicate::<Zombie>()
@@ -1841,8 +1870,7 @@ pub fn main() {
                     .chain(),
             )
                 .chain(),
-        )
-        .run();
+        );
 }
 
 #[derive(Resource)]
