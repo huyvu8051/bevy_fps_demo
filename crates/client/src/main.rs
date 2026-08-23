@@ -1152,10 +1152,11 @@ fn main() {
             // draggable DiagnosticsOverlay panels (that's 0.19-only), so this
             // is the only diagnostics UI available here. Default
             // refresh_interval (100ms, 10x/sec) reads as a flicker rather
-            // than a number — slowed down to something actually readable.
+            // than a number — slowed to 30x/sec (see PING_UI_REFRESH_SECS
+            // below, kept at the same rate for consistency).
             FpsOverlayPlugin {
                 config: bevy::dev_tools::fps_overlay::FpsOverlayConfig {
-                    refresh_interval: std::time::Duration::from_millis(500),
+                    refresh_interval: std::time::Duration::from_secs_f32(1.0 / 30.0),
                     ..default()
                 },
             },
@@ -2308,9 +2309,9 @@ fn spawn_ping_ui(commands: &mut Commands) {
 // shared::sim_latency), so this doubles as a way to verify the simulated
 // latency/jitter config is actually taking effect. Rewriting the text every
 // render frame made the number flicker too fast to actually read, so this
-// only updates a few times a second (same idea as FpsOverlayConfig's own
+// only updates 30x/sec (same idea and rate as FpsOverlayConfig's own
 // refresh_interval).
-const PING_UI_REFRESH_SECS: f32 = 0.5;
+const PING_UI_REFRESH_SECS: f32 = 1.0 / 30.0;
 
 fn update_ping_ui(
     time: Res<Time>,
