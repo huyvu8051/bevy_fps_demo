@@ -233,12 +233,18 @@ pub const ZOMBIE_SPEED: f32 = 1.0;
 // capsule/hitbox constants below are now all *derived* from this value
 // instead of separately hardcoded, specifically so that can't happen again).
 pub const ZOMBIE_SCALE: f32 = 0.25;
-// Rough raw mesh height in its own unscaled local units, back-derived from
-// the model's original calibration note ("0.1 scale ≈ 2m tall, verified
-// in-game against a 1m reference cube": 2.0 / 0.1 = 20). Not independently
-// re-measured since — best guess, not an exact figure, so this whole
-// derivation may still need visual tuning.
-const ZOMBIE_MESH_REFERENCE_HEIGHT: f32 = 20.0;
+// Raw mesh height in zombie.glb's own unscaled local units, actually
+// measured from the file (not guessed): its POSITION accessor's Y
+// bounding box is [-0.0000837, 0.0760498] (height 0.0761335), but the
+// glTF scene's "Zombie" node — the one crates/client's SceneRoot load
+// actually renders through — bakes in its own 107.006576 scale on top of
+// that raw vertex data. 0.0761335 * 107.006576 = 8.1468, i.e. this
+// constant already includes that node scale, so ZOMBIE_WORLD_HEIGHT below
+// only needs to multiply by ZOMBIE_SCALE, not by both. (Two earlier
+// values here were both wrong: 20.0 was a guess never checked against the
+// file, and 1.0 made ZOMBIE_LENGTH go negative — see ZOMBIE_LENGTH's own
+// comment on why that's a real bug, not just a bad guess.)
+const ZOMBIE_MESH_REFERENCE_HEIGHT: f32 = 8.1468;
 const ZOMBIE_WORLD_HEIGHT: f32 = ZOMBIE_MESH_REFERENCE_HEIGHT * ZOMBIE_SCALE;
 // Relative to the original 0.1 calibration (factor 1.0 at ZOMBIE_SCALE =
 // 0.1) — everything below scales off this so the capsule and per-region
@@ -251,7 +257,16 @@ const ZOMBIE_SCALE_FACTOR: f32 = ZOMBIE_SCALE / 0.1;
 pub const ZOMBIE_RADIUS: f32 = 0.35 * ZOMBIE_SCALE_FACTOR;
 // Capsule height (2*radius + length) is set to exactly ZOMBIE_WORLD_HEIGHT
 // so a raycast/capsule-cast covers the mesh's full height, including the
-// very top of the head — no gap left uncovered like before.
+// very top of the head — no gap left uncovered like before. ZOMBIE_RADIUS
+// isn't derived from ZOMBIE_WORLD_HEIGHT (it scales off ZOMBIE_SCALE_FACTOR
+// independently), so this can go negative if ZOMBIE_MESH_REFERENCE_HEIGHT
+// is ever set too small relative to 2*ZOMBIE_RADIUS — avian3d's capsule
+// collider doesn't panic on that (SharedShape::capsule just takes two
+// endpoints, so a negative length silently flips them and produces a
+// capsule sized off |length| instead — see the client's draw_zombie_hitboxes
+// for why that made the debug capsule gizmo visibly lie about the real
+// hitbox size). A negative value here is always a bug, not a valid "smaller
+// zombie" — shrink ZOMBIE_SCALE instead, which scales both terms together.
 pub const ZOMBIE_LENGTH: f32 = ZOMBIE_WORLD_HEIGHT - 2.0 * ZOMBIE_RADIUS;
 pub const ZOMBIE_PATH_RECALC_INTERVAL: f32 = 0.8;
 // How long a zombie sticks with its current chase target before re-picking

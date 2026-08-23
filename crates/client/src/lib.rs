@@ -3475,6 +3475,28 @@ fn draw_zombie_hitboxes(
         return;
     }
     for (transform, bones) in &zombies {
+        // The actual collision capsule handle_fire_shot/debug_bot_fire test
+        // shots against (Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH),
+        // centered on this Transform — see ZOMBIE_MODEL_Y_OFFSET's own doc
+        // comment for why the rendered mesh is offset to put its feet at the
+        // capsule's bottom). Drawn in white so it's visually distinct from
+        // the colored damage-region markers below — if this capsule's top
+        // ends up rendering above the visible head, that's ZOMBIE_SCALE/
+        // ZOMBIE_MESH_REFERENCE_HEIGHT not actually matching the mesh's real
+        // height, not a bug in the raycast itself.
+        // abs(): avian3d's Collider::capsule builds the shape from two
+        // endpoints (±length/2), so a negative ZOMBIE_LENGTH just flips
+        // which endpoint is which — the real physics capsule ends up sized
+        // off |length|, same as here. Bevy's gizmo primitive instead adds
+        // half_length + radius directly with no abs(), so without this it
+        // silently draws a squashed, wrong-sized capsule for a negative
+        // input instead of matching what's actually being tested against.
+        gizmos.primitive_3d(
+            &Capsule3d { radius: ZOMBIE_RADIUS, half_length: (ZOMBIE_LENGTH / 2.0).abs() },
+            Isometry3d::from_translation(transform.translation),
+            Color::WHITE,
+        );
+
         let mut any_bone = false;
         for (bone, color) in [
             (bones.head, Color::srgb(1.0, 0.2, 0.2)),
