@@ -264,10 +264,17 @@ fn run_ai_director(
     director.calm_timer = 0.0;
 
     let center = player_positions[(time.elapsed_secs() as usize) % player_positions.len()].1;
+    // Y is the zombie's own resting height (capsule center when grounded),
+    // not the player's — center.y is the PLAYER's capsule height, which is
+    // much lower than the zombie's now that ZOMBIE_RADIUS/ZOMBIE_LENGTH
+    // scale with ZOMBIE_SCALE. Reusing it here buried every director-spawned
+    // horde well below ground on spawn (same bug ZOMBIE_SPAWNS/
+    // ZOMBIE_LOD_REST_HEIGHT already hit — see their own comments).
+    let spawn_y = ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0;
     let spawns: Vec<Vec3> = (0..DIRECTOR_HORDE_SIZE)
         .map(|i| {
             let angle = i as f32 / DIRECTOR_HORDE_SIZE as f32 * std::f32::consts::TAU;
-            center + Vec3::new(angle.cos(), 0.0, angle.sin()) * DIRECTOR_HORDE_SPAWN_RADIUS
+            Vec3::new(center.x + angle.cos() * DIRECTOR_HORDE_SPAWN_RADIUS, spawn_y, center.z + angle.sin() * DIRECTOR_HORDE_SPAWN_RADIUS)
         })
         .collect();
     info!("AI Director: sustained calm, spawning a {}-zombie horde near {center}", DIRECTOR_HORDE_SIZE);
