@@ -13,7 +13,7 @@ settingGroups:
     base:
       PRODUCT_NAME: Bevy FPS Demo
       PRODUCT_BUNDLE_IDENTIFIER: com.huyvu8051.bevyfpsdemo
-      DEVELOPMENT_TEAM: 0
+      DEVELOPMENT_TEAM: GNNA6PH896
 targetTemplates:
   app:
     type: application
@@ -31,6 +31,22 @@ targets:
     platform: iOS
     sources:
       - path: Sources
+        # cargo-apple drops the cross-compiled libclient.a under
+        # Sources/<target-triple>/debug/ as a build BYPRODUCT (the real
+        # linking happens via LIBRARY_SEARCH_PATHS + -lclient, from
+        # target/ two levels up — see preBuildScripts' own comment). This
+        # bare `path: Sources` scan was picking those .a files up as
+        # ordinary resources and auto-bundling them into the .app (hence
+        # the multi-GB libclient.a that ended up inside earlier builds),
+        # and once both a simulator and a device build had each dropped
+        # their own copy, Xcode saw two source files trying to produce the
+        # same bundled "libclient.a" output and failed with "Multiple
+        # commands produce". Excluding the whole triple-named directories
+        # avoids both problems at once.
+        excludes:
+          - "aarch64-apple-ios/**"
+          - "aarch64-apple-ios-sim/**"
+          - "x86_64-apple-ios/**"
       - path: assets
         buildPhase: resources
         type: folder
@@ -42,15 +58,26 @@ targets:
         LSRequiresIPhoneOS: true
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
+        # Landscape-only on both iPhone and iPad — an FPS's touch controls
+        # (see crates/client's TouchControlsEnabled/spawn_touch_controls:
+        # joystick bottom-left, fire bottom-right) are laid out assuming a
+        # wide viewport, and the game's own camera/aspect-ratio handling was
+        # never built to cope with a tall portrait frame. Previously both
+        # orientations were allowed, so iOS could hand the app a portrait
+        # window at launch (or mid-session on iPad, which rotates freely by
+        # default) and the viewport stayed mismatched — the "viewport
+        # không khớp" this was reported as.
         UISupportedInterfaceOrientations:
-          - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        # iPad only: opts out of Split View/Slide Over multitasking, which
+        # would otherwise hand the app an arbitrary (non-fullscreen, and
+        # potentially portrait-shaped) window size regardless of the
+        # orientation lock above.
+        UIRequiresFullScreen: true
         CFBundleShortVersionString: 1.0.0
         CFBundleVersion: 1.0.0
         
@@ -66,6 +93,26 @@ targets:
         LIBRARY_SEARCH_PATHS[sdk=iphoneos*]: $(inherited) $(SRCROOT)/../../target/aarch64-apple-ios/$(CONFIGURATION)
         LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]: $(inherited) $(SRCROOT)/../../target/aarch64-apple-ios-sim/$(CONFIGURATION)
         ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
+        # Xcode's "debug dylib" build acceleration (default YES since
+        # Xcode 16-ish): links the main executable against a separate
+        # Bevy\ FPS\ Demo.debug.dylib instead of embedding code directly, so
+        # repeated Run-from-Xcode iteration only has to relink/swap that
+        # small dylib instead of the whole app. Only Xcode's own Run/debug-
+        # launch machinery knows how to substitute that dylib's real path on
+        # a device — it's baked in at link time as an absolute path on THIS
+        # Mac (.../gen/apple/../../target/...), which obviously doesn't
+        # exist on the phone's filesystem. Works fine from Simulator (same
+        # filesystem as the Mac) and from Xcode Run on a real device (the
+        # debugger session patches it), but opening the app directly from
+        # the Home Screen — bypassing Xcode entirely, which is the whole
+        # point of a sideload build — dyld-fails with "Library not loaded".
+        # Off, so the app is a normal self-contained binary that runs
+        # standalone. The speed this setting buys only applies to the
+        # native relink step (a couple .mm files) — for this project the
+        # actual bottleneck on every build is the Rust/cargo compile in
+        # preBuildScripts below, which this setting does nothing for, so
+        # turning it off costs effectively nothing here.
+        ENABLE_DEBUG_DYLIB: false
       groups: [app]
     dependencies:
       - framework: libclient.a

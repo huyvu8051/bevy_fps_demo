@@ -10,8 +10,16 @@ edition = "2024"
 [package.metadata.cargo-apple.ios]
 frameworks = ["AudioToolbox"]
 
+# staticlib only: Xcode links against libclient.a via -lclient (see
+# gen/apple/project.yml's LIBRARY_SEARCH_PATHS), it never touches a cdylib.
+# Building "cdylib" alongside "staticlib" in the same invocation was making
+# rustc bake an LC_LOAD_DYLIB into the STATIC output too, pointing at
+# target/aarch64-apple-ios/debug/deps/libclient.dylib on THIS Mac — works
+# on Simulator (same filesystem as the Mac) but dyld-fails on a real
+# device with "Library not loaded" the moment the app launches without
+# Xcode's debugger attached to patch it.
 [lib]
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 shared = { path = "../shared" }

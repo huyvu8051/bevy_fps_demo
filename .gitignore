@@ -1,6 +1,7 @@
 /target
 run.log
 server.log
+.DS_Store
 
 # iOS build: crates/client/gen/apple's build-phase script redirects cargo's
 # own output here (CARGO_TARGET_DIR) instead of the workspace's shared

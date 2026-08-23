@@ -157,7 +157,7 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					0320E4F606701A9E4639B9F2 = {
-						DevelopmentTeam = 0;
+						DevelopmentTeam = GNNA6PH896;
 					};
 				};
 			};
@@ -300,8 +300,9 @@
 				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 0;
+				DEVELOPMENT_TEAM = GNNA6PH896;
 				ENABLE_BITCODE = NO;
+				ENABLE_DEBUG_DYLIB = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"\".\"",
@@ -387,8 +388,9 @@
 				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 0;
+				DEVELOPMENT_TEAM = GNNA6PH896;
 				ENABLE_BITCODE = NO;
+				ENABLE_DEBUG_DYLIB = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"\".\"",
