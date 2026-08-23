@@ -20,7 +20,10 @@ RUN cargo binstall -y cargo-chef
 
 FROM chef AS planner
 COPY . .
-RUN cargo chef prepare --recipe-path recipe.json -p server
+# `prepare` doesn't take a -p/--package filter (unlike `cook`/`build` below)
+# — it always plans the whole workspace, which is fine since the client
+# crate's deps still get computed/cached even though nothing here builds it.
+RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
