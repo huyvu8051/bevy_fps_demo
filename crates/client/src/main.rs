@@ -205,6 +205,76 @@ const MOUSE_SENSITIVITY: f32 = 0.002;
 // Mouse turns slower while ADS'd — real scopes/sights make fine aim
 // adjustments feel twitchy at full sensitivity.
 const AIM_MOUSE_SENSITIVITY_MULTIPLIER: f32 = 0.5;
+// Same yaw/pitch clamp mouse_look applies — factored out so touch_look can
+// share it instead of duplicating the magic numbers.
+const PITCH_CLAMP: f32 = 1.54;
+
+// --- Touch controls (iOS/Android) ---
+// A single virtual joystick (bottom-left) for movement and a drag-to-look
+// region (the whole right half of the screen — no visible Node needed,
+// just compared against touch x-position) cover the two things WASD+mouse
+// normally do; a fire button covers the one thing left-click does. Nothing
+// else (aim/lean/stance/debug tools) has a touch equivalent yet — see the
+// plan doc's "out of scope for now" section.
+const TOUCH_JOYSTICK_BASE_PX: f32 = 140.0;
+const TOUCH_JOYSTICK_KNOB_PX: f32 = 64.0;
+// Max distance (px) the knob can be dragged from center — also the
+// denominator that normalizes drag distance into a 0..1 move_axis
+// magnitude, so dragging further than this doesn't move any faster.
+const TOUCH_JOYSTICK_RADIUS_PX: f32 = (TOUCH_JOYSTICK_BASE_PX - TOUCH_JOYSTICK_KNOB_PX) / 2.0;
+const TOUCH_FIRE_BUTTON_PX: f32 = 90.0;
+// Touch drag deltas are raw screen pixels per frame, same unit MouseMotion
+// deltas are — reusing MOUSE_SENSITIVITY directly felt right in theory, but
+// there's no device here to actually verify feel against, so this exists
+// as an explicit second multiplier to tune later rather than assuming
+// touch and mouse should feel identical.
+const TOUCH_LOOK_SENSITIVITY_MULTIPLIER: f32 = 1.0;
+
+// Auto-on for iOS/Android builds; TOUCH_UI_PREVIEW=1 forces it on under a
+// desktop build too, since this dev environment has no physical
+// device/simulator to build+run the real mobile targets on — this is the
+// only way to visually iterate on the touch UI/systems from here.
+#[derive(Resource)]
+struct TouchControlsEnabled(bool);
+
+impl Default for TouchControlsEnabled {
+    fn default() -> Self {
+        let mobile = cfg!(target_os = "ios") || cfg!(target_os = "android");
+        Self(mobile || std::env::var("TOUCH_UI_PREVIEW").is_ok())
+    }
+}
+
+#[derive(Component)]
+struct TouchJoystickBase;
+#[derive(Component)]
+struct TouchJoystickKnob;
+#[derive(Component)]
+struct TouchFireButton;
+
+// Which touch (Bevy's own per-touch id) is currently driving the joystick,
+// and where it started — drag-from-start is the whole joystick model, no
+// separate "return to center" animation needed since releasing just drops
+// the tracked id (see touch_move_axis).
+#[derive(Resource, Default)]
+struct TouchMoveState {
+    touch_id: Option<u64>,
+    origin: Vec2,
+}
+
+// Computed fresh each frame by touch_move_axis, read by send_player_input
+// exactly like the WASD-derived Vec2 it already builds — same units (x =
+// right, y = forward), so send_player_input just adds the two together.
+#[derive(Resource, Default)]
+struct TouchMoveAxis(Vec2);
+
+#[derive(Resource, Default)]
+struct TouchLookState {
+    touch_id: Option<u64>,
+    last_pos: Vec2,
+}
+
+#[derive(Resource, Default)]
+struct TouchFiring(bool);
 
 // Crosshair: 4 hash marks pushed apart from center by GAP, which grows with
 // the current bullet spread (see current_bullet_spread/update_crosshair).
@@ -886,10 +956,15 @@ fn despawn_replicated_on_disconnect(mut commands: Commands, entities: Query<Enti
 }
 
 fn spawn_client_connection(commands: &mut Commands, channels: &RepliconChannels) {
-    let server_addr: std::net::SocketAddr = std::env::var("SERVER_ADDR")
-        .unwrap_or_else(|_| "127.0.0.1:5031".to_string())
-        .parse()
-        .expect("SERVER_ADDR must be a valid socket address, e.g. 127.0.0.1:5031");
+    // to_socket_addrs (not parse::<SocketAddr>) so this also accepts a DNS
+    // hostname, not just a literal IP — needed for e.g. playit.gg's
+    // assigned tunnel domain (foo.tun.ply.gg:PORT), which a plain
+    // SocketAddr parse rejects outright since it never resolves DNS.
+    let server_addr_str = std::env::var("SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:5031".to_string());
+    let server_addr: std::net::SocketAddr = std::net::ToSocketAddrs::to_socket_addrs(&server_addr_str)
+        .unwrap_or_else(|_| panic!("SERVER_ADDR must be a resolvable host:port (DNS lookup failed for \"{server_addr_str}\"), e.g. 127.0.0.1:5031 or foo.tun.ply.gg:5031"))
+        .next()
+        .unwrap_or_else(|| panic!("SERVER_ADDR \"{server_addr_str}\" resolved to no addresses"));
 
     let client = RenetClient::new(
         ConnectionConfig::from_channels(channels.server_configs(), channels.client_configs()),
@@ -1217,10 +1292,21 @@ fn main() {
         .init_resource::<PredictedInputs>()
         .init_resource::<PlayerModelVisible>()
         .init_resource::<SelectedDebugBot>()
+        .init_resource::<TouchControlsEnabled>()
+        .init_resource::<TouchMoveState>()
+        .init_resource::<TouchMoveAxis>()
+        .init_resource::<TouchLookState>()
+        .init_resource::<TouchFiring>()
         .add_systems(Startup, (setup, log_window_resolution))
         .add_systems(
             Update,
             (
+                // Touch input sources run before the group below reads
+                // their output (TouchMoveAxis in send_player_input,
+                // FpsCamera/MouseLookDelta in apply_view_recoil) — a
+                // separate leading group rather than folding into the next
+                // one below, which is already at the 20-arity tuple limit.
+                (touch_move_axis, update_joystick_knob_visual, touch_look, touch_fire_button),
                 // Tuples of systems only implement IntoSystemConfigs up to
                 // arity 20, so this is split into nested chained groups
                 // rather than one flat tuple — .chain() on the outer tuple
@@ -1389,6 +1475,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
     mut images: ResMut<Assets<Image>>,
+    touch_enabled: Res<TouchControlsEnabled>,
 ) {
     commands.insert_resource(HitMarkerAssets {
         mesh: meshes.add(Sphere::new(0.03)),
@@ -1685,6 +1772,9 @@ fn setup(
     spawn_ammo_ui(&mut commands);
     spawn_ping_ui(&mut commands);
     spawn_debug_panel(&mut commands);
+    if touch_enabled.0 {
+        spawn_touch_controls(&mut commands);
+    }
 }
 
 // Sponza.gltf ships as pure geometry with no KHR_lights_punctual data (single
@@ -2819,6 +2909,169 @@ fn update_crosshair(
     }
 }
 
+// Bottom-left joystick base+knob, bottom-right fire button — same
+// absolute-Node/BackgroundColor style spawn_crosshair/spawn_health_ui
+// already use elsewhere in setup(). The look region (right half of the
+// screen) deliberately has no visible Node — see touch_look, which just
+// compares touch x-position against window width/2 instead of hit-testing
+// a UI element, so there's nothing to draw for it.
+fn spawn_touch_controls(commands: &mut Commands) {
+    commands
+        .spawn((
+            Node {
+                width: Val::Px(TOUCH_JOYSTICK_BASE_PX),
+                height: Val::Px(TOUCH_JOYSTICK_BASE_PX),
+                position_type: PositionType::Absolute,
+                left: Val::Px(32.0),
+                bottom: Val::Px(32.0),
+                border_radius: BorderRadius::all(Val::Px(TOUCH_JOYSTICK_BASE_PX / 2.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.15)),
+            TouchJoystickBase,
+        ))
+        .with_children(|base| {
+            base.spawn((
+                Node {
+                    width: Val::Px(TOUCH_JOYSTICK_KNOB_PX),
+                    height: Val::Px(TOUCH_JOYSTICK_KNOB_PX),
+                    position_type: PositionType::Absolute,
+                    left: Val::Px((TOUCH_JOYSTICK_BASE_PX - TOUCH_JOYSTICK_KNOB_PX) / 2.0),
+                    top: Val::Px((TOUCH_JOYSTICK_BASE_PX - TOUCH_JOYSTICK_KNOB_PX) / 2.0),
+                    border_radius: BorderRadius::all(Val::Px(TOUCH_JOYSTICK_KNOB_PX / 2.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.35)),
+                TouchJoystickKnob,
+            ));
+        });
+
+    commands.spawn((
+        Node {
+            width: Val::Px(TOUCH_FIRE_BUTTON_PX),
+            height: Val::Px(TOUCH_FIRE_BUTTON_PX),
+            position_type: PositionType::Absolute,
+            right: Val::Px(32.0),
+            bottom: Val::Px(48.0),
+            border_radius: BorderRadius::all(Val::Px(TOUCH_FIRE_BUTTON_PX / 2.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(1.0, 0.3, 0.3, 0.35)),
+        Button,
+        Interaction::default(),
+        TouchFireButton,
+    ));
+}
+
+// Claims whichever touch starts on the left half of the screen as the
+// movement touch, tracks it while held, and writes the drag-from-origin
+// vector (clamped/normalized to TOUCH_JOYSTICK_RADIUS_PX) into
+// TouchMoveAxis — send_player_input adds this straight into the same
+// move_axis WASD builds. Dropping the touch (finger lifted) snaps back to
+// zero; there's no separate "spring back to center" tween.
+fn touch_move_axis(
+    touches: Res<Touches>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut state: ResMut<TouchMoveState>,
+    mut axis: ResMut<TouchMoveAxis>,
+) {
+    let Ok(window) = windows.single() else {
+        axis.0 = Vec2::ZERO;
+        return;
+    };
+    let half_width = window.width() / 2.0;
+
+    if let Some(id) = state.touch_id {
+        if touches.get_pressed(id).is_none() {
+            state.touch_id = None;
+        }
+    }
+    if state.touch_id.is_none() {
+        if let Some(touch) = touches.iter_just_pressed().find(|touch| touch.position().x < half_width) {
+            state.touch_id = Some(touch.id());
+            state.origin = touch.position();
+        }
+    }
+
+    axis.0 = match state.touch_id.and_then(|id| touches.get_pressed(id)) {
+        Some(touch) => {
+            let drag = (touch.position() - state.origin).clamp_length_max(TOUCH_JOYSTICK_RADIUS_PX) / TOUCH_JOYSTICK_RADIUS_PX;
+            // Screen Y grows downward; move_axis.y is "forward" (matches
+            // WASD's KeyW = +1.0), so this flips the sign.
+            Vec2::new(drag.x, -drag.y)
+        }
+        None => Vec2::ZERO,
+    };
+}
+
+// Purely cosmetic: slides the joystick knob to follow the tracked drag so
+// there's visual feedback, independent of the actual TouchMoveAxis math
+// above.
+fn update_joystick_knob_visual(state: Res<TouchMoveState>, touches: Res<Touches>, mut knob: Query<&mut Node, With<TouchJoystickKnob>>) {
+    let Ok(mut node) = knob.single_mut() else {
+        return;
+    };
+    let offset = match state.touch_id.and_then(|id| touches.get_pressed(id)) {
+        Some(touch) => (touch.position() - state.origin).clamp_length_max(TOUCH_JOYSTICK_RADIUS_PX),
+        None => Vec2::ZERO,
+    };
+    let center = (TOUCH_JOYSTICK_BASE_PX - TOUCH_JOYSTICK_KNOB_PX) / 2.0;
+    node.left = Val::Px(center + offset.x);
+    node.top = Val::Px(center + offset.y);
+}
+
+// Mirror of mouse_look for the right half of the screen — writes into the
+// exact same FpsCamera.yaw/pitch and MouseLookDelta, so everything
+// downstream (apply_view_recoil composing the final camera rotation,
+// recoil kick, etc.) doesn't need to know or care whether the drag came
+// from a mouse or a finger.
+fn touch_look(
+    touches: Res<Touches>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut state: ResMut<TouchLookState>,
+    mut look_delta: ResMut<MouseLookDelta>,
+    mut query: Query<&mut FpsCamera>,
+) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let half_width = window.width() / 2.0;
+
+    if let Some(id) = state.touch_id {
+        if touches.get_pressed(id).is_none() {
+            state.touch_id = None;
+        }
+    }
+    if state.touch_id.is_none() {
+        if let Some(touch) = touches.iter_just_pressed().find(|touch| touch.position().x >= half_width) {
+            state.touch_id = Some(touch.id());
+            state.last_pos = touch.position();
+        }
+    }
+
+    let Some(touch) = state.touch_id.and_then(|id| touches.get_pressed(id)) else {
+        return;
+    };
+    let delta = touch.position() - state.last_pos;
+    state.last_pos = touch.position();
+    if delta == Vec2::ZERO {
+        return;
+    }
+
+    look_delta.0 = delta;
+    let sensitivity = MOUSE_SENSITIVITY * TOUCH_LOOK_SENSITIVITY_MULTIPLIER;
+    for mut cam in &mut query {
+        cam.yaw -= delta.x * sensitivity;
+        cam.pitch = (cam.pitch - delta.y * sensitivity).clamp(-PITCH_CLAMP, PITCH_CLAMP);
+    }
+}
+
+// Held (not just tapped) → auto-fires the same way holding left-click does
+// on desktop, via shoot()'s own FIRE_RATE cooldown.
+fn touch_fire_button(mut firing: ResMut<TouchFiring>, buttons: Query<&Interaction, With<TouchFireButton>>) {
+    firing.0 = buttons.iter().any(|interaction| matches!(interaction, Interaction::Pressed));
+}
+
 // Click into the window to lock/hide the cursor for mouse-look; Esc releases it.
 fn grab_cursor(
     mouse: Res<ButtonInput<MouseButton>>,
@@ -2879,7 +3132,7 @@ fn mouse_look(
     };
     for mut cam in &mut query {
         cam.yaw -= delta.x * sensitivity;
-        cam.pitch = (cam.pitch - delta.y * sensitivity).clamp(-1.54, 1.54);
+        cam.pitch = (cam.pitch - delta.y * sensitivity).clamp(-PITCH_CLAMP, PITCH_CLAMP);
     }
 }
 
@@ -3237,6 +3490,7 @@ fn send_player_input(
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut player_query: Query<(&mut Transform, &mut Player, &PlayerStance), Without<NetPlayer>>,
     noclip: Res<Noclip>,
+    touch_move_axis: Res<TouchMoveAxis>,
     mover: MoveAndSlide,
 ) {
     if game_over.0 {
@@ -3266,6 +3520,10 @@ fn send_player_input(
     if keys.pressed(KeyCode::KeyA) {
         move_axis.x -= 1.0;
     }
+    // Harmless to add unconditionally: on real mobile there's no keyboard,
+    // and on desktop (only reachable via TOUCH_UI_PREVIEW) this is 0 unless
+    // actively testing the touch joystick.
+    move_axis = (move_axis + touch_move_axis.0).clamp_length_max(1.0);
 
     *sequence += 1;
     let dt = time.delta_secs();
@@ -3366,6 +3624,7 @@ fn shoot(
     vfx_assets: VfxAssets,
     spatial_query: SpatialQuery,
     zombies: Query<(Entity, &Transform, &GlobalTransform), With<Zombie>>,
+    touch_firing: Res<TouchFiring>,
     mut cooldown: Local<f32>,
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
@@ -3376,7 +3635,7 @@ fn shoot(
     let Ok(cursor) = cursor.single() else {
         return;
     };
-    let firing = cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Left);
+    let firing = (cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Left)) || touch_firing.0;
     if !firing || *cooldown > 0.0 {
         return;
     }
