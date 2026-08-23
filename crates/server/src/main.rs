@@ -830,12 +830,10 @@ fn handle_fire_shot(
     };
 
     let filter = SpatialQueryFilter::default();
-    // Live world raycast — bounds how far a lag-compensated zombie hit
-    // below is allowed to be (nothing past whatever's really there right
-    // now, e.g. a wall), and doubles as the SurfaceHit fallback if no
-    // zombie ends up qualifying.
+    // Live world raycast — only used as the SurfaceHit fallback if no
+    // zombie ends up qualifying below. NOT used to bound the rewound
+    // search distance (see the bug this fixed, below).
     let live_hit = spatial_query.cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &filter);
-    let search_distance = live_hit.map_or(MAX_SHOT_DISTANCE, |hit| hit.distance);
 
     // Lag compensation: rewind to roughly what the shooter's own screen
     // showed when they fired (their network latency + the client's own
@@ -853,12 +851,22 @@ fn handle_fire_shot(
     let rewind_secs = (rtt as f32 / 2.0 + INTERP_DELAY_SECS).min(LAG_COMPENSATION_MAX_SECS);
     let rewind_time = time.elapsed_secs() - rewind_secs;
 
+    // Search bound is MAX_SHOT_DISTANCE, not the live raycast's hit
+    // distance — zombies are always chasing (moving toward the shooter),
+    // so their rewound (past) position is essentially always *farther*
+    // away than their live position. Bounding the search by the live hit
+    // distance meant the rewound test could never actually reach the
+    // zombie's rewound position — it was always just out of range,
+    // silently failing almost every shot except when the player was
+    // closing distance fast enough to offset it. That's what was showing
+    // up as "damage applies rarely, knockback only when walking into the
+    // zombie while firing".
     let capsule = Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH);
     let rewound_hit = zombies
         .iter()
         .filter_map(|(entity, _, _, history)| {
             let (position, rotation) = zombie_history_at(history, rewind_time)?;
-            let (distance, normal) = capsule.cast_ray(position, rotation, shot.origin, *direction, search_distance, true)?;
+            let (distance, normal) = capsule.cast_ray(position, rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
             Some((distance, entity, position, rotation, normal))
         })
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
@@ -899,13 +907,46 @@ fn handle_fire_shot(
         return;
     }
 
-    if let Some(hit) = live_hit {
-        let hit_point = shot.origin + *direction * hit.distance;
+    let Some(hit) = live_hit else {
+        return;
+    };
+    let hit_point = shot.origin + *direction * hit.distance;
+
+    // Fallback: the rewound test above found nothing (e.g. a zombie with
+    // no history yet, or a genuine miss), but the live world raycast still
+    // landed directly on a zombie right now — treat that as an ordinary,
+    // un-compensated hit instead of silently treating a zombie as a wall.
+    if let Ok((entity, mut health, mut knockback, history)) = zombies.get_mut(hit.entity) {
+        let (position, rotation) = zombie_history_at(history, time.elapsed_secs()).unwrap_or((hit_point, Quat::IDENTITY));
+        let live_transform = Transform {
+            translation: position,
+            rotation,
+            scale: Vec3::ONE,
+        };
+        let damage = zombie_hit_damage_geometric(hit_point, &live_transform);
+        health.0 -= damage;
+        let killed = health.0 <= 0.0;
+        if killed {
+            let was_director_spawn = director_spawned.contains(entity);
+            commands.entity(entity).despawn();
+            if !was_director_spawn {
+                respawns.0.push(ZOMBIE_RESPAWN_DELAY);
+            }
+        } else {
+            let push = Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
+            knockback.0 += push;
+        }
         commands.server_trigger(ToClients {
-            mode: SendMode::Broadcast,
-            message: ShotFx::SurfaceHit { point: hit_point, normal: hit.normal },
+            mode: SendMode::BroadcastExcept(trigger.client_id),
+            message: ShotFx::ZombieHit { point: hit_point, normal: hit.normal, damage, killed },
         });
+        return;
     }
+
+    commands.server_trigger(ToClients {
+        mode: SendMode::Broadcast,
+        message: ShotFx::SurfaceHit { point: hit_point, normal: hit.normal },
+    });
 }
 
 // Server-only bookkeeping — not replicated, clients only ever learn about

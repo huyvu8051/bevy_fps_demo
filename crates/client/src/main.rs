@@ -29,7 +29,7 @@ use shared::{
     LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform, Player, PlayerDied, PlayerStance,
     RequestRestart, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieMotion,
     zombie_hit_damage_geometric, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LENGTH,
-    ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH, ZOMBIE_RADIUS, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
+    ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH, ZOMBIE_RADIUS, ZOMBIE_SCALE, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
@@ -364,19 +364,14 @@ const ZOMBIE_ATTACK_DAMAGE: f32 = 12.0;
 
 // "Animated Zombie" by Quaternius (poly.pizza, CC-BY 3.0) —
 // https://poly.pizza/m/jkrEvQZb8J — keep this attribution if shared/published.
-// Calibrated in-game against a 1m reference cube: ~2m tall. Was briefly
-// dropped to 0.08 (proportional to the zombie's 1.6m capsule collider)
-// while chasing a "feet not on the ground" report, but that turned out to
-// be a separate bug (no offset at all — see ZOMBIE_MODEL_Y_OFFSET) and the
-// smaller scale just read as "too short" once the real fix landed.
-const ZOMBIE_SCALE: f32 = 0.25;
+// ZOMBIE_SCALE itself now lives in crates/shared, not here — see its own
+// doc comment for why (the physics/hit-detection capsule is derived from
+// it, so it can't be a client-only visual constant anymore).
 const ZOMBIE_PATH: &str = "models/zombie.glb";
 // Capsule center (the zombie's own Transform/NetTransform.translation) to
-// feet — identical formula to PLAYER_MODEL_Y_OFFSET since ZOMBIE_RADIUS/
-// ZOMBIE_LENGTH are literally PLAYER_RADIUS/PLAYER_LENGTH (see shared).
-// Applied to the mesh's child Transform, in world units (the child's parent
-// — the zombie entity — is never scaled, only this child is), not the
-// scaled mesh-local space.
+// feet. Applied to the mesh's child Transform, in world units (the child's
+// parent — the zombie entity — is never scaled, only this child is), not
+// the scaled mesh-local space.
 const ZOMBIE_MODEL_Y_OFFSET: f32 = -(ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0);
 
 // "Soldier" by Quaternius (poly.pizza, CC-BY 3.0) —

@@ -222,9 +222,37 @@ pub const ZOMBIE_AI_ENABLED: bool = true;
 // this is meant as target practice, not a stealth encounter.
 pub const ZOMBIE_CHASE_RANGE: f32 = 60.0;
 pub const ZOMBIE_SPEED: f32 = 1.0;
-// Reuses the player's capsule dimensions (roughly human-sized).
-pub const ZOMBIE_RADIUS: f32 = PLAYER_RADIUS;
-pub const ZOMBIE_LENGTH: f32 = PLAYER_LENGTH;
+
+// Visual mesh scale multiplier for zombie.glb (crates/client's ZOMBIE_PATH)
+// — lives here rather than client-only because the physics/hit-detection
+// capsule below needs to stay sized to match it. Keeping them in the same
+// crate is what stops them silently drifting apart: previously ZOMBIE_SCALE
+// was bumped 0.1 -> 0.25 directly in the client without resizing the
+// capsule to match, so the visual head grew well above where the actual
+// collider ended and headshots stopped registering as hits at all (the
+// capsule/hitbox constants below are now all *derived* from this value
+// instead of separately hardcoded, specifically so that can't happen again).
+pub const ZOMBIE_SCALE: f32 = 0.25;
+// Rough raw mesh height in its own unscaled local units, back-derived from
+// the model's original calibration note ("0.1 scale ≈ 2m tall, verified
+// in-game against a 1m reference cube": 2.0 / 0.1 = 20). Not independently
+// re-measured since — best guess, not an exact figure, so this whole
+// derivation may still need visual tuning.
+const ZOMBIE_MESH_REFERENCE_HEIGHT: f32 = 20.0;
+const ZOMBIE_WORLD_HEIGHT: f32 = ZOMBIE_MESH_REFERENCE_HEIGHT * ZOMBIE_SCALE;
+// Relative to the original 0.1 calibration (factor 1.0 at ZOMBIE_SCALE =
+// 0.1) — everything below scales off this so the capsule and per-region
+// damage thresholds stay proportional to whatever ZOMBIE_SCALE currently
+// is, instead of separately hardcoded numbers.
+const ZOMBIE_SCALE_FACTOR: f32 = ZOMBIE_SCALE / 0.1;
+// No longer aliased to the player's capsule (PLAYER_RADIUS/PLAYER_LENGTH) —
+// a zombie 2.5x the player's visual size should have a matching hitbox, not
+// a human-sized one buried inside it.
+pub const ZOMBIE_RADIUS: f32 = 0.35 * ZOMBIE_SCALE_FACTOR;
+// Capsule height (2*radius + length) is set to exactly ZOMBIE_WORLD_HEIGHT
+// so a raycast/capsule-cast covers the mesh's full height, including the
+// very top of the head — no gap left uncovered like before.
+pub const ZOMBIE_LENGTH: f32 = ZOMBIE_WORLD_HEIGHT - 2.0 * ZOMBIE_RADIUS;
 pub const ZOMBIE_PATH_RECALC_INTERVAL: f32 = 0.8;
 // How long a zombie sticks with its current chase target before re-picking
 // the nearest connected player. Without this, two players standing close
@@ -275,7 +303,15 @@ pub const DIRECTOR_HORDE_SIZE: usize = 10;
 pub const DIRECTOR_HORDE_SPAWN_RADIUS: f32 = 6.0;
 pub const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
 pub const ZOMBIE_LOD_DISTANCE: f32 = 15.0;
-pub const ZOMBIE_LOD_REST_HEIGHT: f32 = 0.9;
+// The Y a far (motion.far, beyond ZOMBIE_LOD_DISTANCE) zombie is pinned to
+// each frame instead of running full physics — has to match how high the
+// capsule naturally rests when grounded (radius + length/2), or a far
+// zombie visibly sinks/floats relative to the capsule-height everyone else
+// uses. Was a hardcoded 0.9 tuned for the old fixed-size capsule; derived
+// now so it can't drift out of sync with ZOMBIE_RADIUS/ZOMBIE_LENGTH again
+// (exactly what just happened when ZOMBIE_SCALE grew the capsule but this
+// stayed put — far zombies sank into the ground).
+pub const ZOMBIE_LOD_REST_HEIGHT: f32 = ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0;
 pub const ZOMBIE_AVOID_PROBE_DISTANCE: f32 = 2.5;
 pub const ZOMBIE_AVOID_ANGLES_DEG: [f32; 6] = [25.0, -25.0, 50.0, -50.0, 80.0, -80.0];
 pub const ZOMBIE_SEPARATION_RADIUS: f32 = 1.1;
@@ -315,8 +351,15 @@ pub const fn zombie_spawn_grid(half_x: f32, half_z: f32, y: f32) -> [Vec3; 100] 
 }
 
 // Inset a few meters from the arena walls so nothing spawns stuck inside
-// geometry.
-pub const ZOMBIE_SPAWNS: [Vec3; 100] = zombie_spawn_grid(ARENA_HALF_SIZE - 3.0, ARENA_HALF_SIZE - 3.0, 0.9);
+// geometry. Spawn Y matches the capsule's natural grounded height (radius +
+// length/2) — was hardcoded 0.9 for the old fixed-size capsule, which after
+// ZOMBIE_RADIUS/ZOMBIE_LENGTH grew with ZOMBIE_SCALE left every zombie
+// spawning already deeply embedded in the floor (bottom of the capsule
+// ended up well below y=0), which move_and_slide couldn't fully resolve
+// back out of on its own — that's what was still showing as "sunk into the
+// ground" even after fixing ZOMBIE_LOD_REST_HEIGHT.
+pub const ZOMBIE_SPAWNS: [Vec3; 100] =
+    zombie_spawn_grid(ARENA_HALF_SIZE - 3.0, ARENA_HALF_SIZE - 3.0, ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0);
 
 // Sent by the client's "spawn 100 more" debug button — spawning must be a
 // server decision now, since zombies are server-authoritative.
@@ -353,8 +396,12 @@ pub struct DespawnDebugBot {
 // up instead of thinning out.
 pub const ZOMBIE_RESPAWN_DELAY: f32 = 1.0;
 // Horizontal-only impulse applied to a zombie that survives a hit, along
-// the bullet's own travel direction.
-pub const KNOCKBACK_FORCE: f32 = 3.5;
+// the bullet's own travel direction. Scaled by ZOMBIE_SCALE_FACTOR (see
+// ZOMBIE_RADIUS's own comment) — an unscaled push displaces the same
+// absolute world distance regardless of the zombie's visual size, which
+// reads as "barely any knockback at all" once the zombie is several times
+// bigger than the original ~2m calibration.
+pub const KNOCKBACK_FORCE: f32 = 3.5 * ZOMBIE_SCALE_FACTOR;
 // Same distance avian3d's physics raycast in shoot() used to go — far past
 // anything reachable inside the arena.
 pub const MAX_SHOT_DISTANCE: f32 = 200.0;
@@ -382,11 +429,15 @@ pub const LIMB_DAMAGE: f32 = 0.5;
 // sits around the physics capsule's center — roughly hip/waist height, not
 // the feet) and a lateral distance from the vertical axis through the root,
 // used to tell an out-flung arm from the torso at similar heights. Rough
-// estimates for a ~2m-tall zombie — not visually calibrated.
-pub const HITBOX_HEAD_MIN_Y: f32 = 0.9;
-pub const HITBOX_CHEST_MIN_Y: f32 = 0.3;
-pub const HITBOX_BELLY_MIN_Y: f32 = -0.2;
-pub const HITBOX_LIMB_LATERAL_MIN: f32 = 0.35;
+// estimates, originally tuned for the ~2m-tall zombie at ZOMBIE_SCALE = 0.1
+// — not visually calibrated. Scaled by ZOMBIE_SCALE_FACTOR (see
+// ZOMBIE_RADIUS's own comment) so a bigger/smaller zombie's head/chest/
+// belly bands grow or shrink along with it instead of staying fixed at the
+// original size while the mesh around them changes.
+pub const HITBOX_HEAD_MIN_Y: f32 = 0.9 * ZOMBIE_SCALE_FACTOR;
+pub const HITBOX_CHEST_MIN_Y: f32 = 0.3 * ZOMBIE_SCALE_FACTOR;
+pub const HITBOX_BELLY_MIN_Y: f32 = -0.2 * ZOMBIE_SCALE_FACTOR;
+pub const HITBOX_LIMB_LATERAL_MIN: f32 = 0.35 * ZOMBIE_SCALE_FACTOR;
 
 // Approximates head/chest/belly/limb from the hit point's height and
 // lateral distance from the zombie's own vertical axis. Works in the
