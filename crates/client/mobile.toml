@@ -1,0 +1,8 @@
+[app]
+name = "client"
+stylized-name = "Bevy FPS Demo"
+identifier = "com.huyvu8051.bevyfpsdemo"
+template-pack = "bevy"
+
+[apple]
+development-team = "0"

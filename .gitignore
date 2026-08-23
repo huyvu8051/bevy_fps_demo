@@ -1,3 +1,13 @@
 /target
 run.log
 server.log
+
+# iOS build: crates/client/gen/apple's build-phase script redirects cargo's
+# own output here (CARGO_TARGET_DIR) instead of the workspace's shared
+# /target above — see the script's own comment on why. Xcode's DerivedData
+# (build products, .app bundles, xcodeproj's own user state) is left out of
+# this repo entirely, same convention as /target.
+crates/client/target/
+crates/client/gen/apple/*.xcodeproj/project.xcworkspace/xcuserdata/
+crates/client/gen/apple/*.xcodeproj/xcuserdata/
+crates/client/gen/apple/Sources/*-apple-ios*/

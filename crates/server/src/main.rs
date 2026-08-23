@@ -314,6 +314,11 @@ fn move_players(
         shared::movement::simulate_player_step(&mover, &mut transform, &mut player, *stance, input, time.delta_secs());
         net_transform.translation = transform.translation;
         net_transform.yaw = input.yaw;
+        // Never set before — the client's own walk/idle animation for OTHER
+        // players (and bots) reads this exactly like it already does for
+        // zombies, but for players it just stayed false forever, so remote
+        // player models never animated.
+        net_transform.moving = input.move_axis != Vec2::ZERO;
     }
 }
 
@@ -375,6 +380,7 @@ fn move_debug_bots(time: Res<Time>, mut bots: Query<(&mut Transform, &mut NetTra
         let to_target = target.0 - transform.translation;
         let horizontal = Vec3::new(to_target.x, 0.0, to_target.z);
         let distance = horizontal.length();
+        net_transform.moving = distance > 0.05;
         if distance > 0.05 {
             let direction = horizontal / distance;
             let step = (MOVE_SPEED * time.delta_secs()).min(distance);

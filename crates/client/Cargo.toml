@@ -3,6 +3,16 @@ name = "client"
 version = "0.1.0"
 edition = "2024"
 
+# iOS build (see gen/apple/, scaffolded via `cargo mobile init` run in a
+# scratch dir — see crates/client/README.md for why not directly in here —
+# then hand-merged: only these two sections + the lib.rs/main.rs split
+# below were added, nothing here touches the real dependency list).
+[package.metadata.cargo-apple.ios]
+frameworks = ["AudioToolbox"]
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [dependencies]
 shared = { path = "../shared" }
 avian3d = "0.6"
