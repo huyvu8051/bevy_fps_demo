@@ -214,6 +214,13 @@ const RECOIL_RECOVERY_SPEED: f32 = 5.0;
 const BULLET_SPREAD: f32 = 0.02;
 
 const MOUSE_SENSITIVITY: f32 = 0.002;
+// User-facing multiplier on top of MOUSE_SENSITIVITY, adjustable at runtime
+// via the settings menu's Sensitivity row — unlike AIM_MOUSE_SENSITIVITY_
+// MULTIPLIER/TOUCH_LOOK_SENSITIVITY_MULTIPLIER (both fixed tuning
+// constants), this one is meant to be changed by the player.
+const SENSITIVITY_SCALE_MIN: f32 = 0.25;
+const SENSITIVITY_SCALE_MAX: f32 = 3.0;
+const SENSITIVITY_SCALE_STEP: f32 = 0.25;
 // Mouse turns slower while ADS'd — real scopes/sights make fine aim
 // adjustments feel twitchy at full sensitivity.
 const AIM_MOUSE_SENSITIVITY_MULTIPLIER: f32 = 0.5;
@@ -300,6 +307,17 @@ struct TouchFiring(bool);
 // is_aiming() call site the same way TouchFiring is read by shoot().
 #[derive(Resource, Default)]
 struct TouchAiming(bool);
+
+// User-facing look sensitivity multiplier — see SENSITIVITY_SCALE_MIN/MAX's
+// own comment. Applied on top of MOUSE_SENSITIVITY by both mouse_look and
+// touch_look, so a change affects desktop and mobile identically.
+#[derive(Resource)]
+struct SensitivityScale(f32);
+impl Default for SensitivityScale {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
 
 // One-frame pulse, not a held state: touch_jump_button resets this to false
 // every tick and only sets it true on the exact frame TouchJumpButton's
@@ -766,6 +784,41 @@ struct PlayerModelVisible(bool);
 // sync_player_model.
 #[derive(Component)]
 struct PlayerModel;
+
+// Debug/dev toggles for the Cheats panel's "Gun"/"MSAA"/"Shadow" row — hide
+// the viewmodel gun, or A/B the map's render cost the same way the
+// CADisplayLink probe's own MSAA/SHADOW buttons do, just wired to the real
+// game's own camera/sun instead of the probe's.
+#[derive(Resource)]
+struct GunVisible(bool);
+impl Default for GunVisible {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+// Starts matching the main camera's own literal Msaa::Off at spawn (see
+// setup()) — kept as a separate resource rather than reading the Msaa
+// component back every frame so the toggle button's own color logic
+// doesn't need a camera query.
+#[derive(Resource, Default)]
+struct MapMsaaOn(bool);
+
+// Starts matching the sun DirectionalLight's own shadows_enabled: true at
+// spawn (see setup()) — same reasoning as MapMsaaOn.
+#[derive(Resource)]
+struct MapShadowsOn(bool);
+impl Default for MapShadowsOn {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+// Marks the main game's sun DirectionalLight (setup()'s own, not the
+// per-hall accent lights from spawn_hall_lights) so apply_map_render_toggles
+// can find it unambiguously.
+#[derive(Component)]
+struct MainSun;
 
 // Marks any PLAYER_MODEL_PATH scene root that should animate — both the
 // local debug PlayerModel (above) and the child spawned for every other
@@ -1422,6 +1475,7 @@ fn build_probe_common(app: &mut App) {
         // probe-only button handler (probe_crouch_button) instead of the
         // real game's touch_crouch_button.
         .init_resource::<TouchJump>()
+        .init_resource::<SensitivityScale>()
         .init_resource::<ProbeCrouching>()
         .add_systems(Startup, |mut commands: Commands,
                                 asset_server: Res<AssetServer>,
@@ -1916,6 +1970,9 @@ fn build_game_common(app: &mut App) {
         .init_resource::<ZombieLodDisabled>()
         .init_resource::<PredictedInputs>()
         .init_resource::<PlayerModelVisible>()
+        .init_resource::<GunVisible>()
+        .init_resource::<MapMsaaOn>()
+        .init_resource::<MapShadowsOn>()
         .init_resource::<SelectedDebugBot>()
         .init_resource::<LocalPlayerMoving>()
         .init_resource::<TouchControlsEnabled>()
@@ -1925,6 +1982,7 @@ fn build_game_common(app: &mut App) {
         .init_resource::<TouchFiring>()
         .init_resource::<TouchAiming>()
         .init_resource::<TouchJump>()
+        .init_resource::<SensitivityScale>()
         .add_systems(Startup, (setup, log_window_resolution))
         .add_systems(
             Update,
@@ -1956,12 +2014,15 @@ fn build_game_common(app: &mut App) {
                     resize_scene_render_target,
                     scroll_settings_menu,
                     cheat_toggle_buttons,
+                    apply_map_render_toggles,
                     cheat_toggle_buttons_2,
                     update_cheat_toggle_colors,
                     cheat_kill_all_button,
                     cheat_zombie_health_buttons,
                     zombie_count_buttons,
                     update_zombie_count_text,
+                    sensitivity_buttons,
+                    update_sensitivity_text,
                     auto_maintain_button,
                     update_auto_maintain_button_color,
                 )
@@ -2303,6 +2364,7 @@ fn setup(
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
+        MainSun,
     ));
 
     // HALL_LIGHT_XS's placement is calibrated to Sponza's own hall geometry
@@ -2688,6 +2750,16 @@ fn spawn_settings_menu(commands: &mut Commands) {
                 ..default()
             })
             .with_children(|row| {
+                spawn_cheat_toggle_button(row, "Gun", CheatGunButton);
+                spawn_cheat_toggle_button(row, "MSAA", CheatMsaaButton);
+                spawn_cheat_toggle_button(row, "Shadow", CheatShadowButton);
+            });
+            menu.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|row| {
                 spawn_cheat_toggle_button(row, "Hitboxes", CheatHitboxesButton);
                 spawn_cheat_toggle_button(row, "AimBlur", CheatAimBlurButton);
                 spawn_cheat_toggle_button(row, "PlayerMdl", CheatPlayerModelButton);
@@ -2721,6 +2793,33 @@ fn spawn_settings_menu(commands: &mut Commands) {
                 ));
                 spawn_cheat_action_button(row, "+10", ZombieCountIncButton);
                 spawn_cheat_toggle_button(row, "Auto", AutoMaintainButton);
+            });
+            menu.spawn((
+                Text::new("Sensitivity"),
+                TextFont {
+                    font_size: 16.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+            menu.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                align_items: AlignItems::Center,
+                ..default()
+            })
+            .with_children(|row| {
+                spawn_cheat_action_button(row, "-", SensitivityDecButton);
+                row.spawn((
+                    Text::new("1.00x"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    SensitivityText,
+                ));
+                spawn_cheat_action_button(row, "+", SensitivityIncButton);
             });
             menu.spawn(Node {
                 flex_direction: FlexDirection::Row,
@@ -2791,6 +2890,12 @@ struct CheatGodModeButton;
 #[derive(Component)]
 struct CheatFreezeButton;
 #[derive(Component)]
+struct CheatGunButton;
+#[derive(Component)]
+struct CheatMsaaButton;
+#[derive(Component)]
+struct CheatShadowButton;
+#[derive(Component)]
 struct CheatKillAllButton;
 #[derive(Component)]
 struct ZombieCountDecButton;
@@ -2800,6 +2905,12 @@ struct ZombieCountIncButton;
 struct ZombieCountText;
 #[derive(Component)]
 struct AutoMaintainButton;
+#[derive(Component)]
+struct SensitivityDecButton;
+#[derive(Component)]
+struct SensitivityIncButton;
+#[derive(Component)]
+struct SensitivityText;
 
 // Client's own best guess at the server's current zombie population
 // target, so the cheat panel has a number to show and step from without
@@ -2910,9 +3021,15 @@ fn cheat_toggle_buttons(
     mut noclip: ResMut<Noclip>,
     mut god_mode: ResMut<GodMode>,
     mut freeze: ResMut<FreezeZombies>,
+    mut gun_visible: ResMut<GunVisible>,
+    mut map_msaa: ResMut<MapMsaaOn>,
+    mut map_shadows: ResMut<MapShadowsOn>,
     noclip_btn: Query<&Interaction, (With<CheatNoclipButton>, Changed<Interaction>)>,
     god_btn: Query<&Interaction, (With<CheatGodModeButton>, Changed<Interaction>)>,
     freeze_btn: Query<&Interaction, (With<CheatFreezeButton>, Changed<Interaction>)>,
+    gun_btn: Query<&Interaction, (With<CheatGunButton>, Changed<Interaction>)>,
+    msaa_btn: Query<&Interaction, (With<CheatMsaaButton>, Changed<Interaction>)>,
+    shadow_btn: Query<&Interaction, (With<CheatShadowButton>, Changed<Interaction>)>,
 ) {
     if tapped(&noclip_btn) {
         noclip.0 = !noclip.0;
@@ -2922,6 +3039,45 @@ fn cheat_toggle_buttons(
     }
     if tapped(&freeze_btn) {
         freeze.0 = !freeze.0;
+    }
+    if tapped(&gun_btn) {
+        gun_visible.0 = !gun_visible.0;
+    }
+    if tapped(&msaa_btn) {
+        map_msaa.0 = !map_msaa.0;
+    }
+    if tapped(&shadow_btn) {
+        map_shadows.0 = !map_shadows.0;
+    }
+}
+
+// Applies GunVisible/MapMsaaOn/MapShadowsOn every frame — same
+// resource-drives-a-component pattern as sync_player_model, cheap enough
+// (3 single-entity queries) not to bother gating on resource_changed.
+fn apply_map_render_toggles(
+    gun_visible: Res<GunVisible>,
+    map_msaa: Res<MapMsaaOn>,
+    map_shadows: Res<MapShadowsOn>,
+    mut gun: Query<&mut Visibility, With<Gun>>,
+    // FpsCamera, not Camera3d — the AK scope's own render-to-texture
+    // camera (see setup()) is ALSO a Camera3d, which would make
+    // .single_mut() below error out with two matches.
+    mut camera_msaa: Query<&mut Msaa, With<FpsCamera>>,
+    mut sun: Query<&mut DirectionalLight, With<MainSun>>,
+) {
+    if let Ok(mut visibility) = gun.single_mut() {
+        *visibility = if gun_visible.0 { Visibility::Inherited } else { Visibility::Hidden };
+    }
+    if let Ok(mut msaa) = camera_msaa.single_mut() {
+        let target = if map_msaa.0 { Msaa::Sample4 } else { Msaa::Off };
+        if *msaa != target {
+            *msaa = target;
+        }
+    }
+    if let Ok(mut light) = sun.single_mut() {
+        if light.shadows_enabled != map_shadows.0 {
+            light.shadows_enabled = map_shadows.0;
+        }
     }
 }
 
@@ -2982,6 +3138,9 @@ fn update_cheat_toggle_colors(
     zombie_health_bars: Res<ZombieHealthBarsHidden>,
     zombie_lod: Res<ZombieLodDisabled>,
     player_model: Res<PlayerModelVisible>,
+    gun_visible: Res<GunVisible>,
+    map_msaa: Res<MapMsaaOn>,
+    map_shadows: Res<MapShadowsOn>,
     mut buttons: Query<
         (
             &mut BackgroundColor,
@@ -2994,6 +3153,9 @@ fn update_cheat_toggle_colors(
             Option<&CheatZombieHealthBarsButton>,
             Option<&CheatZombieLodButton>,
             Option<&CheatPlayerModelButton>,
+            Option<&CheatGunButton>,
+            Option<&CheatMsaaButton>,
+            Option<&CheatShadowButton>,
         ),
         Or<(
             With<CheatNoclipButton>,
@@ -3005,11 +3167,16 @@ fn update_cheat_toggle_colors(
             With<CheatZombieHealthBarsButton>,
             With<CheatZombieLodButton>,
             With<CheatPlayerModelButton>,
+            With<CheatGunButton>,
+            With<CheatMsaaButton>,
+            With<CheatShadowButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, zombie_lod_m, player_model_m) in &mut buttons {
+    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, zombie_lod_m, player_model_m, gun_m, msaa_m, shadow_m) in
+        &mut buttons
+    {
         let on = if noclip_m.is_some() {
             noclip.0
         } else if god_m.is_some() {
@@ -3026,8 +3193,14 @@ fn update_cheat_toggle_colors(
             zombie_health_bars.0
         } else if zombie_lod_m.is_some() {
             zombie_lod.0
+        } else if player_model_m.is_some() {
+            player_model.0
+        } else if gun_m.is_some() {
+            gun_visible.0
+        } else if msaa_m.is_some() {
+            map_msaa.0
         } else {
-            player_model_m.is_some() && player_model.0
+            shadow_m.is_some() && map_shadows.0
         };
         *bg = BackgroundColor(color_for(on));
     }
@@ -3119,6 +3292,32 @@ fn update_zombie_count_text(count: Res<ZombieCountUi>, mut text: Query<&mut Text
     }
 }
 
+fn sensitivity_buttons(
+    mut scale: ResMut<SensitivityScale>,
+    dec_btn: Query<&Interaction, (With<SensitivityDecButton>, Changed<Interaction>)>,
+    inc_btn: Query<&Interaction, (With<SensitivityIncButton>, Changed<Interaction>)>,
+) {
+    for interaction in &dec_btn {
+        if *interaction == Interaction::Pressed {
+            scale.0 = (scale.0 - SENSITIVITY_SCALE_STEP).max(SENSITIVITY_SCALE_MIN);
+        }
+    }
+    for interaction in &inc_btn {
+        if *interaction == Interaction::Pressed {
+            scale.0 = (scale.0 + SENSITIVITY_SCALE_STEP).min(SENSITIVITY_SCALE_MAX);
+        }
+    }
+}
+
+fn update_sensitivity_text(scale: Res<SensitivityScale>, mut text: Query<&mut Text, With<SensitivityText>>) {
+    if !scale.is_changed() {
+        return;
+    }
+    for mut text in &mut text {
+        text.0 = format!("{:.2}x", scale.0);
+    }
+}
+
 fn auto_maintain_button(
     mut commands: Commands,
     mut auto_maintain: ResMut<AutoMaintainUi>,
@@ -3196,16 +3395,17 @@ fn spawn_settings_toggle_button(commands: &mut Commands) {
 fn toggle_settings_menu(
     keys: Res<ButtonInput<KeyCode>>,
     mut visible: ResMut<SettingsMenuVisible>,
-    toggle_button: Query<&Interaction, (With<SettingsToggleButton>, Changed<Interaction>)>,
+    mut was_pressed: Local<bool>,
+    toggle_button: Query<&Interaction, With<SettingsToggleButton>>,
 ) {
     if keys.just_pressed(KeyCode::F1) {
         visible.0 = !visible.0;
     }
-    for interaction in &toggle_button {
-        if *interaction == Interaction::Pressed {
-            visible.0 = !visible.0;
-        }
+    let is_pressed = toggle_button.iter().any(|interaction| *interaction == Interaction::Pressed);
+    if is_pressed && !*was_pressed {
+        visible.0 = !visible.0;
     }
+    *was_pressed = is_pressed;
 }
 
 fn update_settings_menu(visible: Res<SettingsMenuVisible>, mut menu: Query<&mut Node, With<SettingsMenuRoot>>) {
@@ -4713,6 +4913,7 @@ fn touch_look(
     interactive: Query<(), With<Interaction>>,
     mut state: ResMut<TouchLookState>,
     mut look_delta: ResMut<MouseLookDelta>,
+    sensitivity_scale: Res<SensitivityScale>,
     mut query: Query<&mut FpsCamera>,
 ) {
     let Ok(window) = windows.single() else {
@@ -4745,7 +4946,7 @@ fn touch_look(
     }
 
     look_delta.0 = delta;
-    let sensitivity = MOUSE_SENSITIVITY * TOUCH_LOOK_SENSITIVITY_MULTIPLIER;
+    let sensitivity = MOUSE_SENSITIVITY * TOUCH_LOOK_SENSITIVITY_MULTIPLIER * sensitivity_scale.0;
     for mut cam in &mut query {
         cam.yaw -= delta.x * sensitivity;
         cam.pitch = (cam.pitch - delta.y * sensitivity).clamp(-PITCH_CLAMP, PITCH_CLAMP);
@@ -4788,6 +4989,7 @@ fn mouse_look(
     zoom: Res<ScopeZoom>,
     mut motion: MessageReader<MouseMotion>,
     mut look_delta: ResMut<MouseLookDelta>,
+    sensitivity_scale: Res<SensitivityScale>,
     mut query: Query<&mut FpsCamera>,
 ) {
     let Ok(cursor) = cursor.single() else {
@@ -4816,7 +5018,7 @@ fn mouse_look(
         MOUSE_SENSITIVITY * AIM_MOUSE_SENSITIVITY_MULTIPLIER * (SCOPE_DEFAULT_ZOOM / zoom.0)
     } else {
         MOUSE_SENSITIVITY
-    };
+    } * sensitivity_scale.0;
     for mut cam in &mut query {
         cam.yaw -= delta.x * sensitivity;
         cam.pitch = (cam.pitch - delta.y * sensitivity).clamp(-PITCH_CLAMP, PITCH_CLAMP);
