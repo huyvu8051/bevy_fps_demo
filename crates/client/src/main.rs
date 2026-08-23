@@ -1263,6 +1263,7 @@ fn main() {
                     sync_scope_camera,
                     update_scope_lens,
                     update_ammo_ui,
+                    update_ping_ui,
                     update_crosshair,
                     draw_zombie_hitboxes,
                     update_debug_panel,
@@ -1669,6 +1670,7 @@ fn setup(
     spawn_crosshair(&mut commands);
     spawn_health_ui(&mut commands);
     spawn_ammo_ui(&mut commands);
+    spawn_ping_ui(&mut commands);
     spawn_debug_panel(&mut commands);
 }
 
@@ -2269,6 +2271,43 @@ fn spawn_ammo_ui(commands: &mut Commands) {
         },
         AmmoUi,
     ));
+}
+
+// Marks the always-visible ping readout so update_ping_ui can find it.
+#[derive(Component)]
+struct PingUi;
+
+fn spawn_ping_ui(commands: &mut Commands) {
+    commands.spawn((
+        Text::new("Ping: -- ms"),
+        TextFont {
+            font_size: 16.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.7, 0.85, 1.0)),
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(16.0),
+            top: Val::Px(16.0),
+            ..default()
+        },
+        PingUi,
+    ));
+}
+
+// RenetClient::rtt() is renet2's own round-trip estimate (seconds) off the
+// live connection — reflects real network conditions plus whatever
+// SIM_LATENCY_MS/SIM_LATENCY_JITTER_MS is currently simulating (see
+// shared::sim_latency), so this doubles as a way to verify the simulated
+// latency/jitter config is actually taking effect.
+fn update_ping_ui(client: Option<Res<RenetClient>>, mut text: Query<&mut Text, With<PingUi>>) {
+    let Ok(mut text) = text.single_mut() else {
+        return;
+    };
+    text.0 = match client {
+        Some(client) => format!("Ping: {:.0} ms", client.rtt() * 1000.0),
+        None => "Ping: -- ms".to_string(),
+    };
 }
 
 fn update_ammo_ui(gun: Query<&Gun, Changed<Gun>>, mut text: Query<&mut Text, With<AmmoUi>>) {

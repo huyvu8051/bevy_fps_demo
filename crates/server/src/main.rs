@@ -38,10 +38,24 @@ const PORT: u16 = 5031;
 const PROTOCOL_ID: u64 = 0;
 const MAX_CLIENTS: usize = 256;
 
+// MinimalPlugins' default ScheduleRunnerPlugin loops as fast as the CPU
+// allows (RunMode::Loop { wait: None }) — meaning move_players/move_zombies
+// ran with a tiny, unstable dt every iteration, different from whatever dt
+// the client happened to predict with for the "same" input. That dt
+// mismatch was a real source of the client's jump-reconciliation drift
+// (see predict_player_movement's own doc comment for the other half of
+// that fix). Capping the server to a fixed tick gives both sides a
+// consistent, comparable dt. 30Hz: plenty for a hitscan zombie co-op (no
+// twitch-competitive aiming needs), and it's not render-rate-bound like the
+// client, so a lower tick than 60 is fine and cheaper.
+const SERVER_TICK_HZ: f64 = 30.0;
+
 fn main() {
     App::new()
         .add_plugins((
-            MinimalPlugins,
+            MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(std::time::Duration::from_secs_f64(
+                1.0 / SERVER_TICK_HZ,
+            ))),
             bevy::log::LogPlugin::default(),
             bevy::asset::AssetPlugin::default(),
             bevy::mesh::MeshPlugin,
