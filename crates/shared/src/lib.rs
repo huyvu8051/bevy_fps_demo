@@ -265,6 +265,12 @@ pub const ZOMBIE_AVOID_ANGLES_DEG: [f32; 6] = [25.0, -25.0, 50.0, -50.0, 80.0, -
 pub const ZOMBIE_SEPARATION_RADIUS: f32 = 1.1;
 pub const ZOMBIE_SEPARATION_STRENGTH: f32 = 1.2;
 pub const KNOCKBACK_DECAY_RATE: f32 = 6.0;
+// Max degrees/sec a zombie's facing can turn — move_zombies rotates toward
+// its movement direction gradually instead of snapping instantly whenever
+// that direction changes (every path_recalc_timer tick, or a full turn on
+// retarget). Turning much faster than a real jog-turn would still be
+// visible as a near-instant snap, so this is deliberately not huge.
+pub const ZOMBIE_TURN_RATE_DEG: f32 = 180.0;
 
 pub const NAVMESH_HEIGHT: f32 = 1.0;
 pub const NAVMESH_BOUNDS: [Vec2; 4] = [

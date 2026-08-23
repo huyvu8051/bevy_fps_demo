@@ -25,7 +25,7 @@ use shared::{
     DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, PLAYER_THREAT_DECAY_RATE,
     PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY,
     ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS, ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS,
-    ZOMBIE_SPEED, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
+    ZOMBIE_SPEED, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS, ZOMBIE_TURN_RATE_DEG,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 use vleue_navigator::prelude::*;
@@ -525,6 +525,20 @@ fn chase_action_system(mut commands: Commands, mut query: Query<(&Actor, &mut Ac
     }
 }
 
+// Rotates `rotation` toward `target` by at most `max_angle` radians this
+// call, instead of snapping straight to it — see ZOMBIE_TURN_RATE_DEG.
+// slerp's `t` fraction is derived from the actual angle between the two
+// (not a flat lerp factor), so the per-frame angular step stays constant
+// regardless of how far off `target` currently is.
+fn turn_towards(rotation: &mut Quat, target: Quat, max_angle: f32) {
+    let angle = rotation.angle_between(target);
+    if angle <= max_angle || angle <= f32::EPSILON {
+        *rotation = target;
+    } else {
+        *rotation = rotation.slerp(target, max_angle / angle);
+    }
+}
+
 fn steer_around_obstacles(
     spatial_query: &SpatialQuery,
     origin: Vec3,
@@ -619,7 +633,8 @@ fn move_zombies(
             if distance > ZOMBIE_STOP_DISTANCE {
                 let direction = horizontal / distance;
                 transform.translation += direction * chase.speed * time.delta_secs();
-                transform.look_to(-direction, Vec3::Y);
+                let target_rotation = Transform::default().looking_to(-direction, Vec3::Y).rotation;
+                turn_towards(&mut transform.rotation, target_rotation, ZOMBIE_TURN_RATE_DEG.to_radians() * time.delta_secs());
             }
             transform.translation.y = ZOMBIE_LOD_REST_HEIGHT;
             motion.grounded = true;
@@ -704,7 +719,8 @@ fn move_zombies(
         motion.vertical_velocity = if grounded_this_frame { motion.vertical_velocity.min(0.0) } else { motion.vertical_velocity };
 
         if horizontal_velocity != Vec3::ZERO {
-            transform.look_to(-horizontal_velocity, Vec3::Y);
+            let target_rotation = Transform::default().looking_to(-horizontal_velocity, Vec3::Y).rotation;
+            turn_towards(&mut transform.rotation, target_rotation, ZOMBIE_TURN_RATE_DEG.to_radians() * time.delta_secs());
         }
 
         net_transform.translation = transform.translation;
