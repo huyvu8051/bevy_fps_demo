@@ -131,6 +131,11 @@ pub const GRAVITY: f32 = -20.0;
 pub const JUMP_SPEED: f32 = 6.5;
 pub const GROUND_NORMAL_MIN_Y: f32 = 0.6;
 
+// Debug flight mode (KeyN) — no gravity/collision, flies in whatever
+// direction move_axis+yaw points horizontally, jump/crouch to ascend/
+// descend. See ClientInput.noclip and simulate_player_step.
+pub const NOCLIP_SPEED: f32 = MOVE_SPEED * 3.0;
+
 // Sent by the client every frame (Channel::Unreliable — the next one
 // supersedes a dropped one, no need to retransmit). move_axis is
 // pre-rotation: x = right(+)/left(-), y = forward(+)/back(-), matching the
@@ -152,6 +157,13 @@ pub struct ClientInput {
     pub sprint: bool,
     pub aiming: bool,
     pub stance: PlayerStance,
+    // Client-decided debug flight toggle (KeyN) — same "trust the client,
+    // no anti-cheat goals" stance as `stance` above. Server and client run
+    // the exact same simulate_player_step, so simulating noclip there too
+    // (instead of only client-side) keeps both sides in agreement instead
+    // of the server fighting/reverting a client-only fly-through-walls
+    // override every tick.
+    pub noclip: bool,
 }
 
 // Replicated pose (server -> client) for any networked entity — smaller and

@@ -28,8 +28,8 @@ use shared::{
     HITBOX_BELLY_MIN_Y, HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN, KnockbackVelocity,
     LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform, Player, PlayerDied, PlayerStance,
     RequestRestart, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieMotion,
-    MAX_SHOT_DISTANCE, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH, ZOMBIE_SPAWNS,
-    ZOMBIE_STOP_DISTANCE,
+    MAX_SHOT_DISTANCE, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH,
+    ZOMBIE_RADIUS, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
@@ -364,10 +364,20 @@ const ZOMBIE_ATTACK_DAMAGE: f32 = 12.0;
 
 // "Animated Zombie" by Quaternius (poly.pizza, CC-BY 3.0) —
 // https://poly.pizza/m/jkrEvQZb8J — keep this attribution if shared/published.
-// Calibrated in-game against a 1m reference cube: this comes out to a ~2m
-// tall zombie, appropriately looming over the player.
-const ZOMBIE_SCALE: f32 = 0.1;
+// Calibrated in-game against a 1m reference cube: ~2m tall. Was briefly
+// dropped to 0.08 (proportional to the zombie's 1.6m capsule collider)
+// while chasing a "feet not on the ground" report, but that turned out to
+// be a separate bug (no offset at all — see ZOMBIE_MODEL_Y_OFFSET) and the
+// smaller scale just read as "too short" once the real fix landed.
+const ZOMBIE_SCALE: f32 = 0.25;
 const ZOMBIE_PATH: &str = "models/zombie.glb";
+// Capsule center (the zombie's own Transform/NetTransform.translation) to
+// feet — identical formula to PLAYER_MODEL_Y_OFFSET since ZOMBIE_RADIUS/
+// ZOMBIE_LENGTH are literally PLAYER_RADIUS/PLAYER_LENGTH (see shared).
+// Applied to the mesh's child Transform, in world units (the child's parent
+// — the zombie entity — is never scaled, only this child is), not the
+// scaled mesh-local space.
+const ZOMBIE_MODEL_Y_OFFSET: f32 = -(ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0);
 
 // "Soldier" by Quaternius (poly.pizza, CC-BY 3.0) —
 // https://poly.pizza/m/oAArCNHjFB — keep this attribution if shared/published.
@@ -518,11 +528,12 @@ struct Lean {
 #[derive(Component)]
 struct GameOverUi;
 
-// Debug/dev flight mode: toggled by KeyN. Bypasses MoveAndSlide (and thus
-// gravity/collision) entirely — see move_player_physics — so the player can
-// fly through walls to inspect the level. Not reset by restart_game
-// (deliberately — no reason to drop out of noclip just because the player
-// died).
+// Debug/dev flight mode: toggled by KeyN. Sent to the server as part of
+// ClientInput (see its own doc comment) and simulated by the shared
+// simulate_player_step on both sides — bypasses MoveAndSlide (and thus
+// gravity/collision) entirely, so the player can fly through walls to
+// inspect the level. Not reset by restart_game (deliberately — no reason to
+// drop out of noclip just because the player died).
 #[derive(Resource, Default)]
 struct Noclip(bool);
 
@@ -961,6 +972,10 @@ fn on_net_player_replicated(
     if network_ids.get(entity).is_ok_and(|id| id.get() == my_id.0) {
         return;
     }
+    // Visibility: NetPlayer never had one before (see zombie_cosmetic_bundle's
+    // matching comment) — needed now that this entity has a child with a
+    // SceneRoot, or Bevy's visibility-propagation hook warns (B0004).
+    commands.entity(entity).insert(Visibility::default());
     commands.entity(entity).with_children(|parent| {
         parent.spawn((
             SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(PLAYER_MODEL_PATH))),
@@ -1156,7 +1171,7 @@ fn main() {
             // below, kept at the same rate for consistency).
             FpsOverlayPlugin {
                 config: bevy::dev_tools::fps_overlay::FpsOverlayConfig {
-                    refresh_interval: std::time::Duration::from_secs_f32(1.0 / 30.0),
+                    refresh_interval: std::time::Duration::from_secs_f32(1.0 / 60.0),
                     ..default()
                 },
             },
@@ -1703,17 +1718,10 @@ const HALL_LIGHT_INTENSITY: f32 = 200_000.0;
 // pieces onto that same entity: the GLTF scene, health, hitbox bones for
 // zombie_hit_damage, and a persistent Sensor collider so shoot() can
 // raycast against it (see the collider's own comment below).
-fn on_zombie_replicated(
-    trigger: On<Add, Zombie>,
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut transforms: Query<&mut Transform>,
-) {
+fn on_zombie_replicated(trigger: On<Add, Zombie>, mut commands: Commands, asset_server: Res<AssetServer>) {
     let entity = trigger.event().entity;
-    if let Ok(mut transform) = transforms.get_mut(entity) {
-        transform.scale = Vec3::splat(ZOMBIE_SCALE);
-    }
-    commands.entity(entity).insert(zombie_cosmetic_bundle(&asset_server));
+    commands.entity(entity).insert(zombie_cosmetic_bundle());
+    commands.entity(entity).with_child(zombie_mesh_bundle(&asset_server));
     spawn_zombie_health_bar(&mut commands, entity);
 }
 
@@ -1725,15 +1733,16 @@ fn on_zombie_replicated(
 fn spawn_local_zombie(commands: &mut Commands, asset_server: &AssetServer, spawn_pos: Vec3) {
     let zombie_entity = commands
         .spawn((
-            Transform::from_translation(spawn_pos).with_scale(Vec3::splat(ZOMBIE_SCALE)),
+            Transform::from_translation(spawn_pos),
             Zombie,
             // Not replicated, so unlike a real zombie it needs its own local
             // Health — nothing will ever set one via replication for it.
             // Also unkillable via shoot() now: the server has never heard of
             // this entity, so its raycast can't land on it.
             Health(ZOMBIE_MAX_HEALTH),
-            zombie_cosmetic_bundle(asset_server),
+            zombie_cosmetic_bundle(),
         ))
+        .with_child(zombie_mesh_bundle(asset_server))
         .id();
     spawn_zombie_health_bar(commands, zombie_entity);
 }
@@ -1741,13 +1750,37 @@ fn spawn_local_zombie(commands: &mut Commands, asset_server: &AssetServer, spawn
 // No collider here anymore — hit detection is server-authoritative now
 // (crates/server's handle_fire_shot raycasts against its own zombie
 // colliders), so the client doesn't need one of its own to shoot with.
-fn zombie_cosmetic_bundle(asset_server: &AssetServer) -> impl Bundle {
+// Deliberately doesn't include the mesh itself — see zombie_mesh_bundle.
+// Visibility: the Zombie entity itself never had one before (nothing on it
+// needed rendering directly) — now that zombie_mesh_bundle is a *child*
+// or it, Bevy's visibility-propagation hook warns (bevy_ecs warning[B0004])
+// if an ancestor is missing Visibility, since inherited visibility walks up
+// the parent chain. Explicit here rather than relying on Zombie's own
+// #[require] so this stays a client-only concern.
+fn zombie_cosmetic_bundle() -> impl Bundle {
     (
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(ZOMBIE_PATH))),
+        Visibility::default(),
         ZombieHitboxBones::default(),
         KnockbackVelocity::default(),
         ZombieAttackTimer::default(),
         ZombiePlayingWalk::default(),
+    )
+}
+
+// The visible mesh, on its own child entity instead of directly on the
+// zombie's own Transform — that Transform is driven every frame by
+// interpolate_net_transform (translation+rotation only, from replicated
+// NetTransform), so any position offset baked into it directly would get
+// clobbered the very next frame. A child's Transform is independent, which
+// is what lets ZOMBIE_MODEL_Y_OFFSET actually stick (same reasoning
+// PLAYER_MODEL_PATH's child already relied on). wire_zombie_animations/
+// wire_zombie_hitbox_bones walk back up through ChildOf to find the Zombie
+// ancestor regardless of how many hops that takes, so this extra nesting
+// level doesn't break either of them.
+fn zombie_mesh_bundle(asset_server: &AssetServer) -> impl Bundle {
+    (
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(ZOMBIE_PATH))),
+        Transform::from_xyz(0.0, ZOMBIE_MODEL_Y_OFFSET, 0.0).with_scale(Vec3::splat(ZOMBIE_SCALE)),
     )
 }
 
@@ -2568,8 +2601,8 @@ fn update_debug_panel(
          J: Zombie health bars [{}]\n\
          K: Zombie LOD (distance shortcut) [{}]\n\
          T: Player model (debug visual) [{}]\n\
-         C: Spawn debug bot at crosshair+2m | [/]: select prev/next bot\n\
-         X: Move selected bot to crosshair | O: Despawn selected bot\n\
+         6: Spawn debug bot at crosshair+2m | [/]: select prev/next bot\n\
+         9: Move selected bot to crosshair | O: Despawn selected bot\n\
          Debug bots: {} (selected: {})\n\
          move_zombies: {:.2}ms | health bars: {:.2}ms | zombies: {} (near: {})\n\
          Zombies alive: {}",
@@ -2657,11 +2690,13 @@ fn debug_panel_actions(
         commands.client_trigger(SpawnMoreZombies);
     }
 
-    // C: spawn a fake NetPlayer ("debug bot") a couple meters in front of
+    // 6: spawn a fake NetPlayer ("debug bot") a couple meters in front of
     // the local player, so multi-player zombie targeting can be tested
     // without a second real client — see on_net_player_replicated for how
-    // it becomes visible.
-    if keys.just_pressed(KeyCode::KeyC) {
+    // it becomes visible. (Was KeyC, which collided with the always-on
+    // crouch toggle — moved to the 6-9 range alongside the other
+    // panel-only debug actions, same as 1-5.)
+    if keys.just_pressed(KeyCode::Digit6) {
         let forward = camera
             .single()
             .map(|cam| Quat::from_rotation_y(cam.yaw) * Vec3::NEG_Z)
@@ -2685,9 +2720,10 @@ fn debug_panel_actions(
             selected_bot.0 = Some(ids[next_index]);
         }
     }
-    // X: move the selected bot to wherever the local player is aiming
-    // (same forward raycast gun_view_animation/shoot already use).
-    if keys.just_pressed(KeyCode::KeyX) {
+    // 9: move the selected bot to wherever the local player is aiming
+    // (same forward raycast gun_view_animation/shoot already use). Was
+    // KeyX, which collided with the always-on prone toggle.
+    if keys.just_pressed(KeyCode::Digit9) {
         if let Some(id) = selected_bot.0 {
             if let Ok(camera_transform) = camera_transform.single() {
                 let filter = SpatialQueryFilter::default();
@@ -2965,19 +3001,8 @@ fn apply_aim_dof(
     }
 }
 
-// Ground-based movement: WASD sets horizontal velocity relative to where the
-// camera is *facing on the horizontal plane* (yaw only — looking up/down no
-// longer flies you into the air like the old noclip version did). Gravity
-// and jumping are handled here too, and avian3d's move_and_slide sweeps the
-// player's capsule against the level collider, sliding along walls/slopes
-// and stopping at anything it can't get past.
-//
-// Caveat: this is plain move-and-slide with no dedicated step-up logic, so
-// stairs/ledges taller than roughly the capsule radius may block movement
-// instead of being climbed — untested since this can't be visually verified
-// here.
-// Toggles Noclip on KeyN. Separate from move_player_physics so the toggle
-// still works even while game_over freezes movement.
+// Toggles Noclip on KeyN — separate system from send_player_input so the
+// toggle itself still works even while game_over freezes real input sending.
 fn toggle_noclip(keys: Res<ButtonInput<KeyCode>>, mut noclip: ResMut<Noclip>) {
     if keys.just_pressed(KeyCode::KeyN) {
         noclip.0 = !noclip.0;
@@ -3195,13 +3220,6 @@ fn draw_zombie_hitboxes(
     }
 }
 
-// Player movement is now server-authoritative (see crates/server's
-// move_players) — this no longer touches Transform or avian3d at all, it
-// just packages input into a ClientInput and sends it. The resulting
-// position comes back later via replication (see apply_server_player_transform).
-// Noclip's fly-through-walls behavior had no server-side equivalent when
-// this moved, so KeyN's toggle is now inert (kept only so the debug panel
-// line and toggle system don't need removing too).
 // Every unacknowledged input this client has sent, oldest first: the input
 // itself, the dt it was generated with, and the Player physics state
 // (vertical_velocity/grounded) immediately *after* send_player_input
@@ -3228,6 +3246,7 @@ fn send_player_input(
     camera_query: Query<&FpsCamera>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut player_query: Query<(&mut Transform, &mut Player, &PlayerStance), Without<NetPlayer>>,
+    noclip: Res<Noclip>,
     mover: MoveAndSlide,
 ) {
     if game_over.0 {
@@ -3264,10 +3283,16 @@ fn send_player_input(
         sequence: *sequence,
         move_axis,
         yaw: cam.yaw,
-        jump: keys.just_pressed(KeyCode::Space),
+        // Held while noclipping (hold Space to fly up) vs. a one-shot
+        // press for a real jump — simulate_player_step's two branches
+        // (noclip vs normal) never both read this in the same frame, so
+        // it's safe to give it different semantics per mode instead of
+        // adding a second field.
+        jump: if noclip.0 { keys.pressed(KeyCode::Space) } else { keys.just_pressed(KeyCode::Space) },
         sprint: sprinting,
         aiming,
         stance,
+        noclip: noclip.0,
     };
     shared::movement::simulate_player_step(&mover, &mut transform, &mut player, stance, &input, dt);
     pending.0.push_back((*sequence, input, dt, player.vertical_velocity, player.grounded));

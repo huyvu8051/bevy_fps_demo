@@ -3,8 +3,8 @@ use bevy::prelude::*;
 
 use crate::{
     ClientInput, Player, PlayerStance, AIM_MOVE_SPEED_MULTIPLIER, CROUCH_LENGTH, CROUCH_SPEED_MULTIPLIER,
-    GRAVITY, GROUND_NORMAL_MIN_Y, JUMP_SPEED, MOVE_SPEED, PLAYER_LENGTH, PLAYER_RADIUS, PRONE_LENGTH,
-    PRONE_SPEED_MULTIPLIER, SPRINT_MULTIPLIER,
+    GRAVITY, GROUND_NORMAL_MIN_Y, JUMP_SPEED, MOVE_SPEED, NOCLIP_SPEED, PLAYER_LENGTH, PLAYER_RADIUS,
+    PRONE_LENGTH, PRONE_SPEED_MULTIPLIER, SPRINT_MULTIPLIER,
 };
 
 // The one authoritative player-movement step, shared by crates/server
@@ -16,6 +16,13 @@ use crate::{
 // must do the *exact* same math here or prediction will constantly
 // mispredict and visibly correct itself.
 pub fn simulate_player_step(mover: &MoveAndSlide, transform: &mut Transform, player: &mut Player, stance: PlayerStance, input: &ClientInput, dt: f32) {
+    if input.noclip {
+        simulate_noclip_step(transform, input, dt);
+        player.vertical_velocity = 0.0;
+        player.grounded = true;
+        return;
+    }
+
     let move_speed = if input.aiming {
         MOVE_SPEED * AIM_MOVE_SPEED_MULTIPLIER
     } else {
@@ -75,4 +82,30 @@ pub fn simulate_player_step(mover: &MoveAndSlide, transform: &mut Transform, pla
     transform.translation = output.position;
     player.grounded = grounded_this_frame;
     player.vertical_velocity = if grounded_this_frame { vertical_velocity.min(0.0) } else { vertical_velocity };
+}
+
+// No MoveAndSlide/collision at all — flies straight through geometry.
+// Horizontal direction is move_axis rotated by yaw same as normal movement;
+// vertical is jump=ascend / crouch=descend (ClientInput has no pitch to fly
+// "the way you're looking", only yaw, so this is the simplest fly scheme
+// that doesn't need one).
+fn simulate_noclip_step(transform: &mut Transform, input: &ClientInput, dt: f32) {
+    let speed = if input.sprint { NOCLIP_SPEED * SPRINT_MULTIPLIER } else { NOCLIP_SPEED };
+
+    let yaw_rotation = Quat::from_rotation_y(input.yaw);
+    let forward = yaw_rotation * Vec3::NEG_Z;
+    let right = yaw_rotation * Vec3::X;
+    let horizontal = forward * input.move_axis.y + right * input.move_axis.x;
+
+    let vertical = if input.jump {
+        1.0
+    } else if input.stance == PlayerStance::Crouching {
+        -1.0
+    } else {
+        0.0
+    };
+
+    let direction = horizontal + Vec3::Y * vertical;
+    let direction = direction.normalize_or_zero();
+    transform.translation += direction * speed * dt;
 }
