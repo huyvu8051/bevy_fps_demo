@@ -1426,18 +1426,77 @@ fn build_probe_common(app: &mut App) {
         .add_systems(Startup, |mut commands: Commands,
                                 asset_server: Res<AssetServer>,
                                 mut meshes: ResMut<Assets<Mesh>>,
-                                mut materials: ResMut<Assets<StandardMaterial>>| {
+                                mut materials: ResMut<Assets<StandardMaterial>>,
+                                mut images: ResMut<Assets<Image>>,
+                                windows: Query<&Window, With<PrimaryWindow>>| {
+            // Same dynamic-resolution-scale render target the real game
+            // uses (setup()'s own comment has the full explanation) —
+            // migrated here so the probe can A/B render-resolution cost
+            // the same way, instead of only being able to guess from the
+            // real game's numbers.
+            let (window_width, window_height) = windows
+                .single()
+                .map(|window| (window.resolution.physical_width(), window.resolution.physical_height()))
+                .unwrap_or((1280, 720));
+            let mut scene_image = Image::new_fill(
+                scaled_scene_extent(window_width, window_height, RESOLUTION_SCALE_DEFAULT),
+                TextureDimension::D2,
+                &[0, 0, 0, 255],
+                TextureFormat::Bgra8UnormSrgb,
+                RenderAssetUsages::default(),
+            );
+            scene_image.texture_descriptor.usage =
+                TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+            let scene_image_handle = images.add(scene_image);
+            commands.insert_resource(SceneRenderTarget(scene_image_handle.clone()));
+            commands.insert_resource(RenderResolutionScale::default());
+
             commands.spawn((
                 Camera3d::default(),
+                // Starts Off, matching the real game's own main cameras —
+                // toggleable at runtime via the MSAA button (see
+                // probe_msaa_button) to A/B the render cost live.
+                Msaa::Off,
                 Transform::from_xyz(0.0, 3.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
                 FpsCamera { yaw: 0.0, pitch: 0.0 },
+                // Renders into the resolution-scaled offscreen texture
+                // instead of the window directly — see present_camera/the
+                // fullscreen ImageNode right below for how it reaches the
+                // screen.
+                RenderTarget::from(scene_image_handle.clone()),
+            ));
+            // present_camera: routes all UI (via IsDefaultUiCamera) to the
+            // window at full native resolution, same as the real game's
+            // setup() — only the 3D scene (the ImageNode below) is scaled.
+            commands.spawn((Camera2d, IsDefaultUiCamera));
+            // Fullscreen quad showing the scaled render, stretched to fill
+            // the window. Spawned before any other UI so it stays the
+            // back-most sibling (Bevy UI draws root nodes in insertion
+            // order) — otherwise it'd paint over the touch controls.
+            // Pickable::IGNORE for the same reason as the real game's
+            // identical node: without it, this fullscreen node counts as
+            // "touch is over UI" for every touch anywhere on screen,
+            // breaking touch_move_axis/touch_look outright.
+            commands.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    position_type: PositionType::Absolute,
+                    ..default()
+                },
+                ImageNode::new(scene_image_handle),
+                Pickable::IGNORE,
             ));
             commands.spawn((
                 DirectionalLight {
                     illuminance: 3000.0,
+                    // Starts disabled (Bevy's own default) — toggleable via
+                    // the SHADOW button (see probe_shadow_button).
+                    shadows_enabled: false,
                     ..default()
                 },
                 Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+                ProbeSun,
             ));
             // PROBE_SIMPLE_SCENE=1 swaps the (fairly heavy, many-material)
             // Sponza gltf for a bare cube + floor plane — isolates whether
@@ -1461,6 +1520,26 @@ fn build_probe_common(app: &mut App) {
                 "Sponza"
             };
             spawn_touch_controls(&mut commands);
+            // Render-cost toggles (top-left, out of the way of the
+            // joystick/look/jump/crouch UI and the FPS overlay in the
+            // top-left corner) — lets us A/B the actual GPU cost of
+            // MSAA/shadows live on-device instead of guessing.
+            spawn_probe_render_toggle_button(&mut commands, "MSAA", 16.0, Color::srgba(0.3, 0.6, 1.0, 0.4), ProbeMsaaButton);
+            spawn_probe_render_toggle_button(&mut commands, "SHADOW", 84.0, Color::srgba(0.6, 0.3, 1.0, 0.4), ProbeShadowButton);
+            // Resolution-scale presets — same RESOLUTION_SCALE_PRESETS/
+            // ResolutionScaleButton/resolution_scale_buttons the real
+            // game's settings menu uses, just laid out as standalone
+            // buttons here instead of behind a menu (the probe has no
+            // settings menu).
+            for (i, &scale) in RESOLUTION_SCALE_PRESETS.iter().enumerate() {
+                spawn_probe_render_toggle_button(
+                    &mut commands,
+                    &format!("{:.0}%", scale * 100.0),
+                    152.0 + i as f32 * 64.0,
+                    Color::srgba(0.3, 1.0, 0.6, 0.4),
+                    ResolutionScaleButton(scale),
+                );
+            }
             // Small label so it's obvious at a glance this is the stripped-
             // down probe build, not the real game with a blank screen.
             commands.spawn((
@@ -1481,11 +1560,16 @@ fn build_probe_common(app: &mut App) {
         .add_systems(
             Update,
             (
+                multi_touch_button_interaction,
                 touch_move_axis,
                 update_joystick_knob_visual,
                 touch_look,
                 touch_jump_button,
                 probe_crouch_button,
+                probe_msaa_button,
+                probe_shadow_button,
+                resolution_scale_buttons,
+                resize_scene_render_target,
                 probe_apply_look,
                 probe_move,
             )
@@ -1498,6 +1582,89 @@ fn build_probe_common(app: &mut App) {
 // the camera's height, see probe_move.
 #[derive(Resource, Default)]
 struct ProbeCrouching(bool);
+
+// Marks the probe's DirectionalLight so probe_shadow_button can find it
+// without accidentally touching the real game's own sun light (this
+// function tree is never reachable from the real game, but the marker
+// keeps the query unambiguous regardless).
+#[derive(Component)]
+struct ProbeSun;
+
+#[derive(Component)]
+struct ProbeMsaaButton;
+#[derive(Component)]
+struct ProbeShadowButton;
+
+// Positioned below the FPS overlay (top-left corner) rather than reusing
+// spawn_touch_round_button's bottom-anchored layout, since "80px from the
+// bottom" would land in a different spot depending on screen height —
+// top-anchored is safe under 16:9 vs. 19.5:9 phones alike.
+fn spawn_probe_render_toggle_button(commands: &mut Commands, label: &str, left_px: f32, color: Color, marker: impl Component) {
+    commands
+        .spawn((
+            Node {
+                width: Val::Px(56.0),
+                height: Val::Px(56.0),
+                position_type: PositionType::Absolute,
+                left: Val::Px(left_px),
+                top: Val::Px(80.0),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(28.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(color),
+            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+            Button,
+            Interaction::default(),
+            marker,
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: 10.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+        });
+}
+
+// Toggles the probe camera's Msaa component between Off and Sample4 on tap
+// — a live A/B test of MSAA's actual render cost, since the probe starts
+// with it Off (matching the real game's main cameras) and there's no
+// keyboard on iOS to flip a debug flag any other way.
+fn probe_msaa_button(
+    button: Query<&Interaction, (With<ProbeMsaaButton>, Changed<Interaction>)>,
+    mut camera: Query<&mut Msaa, With<Camera3d>>,
+) {
+    for interaction in &button {
+        if *interaction == Interaction::Pressed {
+            let Ok(mut msaa) = camera.single_mut() else {
+                return;
+            };
+            *msaa = if *msaa == Msaa::Off { Msaa::Sample4 } else { Msaa::Off };
+        }
+    }
+}
+
+// Same idea for shadow rendering — starts disabled (Bevy's own
+// DirectionalLight default), toggled live to A/B its render cost.
+fn probe_shadow_button(
+    button: Query<&Interaction, (With<ProbeShadowButton>, Changed<Interaction>)>,
+    mut sun: Query<&mut DirectionalLight, With<ProbeSun>>,
+) {
+    for interaction in &button {
+        if *interaction == Interaction::Pressed {
+            let Ok(mut light) = sun.single_mut() else {
+                return;
+            };
+            light.shadows_enabled = !light.shadows_enabled;
+        }
+    }
+}
 
 // Tap-edge toggle, same pattern as touch_aim_button/touch_crouch_button —
 // reacts to the exact same TouchCrouchButton UI entity the real game's
@@ -1768,6 +1935,7 @@ fn build_game_common(app: &mut App) {
                 // separate leading group rather than folding into the next
                 // one below, which is already at the 20-arity tuple limit.
                 (
+                    multi_touch_button_interaction,
                     touch_move_axis,
                     update_joystick_knob_visual,
                     touch_look,
@@ -1775,7 +1943,8 @@ fn build_game_common(app: &mut App) {
                     touch_aim_button,
                     touch_jump_button,
                     touch_crouch_button,
-                ),
+                )
+                    .chain(),
                 // Settings menu (resolution scale) — independent of the
                 // gameplay chain below, so its own small group rather than
                 // pushed into an already near-the-20-arity-limit tuple (see
@@ -2663,6 +2832,60 @@ impl Default for AutoMaintainUi {
 // Changed<Interaction>-gated Pressed check (most of the cheat panel).
 fn tapped<T: Component>(q: &Query<&Interaction, (With<T>, Changed<Interaction>)>) -> bool {
     q.iter().any(|i| *i == Interaction::Pressed)
+}
+
+// bevy_ui's own ui_focus_system (the thing that normally drives Interaction)
+// only ever looks at Touches::first_pressed_position() — a single,
+// arbitrarily-chosen touch, full stop. On a touchscreen with two fingers
+// down at once (e.g. holding the movement joystick while tapping Fire),
+// whichever touch ui_focus_system picked as "first" gets normal hover/press
+// handling, but every OTHER simultaneous touch is invisible to it — any
+// button under a second finger silently never becomes Interaction::Pressed.
+// This is a known community pain point, not a CADisplayLink-specific bug: a
+// popular touch-joystick crate (SergioRibera/virtual_joystick) works around
+// the exact same limitation by hand-testing Touches against node rects
+// instead of relying on Interaction at all. This system does the same,
+// narrower: it only forces Interaction::Pressed for actual Button entities
+// hit by a touch OTHER than the "first" one ui_focus_system already
+// manages — so it never fights ui_focus_system over the same touch, and
+// never touches non-Button nodes (the joystick base/knob, which aren't
+// Button, are naturally excluded by the With<Button> filter below).
+// Clearing back to None on release is already handled for free: bevy_ui's
+// own mouse_released check reacts to touches_input.any_just_released() —
+// ANY touch ending, not just the first — and resets every Pressed node to
+// None, so this system only ever needs to set, never clear.
+// Runs first (see both call sites) so button-tap systems reading
+// Changed<Interaction> later in the same Update tick see this frame's
+// change immediately, not one frame late.
+fn multi_touch_button_interaction(
+    touches: Res<Touches>,
+    primary_window: Query<&Window, With<PrimaryWindow>>,
+    mut buttons: Query<(&ComputedNode, &UiGlobalTransform, &mut Interaction), With<Button>>,
+) {
+    let Some(first_id) = touches.iter().next().map(|t| t.id()) else {
+        return;
+    };
+    let Ok(window) = primary_window.single() else {
+        return;
+    };
+    // node.contains_point expects physical-pixel coordinates, same as
+    // window.physical_cursor_position() — touch.position() is logical, so
+    // needs the same scale-factor conversion ui_focus_system itself applies
+    // to touches_input.first_pressed_position().
+    let scale_factor = window.scale_factor();
+    let other_touch_positions: Vec<Vec2> = touches
+        .iter()
+        .filter(|touch| touch.id() != first_id)
+        .map(|touch| touch.position() * scale_factor)
+        .collect();
+    if other_touch_positions.is_empty() {
+        return;
+    }
+    for (node, transform, mut interaction) in &mut buttons {
+        if other_touch_positions.iter().any(|&pos| node.contains_point(*transform, pos)) {
+            interaction.set_if_neq(Interaction::Pressed);
+        }
+    }
 }
 
 #[derive(Component)]

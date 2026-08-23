@@ -17,6 +17,13 @@ class MetalView: UIView {
         super.awakeFromNib()
         configLayer()
         self.layer.backgroundColor = UIColor.clear.cgColor
+        // UIView.isMultipleTouchEnabled defaults to false — UIKit then only
+        // ever tracks ONE touch at a time for this view, silently dropping
+        // every other simultaneous touch before touchesBegan ever sees it.
+        // This alone could fully explain "combo touches don't work": the
+        // second finger's events may never have reached Swift at all, let
+        // alone Rust/Bevy.
+        self.isMultipleTouchEnabled = true
     }
     
     private func configLayer() {
