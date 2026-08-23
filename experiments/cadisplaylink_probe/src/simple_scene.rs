@@ -81,12 +81,7 @@ fn update_debug_overlay(
     text.0 = format!("FPS: {fps:.1}\nCPU: {:.1}%  (process, 1s avg)", cpu.last_percent);
 }
 
-// Same glTF our own MINIMAL_MAP_PROBE loads by default (crates/client's
-// SCENE_PATH) — copied into this experiment's assets/models/Sponza/ so the
-// two apps are showing identical geometry, not just similarly-shaped ones.
-const SCENE_PATH: &str = "models/Sponza/Sponza.gltf";
-
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(0.0, 3.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -98,7 +93,16 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         },
         Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    commands.spawn(SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(SCENE_PATH))));
+    commands.spawn((
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(50.0, 50.0))),
+        MeshMaterial3d(materials.add(Color::srgb(0.3, 0.3, 0.35))),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+    ));
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+        MeshMaterial3d(materials.add(Color::srgb(0.8, 0.2, 0.2))),
+        Transform::from_xyz(0.0, 0.5, 0.0),
+    ));
     commands.spawn((
         Text::new("FPS: --\nCPU: --"),
         TextFont {

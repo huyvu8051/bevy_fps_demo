@@ -86,6 +86,42 @@ Trên desktop cũng test được probe này (vẫn dùng đường winit bình 
 MINIMAL_MAP_PROBE=1 TOUCH_UI_PREVIEW=1 cargo run -p client
 ```
 
+## Đo CPU/GPU trên iOS
+
+Bevy's `SystemInformationDiagnosticsPlugin` **không hỗ trợ iOS** (dùng crate `sysinfo`, bị tắt hẳn trên target này ở source code) — không có plugin Bevy nào báo % CPU/GPU sẵn trên iOS.
+
+Cách thực tế để xem CPU/GPU/FPS trực tiếp trên máy, không cần Instruments:
+
+```bash
+xcrun devicectl device process launch --device <DEVICE_UUID> \
+  -e '{"MTL_HUD_ENABLED":"1"}' com.huyvu8051.bevyfpsdemo
+```
+
+Bật **Metal HUD** (tính năng có sẵn của Apple) — overlay đè lên góc màn hình, hiển thị FPS, frame time, GPU time trực tiếp trên thiết bị. Đây cũng chính là cách Bevy khuyến nghị thay vì dùng `FpsOverlayPlugin` để đo chính xác/ít overhead hơn.
+
+Muốn đo sâu hơn (breakdown theo shader pass, command buffer, memory bandwidth...) thì dùng Instruments với template **"Metal System Trace"**:
+```bash
+xcrun xctrace record --template "Metal System Trace" --device <DEVICE_UUID_XCTRACE> \
+  --time-limit 15s --output trace.trace --attach <PID>
+open trace.trace   # mở bằng Instruments GUI để xem track GPU
+```
+Lưu ý: `<DEVICE_UUID_XCTRACE>` khác format với UUID của `devicectl` — lấy qua `xcrun xctrace list devices`.
+
+Riêng số liệu CPU% tự viết tay (không có plugin Bevy hỗ trợ) — xem ví dụ ở `experiments/cadisplaylink_probe/src/simple_scene.rs` (`process_cpu_seconds()`, dùng `libc::getrusage`).
+
+### Game Mode (iOS 18+)
+
+Đã bật trong `crates/client/gen/apple/iOS/bevy_in_iOS/Info.plist`:
+```xml
+<key>LSApplicationCategoryType</key>
+<string>public.app-category.games</string>
+<key>GCSupportsGameMode</key>
+<true/>
+<key>LSSupportsGameMode</key>
+<true/>
+```
+Chỉ khiến app **đủ điều kiện** — hệ điều hành mới quyết định có thực sự kích hoạt Game Mode hay không (tuỳ trạng thái máy lúc đó: pin, nhiệt độ...). Khi kích hoạt, iOS giảm hoạt động nền + ưu tiên CPU/GPU cho app, giảm độ trễ Bluetooth — kiểm tra bằng icon Game Mode ở Control Center.
+
 ## Trạng thái tạm/test (cần dọn lại sau khi test xong)
 
 - `SERVER_ADDR` fallback trong `crates/client/src/lib.rs` đang hardcode IP Tailscale (`100.97.13.68:5031`) thay vì `127.0.0.1:5031`, để icon-tap launch trên điện thoại tự nối vào server chạy local qua Tailscale (icon-tap không đọc được scheme env var của Xcode).
