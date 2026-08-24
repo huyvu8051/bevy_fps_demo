@@ -265,6 +265,91 @@ struct SponzaUniforms {
     base_color_factor: [f32; 4],
 }
 
+// Phase 2 of the wgpu-replacement plan: GPU skinning for
+// models/soldier.glb (and later zombie.glb) — up to 4 joint influences
+// per vertex, standard linear-blend skinning. jointMatrices is computed
+// CPU-side once per frame (see skinned_gltf.rs's compute_joint_matrices,
+// same keyframe-sampling + hierarchy-walk math bevy_animation does
+// internally) and uploaded as a plain buffer the vertex shader indexes by
+// joint id.
+const SKINNED_SHADER_SOURCE: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct Vertex {
+    packed_float3 position;
+    packed_float3 normal;
+    packed_float2 uv;
+    ushort4 joints;
+    packed_float4 weights;
+};
+
+struct Uniforms {
+    float4x4 viewProjection;
+    float4x4 modelMatrix;
+    float3 lightDir;
+    float _pad;
+    float4 baseColorFactor;
+};
+
+struct VertexOut {
+    float4 position [[position]];
+    float3 normal;
+    float2 uv;
+};
+
+vertex VertexOut skinned_vertex(uint vid [[vertex_id]],
+                                 const device Vertex *verts [[buffer(0)]],
+                                 constant Uniforms &uniforms [[buffer(1)]],
+                                 const device float4x4 *jointMatrices [[buffer(2)]]) {
+    Vertex v = verts[vid];
+    float4x4 skin =
+        v.weights.x * jointMatrices[v.joints.x] +
+        v.weights.y * jointMatrices[v.joints.y] +
+        v.weights.z * jointMatrices[v.joints.z] +
+        v.weights.w * jointMatrices[v.joints.w];
+
+    float4 skinnedPos = skin * float4(float3(v.position), 1.0);
+    float3 skinnedNormal = normalize((skin * float4(float3(v.normal), 0.0)).xyz);
+
+    VertexOut out;
+    out.position = uniforms.viewProjection * uniforms.modelMatrix * skinnedPos;
+    out.normal = (uniforms.modelMatrix * float4(skinnedNormal, 0.0)).xyz;
+    out.uv = float2(v.uv);
+    return out;
+}
+
+fragment float4 skinned_fragment(VertexOut in [[stage_in]],
+                                  constant Uniforms &uniforms [[buffer(1)]],
+                                  texture2d<float> baseColorTexture [[texture(0)]],
+                                  sampler texSampler [[sampler(0)]]) {
+    float diffuse = max(dot(normalize(in.normal), -normalize(uniforms.lightDir)), 0.0);
+    float4 texColor = baseColorTexture.sample(texSampler, in.uv);
+    float4 baseColor = texColor * uniforms.baseColorFactor;
+    // soldier.glb's materials have no base color texture at all, and some
+    // of their baseColorFactor values are extremely dark (e.g. ~0.03) —
+    // real gear colors (black straps/vest), but combined with this
+    // shader's 0.35 ambient floor that multiplies straight through, they
+    // rendered as an indistinguishable solid black silhouette on-device.
+    // Floor the color itself (not just the lighting term) so dark
+    // materials stay visible/distinguishable; brighter ones (e.g. skin
+    // tone) are unaffected.
+    float3 flooredColor = max(baseColor.rgb, float3(0.12));
+    float3 lit = flooredColor * (0.35 + 0.65 * diffuse);
+    return float4(lit, baseColor.a);
+}
+"#;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct SkinnedUniforms {
+    view_projection: [[f32; 4]; 4],
+    model_matrix: [[f32; 4]; 4],
+    light_dir: [f32; 3],
+    _pad: f32,
+    base_color_factor: [f32; 4],
+}
+
 pub struct NativeMetalProbe {
     device: Device,
     layer: MetalLayer,
@@ -281,6 +366,10 @@ pub struct NativeMetalProbe {
     camera_position: [f32; 3],
     camera_yaw: f32,
     camera_pitch: f32,
+    skinned_pipeline: Option<RenderPipelineState>,
+    soldier_model: Option<super::skinned_gltf::SkinnedModel>,
+    start_time: std::time::Instant,
+    logged_joint_debug: bool,
 }
 
 impl NativeMetalProbe {
@@ -379,6 +468,26 @@ impl NativeMetalProbe {
         let white_texture = device.new_texture(&white_texture_descriptor);
         white_texture.replace_region(metal::MTLRegion::new_2d(0, 0, 1, 1), 0, [255u8, 255, 255, 255].as_ptr() as *const _, 4);
 
+        let skinned_pipeline = match device.new_library_with_source(SKINNED_SHADER_SOURCE, &compile_options) {
+            Ok(library) => {
+                let vertex_fn = library.get_function("skinned_vertex", None).unwrap();
+                let fragment_fn = library.get_function("skinned_fragment", None).unwrap();
+                let descriptor = RenderPipelineDescriptor::new();
+                descriptor.set_vertex_function(Some(&vertex_fn));
+                descriptor.set_fragment_function(Some(&fragment_fn));
+                descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+                descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+                device.new_render_pipeline_state(&descriptor).ok()
+            }
+            Err(err) => {
+                eprintln!("[native_metal_probe] skinned shader compile failed: {err}");
+                None
+            }
+        };
+        let resource_path = bundle_resource_path().unwrap_or_default();
+        let soldier_path = std::path::Path::new(&resource_path).join("assets/models/soldier.glb");
+        let soldier_model = super::skinned_gltf::load_skinned_gltf(&device, &soldier_path);
+
         Self {
             device,
             layer,
@@ -392,9 +501,13 @@ impl NativeMetalProbe {
             vertex_count: vertices.len(),
             depth_state,
             depth_texture: None,
-            camera_position: [0.0, 3.0, 4.0],
+            camera_position: [0.0, 1.0, 0.0],
             camera_yaw: 0.0,
             camera_pitch: 0.0,
+            skinned_pipeline,
+            soldier_model,
+            start_time: std::time::Instant::now(),
+            logged_joint_debug: false,
         }
     }
 
@@ -444,7 +557,29 @@ impl NativeMetalProbe {
     // playable probe). Draws Sponza if it loaded, otherwise falls back to
     // the box arena — same "don't show a blank screen while diagnosing"
     // reasoning as ViewController.swift's own fallback.
+    // Re-reads the layer's own current `bounds` (in points) each frame and
+    // updates drawableSize accordingly — CAMetalLayer.drawableSize doesn't
+    // auto-track bounds changes when driven manually like this (unlike
+    // MTKView, which redoes this every layout pass), and setting it only
+    // once in `new()` used whatever bounds existed at that moment, which
+    // may predate Auto Layout settling on the view's final frame — this
+    // produced a torn/skewed image (part of the screen using stale
+    // geometry from an earlier, wrong-sized drawable).
+    fn sync_drawable_size(&self) {
+        unsafe {
+            let raw_layer = self.layer.as_ptr() as *mut Object;
+            let bounds: CGRect = msg_send![raw_layer, bounds];
+            let scale = self.layer.contents_scale();
+            let target = CGSize::new(bounds.size.width * scale, bounds.size.height * scale);
+            let current = self.layer.drawable_size();
+            if (current.width - target.width).abs() > 0.5 || (current.height - target.height).abs() > 0.5 {
+                self.layer.set_drawable_size(target);
+            }
+        }
+    }
+
     pub fn render_frame(&mut self) {
+        self.sync_drawable_size();
         let drawable_size = self.layer.drawable_size();
         let (width, height) = (drawable_size.width as u64, drawable_size.height as u64);
         let depth_texture = self.ensure_depth_texture(width, height);
@@ -530,6 +665,69 @@ impl NativeMetalProbe {
             encoder.set_vertex_bytes(1, std::mem::size_of::<Uniforms>() as u64, &uniforms as *const _ as *const _);
             encoder.set_fragment_bytes(1, std::mem::size_of::<Uniforms>() as u64, &uniforms as *const _ as *const _);
             encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, self.vertex_count as u64);
+        }
+
+        if let (Some(pipeline), Some(model)) = (&self.skinned_pipeline, &self.soldier_model) {
+            let joint_matrices = model.compute_joint_matrices(0, self.start_time.elapsed().as_secs_f32());
+            if !self.logged_joint_debug {
+                self.logged_joint_debug = true;
+                let translations: Vec<[f32; 3]> = joint_matrices.iter().map(|m| [m[3][0], m[3][1], m[3][2]]).collect();
+                let min_y = translations.iter().map(|t| t[1]).fold(f32::INFINITY, f32::min);
+                let max_y = translations.iter().map(|t| t[1]).fold(f32::NEG_INFINITY, f32::max);
+                eprintln!(
+                    "[native_metal_probe] joint count={} first={:?} y_range=[{min_y},{max_y}] mesh_count={}",
+                    joint_matrices.len(),
+                    translations.first(),
+                    model.meshes.len()
+                );
+            }
+            let joint_buffer = self.device.new_buffer_with_data(
+                joint_matrices.as_ptr() as *const _,
+                (joint_matrices.len() * std::mem::size_of::<[[f32; 4]; 4]>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            // Stand a couple meters in front of the camera's spawn point,
+            // facing back toward it — placeholder placement just to
+            // confirm skinning works; real per-entity transforms come in
+            // Phase 3 (ECS-driven dynamic entities).
+            let model_matrix = [
+                [-1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, -1.0, 0.0],
+                [0.0, 0.0, -3.0, 1.0],
+            ];
+            encoder.set_render_pipeline_state(pipeline);
+            encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
+            for mesh in &model.meshes {
+                let skinned_uniforms = SkinnedUniforms {
+                    view_projection,
+                    model_matrix,
+                    light_dir,
+                    _pad: 0.0,
+                    base_color_factor: mesh.base_color_factor,
+                };
+                encoder.set_vertex_buffer(0, Some(&mesh.vertex_buffer), 0);
+                encoder.set_vertex_buffer(2, Some(&joint_buffer), 0);
+                encoder.set_vertex_bytes(
+                    1,
+                    std::mem::size_of::<SkinnedUniforms>() as u64,
+                    &skinned_uniforms as *const _ as *const _,
+                );
+                encoder.set_fragment_bytes(
+                    1,
+                    std::mem::size_of::<SkinnedUniforms>() as u64,
+                    &skinned_uniforms as *const _ as *const _,
+                );
+                let texture = mesh.base_color_texture.as_ref().unwrap_or(&self.white_texture);
+                encoder.set_fragment_texture(0, Some(texture));
+                encoder.draw_indexed_primitives(
+                    MTLPrimitiveType::Triangle,
+                    mesh.index_count as u64,
+                    MTLIndexType::UInt32,
+                    &mesh.index_buffer,
+                    0,
+                );
+            }
         }
 
         encoder.end_encoding();

@@ -22,6 +22,7 @@ mod ffi;
 pub mod gltf_scene;
 mod ios_view;
 pub mod native_metal_probe;
+pub mod skinned_gltf;
 pub use ios_view::IosViewObj;
 
 #[derive(Eq, Hash, PartialEq, Debug, Copy, Clone)]

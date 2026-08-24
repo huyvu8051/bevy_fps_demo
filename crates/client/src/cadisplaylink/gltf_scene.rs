@@ -83,7 +83,7 @@ fn transform_normal(m: Mat4, n: [f32; 3]) -> [f32; 3] {
     if len > 1e-6 { [v[0] / len, v[1] / len, v[2] / len] } else { [0.0, 1.0, 0.0] }
 }
 
-fn upload_texture(device: &Device, width: u32, height: u32, rgba: &[u8]) -> metal::Texture {
+pub(crate) fn upload_texture(device: &Device, width: u32, height: u32, rgba: &[u8]) -> metal::Texture {
     let descriptor = metal::TextureDescriptor::new();
     descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm);
     descriptor.set_width(width as u64);
@@ -99,7 +99,7 @@ fn upload_texture(device: &Device, width: u32, height: u32, rgba: &[u8]) -> meta
 // gltf::image::Data comes back in whatever channel layout the source image
 // had (R8, RG8, RGB8, RGBA8, ...); Metal's texture upload here always wants
 // RGBA8, so pad/expand as needed.
-fn to_rgba8(image: &gltf::image::Data) -> Vec<u8> {
+pub(crate) fn to_rgba8(image: &gltf::image::Data) -> Vec<u8> {
     use gltf::image::Format;
     let pixel_count = (image.width * image.height) as usize;
     let mut out = Vec::with_capacity(pixel_count * 4);
