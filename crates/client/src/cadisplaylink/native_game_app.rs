@@ -123,6 +123,30 @@ pub fn build_headless_game_ecs_app() -> App {
     app.add_plugins(bevy_replicon_renet2::RepliconRenetPlugins);
     crate::build_game_common(&mut app);
 
+    // Step 3 (input): several of the game's own input systems
+    // (`touch_move_axis`, `touch_look`, `mouse_look`'s `CursorOptions` gate)
+    // query `With<PrimaryWindow>`/`Query<&Window, ...>` and silently bail
+    // every frame if no such entity exists — which is exactly the situation
+    // pre-Step-3, since we deliberately never add `WindowPlugin`. Spawning
+    // one plain `Window`+`PrimaryWindow`+`CursorOptions` entity (pure data,
+    // no actual OS window, no `WinitPlugin` involved) is enough to make
+    // those systems run unmodified against the real FFI-injected input
+    // messages (see ffi.rs's new `native_metal_probe_touch_*`/`key_changed`/
+    // `mouse_*` functions) exactly like the on-device/Simulator winit path
+    // does. `CursorOptions.grab_mode` starts `Locked` — mirrors what a
+    // connected Bluetooth mouse/keyboard would set via
+    // `cadisplaylink_mouse_connected` on iOS (no on-screen cursor to
+    // click-to-lock there either) — so `mouse_look` reads `MouseMotion`
+    // immediately instead of early-returning.
+    app.world_mut().spawn((
+        bevy::window::Window { resolution: (1170_u32, 2532_u32).into(), ..Default::default() },
+        bevy::window::PrimaryWindow,
+        bevy::window::CursorOptions {
+            grab_mode: bevy::window::CursorGrabMode::Locked,
+            ..Default::default()
+        },
+    ));
+
     if app.plugins_state() != bevy::app::PluginsState::Ready {
         while app.plugins_state() == bevy::app::PluginsState::Adding {
             #[cfg(not(target_arch = "wasm32"))]

@@ -35,6 +35,20 @@ void native_metal_probe_render_frame(struct native_metal_probe *probe);
 void native_metal_probe_update_camera(struct native_metal_probe *probe, float forward, float strafe, float look_dx, float look_dy, float delta_time);
 void native_metal_probe_release(struct native_metal_probe *probe);
 
+// Phase 6 Step 3: same input plumbing as the cadisplaylink_* functions
+// below, re-targeted at a real-game-mode probe's own headless App — call
+// these instead of the cadisplaylink_* ones when
+// USE_REAL_GAME_NATIVE_RENDERER is set, for BOTH touch and Bluetooth
+// keyboard/mouse. No-ops if the probe isn't in real-game mode.
+void native_metal_probe_touch_started(struct native_metal_probe *probe, uint64_t touch_id, float x, float y);
+void native_metal_probe_touch_moved(struct native_metal_probe *probe, uint64_t touch_id, float x, float y);
+void native_metal_probe_touch_ended(struct native_metal_probe *probe, uint64_t touch_id, float x, float y);
+void native_metal_probe_touch_cancelled(struct native_metal_probe *probe, uint64_t touch_id, float x, float y);
+void native_metal_probe_key_changed(struct native_metal_probe *probe, uint16_t key_id, bool pressed);
+void native_metal_probe_mouse_connected(struct native_metal_probe *probe, bool connected);
+void native_metal_probe_mouse_moved(struct native_metal_probe *probe, float delta_x, float delta_y);
+void native_metal_probe_mouse_button_changed(struct native_metal_probe *probe, uint8_t button, bool pressed);
+
 // touch_id is a stable per-finger identifier for the duration of one touch
 // (we pass in the UITouch's own pointer address, cast to an integer) — the
 // probe needs two simultaneous touches (joystick + look-drag) to both work,

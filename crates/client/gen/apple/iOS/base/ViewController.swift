@@ -383,7 +383,9 @@ class ViewController: UIViewController {
     private var nativeDepthTexture: MTLTexture?
     private var sponzaPipeline: MTLRenderPipelineState?
     private var sponzaMeshes: [NativeMeshEntry] = []
-    private var rustMetalProbe: OpaquePointer?
+    // Not `private`: GameControllerInput.swift (Bluetooth keyboard/mouse,
+    // Phase 6 Step 3) reads this the same way it already reads `bevyApp`.
+    var rustMetalProbe: OpaquePointer?
     // Phase 6 Step 1 spike (temporary) — see RUN_HEADLESS_GAME_APP_SPIKE.
     private var headlessGameApp: OpaquePointer?
     private var headlessGameAppTimer: Timer?
@@ -776,6 +778,19 @@ class ViewController: UIViewController {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Phase 6 Step 3: in real-game-renderer mode, ALSO forward every
+        // touch to the real game's own headless App (native_metal_probe_
+        // touch_started) so its own touch_move_axis/touch_look systems
+        // drive movement/look — alongside (not instead of) the existing
+        // moveTouch/lookTouch tracking below, which render_frame's camera
+        // pose gets overwritten from the real FpsCamera anyway once one
+        // exists (see native_metal_probe.rs's render_frame).
+        if USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe {
+            for touch in touches {
+                let location = touch.location(in: self.metalV)
+                native_metal_probe_touch_started(probe, touchId(for: touch), Float(location.x), Float(location.y))
+            }
+        }
         if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
             for touch in touches {
                 let location = touch.location(in: self.metalV)
@@ -799,6 +814,12 @@ class ViewController: UIViewController {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe {
+            for touch in touches {
+                let location = touch.location(in: self.metalV)
+                native_metal_probe_touch_moved(probe, touchId(for: touch), Float(location.x), Float(location.y))
+            }
+        }
         if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
             for touch in touches {
                 if touch == moveTouch {
@@ -829,6 +850,12 @@ class ViewController: UIViewController {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe {
+            for touch in touches {
+                let location = touch.location(in: self.metalV)
+                native_metal_probe_touch_ended(probe, touchId(for: touch), Float(location.x), Float(location.y))
+            }
+        }
         if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
             endNativeTouch(touches)
             return
@@ -841,6 +868,12 @@ class ViewController: UIViewController {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe {
+            for touch in touches {
+                let location = touch.location(in: self.metalV)
+                native_metal_probe_touch_cancelled(probe, touchId(for: touch), Float(location.x), Float(location.y))
+            }
+        }
         if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
             endNativeTouch(touches)
             return

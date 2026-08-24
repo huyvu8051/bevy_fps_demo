@@ -125,26 +125,32 @@ pub extern "C" fn cadisplaylink_enter_frame(obj: *mut std::ffi::c_void) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn cadisplaylink_touch_started(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
-    touched(obj, touch_id, TouchPhase::Started, Vec2::new(x, y));
+    let app = unsafe { &mut *(obj as *mut App) };
+    touched(app, touch_id, TouchPhase::Started, Vec2::new(x, y));
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn cadisplaylink_touch_moved(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
-    touched(obj, touch_id, TouchPhase::Moved, Vec2::new(x, y));
+    let app = unsafe { &mut *(obj as *mut App) };
+    touched(app, touch_id, TouchPhase::Moved, Vec2::new(x, y));
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn cadisplaylink_touch_ended(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
-    touched(obj, touch_id, TouchPhase::Ended, Vec2::new(x, y));
+    let app = unsafe { &mut *(obj as *mut App) };
+    touched(app, touch_id, TouchPhase::Ended, Vec2::new(x, y));
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn cadisplaylink_touch_cancelled(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
-    touched(obj, touch_id, TouchPhase::Canceled, Vec2::new(x, y));
+    let app = unsafe { &mut *(obj as *mut App) };
+    touched(app, touch_id, TouchPhase::Canceled, Vec2::new(x, y));
 }
 
-fn touched(obj: *mut std::ffi::c_void, touch_id: u64, phase: TouchPhase, position: Vec2) {
-    let app = unsafe { &mut *(obj as *mut App) };
+// Shared by both the toy `cadisplaylink_*` App and Phase 6 Step 3's
+// `native_metal_probe_*` real-game App (see below) — same message-writing
+// logic either way, only which `App`'s `World` it targets differs.
+pub(super) fn touched(app: &mut App, touch_id: u64, phase: TouchPhase, position: Vec2) {
     let mut windows_state: bevy::ecs::system::SystemState<Query<Entity, bevy::ecs::query::With<Window>>> =
         bevy::ecs::system::SystemState::from_world(app.world_mut());
     let windows = windows_state.get(app.world_mut());
@@ -244,6 +250,12 @@ fn map_key_id(id: u16) -> Option<KeyCode> {
 #[unsafe(no_mangle)]
 pub extern "C" fn cadisplaylink_key_changed(obj: *mut std::ffi::c_void, key_id: u16, pressed: bool) {
     let app = unsafe { &mut *(obj as *mut App) };
+    key_changed(app, key_id, pressed);
+}
+
+// Shared by both `cadisplaylink_key_changed` and Step 3's
+// `native_metal_probe_key_changed`.
+pub(super) fn key_changed(app: &mut App, key_id: u16, pressed: bool) {
     let Some(key_code) = map_key_id(key_id) else {
         return;
     };
@@ -268,6 +280,12 @@ pub extern "C" fn cadisplaylink_key_changed(obj: *mut std::ffi::c_void, key_id: 
 #[unsafe(no_mangle)]
 pub extern "C" fn cadisplaylink_mouse_connected(obj: *mut std::ffi::c_void, connected: bool) {
     let app = unsafe { &mut *(obj as *mut App) };
+    mouse_connected(app, connected);
+}
+
+// Shared by both `cadisplaylink_mouse_connected` and Step 3's
+// `native_metal_probe_mouse_connected`.
+pub(super) fn mouse_connected(app: &mut App, connected: bool) {
     let mut cursor_state: bevy::ecs::system::SystemState<Query<&mut CursorOptions, bevy::ecs::query::With<PrimaryWindow>>> =
         bevy::ecs::system::SystemState::from_world(app.world_mut());
     let mut cursor = cursor_state.get_mut(app.world_mut());
@@ -280,6 +298,12 @@ pub extern "C" fn cadisplaylink_mouse_connected(obj: *mut std::ffi::c_void, conn
 #[unsafe(no_mangle)]
 pub extern "C" fn cadisplaylink_mouse_moved(obj: *mut std::ffi::c_void, delta_x: f32, delta_y: f32) {
     let app = unsafe { &mut *(obj as *mut App) };
+    mouse_moved(app, delta_x, delta_y);
+}
+
+// Shared by both `cadisplaylink_mouse_moved` and Step 3's
+// `native_metal_probe_mouse_moved`.
+pub(super) fn mouse_moved(app: &mut App, delta_x: f32, delta_y: f32) {
     app.world_mut().write_message(MouseMotion {
         delta: Vec2::new(delta_x, delta_y),
     });
@@ -289,6 +313,12 @@ pub extern "C" fn cadisplaylink_mouse_moved(obj: *mut std::ffi::c_void, delta_x:
 #[unsafe(no_mangle)]
 pub extern "C" fn cadisplaylink_mouse_button_changed(obj: *mut std::ffi::c_void, button: u8, pressed: bool) {
     let app = unsafe { &mut *(obj as *mut App) };
+    mouse_button_changed(app, button, pressed);
+}
+
+// Shared by both `cadisplaylink_mouse_button_changed` and Step 3's
+// `native_metal_probe_mouse_button_changed`.
+pub(super) fn mouse_button_changed(app: &mut App, button: u8, pressed: bool) {
     let button = match button {
         0 => MouseButton::Left,
         1 => MouseButton::Right,
@@ -303,6 +333,79 @@ pub extern "C" fn cadisplaylink_mouse_button_changed(obj: *mut std::ffi::c_void,
         state: if pressed { ButtonState::Pressed } else { ButtonState::Released },
         window,
     });
+}
+
+// Phase 6 Step 3: same input plumbing as the `cadisplaylink_*` functions
+// above, re-targeted at the real headless game App a `NativeMetalProbe`
+// constructed with `real_game: true` owns (see
+// `NativeMetalProbe::real_game_app_mut`) — Swift calls these instead of the
+// `cadisplaylink_*` ones when `USE_REAL_GAME_NATIVE_RENDERER` is set, for
+// BOTH touch (joystick/look-drag) and Bluetooth keyboard/mouse
+// (GameControllerInput.swift), so either input source drives the real
+// game's own `send_player_input`/`mouse_look`/`touch_look` systems
+// unmodified. No-ops if this probe isn't in real-game mode.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_touch_started(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        touched(app, touch_id, TouchPhase::Started, Vec2::new(x, y));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_touch_moved(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        touched(app, touch_id, TouchPhase::Moved, Vec2::new(x, y));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_touch_ended(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        touched(app, touch_id, TouchPhase::Ended, Vec2::new(x, y));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_touch_cancelled(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        touched(app, touch_id, TouchPhase::Canceled, Vec2::new(x, y));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_key_changed(obj: *mut std::ffi::c_void, key_id: u16, pressed: bool) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        key_changed(app, key_id, pressed);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_mouse_connected(obj: *mut std::ffi::c_void, connected: bool) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        mouse_connected(app, connected);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_mouse_moved(obj: *mut std::ffi::c_void, delta_x: f32, delta_y: f32) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        mouse_moved(app, delta_x, delta_y);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_mouse_button_changed(obj: *mut std::ffi::c_void, button: u8, pressed: bool) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        mouse_button_changed(app, button, pressed);
+    }
 }
 
 #[unsafe(no_mangle)]

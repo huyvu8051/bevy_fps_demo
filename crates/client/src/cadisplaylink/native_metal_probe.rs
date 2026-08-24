@@ -761,6 +761,17 @@ impl NativeMetalProbe {
         }
     }
 
+    // Phase 6 Step 3: exposes the headless real-game App to ffi.rs's
+    // `native_metal_probe_touch_*`/`key_changed`/`mouse_*` functions so they
+    // can write real Bevy input messages (`TouchInput`/`KeyboardInput`/
+    // `MouseMotion`/`MouseButtonInput`) straight into it — the exact same
+    // message-writing helpers `cadisplaylink_*` already uses against the
+    // toy/real `cadisplaylink_create_game_app`, just re-targeted. `None`
+    // when this probe wasn't constructed with `real_game: true`.
+    pub fn real_game_app_mut(&mut self) -> Option<&mut bevy::app::App> {
+        self.real_game_app.as_mut()
+    }
+
     // Same touch-driven free-fly camera as the Swift-only demo used to
     // have — Swift now tracks the raw touches (see ViewController.swift's
     // moveTouch/lookTouch) and passes the resulting per-frame deltas here
