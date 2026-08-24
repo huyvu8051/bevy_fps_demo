@@ -369,29 +369,88 @@ pub struct NativeMetalProbe {
     skinned_pipeline: Option<RenderPipelineState>,
     soldier_model: Option<super::skinned_gltf::SkinnedModel>,
     zombie_model: Option<super::skinned_gltf::SkinnedModel>,
-    // Phase 3 stand-in for ECS-driven dynamic entities (see the
-    // wgpu-replacement plan) — real per-entity spawn/despawn and movement
-    // will come from Bevy's ECS + networking once this renderer is wired
-    // into the actual game App; for now this proves the RENDERING side
-    // (many independently transformed/animated skinned draws per frame,
-    // each with its own joint buffer) works and measures its cost, ahead
-    // of that bigger integration step.
-    entities: Vec<EntityInstance>,
+    // Phase 3: entities now genuinely live in a Bevy ECS World (see
+    // ecs_app below) instead of a hardcoded Vec — patrol movement runs as
+    // a real Bevy system over real Transform components. Real
+    // spawn/despawn and movement driven by actual networking is a later
+    // step (this ECS App has no RepliconPlugins/game logic yet, just
+    // MinimalPlugins + our own patrol system) — this proves the "extract
+    // a draw list from ECS each frame" seam works end-to-end, which is
+    // the actual architectural risk the plan calls out.
+    ecs_app: bevy::app::App,
     start_time: std::time::Instant,
 }
 
+#[derive(bevy::ecs::component::Component, Clone, Copy)]
 enum EntityKind {
     Soldier,
     Zombie,
 }
 
-struct EntityInstance {
-    kind: EntityKind,
-    patrol_center: [f32; 2],
-    patrol_radius: f32,
-    patrol_speed: f32,
+#[derive(bevy::ecs::component::Component)]
+struct Patrol {
+    center: [f32; 2],
+    radius: f32,
+    speed: f32,
     phase: f32,
-    anim_offset: f32,
+}
+
+#[derive(bevy::ecs::component::Component)]
+struct AnimOffset(f32);
+
+// Real Bevy ECS system — walks every entity with a Patrol component and
+// moves its Transform along a circle each tick, driven by Bevy's own Time
+// resource (from MinimalPlugins' TimePlugin). This is the seam the plan
+// calls "extract": render_frame() below queries the same World for
+// (Transform, EntityKind, AnimOffset) after ticking this system, instead
+// of reading a hand-maintained Vec.
+fn patrol_system(time: bevy::ecs::system::Res<bevy::time::Time>, mut query: bevy::ecs::system::Query<(&mut bevy::transform::components::Transform, &Patrol)>) {
+    let now = time.elapsed_secs();
+    for (mut transform, patrol) in &mut query {
+        let angle = patrol.phase + now * patrol.speed;
+        let x = patrol.center[0] + angle.cos() * patrol.radius;
+        let z = patrol.center[1] + angle.sin() * patrol.radius;
+        let facing = angle + std::f32::consts::FRAC_PI_2;
+        transform.translation = bevy::math::Vec3::new(x, 0.0, z);
+        transform.rotation = bevy::math::Quat::from_rotation_y(facing);
+    }
+}
+
+fn build_entity_ecs_app() -> bevy::app::App {
+    let mut app = bevy::app::App::new();
+    app.add_plugins(bevy::MinimalPlugins);
+    app.add_systems(bevy::app::Update, patrol_system);
+    app.world_mut().spawn((
+        bevy::transform::components::Transform::IDENTITY,
+        EntityKind::Zombie,
+        Patrol { center: [-4.0, -3.0], radius: 2.5, speed: 0.4, phase: 0.0 },
+        AnimOffset(0.0),
+    ));
+    app.world_mut().spawn((
+        bevy::transform::components::Transform::IDENTITY,
+        EntityKind::Zombie,
+        Patrol { center: [3.0, -4.0], radius: 3.0, speed: 0.3, phase: 1.7 },
+        AnimOffset(0.5),
+    ));
+    app.world_mut().spawn((
+        bevy::transform::components::Transform::IDENTITY,
+        EntityKind::Zombie,
+        Patrol { center: [-2.0, -6.0], radius: 2.0, speed: 0.5, phase: 3.1 },
+        AnimOffset(1.1),
+    ));
+    app.world_mut().spawn((
+        bevy::transform::components::Transform::IDENTITY,
+        EntityKind::Zombie,
+        Patrol { center: [5.0, -2.0], radius: 2.2, speed: 0.35, phase: 4.6 },
+        AnimOffset(1.8),
+    ));
+    app.world_mut().spawn((
+        bevy::transform::components::Transform::IDENTITY,
+        EntityKind::Soldier,
+        Patrol { center: [0.0, -3.0], radius: 1.5, speed: 0.2, phase: 0.0 },
+        AnimOffset(0.0),
+    ));
+    app
 }
 
 impl NativeMetalProbe {
@@ -512,19 +571,7 @@ impl NativeMetalProbe {
         let zombie_path = std::path::Path::new(&resource_path).join("assets/models/zombie.glb");
         let zombie_model = super::skinned_gltf::load_skinned_gltf(&device, &zombie_path);
 
-        // A handful of independently patrolling entities (some soldiers,
-        // mostly zombies) scattered around the open hall near the camera —
-        // stands in for what ECS/networking would spawn in the real game,
-        // to measure the cost of drawing several skinned, independently
-        // animated/transformed characters per frame (see EntityInstance's
-        // own doc comment).
-        let entities = vec![
-            EntityInstance { kind: EntityKind::Zombie, patrol_center: [-4.0, -3.0], patrol_radius: 2.5, patrol_speed: 0.4, phase: 0.0, anim_offset: 0.0 },
-            EntityInstance { kind: EntityKind::Zombie, patrol_center: [3.0, -4.0], patrol_radius: 3.0, patrol_speed: 0.3, phase: 1.7, anim_offset: 0.5 },
-            EntityInstance { kind: EntityKind::Zombie, patrol_center: [-2.0, -6.0], patrol_radius: 2.0, patrol_speed: 0.5, phase: 3.1, anim_offset: 1.1 },
-            EntityInstance { kind: EntityKind::Zombie, patrol_center: [5.0, -2.0], patrol_radius: 2.2, patrol_speed: 0.35, phase: 4.6, anim_offset: 1.8 },
-            EntityInstance { kind: EntityKind::Soldier, patrol_center: [0.0, -3.0], patrol_radius: 1.5, patrol_speed: 0.2, phase: 0.0, anim_offset: 0.0 },
-        ];
+        let ecs_app = build_entity_ecs_app();
 
         Self {
             device,
@@ -545,7 +592,7 @@ impl NativeMetalProbe {
             skinned_pipeline,
             soldier_model,
             zombie_model,
-            entities,
+            ecs_app,
             start_time: std::time::Instant::now(),
         }
     }
@@ -708,33 +755,46 @@ impl NativeMetalProbe {
 
         if let Some(pipeline) = &self.skinned_pipeline {
             let now = self.start_time.elapsed().as_secs_f32();
+
+            // Tick the ECS world (advances Time, runs patrol_system over
+            // every Patrol+Transform entity), then extract — this is the
+            // actual "extract" seam the plan calls for: a plain Vec built
+            // from a Query, decoupled from bevy_render entirely. Collected
+            // into an owned Vec (not held as a live query/World borrow)
+            // so the draw loop below can freely borrow self.device /
+            // self.soldier_model etc. at the same time.
+            self.ecs_app.update();
+            let extracted: Vec<(bevy::transform::components::Transform, EntityKind, f32)> = {
+                let mut query_state = self
+                    .ecs_app
+                    .world_mut()
+                    .query::<(&bevy::transform::components::Transform, &EntityKind, &AnimOffset)>();
+                query_state.iter(self.ecs_app.world()).map(|(t, k, a)| (*t, *k, a.0)).collect()
+            };
+
             encoder.set_render_pipeline_state(pipeline);
             encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
 
-            for entity in &self.entities {
-                let model = match entity.kind {
+            for (transform, kind, anim_offset) in &extracted {
+                let model = match kind {
                     EntityKind::Soldier => self.soldier_model.as_ref(),
                     EntityKind::Zombie => self.zombie_model.as_ref(),
                 };
                 let Some(model) = model else { continue };
 
-                // Simple circular patrol — a placeholder for real
-                // ECS/networking-driven movement, just enough to prove
-                // per-entity transforms actually update every frame (not
-                // baked once at load time like the static Sponza meshes).
-                let angle = entity.phase + now * entity.patrol_speed;
-                let x = entity.patrol_center[0] + angle.cos() * entity.patrol_radius;
-                let z = entity.patrol_center[1] + angle.sin() * entity.patrol_radius;
-                let facing = angle + std::f32::consts::FRAC_PI_2;
-                let (sin_f, cos_f) = facing.sin_cos();
+                let [qx, qy, qz, qw] = transform.rotation.to_array();
+                let (x2, y2, z2) = (qx + qx, qy + qy, qz + qz);
+                let (xx, xy, xz) = (qx * x2, qx * y2, qx * z2);
+                let (yy, yz, zz) = (qy * y2, qy * z2, qz * z2);
+                let (wx, wy, wz) = (qw * x2, qw * y2, qw * z2);
                 let model_matrix = [
-                    [cos_f, 0.0, -sin_f, 0.0],
-                    [0.0, 1.0, 0.0, 0.0],
-                    [sin_f, 0.0, cos_f, 0.0],
-                    [x, 0.0, z, 1.0],
+                    [1.0 - (yy + zz), xy + wz, xz - wy, 0.0],
+                    [xy - wz, 1.0 - (xx + zz), yz + wx, 0.0],
+                    [xz + wy, yz - wx, 1.0 - (xx + yy), 0.0],
+                    [transform.translation.x, transform.translation.y, transform.translation.z, 1.0],
                 ];
 
-                let joint_matrices = model.compute_joint_matrices(0, now + entity.anim_offset);
+                let joint_matrices = model.compute_joint_matrices(0, now + anim_offset);
                 let joint_buffer = self.device.new_buffer_with_data(
                     joint_matrices.as_ptr() as *const _,
                     (joint_matrices.len() * std::mem::size_of::<[[f32; 4]; 4]>()) as u64,
