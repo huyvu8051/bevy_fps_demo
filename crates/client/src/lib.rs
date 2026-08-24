@@ -4876,23 +4876,34 @@ fn spawn_debug_panel(commands: &mut Commands) {
     ));
 }
 
+// Bundles the ~10 debug-toggle resource reads update_debug_panel needs
+// into one param — that fn was already at Bevy's 16-param system function
+// limit (see HitMarkerAssets' own doc comment for the same constraint hit
+// elsewhere), and the refresh-throttle Local pushed it over.
+#[derive(SystemParam)]
+struct DebugPanelToggles<'w> {
+    noclip: Res<'w, Noclip>,
+    freeze: Res<'w, FreezeZombies>,
+    show_hitboxes: Res<'w, ShowHitboxes>,
+    god_mode: Res<'w, GodMode>,
+    aim_blur: Res<'w, AimBlurEnabled>,
+    dof_focal_alt: Res<'w, AimDofFocalDistanceAlt>,
+    zombie_anim_disabled: Res<'w, ZombieAnimDisabled>,
+    zombie_health_bars_hidden: Res<'w, ZombieHealthBarsHidden>,
+    zombie_lod_disabled: Res<'w, ZombieLodDisabled>,
+    player_model_visible: Res<'w, PlayerModelVisible>,
+}
+
 fn update_debug_panel(
     panel_visible: Res<DebugPanelVisible>,
-    noclip: Res<Noclip>,
-    freeze: Res<FreezeZombies>,
-    show_hitboxes: Res<ShowHitboxes>,
-    god_mode: Res<GodMode>,
-    aim_blur: Res<AimBlurEnabled>,
-    dof_focal_alt: Res<AimDofFocalDistanceAlt>,
+    toggles: DebugPanelToggles,
     timings: Res<PerfTimings>,
-    zombie_anim_disabled: Res<ZombieAnimDisabled>,
-    zombie_health_bars_hidden: Res<ZombieHealthBarsHidden>,
-    zombie_lod_disabled: Res<ZombieLodDisabled>,
-    player_model_visible: Res<PlayerModelVisible>,
     debug_bots: Query<&DebugBot>,
     selected_bot: Res<SelectedDebugBot>,
     zombies: Query<(), With<Zombie>>,
     mut text: Query<(&mut Text, &mut Node), With<DebugPanelText>>,
+    time: Res<Time>,
+    mut refresh_elapsed: Local<f32>,
 ) {
     let Ok((mut text, mut node)) = text.single_mut() else {
         return;
@@ -4903,8 +4914,17 @@ fn update_debug_panel(
     }
     node.display = Display::Flex;
 
+    // A human reading debug text doesn't need it re-formatted 120x/sec —
+    // this was pure wasted string allocation every single frame the panel
+    // happened to be open. 10Hz is still imperceptibly "live".
+    *refresh_elapsed += time.delta_secs();
+    if *refresh_elapsed < 0.1 {
+        return;
+    }
+    *refresh_elapsed = 0.0;
+
     let on_off = |b: bool| if b { "ON" } else { "OFF" };
-    let focal_distance = if dof_focal_alt.0 {
+    let focal_distance = if toggles.dof_focal_alt.0 {
         AIM_DOF_FOCAL_DISTANCE_B
     } else {
         AIM_DOF_FOCAL_DISTANCE_A
@@ -4931,17 +4951,17 @@ fn update_debug_panel(
          Debug bots: {} (selected: {})\n\
          move_zombies: {:.2}ms | health bars: {:.2}ms | zombies: {} (near: {})\n\
          Zombies alive: {}",
-        on_off(noclip.0),
-        on_off(freeze.0),
-        on_off(show_hitboxes.0),
-        on_off(god_mode.0),
-        on_off(aim_blur.0),
+        on_off(toggles.noclip.0),
+        on_off(toggles.freeze.0),
+        on_off(toggles.show_hitboxes.0),
+        on_off(toggles.god_mode.0),
+        on_off(toggles.aim_blur.0),
         focal_distance,
         ZOMBIE_SPAWNS.len(),
-        on_off(!zombie_anim_disabled.0),
-        on_off(!zombie_health_bars_hidden.0),
-        on_off(!zombie_lod_disabled.0),
-        on_off(player_model_visible.0),
+        on_off(!toggles.zombie_anim_disabled.0),
+        on_off(!toggles.zombie_health_bars_hidden.0),
+        on_off(!toggles.zombie_lod_disabled.0),
+        on_off(toggles.player_model_visible.0),
         debug_bots.iter().count(),
         selected_bot.0.map_or("none".to_string(), |id| id.to_string()),
         timings.move_zombies_ms,
@@ -6029,6 +6049,27 @@ fn draw_zombie_hitboxes(
 #[derive(Resource, Default)]
 struct PredictedInputs(std::collections::VecDeque<(u32, ClientInput, f32, f32, bool)>);
 
+// No point sending network input faster than crates/server's own
+// SERVER_TICK_HZ can act on it.
+const INPUT_SEND_HZ: f32 = 30.0;
+
+// send_player_input's own throttle state — bundled into one Local (instead
+// of two) since that fn was already at Bevy's 16-param system function
+// limit (see HitMarkerAssets' own doc comment for the same constraint hit
+// elsewhere).
+#[derive(Default)]
+struct InputSendThrottleState {
+    elapsed: f32,
+    // just_pressed()-style jump edges are only true for a single Update
+    // tick; if that tick happens to fall between two throttled network
+    // sends, a naive "send whatever `jump` is right now" would silently
+    // drop the jump server-side. OR-ing every edge seen since the last
+    // send into this flag (cleared only once actually sent) guarantees a
+    // jump the player felt happen locally also reaches the server, just
+    // possibly up to 1/INPUT_SEND_HZ later than the exact input frame.
+    jump_edge_pending: bool,
+}
+
 // Captures the new input and applies it to the local Player immediately —
 // this is what makes movement feel instant instead of waiting a round trip.
 // predict_player_movement only reconciles (rare, network-tick-rate
@@ -6049,6 +6090,14 @@ fn send_player_input(
     touch_move_axis: Res<TouchMoveAxis>,
     mut local_moving: ResMut<LocalPlayerMoving>,
     mover: MoveAndSlide,
+    // Local prediction below still runs every single Update tick (up to
+    // 120Hz on iOS via CADisplayLink) for smooth immediate feedback — only
+    // the network SEND at the bottom of this fn is rate-limited, since
+    // the server only ticks at SERVER_TICK_HZ (30Hz) and can't act on
+    // input faster than that anyway; sending up to 4x more packets/sec
+    // than the server can consume was pure wasted CPU/bandwidth on both
+    // ends, not extra responsiveness.
+    mut input_send_state: Local<InputSendThrottleState>,
 ) {
     if game_over.0 {
         return;
@@ -6113,7 +6162,17 @@ fn send_player_input(
     };
     shared::movement::simulate_player_step(&mover, &mut transform, &mut player, stance, &input, dt);
     pending.0.push_back((*sequence, input, dt, player.vertical_velocity, player.grounded));
-    commands.client_trigger(input);
+
+    input_send_state.jump_edge_pending |= input.jump;
+    input_send_state.elapsed += dt;
+    if input_send_state.elapsed < 1.0 / INPUT_SEND_HZ {
+        return;
+    }
+    input_send_state.elapsed = 0.0;
+    let mut sent_input = input;
+    sent_input.jump = input_send_state.jump_edge_pending;
+    input_send_state.jump_edge_pending = false;
+    commands.client_trigger(sent_input);
 }
 
 // The camera doesn't move itself anymore — it just follows the physics body
