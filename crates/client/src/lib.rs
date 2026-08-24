@@ -1645,8 +1645,11 @@ fn build_game_common(app: &mut App) {
         .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
         .init_resource::<ZombieCountUi>()
         .init_resource::<AutoMaintainUi>()
-        //.add_systems(Startup, connect_to_server)
-        /*
+        // Restored alongside the Update-schedule block above — this was
+        // disabled in the same CPU-investigation commit (80de58d), not
+        // pre-existing/intentional; Phase 6 needs real networking/
+        // replication actually wired up for anything to spawn.
+        .add_systems(Startup, connect_to_server)
         .add_systems(
             Update,
             (
@@ -1656,14 +1659,13 @@ fn build_game_common(app: &mut App) {
                 auto_reconnect,
             ),
         )
-        */
-        //.add_systems(OnExit(ClientState::Connected), despawn_replicated_on_disconnect)
-        //.add_observer(mark_local_player)
-        //.add_observer(on_zombie_replicated)
-        //.add_observer(on_net_transform_replicated)
-        //.add_observer(on_net_player_replicated)
-        //.add_observer(on_shot_fx)
-        //.add_observer(on_game_state_event)
+        .add_systems(OnExit(ClientState::Connected), despawn_replicated_on_disconnect)
+        .add_observer(mark_local_player)
+        .add_observer(on_zombie_replicated)
+        .add_observer(on_net_transform_replicated)
+        .add_observer(on_net_player_replicated)
+        .add_observer(on_shot_fx)
+        .add_observer(on_game_state_event)
         .init_resource::<Noclip>()
         .init_resource::<FreezeZombies>()
         .init_resource::<ShowHitboxes>()
@@ -1705,8 +1707,11 @@ fn build_game_common(app: &mut App) {
     // plus setup()'s one-time Startup spawn (Sponza, lights, gun/zombie
     // models, all UI). No per-frame game logic at all. Compare this
     // Metal HUD reading against the full game to see how much of the CPU
-    // cost is "our systems" vs. fixed engine/render overhead.
-    /*
+    // cost is "our systems" vs. fixed engine/render overhead. Restored for
+    // Phase 6 of the wgpu-replacement plan — the CPU-encoding-cost
+    // investigation concluded the overhead is wgpu-architectural, not
+    // driven by system count, so there's no reason to keep real gameplay
+    // logic disabled, and Phase 6 needs it running for anything to move.
     app.add_systems(
         Update,
         (
@@ -1816,7 +1821,6 @@ fn build_game_common(app: &mut App) {
         )
             .chain(),
     );
-    */
 }
 
 #[derive(Resource)]
