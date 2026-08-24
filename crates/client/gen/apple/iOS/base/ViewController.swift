@@ -232,6 +232,126 @@ private extension Comparable {
     }
 }
 
+// Phase 4 of the wgpu-replacement plan: HUD/joystick/crosshair as plain
+// UIKit views layered over metalV, instead of reimplementing bevy_ui's
+// text/layout engine — presentation-only, no gameplay logic lives here.
+// Deliberately dumb: the joystick knob just visualizes the SAME
+// moveTouch/lookTouch state ViewController already tracks for the camera
+// (see updateTouchUI(), called from enterFrame each frame); the fire
+// button decrements a local ammo counter with no actual shooting wired to
+// the renderer yet — this phase is about the UI layer existing and being
+// visible/interactive, not full gameplay integration.
+final class TouchHUD {
+    let joystickBase = UIView()
+    let joystickKnob = UIView()
+    let fireButton = UIButton(type: .custom)
+    let healthLabel = UILabel()
+    let ammoLabel = UILabel()
+    let crosshairH = UIView()
+    let crosshairV = UIView()
+
+    private let joystickRadius: CGFloat = 55
+    private let knobRadius: CGFloat = 24
+    var ammo = 30 {
+        didSet { ammoLabel.text = "\(ammo) / 90" }
+    }
+    var health = 100 {
+        didSet { healthLabel.text = "HP \(health)" }
+    }
+
+    func install(in parent: UIView, fireAction: @escaping () -> Void) {
+        // Joystick — bottom-left, semi-transparent circles.
+        joystickBase.frame = CGRect(x: 0, y: 0, width: joystickRadius * 2, height: joystickRadius * 2)
+        joystickBase.layer.cornerRadius = joystickRadius
+        joystickBase.backgroundColor = UIColor.white.withAlphaComponent(0.12)
+        joystickBase.layer.borderColor = UIColor.white.withAlphaComponent(0.35).cgColor
+        joystickBase.layer.borderWidth = 1
+        joystickBase.isUserInteractionEnabled = false
+        parent.addSubview(joystickBase)
+
+        joystickKnob.frame = CGRect(x: 0, y: 0, width: knobRadius * 2, height: knobRadius * 2)
+        joystickKnob.layer.cornerRadius = knobRadius
+        joystickKnob.backgroundColor = UIColor.white.withAlphaComponent(0.5)
+        joystickKnob.isUserInteractionEnabled = false
+        parent.addSubview(joystickKnob)
+
+        // Fire button — bottom-right, semi-transparent red circle.
+        let fireRadius: CGFloat = 40
+        fireButton.frame = CGRect(x: 0, y: 0, width: fireRadius * 2, height: fireRadius * 2)
+        fireButton.layer.cornerRadius = fireRadius
+        fireButton.backgroundColor = UIColor.systemRed.withAlphaComponent(0.55)
+        fireButton.setTitle("FIRE", for: .normal)
+        fireButton.setTitleColor(.white, for: .normal)
+        fireButton.titleLabel?.font = .boldSystemFont(ofSize: 14)
+        fireButton.addTarget(self, action: #selector(handleFireTouchDown), for: .touchDown)
+        parent.addSubview(fireButton)
+        self.fireAction = fireAction
+
+        // Health/ammo HUD — top corners.
+        healthLabel.text = "HP \(health)"
+        healthLabel.textColor = .white
+        healthLabel.font = .boldSystemFont(ofSize: 18)
+        healthLabel.sizeToFit()
+        parent.addSubview(healthLabel)
+
+        ammoLabel.text = "\(ammo) / 90"
+        ammoLabel.textColor = .white
+        ammoLabel.font = .boldSystemFont(ofSize: 18)
+        ammoLabel.textAlignment = .right
+        ammoLabel.sizeToFit()
+        parent.addSubview(ammoLabel)
+
+        // Crosshair — dead center, two thin white bars.
+        crosshairH.backgroundColor = UIColor.white.withAlphaComponent(0.8)
+        crosshairV.backgroundColor = UIColor.white.withAlphaComponent(0.8)
+        parent.addSubview(crosshairH)
+        parent.addSubview(crosshairV)
+
+        layout(in: parent)
+    }
+
+    private var fireAction: (() -> Void)?
+
+    @objc private func handleFireTouchDown() {
+        guard ammo > 0 else { return }
+        ammo -= 1
+        fireAction?()
+        UIView.animate(withDuration: 0.05, animations: {
+            self.fireButton.backgroundColor = UIColor.systemRed.withAlphaComponent(0.9)
+        }, completion: { _ in
+            UIView.animate(withDuration: 0.15) {
+                self.fireButton.backgroundColor = UIColor.systemRed.withAlphaComponent(0.55)
+            }
+        })
+    }
+
+    func layout(in parent: UIView) {
+        let bounds = parent.bounds
+        let margin: CGFloat = 24
+        joystickBase.center = CGPoint(x: margin + joystickRadius, y: bounds.height - margin - joystickRadius)
+        joystickKnob.center = joystickBase.center
+        fireButton.center = CGPoint(x: bounds.width - margin - fireButton.bounds.width / 2, y: bounds.height - margin - fireButton.bounds.height / 2)
+        healthLabel.frame.origin = CGPoint(x: margin, y: margin + 20)
+        ammoLabel.frame.origin = CGPoint(x: bounds.width - margin - ammoLabel.bounds.width, y: margin + 20)
+        crosshairH.frame = CGRect(x: bounds.midX - 10, y: bounds.midY - 1, width: 20, height: 2)
+        crosshairV.frame = CGRect(x: bounds.midX - 1, y: bounds.midY - 10, width: 2, height: 20)
+    }
+
+    // Called once per frame — moves the knob to visualize the SAME
+    // moveTouch drag ViewController already reads for camera movement, so
+    // there's exactly one source of truth for "how far the joystick is
+    // pushed", not a second copy of the touch-tracking logic.
+    func updateKnob(dragX: CGFloat, dragY: CGFloat, maxDrag: CGFloat) {
+        let clampedX = (dragX / maxDrag).clamped(to: -1...1) * (joystickRadius - knobRadius)
+        let clampedY = (dragY / maxDrag).clamped(to: -1...1) * (joystickRadius - knobRadius)
+        joystickKnob.center = CGPoint(x: joystickBase.center.x + clampedX, y: joystickBase.center.y + clampedY)
+    }
+
+    func resetKnob() {
+        joystickKnob.center = joystickBase.center
+    }
+}
+
 class ViewController: UIViewController {
     @IBOutlet var metalV: MetalView!
     var bevyApp: OpaquePointer?
@@ -260,6 +380,7 @@ class ViewController: UIViewController {
     private var lookTouch: UITouch?
     private var lookTouchLast: CGPoint = .zero
     private var lastFrameTime: CFTimeInterval = CACurrentMediaTime()
+    private let touchHUD = TouchHUD()
     // Bluetooth keyboard/mouse (GameController framework) — see
     // GameControllerInput.swift. Created after bevyApp so its "wire
     // already-connected devices" check in init() has a real app pointer
@@ -285,6 +406,21 @@ class ViewController: UIViewController {
         if #available(iOS 13.4, *) {
             self.metalV.addInteraction(UIPointerInteraction(delegate: self))
         }
+        touchHUD.install(in: self.view) { [weak self] in
+            self?.handleFire()
+        }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        touchHUD.layout(in: self.view)
+    }
+
+    // No shooting logic wired to the renderer yet (Phase 4 is the UI
+    // layer existing and being interactive, not full gameplay) — just
+    // proves the button press reaches Swift code.
+    private func handleFire() {
+        print("[touch-hud] fire, ammo=\(touchHUD.ammo)")
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -587,6 +723,7 @@ class ViewController: UIViewController {
                 let maxDrag: Float = 60.0
                 strafe = (dx / maxDrag).clamped(to: -1...1)
                 forward = (-dy / maxDrag).clamped(to: -1...1)
+                touchHUD.updateKnob(dragX: CGFloat(dx), dragY: CGFloat(dy), maxDrag: CGFloat(maxDrag))
             }
             native_metal_probe_update_camera(probe, forward, strafe, lookDx, lookDy, deltaTime)
             native_metal_probe_render_frame(probe)
@@ -653,6 +790,7 @@ class ViewController: UIViewController {
         for touch in touches {
             if touch == moveTouch {
                 moveTouch = nil
+                touchHUD.resetKnob()
             }
             if touch == lookTouch {
                 lookTouch = nil
