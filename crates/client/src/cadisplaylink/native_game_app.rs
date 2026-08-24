@@ -29,6 +29,14 @@ pub fn build_headless_game_ecs_app() -> App {
     // is missing. Did you forget to add StatesPlugin..." before this line
     // was added.
     app.add_plugins(bevy::state::app::StatesPlugin);
+    // Needed for correct `GlobalTransform` propagation (parent-relative
+    // hierarchies like the gun's glTF scene, itself `ChildOf(camera)`) —
+    // pure ECS hierarchy math, no window/GPU dependency. Without this,
+    // `GlobalTransform` never gets computed from `Transform` + parent
+    // chains, which is exactly what made the gun's meshes render garbled
+    // when Step 4's extraction first tried using local `Transform` as if
+    // it were world space for parented entities.
+    app.add_plugins(bevy::transform::TransformPlugin);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     // `AssetPlugin` only inserts `AssetServer`; it does NOT register the
     // `Mesh`/`Image` asset *types* themselves — that's normally done by

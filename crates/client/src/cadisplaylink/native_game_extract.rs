@@ -11,21 +11,27 @@
 //! draw-call wiring.
 
 use bevy::asset::Assets;
-use bevy::ecs::query::{With, Without};
+use bevy::ecs::query::With;
 use bevy::ecs::system::{Query, Res, SystemState};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::mesh::{Mesh, Mesh3d};
-use bevy::transform::components::Transform;
+use bevy::transform::components::{GlobalTransform, Transform};
 
 use shared::{NetPlayer, Zombie};
 
-/// One drawable static mesh — currently just arena walls/floor
-/// (`spawn_test_arena`, `crates/client/src/lib.rs:3915`); the gun's
-/// glTF-scene-instantiated child meshes (`GUN_PATH =
-/// "models/ak47_scope.glb"`) are deliberately excluded (see the
-/// `Without<ChildOf>` filter below) until parent-chain composition is
-/// implemented — treating their parent-relative `Transform` as world
-/// space renders them in the wrong place/scale.
+/// One drawable static mesh — arena walls/floor (`spawn_test_arena`,
+/// `crates/client/src/lib.rs:3915`) and the gun's glTF-scene-instantiated
+/// child meshes (`GUN_PATH = "models/ak47_scope.glb"`) both show up here.
+/// Both carry plain `Mesh3d`/`MeshMaterial3d<StandardMaterial>` once
+/// Bevy's scene spawner has run; querying `GlobalTransform` (not local
+/// `Transform`) is what makes the gun's meshes — parented to the gun
+/// root, itself `ChildOf(camera)` — come out in correct world space
+/// without any manual parent-chain math here. Requires
+/// `bevy::transform::TransformPlugin` in the headless App (see
+/// native_game_app.rs) to actually propagate `Transform` -> `GlobalTransform`
+/// through the hierarchy each tick; first attempt at this used local
+/// `Transform` directly and rendered the gun as a garbled giant mesh,
+/// confirming the propagation step really is necessary, not optional.
 pub struct ExtractedMesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
@@ -34,19 +40,16 @@ pub struct ExtractedMesh {
     /// of which are always indexed, but guard rather than assume).
     pub indices: Vec<u32>,
     pub base_color: [f32; 4],
-    /// Local `Transform` at extraction time. Root-level entities only
-    /// (arena/gun-root) — the arena has no parent so this is already its
-    /// world transform; the gun's own child meshes are relative to the gun
-    /// root, which is itself `ChildOf(camera)` (camera-relative viewmodel,
-    /// not world space) — composing the full chain is Step 4's job once an
-    /// actual draw call needs it.
+    /// World-space transform at extraction time (from `GlobalTransform`,
+    /// converted to a plain `Transform` for the renderer's convenience —
+    /// see `bake_static_meshes` in native_metal_probe.rs).
     pub transform: Transform,
 }
 
 /// Camera pose, replicating `apply_view_recoil`'s rotation composition
 /// (`crates/client/src/lib.rs:5144`) minus the recoil/lean terms (headless
 /// has no input driving those yet — Step 3): `eye` is the `FpsCamera`
-/// entity's own `Transform.translation` (already kept in sync with the
+/// entity's own world-space translation (already kept in sync with the
 /// player entity by the game's own systems), `yaw`/`pitch` straight from
 /// `FpsCamera` so a renderer can build `Quat::from_euler(YXZ, yaw, pitch, 0)`
 /// itself without this module depending on any Metal/view-matrix code.
@@ -77,45 +80,41 @@ impl Default for CameraSnapshot {
 pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSnapshot {
     let mut snapshot = RenderSnapshot::default();
 
-    // Camera: the FpsCamera entity's own Transform + yaw/pitch. See this
-    // module's doc comment on CameraSnapshot for why recoil/lean are
-    // omitted here (Step 3 concern, not extraction).
-    let mut camera_state: SystemState<Query<(&Transform, &crate::FpsCamera)>> =
+    // Camera: the FpsCamera entity's own world-space translation +
+    // yaw/pitch. See this module's doc comment on CameraSnapshot for why
+    // recoil/lean are omitted here (Step 3 concern, not extraction).
+    let mut camera_state: SystemState<Query<(&GlobalTransform, &crate::FpsCamera)>> =
         SystemState::new(world);
     if let Some((transform, cam)) = camera_state.get(world).iter().next() {
         snapshot.camera = Some(CameraSnapshot {
-            eye: transform.translation.to_array(),
+            eye: transform.translation().to_array(),
             yaw: cam.yaw,
             pitch: cam.pitch,
         });
     }
 
-    // Zombies: plain marker + Transform, per the plan's own extraction spec.
-    let mut zombie_state: SystemState<Query<&Transform, With<Zombie>>> =
+    // Zombies: plain marker + world-space transform, per the plan's own
+    // extraction spec.
+    let mut zombie_state: SystemState<Query<&GlobalTransform, With<Zombie>>> =
         SystemState::new(world);
-    snapshot.zombies = zombie_state.get(world).iter().copied().collect();
+    snapshot.zombies =
+        zombie_state.get(world).iter().map(|t| t.compute_transform()).collect();
 
     // Remote players: NetPlayer entities that aren't this client's own —
     // LocalPlayer is inserted by the game's own `mark_local_player` system
     // onto whichever NetPlayer matches this client's MyClientId.
     let mut remote_state: SystemState<
-        Query<&Transform, (With<NetPlayer>, Without<crate::LocalPlayer>)>,
+        Query<&GlobalTransform, (With<NetPlayer>, bevy::ecs::query::Without<crate::LocalPlayer>)>,
     > = SystemState::new(world);
-    snapshot.remote_players = remote_state.get(world).iter().copied().collect();
+    snapshot.remote_players =
+        remote_state.get(world).iter().map(|t| t.compute_transform()).collect();
 
-    // Static meshes: arena walls/floor only for now — excludes anything
-    // with a `ChildOf` (the gun's scene-instantiated meshes are parented
-    // to the gun root, itself `ChildOf(camera)`; their `Transform` is
-    // local to that parent chain, not world space, so treating it as
-    // world-space like this module does for root-level entities renders
-    // them in the wrong place/scale). Composing the full parent chain
-    // (camera -> gun root -> mesh) is real follow-up work, not yet done —
-    // see this module's doc comment on ExtractedMesh.
+    // Static meshes: arena walls/floor + gun scene meshes, both plain
+    // Mesh3d/MeshMaterial3d<StandardMaterial> entities — see this module's
+    // doc comment on ExtractedMesh for why GlobalTransform (not local
+    // Transform) is what makes the parented gun meshes come out correct.
     let mut mesh_state: SystemState<(
-        Query<
-            (&Mesh3d, &MeshMaterial3d<StandardMaterial>, &Transform),
-            Without<bevy::ecs::hierarchy::ChildOf>,
-        >,
+        Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>, &GlobalTransform)>,
         Res<Assets<Mesh>>,
         Res<Assets<StandardMaterial>>,
     )> = SystemState::new(world);
@@ -145,7 +144,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
                 let s = material.base_color.to_srgba();
                 [s.red, s.green, s.blue, s.alpha]
             },
-            transform: *transform,
+            transform: transform.compute_transform(),
         });
     }
 

@@ -971,6 +971,13 @@ impl NativeMetalProbe {
         // instead of touch input, and the arena+gun geometry gets rebaked
         // into a plain vertex buffer each frame (see bake_static_meshes).
         let mut real_game_vertices: Option<Vec<Vertex>> = None;
+        // Real zombies/remote players, reusing the toy patrol World's own
+        // `(Transform, EntityKind, AnimOffset)` shape (anim_offset always
+        // 0.0 here — no per-entity animation phase offset needed since
+        // these aren't hand-placed patrol dummies) so draw_scene's
+        // existing skinned-mesh loop draws them completely unchanged.
+        let mut real_game_extracted: Vec<(bevy::transform::components::Transform, EntityKind, f32)> =
+            Vec::new();
         if let Some(app) = &mut self.real_game_app {
             app.update();
             let snapshot = extract_render_snapshot(app.world_mut());
@@ -980,6 +987,9 @@ impl NativeMetalProbe {
                 self.camera_pitch = cam.pitch;
             }
             real_game_vertices = Some(bake_static_meshes(&snapshot.static_meshes));
+            real_game_extracted.extend(snapshot.zombies.into_iter().map(|t| (t, EntityKind::Zombie, 0.0)));
+            real_game_extracted
+                .extend(snapshot.remote_players.into_iter().map(|t| (t, EntityKind::Soldier, 0.0)));
         }
         let real_game_buffer = real_game_vertices.as_ref().filter(|v| !v.is_empty()).map(|vertices| {
             let buffer = self.device.new_buffer_with_data(
@@ -1028,12 +1038,10 @@ impl NativeMetalProbe {
         // without re-ticking Time in between.
         // In real-game mode the toy patrol World is irrelevant (its
         // hardcoded zombies/soldier would just float inside the real
-        // arena) — skip ticking/extracting it and draw no skinned entities
-        // for now. Real zombie/player rendering from `real_game_app`'s own
-        // Zombie/NetPlayer transforms is follow-up work, not part of this
-        // step (which is about seeing the arena+gun geometry at all).
+        // arena) — skip ticking/extracting it and draw the real
+        // zombies/remote players collected above instead.
         let extracted: Vec<(bevy::transform::components::Transform, EntityKind, f32)> = if is_real_game {
-            Vec::new()
+            real_game_extracted
         } else {
             self.ecs_app.update();
             let mut query_state = self
