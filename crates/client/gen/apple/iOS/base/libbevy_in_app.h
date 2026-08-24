@@ -54,4 +54,12 @@ void cadisplaylink_mouse_moved(struct bevy_app *app, float delta_x, float delta_
 // button: 0 = left, 1 = right, 2 = middle.
 void cadisplaylink_mouse_button_changed(struct bevy_app *app, uint8_t button, bool pressed);
 
+// Phase 6 Step 1 feasibility spike: the real game's gameplay App
+// (physics/networking/AI/prediction) with no window/render backend at all
+// — see crates/client/src/cadisplaylink/native_game_app.rs. Not wired into
+// any renderer yet; native_game_app_tick just prints zombie/player counts.
+struct bevy_app *native_game_app_create(void);
+void native_game_app_tick(struct bevy_app *app);
+void native_game_app_release(struct bevy_app *app);
+
 #endif /* libbevy_in_app_h */

@@ -31,6 +31,12 @@ let USE_NATIVE_METAL_DEMO = false
 // whether the encoding-cost overhead is specific to wgpu's abstraction, or
 // something about driving Metal from Rust in general.
 let USE_RUST_METAL_DEMO = true
+// Phase 6 Step 1 feasibility spike (temporary): boots the REAL game's
+// gameplay App (physics/networking/AI/prediction) with no window/render
+// backend at all and ticks it repeatedly, printing zombie/player counts —
+// see native_game_app_create/tick in cadisplaylink/ffi.rs. No renderer
+// reads from it yet. Remove once Phase 6 Step 1 is confirmed working.
+let RUN_HEADLESS_GAME_APP_SPIKE = true
 
 private let arenaHalfSize: Float = 10.0
 private let arenaWallHeight: Float = 4.0
@@ -368,6 +374,9 @@ class ViewController: UIViewController {
     private var sponzaPipeline: MTLRenderPipelineState?
     private var sponzaMeshes: [NativeMeshEntry] = []
     private var rustMetalProbe: OpaquePointer?
+    // Phase 6 Step 1 spike (temporary) — see RUN_HEADLESS_GAME_APP_SPIKE.
+    private var headlessGameApp: OpaquePointer?
+    private var headlessGameAppTimer: Timer?
     // Free-fly camera state, driven by touch (no Bevy/Rust involved).
     private var cameraPosition = SIMD3<Float>(0, 3, 4)
     private var cameraYaw: Float = 0
@@ -440,6 +449,13 @@ class ViewController: UIViewController {
             }
         } else if bevyApp == nil {
             self.createBevyApp()
+        }
+        if RUN_HEADLESS_GAME_APP_SPIKE && headlessGameApp == nil {
+            headlessGameApp = native_game_app_create()
+            headlessGameAppTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                guard let app = self?.headlessGameApp else { return }
+                native_game_app_tick(app)
+            }
         }
         self.displayLink.isPaused = false
     }

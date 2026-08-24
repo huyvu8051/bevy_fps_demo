@@ -21,6 +21,8 @@ use uuid::Uuid;
 mod ffi;
 pub mod gltf_scene;
 mod ios_view;
+pub mod native_game_app;
+pub mod native_game_extract;
 pub mod native_metal_probe;
 pub mod skinned_gltf;
 pub use ios_view::IosViewObj;
