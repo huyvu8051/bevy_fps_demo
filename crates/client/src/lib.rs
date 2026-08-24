@@ -4678,14 +4678,26 @@ fn zombies_damage_player(
     // locally-nonexistent Chase marker.
     mut zombies: Query<(&Transform, &mut ZombieAttackTimer), With<Zombie>>,
     mut player: Query<(&Transform, &mut Health), With<Player>>,
+    mut elapsed: Local<f32>,
 ) {
     if game_over.0 || freeze.0 || god_mode.0 {
         return;
     }
+    // ZombieAttackTimer counts down in real wall-clock seconds, so unlike
+    // update_zombie_lod's pure distance check, throttling this can't just
+    // skip frames — it has to pass the FULL accumulated dt since the last
+    // time this actually ran, not a single frame's delta, or the attack
+    // cooldown would tick down slower than real time and damage would
+    // land later than ZOMBIE_ATTACK_INTERVAL actually specifies.
+    *elapsed += time.delta_secs();
+    if *elapsed < 1.0 / INPUT_SEND_HZ {
+        return;
+    }
+    let dt = *elapsed;
+    *elapsed = 0.0;
     let Ok((player_transform, mut health)) = player.single_mut() else {
         return;
     };
-    let dt = time.delta_secs();
     for (zombie_transform, mut attack_timer) in &mut zombies {
         let in_range = zombie_transform.translation.distance(player_transform.translation) <= ZOMBIE_STOP_DISTANCE;
         if !in_range {
@@ -6826,7 +6838,18 @@ fn update_zombie_lod(
     lod_disabled: Res<ZombieLodDisabled>,
     player: Query<&Transform, With<Player>>,
     mut zombies: Query<(&Transform, &mut ZombieMotion), (With<Zombie>, Without<Player>)>,
+    time: Res<Time>,
+    mut elapsed: Local<f32>,
 ) {
+    // No dt-dependent math here (just a per-zombie distance threshold), so
+    // unlike zombies_damage_player this doesn't need accumulated-dt
+    // bookkeeping to stay correct — motion.far just ends up up to
+    // 1/INPUT_SEND_HZ stale, imperceptible for a render-cost LOD tier.
+    *elapsed += time.delta_secs();
+    if *elapsed < 1.0 / INPUT_SEND_HZ {
+        return;
+    }
+    *elapsed = 0.0;
     let perf_start = std::time::Instant::now();
     let Ok(player_transform) = player.single() else {
         return;
