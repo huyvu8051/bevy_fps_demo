@@ -368,8 +368,30 @@ pub struct NativeMetalProbe {
     camera_pitch: f32,
     skinned_pipeline: Option<RenderPipelineState>,
     soldier_model: Option<super::skinned_gltf::SkinnedModel>,
+    zombie_model: Option<super::skinned_gltf::SkinnedModel>,
+    // Phase 3 stand-in for ECS-driven dynamic entities (see the
+    // wgpu-replacement plan) — real per-entity spawn/despawn and movement
+    // will come from Bevy's ECS + networking once this renderer is wired
+    // into the actual game App; for now this proves the RENDERING side
+    // (many independently transformed/animated skinned draws per frame,
+    // each with its own joint buffer) works and measures its cost, ahead
+    // of that bigger integration step.
+    entities: Vec<EntityInstance>,
     start_time: std::time::Instant,
-    logged_joint_debug: bool,
+}
+
+enum EntityKind {
+    Soldier,
+    Zombie,
+}
+
+struct EntityInstance {
+    kind: EntityKind,
+    patrol_center: [f32; 2],
+    patrol_radius: f32,
+    patrol_speed: f32,
+    phase: f32,
+    anim_offset: f32,
 }
 
 impl NativeMetalProbe {
@@ -487,6 +509,22 @@ impl NativeMetalProbe {
         let resource_path = bundle_resource_path().unwrap_or_default();
         let soldier_path = std::path::Path::new(&resource_path).join("assets/models/soldier.glb");
         let soldier_model = super::skinned_gltf::load_skinned_gltf(&device, &soldier_path);
+        let zombie_path = std::path::Path::new(&resource_path).join("assets/models/zombie.glb");
+        let zombie_model = super::skinned_gltf::load_skinned_gltf(&device, &zombie_path);
+
+        // A handful of independently patrolling entities (some soldiers,
+        // mostly zombies) scattered around the open hall near the camera —
+        // stands in for what ECS/networking would spawn in the real game,
+        // to measure the cost of drawing several skinned, independently
+        // animated/transformed characters per frame (see EntityInstance's
+        // own doc comment).
+        let entities = vec![
+            EntityInstance { kind: EntityKind::Zombie, patrol_center: [-4.0, -3.0], patrol_radius: 2.5, patrol_speed: 0.4, phase: 0.0, anim_offset: 0.0 },
+            EntityInstance { kind: EntityKind::Zombie, patrol_center: [3.0, -4.0], patrol_radius: 3.0, patrol_speed: 0.3, phase: 1.7, anim_offset: 0.5 },
+            EntityInstance { kind: EntityKind::Zombie, patrol_center: [-2.0, -6.0], patrol_radius: 2.0, patrol_speed: 0.5, phase: 3.1, anim_offset: 1.1 },
+            EntityInstance { kind: EntityKind::Zombie, patrol_center: [5.0, -2.0], patrol_radius: 2.2, patrol_speed: 0.35, phase: 4.6, anim_offset: 1.8 },
+            EntityInstance { kind: EntityKind::Soldier, patrol_center: [0.0, -3.0], patrol_radius: 1.5, patrol_speed: 0.2, phase: 0.0, anim_offset: 0.0 },
+        ];
 
         Self {
             device,
@@ -501,13 +539,14 @@ impl NativeMetalProbe {
             vertex_count: vertices.len(),
             depth_state,
             depth_texture: None,
-            camera_position: [0.0, 1.0, 0.0],
+            camera_position: [0.0, 2.5, 2.0],
             camera_yaw: 0.0,
-            camera_pitch: 0.0,
+            camera_pitch: -0.25,
             skinned_pipeline,
             soldier_model,
+            zombie_model,
+            entities,
             start_time: std::time::Instant::now(),
-            logged_joint_debug: false,
         }
     }
 
@@ -667,66 +706,71 @@ impl NativeMetalProbe {
             encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, self.vertex_count as u64);
         }
 
-        if let (Some(pipeline), Some(model)) = (&self.skinned_pipeline, &self.soldier_model) {
-            let joint_matrices = model.compute_joint_matrices(0, self.start_time.elapsed().as_secs_f32());
-            if !self.logged_joint_debug {
-                self.logged_joint_debug = true;
-                let translations: Vec<[f32; 3]> = joint_matrices.iter().map(|m| [m[3][0], m[3][1], m[3][2]]).collect();
-                let min_y = translations.iter().map(|t| t[1]).fold(f32::INFINITY, f32::min);
-                let max_y = translations.iter().map(|t| t[1]).fold(f32::NEG_INFINITY, f32::max);
-                eprintln!(
-                    "[native_metal_probe] joint count={} first={:?} y_range=[{min_y},{max_y}] mesh_count={}",
-                    joint_matrices.len(),
-                    translations.first(),
-                    model.meshes.len()
-                );
-            }
-            let joint_buffer = self.device.new_buffer_with_data(
-                joint_matrices.as_ptr() as *const _,
-                (joint_matrices.len() * std::mem::size_of::<[[f32; 4]; 4]>()) as u64,
-                MTLResourceOptions::StorageModeShared,
-            );
-            // Stand a couple meters in front of the camera's spawn point,
-            // facing back toward it — placeholder placement just to
-            // confirm skinning works; real per-entity transforms come in
-            // Phase 3 (ECS-driven dynamic entities).
-            let model_matrix = [
-                [-1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, -1.0, 0.0],
-                [0.0, 0.0, -3.0, 1.0],
-            ];
+        if let Some(pipeline) = &self.skinned_pipeline {
+            let now = self.start_time.elapsed().as_secs_f32();
             encoder.set_render_pipeline_state(pipeline);
             encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
-            for mesh in &model.meshes {
-                let skinned_uniforms = SkinnedUniforms {
-                    view_projection,
-                    model_matrix,
-                    light_dir,
-                    _pad: 0.0,
-                    base_color_factor: mesh.base_color_factor,
+
+            for entity in &self.entities {
+                let model = match entity.kind {
+                    EntityKind::Soldier => self.soldier_model.as_ref(),
+                    EntityKind::Zombie => self.zombie_model.as_ref(),
                 };
-                encoder.set_vertex_buffer(0, Some(&mesh.vertex_buffer), 0);
-                encoder.set_vertex_buffer(2, Some(&joint_buffer), 0);
-                encoder.set_vertex_bytes(
-                    1,
-                    std::mem::size_of::<SkinnedUniforms>() as u64,
-                    &skinned_uniforms as *const _ as *const _,
+                let Some(model) = model else { continue };
+
+                // Simple circular patrol — a placeholder for real
+                // ECS/networking-driven movement, just enough to prove
+                // per-entity transforms actually update every frame (not
+                // baked once at load time like the static Sponza meshes).
+                let angle = entity.phase + now * entity.patrol_speed;
+                let x = entity.patrol_center[0] + angle.cos() * entity.patrol_radius;
+                let z = entity.patrol_center[1] + angle.sin() * entity.patrol_radius;
+                let facing = angle + std::f32::consts::FRAC_PI_2;
+                let (sin_f, cos_f) = facing.sin_cos();
+                let model_matrix = [
+                    [cos_f, 0.0, -sin_f, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [sin_f, 0.0, cos_f, 0.0],
+                    [x, 0.0, z, 1.0],
+                ];
+
+                let joint_matrices = model.compute_joint_matrices(0, now + entity.anim_offset);
+                let joint_buffer = self.device.new_buffer_with_data(
+                    joint_matrices.as_ptr() as *const _,
+                    (joint_matrices.len() * std::mem::size_of::<[[f32; 4]; 4]>()) as u64,
+                    MTLResourceOptions::StorageModeShared,
                 );
-                encoder.set_fragment_bytes(
-                    1,
-                    std::mem::size_of::<SkinnedUniforms>() as u64,
-                    &skinned_uniforms as *const _ as *const _,
-                );
-                let texture = mesh.base_color_texture.as_ref().unwrap_or(&self.white_texture);
-                encoder.set_fragment_texture(0, Some(texture));
-                encoder.draw_indexed_primitives(
-                    MTLPrimitiveType::Triangle,
-                    mesh.index_count as u64,
-                    MTLIndexType::UInt32,
-                    &mesh.index_buffer,
-                    0,
-                );
+
+                for mesh in &model.meshes {
+                    let skinned_uniforms = SkinnedUniforms {
+                        view_projection,
+                        model_matrix,
+                        light_dir,
+                        _pad: 0.0,
+                        base_color_factor: mesh.base_color_factor,
+                    };
+                    encoder.set_vertex_buffer(0, Some(&mesh.vertex_buffer), 0);
+                    encoder.set_vertex_buffer(2, Some(&joint_buffer), 0);
+                    encoder.set_vertex_bytes(
+                        1,
+                        std::mem::size_of::<SkinnedUniforms>() as u64,
+                        &skinned_uniforms as *const _ as *const _,
+                    );
+                    encoder.set_fragment_bytes(
+                        1,
+                        std::mem::size_of::<SkinnedUniforms>() as u64,
+                        &skinned_uniforms as *const _ as *const _,
+                    );
+                    let texture = mesh.base_color_texture.as_ref().unwrap_or(&self.white_texture);
+                    encoder.set_fragment_texture(0, Some(texture));
+                    encoder.draw_indexed_primitives(
+                        MTLPrimitiveType::Triangle,
+                        mesh.index_count as u64,
+                        MTLIndexType::UInt32,
+                        &mesh.index_buffer,
+                        0,
+                    );
+                }
             }
         }
 
