@@ -78,6 +78,22 @@ pub extern "C" fn native_metal_probe_render_frame(obj: *mut std::ffi::c_void) {
     probe.render_frame();
 }
 
+// Swift tracks the raw touches (left half = move, right half = look, same
+// split as the original Swift-only demo) and calls this once per frame
+// with the resulting deltas instead of moving its own camera fields.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_update_camera(
+    obj: *mut std::ffi::c_void,
+    forward: f32,
+    strafe: f32,
+    look_dx: f32,
+    look_dy: f32,
+    delta_time: f32,
+) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    probe.update_camera(forward, strafe, look_dx, look_dy, delta_time);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_release(obj: *mut std::ffi::c_void) {
     let probe: Box<NativeMetalProbe> = unsafe { Box::from_raw(obj as *mut NativeMetalProbe) };

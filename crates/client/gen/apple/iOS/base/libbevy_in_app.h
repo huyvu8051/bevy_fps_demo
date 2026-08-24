@@ -28,6 +28,7 @@ void cadisplaylink_release_app(struct bevy_app *app);
 struct native_metal_probe;
 struct native_metal_probe *native_metal_probe_create(void *view, float scale_factor);
 void native_metal_probe_render_frame(struct native_metal_probe *probe);
+void native_metal_probe_update_camera(struct native_metal_probe *probe, float forward, float strafe, float look_dx, float look_dy, float delta_time);
 void native_metal_probe_release(struct native_metal_probe *probe);
 
 // touch_id is a stable per-finger identifier for the duration of one touch

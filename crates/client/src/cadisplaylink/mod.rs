@@ -19,6 +19,7 @@ use std::ops::Deref;
 use uuid::Uuid;
 
 mod ffi;
+pub mod gltf_scene;
 mod ios_view;
 pub mod native_metal_probe;
 pub use ios_view::IosViewObj;

@@ -567,10 +567,32 @@ class ViewController: UIViewController {
     @objc func enterFrame() {
         if USE_RUST_METAL_DEMO {
             guard let probe = self.rustMetalProbe else { return }
+            let now = CACurrentMediaTime()
+            let deltaTime = Float(now - lastFrameTime)
+            lastFrameTime = now
+
+            var lookDx: Float = 0
+            var lookDy: Float = 0
+            if let lookTouch = self.lookTouch {
+                let current = lookTouch.location(in: self.metalV)
+                lookDx = Float(current.x - lookTouchLast.x)
+                lookDy = Float(current.y - lookTouchLast.y)
+                lookTouchLast = current
+            }
+            var forward: Float = 0
+            var strafe: Float = 0
+            if self.moveTouch != nil {
+                let dx = Float(moveTouchCurrent.x - moveTouchStart.x)
+                let dy = Float(moveTouchCurrent.y - moveTouchStart.y)
+                let maxDrag: Float = 60.0
+                strafe = (dx / maxDrag).clamped(to: -1...1)
+                forward = (-dy / maxDrag).clamped(to: -1...1)
+            }
+            native_metal_probe_update_camera(probe, forward, strafe, lookDx, lookDy, deltaTime)
             native_metal_probe_render_frame(probe)
             return
         }
-        if USE_NATIVE_METAL_DEMO {
+        if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
             self.renderNativeMetalFrame()
             return
         }
@@ -587,7 +609,7 @@ class ViewController: UIViewController {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if USE_NATIVE_METAL_DEMO {
+        if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
             for touch in touches {
                 let location = touch.location(in: self.metalV)
                 let isLeftHalf = location.x < self.metalV.bounds.width / 2.0
@@ -610,7 +632,7 @@ class ViewController: UIViewController {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if USE_NATIVE_METAL_DEMO {
+        if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
             for touch in touches {
                 if touch == moveTouch {
                     moveTouchCurrent = touch.location(in: self.metalV)
@@ -639,7 +661,7 @@ class ViewController: UIViewController {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if USE_NATIVE_METAL_DEMO {
+        if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
             endNativeTouch(touches)
             return
         }
@@ -651,7 +673,7 @@ class ViewController: UIViewController {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if USE_NATIVE_METAL_DEMO {
+        if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
             endNativeTouch(touches)
             return
         }

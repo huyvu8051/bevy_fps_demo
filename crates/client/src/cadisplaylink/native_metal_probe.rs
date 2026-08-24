@@ -17,12 +17,13 @@ use metal::{
 };
 use objc::{runtime::Object, *};
 
-// Same models/Sponza/ the real game uses, converted once offline to .obj
-// (see assets/models/SponzaObj — trimesh via Python, since Model I/O on
-// iOS doesn't support .gltf; see ViewController.swift's own loadSponza
-// comment for the full story). `tobj` here is the Rust-side equivalent of
-// Swift's Model I/O OBJ import — no Bevy asset_server involved.
-const SPONZA_OBJ_RELATIVE_PATH: &str = "assets/models/SponzaObj/Sponza.obj";
+// The real game's own Sponza asset — loaded directly via the `gltf` crate
+// (see gltf_scene.rs), no offline conversion needed. (Model I/O on iOS
+// doesn't support .gltf at all — confirmed on-device via
+// canImportFileExtension — which is why the Swift demo needed a
+// pre-converted .obj; the pure-Rust `gltf` crate has no such OS
+// dependency.)
+const SPONZA_GLTF_RELATIVE_PATH: &str = "assets/models/Sponza/Sponza.gltf";
 
 // Rust has no direct equivalent of Swift's `Bundle.main.resourcePath` —
 // reach into Foundation via objc the same way the rest of this module
@@ -210,13 +211,6 @@ fn mat_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
     out
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-struct SponzaVertex {
-    position: [f32; 3],
-    normal: [f32; 3],
-}
-
 const SPONZA_SHADER_SOURCE: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -224,17 +218,19 @@ using namespace metal;
 struct Vertex {
     packed_float3 position;
     packed_float3 normal;
+    packed_float2 uv;
 };
 
 struct Uniforms {
     float4x4 viewProjection;
     float3 lightDir;
-    float3 tintColor;
+    float4 baseColorFactor;
 };
 
 struct VertexOut {
     float4 position [[position]];
     float3 normal;
+    float2 uv;
 };
 
 vertex VertexOut sponza_vertex(uint vid [[vertex_id]],
@@ -244,14 +240,19 @@ vertex VertexOut sponza_vertex(uint vid [[vertex_id]],
     Vertex v = verts[vid];
     out.position = uniforms.viewProjection * float4(float3(v.position), 1.0);
     out.normal = float3(v.normal);
+    out.uv = float2(v.uv);
     return out;
 }
 
 fragment float4 sponza_fragment(VertexOut in [[stage_in]],
-                                 constant Uniforms &uniforms [[buffer(1)]]) {
+                                 constant Uniforms &uniforms [[buffer(1)]],
+                                 texture2d<float> baseColorTexture [[texture(0)]],
+                                 sampler texSampler [[sampler(0)]]) {
     float diffuse = max(dot(normalize(in.normal), -normalize(uniforms.lightDir)), 0.0);
-    float3 lit = uniforms.tintColor * (0.35 + 0.65 * diffuse);
-    return float4(lit, 1.0);
+    float4 texColor = baseColorTexture.sample(texSampler, in.uv);
+    float4 baseColor = texColor * uniforms.baseColorFactor;
+    float3 lit = baseColor.rgb * (0.35 + 0.65 * diffuse);
+    return float4(lit, baseColor.a);
 }
 "#;
 
@@ -261,116 +262,7 @@ struct SponzaUniforms {
     view_projection: [[f32; 4]; 4],
     light_dir: [f32; 3],
     _pad: f32,
-    tint_color: [f32; 3],
-    _pad2: f32,
-}
-
-struct SponzaMesh {
-    vertex_buffer: metal::Buffer,
-    index_buffer: metal::Buffer,
-    index_count: usize,
-}
-
-// Parses assets/models/SponzaObj/Sponza.obj (see that dir's own history —
-// converted offline from the real game's Sponza.gltf since Model I/O/tobj
-// don't handle glTF here) via `tobj`, the Rust-side equivalent of what
-// ViewController.swift's loadSponza() does with Model I/O. One MTLBuffer
-// pair (vertex + u32 index) per OBJ "model" (usemtl group), same shape as
-// the Swift version's per-submesh draw calls.
-fn load_sponza(device: &Device) -> Vec<SponzaMesh> {
-    let Some(resource_path) = bundle_resource_path() else {
-        eprintln!("[native_metal_probe] no bundle resource path");
-        return Vec::new();
-    };
-    let obj_path = std::path::Path::new(&resource_path).join(SPONZA_OBJ_RELATIVE_PATH);
-    if !obj_path.exists() {
-        eprintln!("[native_metal_probe] Sponza.obj not found at {obj_path:?}");
-        return Vec::new();
-    }
-
-    let load_options = tobj::LoadOptions {
-        triangulate: true,
-        single_index: true,
-        ..Default::default()
-    };
-    let (models, _materials) = match tobj::load_obj(&obj_path, &load_options) {
-        Ok(result) => result,
-        Err(err) => {
-            eprintln!("[native_metal_probe] tobj load failed: {err}");
-            return Vec::new();
-        }
-    };
-
-    let mut meshes = Vec::new();
-    for model in models {
-        let mesh = model.mesh;
-        if mesh.positions.is_empty() || mesh.indices.is_empty() {
-            continue;
-        }
-        // This particular .obj (see assets/models/SponzaObj's own history —
-        // trimesh's gltf->obj export) has no `vn` lines at all, so
-        // mesh.normals is always empty here — every vertex would otherwise
-        // get the exact same made-up normal, making every surface receive
-        // identical lighting regardless of orientation (a solid mid-gray
-        // blob with zero shading cues, no visible edges — exactly what
-        // showed up on-device before this fix). Compute real per-vertex
-        // normals by accumulating each triangle's face normal (cross
-        // product of two edges) onto its 3 vertices, then normalizing —
-        // the same thing MDLMesh.addNormals() did for us for free on the
-        // Swift/Model I/O side.
-        let has_normals = mesh.normals.len() == mesh.positions.len();
-        let vertex_count = mesh.positions.len() / 3;
-        let mut normals = vec![[0.0f32; 3]; vertex_count];
-        if !has_normals {
-            let pos_at = |i: u32| -> [f32; 3] {
-                let i = i as usize;
-                [mesh.positions[i * 3], mesh.positions[i * 3 + 1], mesh.positions[i * 3 + 2]]
-            };
-            let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-            let cross =
-                |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-            for tri in mesh.indices.chunks_exact(3) {
-                let (ia, ib, ic) = (tri[0], tri[1], tri[2]);
-                let (pa, pb, pc) = (pos_at(ia), pos_at(ib), pos_at(ic));
-                let face_normal = cross(sub(pb, pa), sub(pc, pa));
-                for i in [ia, ib, ic] {
-                    let n = &mut normals[i as usize];
-                    n[0] += face_normal[0];
-                    n[1] += face_normal[1];
-                    n[2] += face_normal[2];
-                }
-            }
-            for n in &mut normals {
-                let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-                if len > 1e-6 {
-                    n[0] /= len;
-                    n[1] /= len;
-                    n[2] /= len;
-                } else {
-                    *n = [0.0, 1.0, 0.0];
-                }
-            }
-        }
-        let mut vertices = Vec::with_capacity(vertex_count);
-        for i in 0..vertex_count {
-            let position = [mesh.positions[i * 3], mesh.positions[i * 3 + 1], mesh.positions[i * 3 + 2]];
-            let normal = if has_normals { [mesh.normals[i * 3], mesh.normals[i * 3 + 1], mesh.normals[i * 3 + 2]] } else { normals[i] };
-            vertices.push(SponzaVertex { position, normal });
-        }
-        let vertex_buffer = device.new_buffer_with_data(
-            vertices.as_ptr() as *const _,
-            (vertices.len() * std::mem::size_of::<SponzaVertex>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-        let index_buffer = device.new_buffer_with_data(
-            mesh.indices.as_ptr() as *const _,
-            (mesh.indices.len() * std::mem::size_of::<u32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-        meshes.push(SponzaMesh { vertex_buffer, index_buffer, index_count: mesh.indices.len() });
-    }
-    eprintln!("[native_metal_probe] loaded {} Sponza meshes", meshes.len());
-    meshes
+    base_color_factor: [f32; 4],
 }
 
 pub struct NativeMetalProbe {
@@ -383,7 +275,12 @@ pub struct NativeMetalProbe {
     depth_state: metal::DepthStencilState,
     depth_texture: Option<metal::Texture>,
     sponza_pipeline: Option<RenderPipelineState>,
-    sponza_meshes: Vec<SponzaMesh>,
+    sponza_meshes: Vec<super::gltf_scene::GltfMesh>,
+    sponza_sampler: metal::SamplerState,
+    white_texture: metal::Texture,
+    camera_position: [f32; 3],
+    camera_yaw: f32,
+    camera_pitch: f32,
 }
 
 impl NativeMetalProbe {
@@ -460,7 +357,27 @@ impl NativeMetalProbe {
                 None
             }
         };
-        let sponza_meshes = load_sponza(&device);
+        let gltf_path = std::path::Path::new(&bundle_resource_path().unwrap_or_default()).join(SPONZA_GLTF_RELATIVE_PATH);
+        let sponza_meshes = super::gltf_scene::load_gltf_scene(&device, &gltf_path);
+
+        let sampler_descriptor = metal::SamplerDescriptor::new();
+        sampler_descriptor.set_min_filter(metal::MTLSamplerMinMagFilter::Linear);
+        sampler_descriptor.set_mag_filter(metal::MTLSamplerMinMagFilter::Linear);
+        sampler_descriptor.set_address_mode_s(metal::MTLSamplerAddressMode::Repeat);
+        sampler_descriptor.set_address_mode_t(metal::MTLSamplerAddressMode::Repeat);
+        let sponza_sampler = device.new_sampler(&sampler_descriptor);
+
+        // Fallback for meshes/materials with no base color texture (glTF
+        // materials aren't required to have one, just a factor) — sample a
+        // 1x1 white texture so baseColorFactor alone still comes through
+        // correctly instead of needing a separate untextured shader path.
+        let white_texture_descriptor = metal::TextureDescriptor::new();
+        white_texture_descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm);
+        white_texture_descriptor.set_width(1);
+        white_texture_descriptor.set_height(1);
+        white_texture_descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
+        let white_texture = device.new_texture(&white_texture_descriptor);
+        white_texture.replace_region(metal::MTLRegion::new_2d(0, 0, 1, 1), 0, [255u8, 255, 255, 255].as_ptr() as *const _, 4);
 
         Self {
             device,
@@ -469,10 +386,36 @@ impl NativeMetalProbe {
             pipeline,
             sponza_pipeline,
             sponza_meshes,
+            sponza_sampler,
+            white_texture,
             vertex_buffer,
             vertex_count: vertices.len(),
             depth_state,
             depth_texture: None,
+            camera_position: [0.0, 3.0, 4.0],
+            camera_yaw: 0.0,
+            camera_pitch: 0.0,
+        }
+    }
+
+    // Same touch-driven free-fly camera as the Swift-only demo used to
+    // have — Swift now tracks the raw touches (see ViewController.swift's
+    // moveTouch/lookTouch) and passes the resulting per-frame deltas here
+    // instead of moving its own camera fields, so this Rust probe can
+    // actually be walked around like the real game for a feel of
+    // real-world performance, not just a static shot.
+    pub fn update_camera(&mut self, forward: f32, strafe: f32, look_dx: f32, look_dy: f32, dt: f32) {
+        self.camera_yaw -= look_dx * 0.005;
+        self.camera_pitch = (self.camera_pitch - look_dy * 0.005).clamp(-1.54, 1.54);
+
+        if forward != 0.0 || strafe != 0.0 {
+            let (sin_yaw, cos_yaw) = self.camera_yaw.sin_cos();
+            let forward_dir = [-sin_yaw, 0.0, -cos_yaw];
+            let right_dir = [cos_yaw, 0.0, -sin_yaw];
+            let speed = 6.0 * dt;
+            self.camera_position[0] += (forward_dir[0] * forward + right_dir[0] * strafe) * speed;
+            self.camera_position[1] += (forward_dir[1] * forward + right_dir[1] * strafe) * speed;
+            self.camera_position[2] += (forward_dir[2] * forward + right_dir[2] * strafe) * speed;
         }
     }
 
@@ -510,10 +453,21 @@ impl NativeMetalProbe {
 
         let use_sponza = self.sponza_pipeline.is_some() && !self.sponza_meshes.is_empty();
         let aspect = width as f32 / height.max(1) as f32;
-        let (eye, center, far) =
-            if use_sponza { ([0.0, 3.0, 4.0], [0.0, 3.0, 0.0], 500.0) } else { ([0.0, 3.0, 10.0], [0.0, 0.0, 0.0], 100.0) };
+        let far = if use_sponza { 500.0 } else { 100.0 };
         let proj = perspective(if use_sponza { 60.0_f32 } else { 45.0 }.to_radians(), aspect, 0.05, far);
-        let view = look_at(eye, center, [0.0, 1.0, 0.0]);
+        let view = if use_sponza {
+            let (sin_pitch, cos_pitch) = self.camera_pitch.sin_cos();
+            let (sin_yaw, cos_yaw) = self.camera_yaw.sin_cos();
+            let look_dir = [-sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch];
+            let center = [
+                self.camera_position[0] + look_dir[0],
+                self.camera_position[1] + look_dir[1],
+                self.camera_position[2] + look_dir[2],
+            ];
+            look_at(self.camera_position, center, [0.0, 1.0, 0.0])
+        } else {
+            look_at([0.0, 3.0, 10.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0])
+        };
         let light_dir = {
             let v = [-4.0f32, -8.0, -4.0];
             let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
@@ -539,26 +493,28 @@ impl NativeMetalProbe {
         encoder.set_depth_stencil_state(&self.depth_state);
 
         if use_sponza {
-            let sponza_uniforms = SponzaUniforms {
-                view_projection,
-                light_dir,
-                _pad: 0.0,
-                tint_color: [0.6, 0.58, 0.55],
-                _pad2: 0.0,
-            };
             encoder.set_render_pipeline_state(self.sponza_pipeline.as_ref().unwrap());
-            encoder.set_vertex_bytes(
-                1,
-                std::mem::size_of::<SponzaUniforms>() as u64,
-                &sponza_uniforms as *const _ as *const _,
-            );
-            encoder.set_fragment_bytes(
-                1,
-                std::mem::size_of::<SponzaUniforms>() as u64,
-                &sponza_uniforms as *const _ as *const _,
-            );
+            encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
             for mesh in &self.sponza_meshes {
+                let sponza_uniforms = SponzaUniforms {
+                    view_projection,
+                    light_dir,
+                    _pad: 0.0,
+                    base_color_factor: mesh.base_color_factor,
+                };
                 encoder.set_vertex_buffer(0, Some(&mesh.vertex_buffer), 0);
+                encoder.set_vertex_bytes(
+                    1,
+                    std::mem::size_of::<SponzaUniforms>() as u64,
+                    &sponza_uniforms as *const _ as *const _,
+                );
+                encoder.set_fragment_bytes(
+                    1,
+                    std::mem::size_of::<SponzaUniforms>() as u64,
+                    &sponza_uniforms as *const _ as *const _,
+                );
+                let texture = mesh.base_color_texture.as_ref().unwrap_or(&self.white_texture);
+                encoder.set_fragment_texture(0, Some(texture));
                 encoder.draw_indexed_primitives(
                     MTLPrimitiveType::Triangle,
                     mesh.index_count as u64,
