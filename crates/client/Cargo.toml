@@ -37,3 +37,5 @@ raw-window-handle = "0.6"
 objc = "0.2"
 core-graphics = "0.25"
 uuid = { version = "1", features = ["v4"] }
+metal = "0.33.0"
+tobj = "4.0.5"

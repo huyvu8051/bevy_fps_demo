@@ -4,6 +4,7 @@
 //! Swift — our probe's joystick (left half) and look-drag (right half)
 //! need two simultaneous touches to both work at once.
 
+use super::native_metal_probe::NativeMetalProbe;
 use super::{IosViewObj, build_cadisplaylink_fps_probe_app, build_cadisplaylink_game_app};
 use bevy::app::App;
 use bevy::ecs::{entity::Entity, system::Query, world::FromWorld};
@@ -57,6 +58,30 @@ pub extern "C" fn cadisplaylink_create_fps_probe_app(view: *mut objc::runtime::O
     let view_obj = IosViewObj { view, scale_factor };
     let app = build_cadisplaylink_fps_probe_app(view_obj);
     Box::into_raw(Box::new(app)) as *mut std::ffi::c_void
+}
+
+// Control experiment: same 5-cuboid arena as fps_probe.rs/the Swift native
+// demo, but rendered from Rust via the `metal` crate directly — no Bevy
+// App, no bevy_render, no wgpu at all — to check whether wgpu's "high CPU
+// encoding cost" overhead is specific to wgpu's abstraction layer or
+// something about doing this from Rust in general. See
+// native_metal_probe.rs's own doc comment.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_create(view: *mut objc::runtime::Object, _scale_factor: f32) -> *mut std::ffi::c_void {
+    let probe = unsafe { NativeMetalProbe::new(view) };
+    Box::into_raw(Box::new(probe)) as *mut std::ffi::c_void
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_render_frame(obj: *mut std::ffi::c_void) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    probe.render_frame();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_release(obj: *mut std::ffi::c_void) {
+    let probe: Box<NativeMetalProbe> = unsafe { Box::from_raw(obj as *mut NativeMetalProbe) };
+    drop(probe);
 }
 
 #[unsafe(no_mangle)]

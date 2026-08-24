@@ -23,6 +23,13 @@ struct bevy_app *cadisplaylink_create_fps_probe_app(void *view, float scale_fact
 void cadisplaylink_enter_frame(struct bevy_app *app);
 void cadisplaylink_release_app(struct bevy_app *app);
 
+// Rust + `metal` crate control experiment (no Bevy App at all) — see
+// crates/client/src/cadisplaylink/native_metal_probe.rs.
+struct native_metal_probe;
+struct native_metal_probe *native_metal_probe_create(void *view, float scale_factor);
+void native_metal_probe_render_frame(struct native_metal_probe *probe);
+void native_metal_probe_release(struct native_metal_probe *probe);
+
 // touch_id is a stable per-finger identifier for the duration of one touch
 // (we pass in the UITouch's own pointer address, cast to an integer) — the
 // probe needs two simultaneous touches (joystick + look-drag) to both work,

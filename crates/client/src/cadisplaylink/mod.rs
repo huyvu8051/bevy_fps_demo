@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 mod ffi;
 mod ios_view;
+pub mod native_metal_probe;
 pub use ios_view::IosViewObj;
 
 #[derive(Eq, Hash, PartialEq, Debug, Copy, Clone)]

@@ -24,7 +24,13 @@ import MetalKit
 // device/OS. If it doesn't, that confirms the cost really is Bevy/wgpu-
 // specific overhead, not something a "real" Metal app pays for the same
 // scene.
-let USE_NATIVE_METAL_DEMO = true
+let USE_NATIVE_METAL_DEMO = false
+// Control experiment: same 5-cuboid arena, rendered from RUST via the
+// `metal` crate directly (no Bevy App/bevy_render/wgpu) instead of Swift —
+// see crates/client/src/cadisplaylink/native_metal_probe.rs. Answers
+// whether the encoding-cost overhead is specific to wgpu's abstraction, or
+// something about driving Metal from Rust in general.
+let USE_RUST_METAL_DEMO = true
 
 private let arenaHalfSize: Float = 10.0
 private let arenaWallHeight: Float = 4.0
@@ -241,6 +247,7 @@ class ViewController: UIViewController {
     private var nativeDepthTexture: MTLTexture?
     private var sponzaPipeline: MTLRenderPipelineState?
     private var sponzaMeshes: [NativeMeshEntry] = []
+    private var rustMetalProbe: OpaquePointer?
     // Free-fly camera state, driven by touch (no Bevy/Rust involved).
     private var cameraPosition = SIMD3<Float>(0, 3, 4)
     private var cameraYaw: Float = 0
@@ -283,7 +290,15 @@ class ViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         self.view.backgroundColor = .black
-        if USE_NATIVE_METAL_DEMO {
+        if USE_RUST_METAL_DEMO {
+            if rustMetalProbe == nil {
+                let viewPointer = Unmanaged.passUnretained(self.metalV).toOpaque()
+                rustMetalProbe = native_metal_probe_create(viewPointer, Float(UIScreen.main.nativeScale))
+                if #available(iOS 15.0, *) {
+                    displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+                }
+            }
+        } else if USE_NATIVE_METAL_DEMO {
             if metalDevice == nil {
                 self.startNativeMetalDemo()
             }
@@ -550,6 +565,11 @@ class ViewController: UIViewController {
     }
 
     @objc func enterFrame() {
+        if USE_RUST_METAL_DEMO {
+            guard let probe = self.rustMetalProbe else { return }
+            native_metal_probe_render_frame(probe)
+            return
+        }
         if USE_NATIVE_METAL_DEMO {
             self.renderNativeMetalFrame()
             return
@@ -645,6 +665,9 @@ class ViewController: UIViewController {
     deinit {
         if let bevy = bevyApp {
             cadisplaylink_release_app(bevy)
+        }
+        if let probe = rustMetalProbe {
+            native_metal_probe_release(probe)
         }
     }
 
