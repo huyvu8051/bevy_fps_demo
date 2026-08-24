@@ -352,6 +352,35 @@ struct TouchJump(bool);
 #[derive(Resource, Default)]
 struct TouchReload(bool);
 
+// Touch's up/down hold state for noclip flight (Jump = fly up, Crouch =
+// fly down) — bundled into one resource/system (update_noclip_fly_input)
+// rather than two separate ones so send_player_input only needs one extra
+// param (it's already at Bevy's 16-param system function limit; see
+// HitMarkerAssets' own doc comment for the same constraint hit elsewhere).
+// Unlike TouchJump (one-frame pulse matching keys.just_pressed, for a real
+// jump), these track whether the button is CURRENTLY held, matching
+// keys.pressed(KeyCode::Space)-style continuous hold — touch has no
+// keyboard hold state to read otherwise. touch_crouch_button (the normal-
+// gameplay stance toggle) skips its own toggle while noclipping, so
+// tapping Crouch during noclip doesn't leave PlayerStance stuck on
+// Crouching once noclip is turned back off.
+#[derive(Resource, Default)]
+struct NoclipFlyInput {
+    up: bool,
+    down: bool,
+}
+
+// Bundles 3 touch-input resource reads send_player_input needs into one
+// param — that fn was already at Bevy's 16-param system function limit
+// (see HitMarkerAssets' own doc comment for the same constraint hit
+// elsewhere), and NoclipFlyInput would have pushed it over.
+#[derive(SystemParam)]
+struct TouchGameplayInputs<'w> {
+    aiming: Res<'w, TouchAiming>,
+    jump: Res<'w, TouchJump>,
+    noclip_fly: Res<'w, NoclipFlyInput>,
+}
+
 // Crosshair: 4 hash marks pushed apart from center by GAP, which grows with
 // the current bullet spread (see current_bullet_spread/update_crosshair).
 // GAP_SPREAD_SCALE converts spread (a small radian-ish value, roughly
@@ -401,7 +430,7 @@ const AIM_DOF_APERTURE_F_STOPS: f32 = 11.0;
 // underlying texture supports any scale in (0, 1], these are just the ones
 // exposed in the UI. MIN_TEXTURE_PX guards against a degenerate/zero-size
 // render target on a tiny window at a low scale.
-const RESOLUTION_SCALE_PRESETS: [f32; 4] = [0.5, 0.65, 0.8, 1.0];
+const RESOLUTION_SCALE_PRESETS: [f32; 7] = [0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0];
 const RESOLUTION_SCALE_DEFAULT: f32 = 1.0;
 const RESOLUTION_SCALE_MIN_TEXTURE_PX: u32 = 64;
 
@@ -774,6 +803,31 @@ struct SettingsMenuScrollState {
 
 #[derive(Component)]
 struct SettingsMenuRoot;
+
+// Which page of the settings menu is currently shown — the menu still
+// scrolls too (see scroll_settings_menu/touch_scroll_settings_menu), but
+// paging avoids ever needing to on a screen this small.
+#[derive(Resource, Default)]
+struct SettingsMenuPageIndex(usize);
+
+// How many SettingsMenuPage(N) containers spawn_settings_menu creates —
+// settings_menu_page_buttons wraps SettingsMenuPageIndex against this so
+// it never points past the last real page.
+const SETTINGS_MENU_PAGE_COUNT: usize = 2;
+
+// Marks each page container; update_settings_menu_pages compares this to
+// SettingsMenuPageIndex to decide that page's Node.display. A child of
+// SettingsMenuRoot, so it inherits the root's GlobalZIndex/stacking rather
+// than needing its own.
+#[derive(Component)]
+struct SettingsMenuPage(usize);
+
+#[derive(Component)]
+struct SettingsMenuPrevButton;
+#[derive(Component)]
+struct SettingsMenuNextButton;
+#[derive(Component)]
+struct SettingsMenuPageLabel;
 
 // One per RESOLUTION_SCALE_PRESETS entry — resolution_scale_buttons reads
 // Interaction on these to know which preset was tapped/clicked.
@@ -1527,6 +1581,7 @@ fn build_probe_common(app: &mut App) {
         // below plus touch_scroll_settings_menu, registered in this same
         // app's Update chain.
         .init_resource::<SettingsMenuScrollState>()
+        .init_resource::<SettingsMenuPageIndex>()
         .init_resource::<ProbeChurnTimer>()
         // Same reasoning as SettingsMenuVisible just above — touch_move_axis/
         // touch_look also gate on MouseUiLocked (GameControllerInput.swift's
@@ -1716,6 +1771,8 @@ fn build_probe_common(app: &mut App) {
                 // logic systems are deliberately NOT registered here.
                 toggle_settings_menu,
                 update_settings_menu,
+                settings_menu_page_buttons,
+                update_settings_menu_pages,
                 scroll_settings_menu,
                 touch_scroll_settings_menu,
                 probe_spawn_churn_entities,
@@ -2161,7 +2218,9 @@ fn build_game_common(app: &mut App) {
         .init_resource::<DebugPanelVisible>()
         .init_resource::<SettingsMenuVisible>()
         .init_resource::<SettingsMenuScrollState>()
+        .init_resource::<SettingsMenuPageIndex>()
         .init_resource::<MouseUiLocked>()
+        .init_resource::<TouchControlsIdleHidden>()
         .init_resource::<AimBlurEnabled>()
         .init_resource::<AimDofFocalDistanceAlt>()
         .init_resource::<MouseLookDelta>()
@@ -2183,6 +2242,7 @@ fn build_game_common(app: &mut App) {
         .init_resource::<TouchFiring>()
         .init_resource::<TouchAiming>()
         .init_resource::<TouchJump>()
+        .init_resource::<NoclipFlyInput>()
         .init_resource::<TouchReload>()
         .init_resource::<SensitivityScale>()
         .add_systems(Startup, (setup, log_window_resolution))
@@ -2204,6 +2264,7 @@ fn build_game_common(app: &mut App) {
                     touch_fire_button,
                     touch_aim_button,
                     touch_jump_button,
+                    update_noclip_fly_input,
                     touch_crouch_button,
                     touch_reload_button,
                 )
@@ -2213,26 +2274,35 @@ fn build_game_common(app: &mut App) {
                 // pushed into an already near-the-20-arity-limit tuple (see
                 // that group's own comment on why it's already split up).
                 (
-                    toggle_settings_menu,
-                    update_settings_menu,
-                    update_mouse_ui_lock_indicator,
-                    resolution_scale_buttons,
-                    resize_scene_render_target,
-                    scroll_settings_menu,
-                    touch_scroll_settings_menu,
-                    cheat_toggle_buttons,
-                    apply_map_render_toggles,
-                    cheat_toggle_buttons_2,
-                    update_cheat_toggle_colors,
-                    cheat_kill_all_button,
-                    cheat_zombie_health_buttons,
-                    zombie_count_buttons,
-                    update_zombie_count_text,
-                    sensitivity_buttons,
-                    update_sensitivity_text,
-                    auto_maintain_button,
-                    update_auto_maintain_button_color,
-                    hide_ui_when_locked,
+                    (
+                        toggle_settings_menu,
+                        update_settings_menu,
+                        settings_menu_page_buttons,
+                        update_settings_menu_pages,
+                        update_mouse_ui_lock_indicator,
+                        resolution_scale_buttons,
+                        resize_scene_render_target,
+                        scroll_settings_menu,
+                        touch_scroll_settings_menu,
+                        cheat_toggle_buttons,
+                        apply_map_render_toggles,
+                    )
+                        .chain(),
+                    (
+                        cheat_toggle_buttons_2,
+                        update_cheat_toggle_colors,
+                        cheat_kill_all_button,
+                        cheat_zombie_health_buttons,
+                        zombie_count_buttons,
+                        update_zombie_count_text,
+                        sensitivity_buttons,
+                        update_sensitivity_text,
+                        auto_maintain_button,
+                        update_auto_maintain_button_color,
+                        update_touch_controls_idle_hidden,
+                        hide_ui_when_locked,
+                    )
+                        .chain(),
                 )
                     .chain(),
                 // Tuples of systems only implement IntoSystemConfigs up to
@@ -2867,12 +2937,11 @@ fn spawn_settings_menu(commands: &mut Commands) {
                 position_type: PositionType::Absolute,
                 left: Val::Px(16.0),
                 top: Val::Px(16.0),
-                // Capped well under a landscape phone's typical height, with
-                // the full merged desktop-panel content this now holds —
-                // see scroll_settings_menu (mouse wheel) and
-                // touch_scroll_settings_menu (touch drag) for how it
-                // actually scrolls.
-                max_height: Val::Px(520.0),
+                // Safety cap, not something the player is expected to hit
+                // in normal use — content is split across
+                // SettingsMenuPage(N) containers (settings_menu_page_
+                // buttons/SettingsMenuPageIndex) instead.
+                max_height: Val::Px(400.0),
                 overflow: Overflow::scroll_y(),
                 padding: UiRect::all(Val::Px(12.0)),
                 flex_direction: FlexDirection::Column,
@@ -2886,171 +2955,215 @@ fn spawn_settings_menu(commands: &mut Commands) {
             SettingsMenuRoot,
         ))
         .with_children(|menu| {
-            menu.spawn((
-                Text::new("Resolution scale"),
-                TextFont {
-                    font_size: 16.0,
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-            ));
+            // Page nav row — a sibling of the SettingsMenuPage(N)
+            // containers below (not inside one), so it's always visible
+            // regardless of which page is active.
             menu.spawn(Node {
                 flex_direction: FlexDirection::Row,
                 column_gap: Val::Px(8.0),
+                align_items: AlignItems::Center,
                 ..default()
             })
             .with_children(|row| {
-                for &scale in &RESOLUTION_SCALE_PRESETS {
-                    row.spawn((
-                        Node {
-                            width: Val::Px(60.0),
-                            height: Val::Px(32.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border_radius: BorderRadius::all(Val::Px(4.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
-                        Button,
-                        Interaction::default(),
-                        ResolutionScaleButton(scale),
-                    ))
-                    .with_children(|btn| {
-                        btn.spawn((
-                            Text::new(format!("{:.0}%", scale * 100.0)),
-                            TextFont {
-                                font_size: 14.0,
-                                ..default()
-                            },
-                            TextColor(Color::WHITE),
-                        ));
-                    });
-                }
+                spawn_cheat_action_button(row, "<", SettingsMenuPrevButton);
+                row.spawn((
+                    Text::new("1/2"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    SettingsMenuPageLabel,
+                ));
+                spawn_cheat_action_button(row, ">", SettingsMenuNextButton);
             });
 
-            // Touch equivalent of the desktop debug panel's keyboard-only
-            // cheats (KeyN/KeyG/KeyF/Digit1/Digit2) — that panel is
-            // unreachable on mobile (no keyboard), so none of it existed
-            // there before. Reuses the exact same Noclip/GodMode/
-            // FreezeZombies resources and kill-all/spawn-one actions the
-            // desktop keys already drive, just from a tap instead of a
-            // keypress — same underlying behavior on both platforms.
             menu.spawn((
-                Text::new("Cheats"),
-                TextFont {
-                    font_size: 16.0,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
                     ..default()
                 },
-                TextColor(Color::WHITE),
-            ));
-            menu.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
-            .with_children(|row| {
-                spawn_cheat_toggle_button(row, "Noclip", CheatNoclipButton);
-                spawn_cheat_toggle_button(row, "God", CheatGodModeButton);
-                spawn_cheat_toggle_button(row, "Freeze", CheatFreezeButton);
-            });
-            menu.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
-            .with_children(|row| {
-                spawn_cheat_toggle_button(row, "Gun", CheatGunButton);
-                spawn_cheat_toggle_button(row, "MSAA", CheatMsaaButton);
-                spawn_cheat_toggle_button(row, "Shadow", CheatShadowButton);
-            });
-            menu.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
-            .with_children(|row| {
-                spawn_cheat_toggle_button(row, "Hitboxes", CheatHitboxesButton);
-                spawn_cheat_toggle_button(row, "AimBlur", CheatAimBlurButton);
-                spawn_cheat_toggle_button(row, "PlayerMdl", CheatPlayerModelButton);
-            });
-            menu.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
-            .with_children(|row| {
-                spawn_cheat_toggle_button(row, "NoZAnim", CheatZombieAnimButton);
-                spawn_cheat_toggle_button(row, "NoHPBar", CheatZombieHealthBarsButton);
-                spawn_cheat_toggle_button(row, "FullLOD", CheatZombieLodButton);
-            });
-            menu.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                align_items: AlignItems::Center,
-                ..default()
-            })
-            .with_children(|row| {
-                spawn_cheat_action_button(row, "-10", ZombieCountDecButton);
-                row.spawn((
-                    Text::new("10"),
+                SettingsMenuPage(0),
+            ))
+            .with_children(|page| {
+                page.spawn((
+                    Text::new("Resolution scale"),
                     TextFont {
                         font_size: 16.0,
                         ..default()
                     },
                     TextColor(Color::WHITE),
-                    ZombieCountText,
                 ));
-                spawn_cheat_action_button(row, "+10", ZombieCountIncButton);
-                spawn_cheat_toggle_button(row, "Auto", AutoMaintainButton);
-            });
-            menu.spawn((
-                Text::new("Sensitivity"),
-                TextFont {
-                    font_size: 16.0,
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
                     ..default()
-                },
-                TextColor(Color::WHITE),
-            ));
-            menu.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                align_items: AlignItems::Center,
-                ..default()
-            })
-            .with_children(|row| {
-                spawn_cheat_action_button(row, "-", SensitivityDecButton);
-                row.spawn((
-                    Text::new("1.00x"),
+                })
+                .with_children(|row| {
+                    for &scale in &RESOLUTION_SCALE_PRESETS {
+                        row.spawn((
+                            Node {
+                                width: Val::Px(60.0),
+                                height: Val::Px(32.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                            Button,
+                            Interaction::default(),
+                            ResolutionScaleButton(scale),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new(format!("{:.0}%", scale * 100.0)),
+                                TextFont {
+                                    font_size: 14.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    }
+                });
+
+                // Touch equivalent of the desktop debug panel's keyboard-only
+                // cheats (KeyN/KeyG/KeyF/Digit1/Digit2) — that panel is
+                // unreachable on mobile (no keyboard), so none of it existed
+                // there before. Reuses the exact same Noclip/GodMode/
+                // FreezeZombies resources and kill-all/spawn-one actions the
+                // desktop keys already drive, just from a tap instead of a
+                // keypress — same underlying behavior on both platforms.
+                page.spawn((
+                    Text::new("Cheats"),
                     TextFont {
                         font_size: 16.0,
                         ..default()
                     },
                     TextColor(Color::WHITE),
-                    SensitivityText,
                 ));
-                spawn_cheat_action_button(row, "+", SensitivityIncButton);
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    spawn_cheat_toggle_button(row, "Noclip", CheatNoclipButton);
+                    spawn_cheat_toggle_button(row, "God", CheatGodModeButton);
+                    spawn_cheat_toggle_button(row, "Freeze", CheatFreezeButton);
+                });
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    spawn_cheat_toggle_button(row, "Gun", CheatGunButton);
+                    spawn_cheat_toggle_button(row, "MSAA", CheatMsaaButton);
+                    spawn_cheat_toggle_button(row, "Shadow", CheatShadowButton);
+                });
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    spawn_cheat_toggle_button(row, "Hitboxes", CheatHitboxesButton);
+                    spawn_cheat_toggle_button(row, "AimBlur", CheatAimBlurButton);
+                    spawn_cheat_toggle_button(row, "PlayerMdl", CheatPlayerModelButton);
+                });
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    spawn_cheat_toggle_button(row, "NoZAnim", CheatZombieAnimButton);
+                    spawn_cheat_toggle_button(row, "NoHPBar", CheatZombieHealthBarsButton);
+                    spawn_cheat_toggle_button(row, "FullLOD", CheatZombieLodButton);
+                });
             });
-            menu.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
-            .with_children(|row| {
-                spawn_cheat_action_button(row, "Kill All", CheatKillAllButton);
-                spawn_cheat_action_button(row, "+100", SpawnMoreZombiesButton);
-            });
-            menu.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
-            .with_children(|row| {
-                spawn_cheat_action_button(row, "Heal Nearest", HealNearestButton);
-                spawn_cheat_action_button(row, "1HP Nearest", NearDeathNearestButton);
+
+            menu.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
+                    display: Display::None,
+                    ..default()
+                },
+                SettingsMenuPage(1),
+            ))
+            .with_children(|page| {
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|row| {
+                    spawn_cheat_action_button(row, "-10", ZombieCountDecButton);
+                    row.spawn((
+                        Text::new("10"),
+                        TextFont {
+                            font_size: 16.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        ZombieCountText,
+                    ));
+                    spawn_cheat_action_button(row, "+10", ZombieCountIncButton);
+                    spawn_cheat_toggle_button(row, "Auto", AutoMaintainButton);
+                });
+                page.spawn((
+                    Text::new("Sensitivity"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|row| {
+                    spawn_cheat_action_button(row, "-", SensitivityDecButton);
+                    row.spawn((
+                        Text::new("1.00x"),
+                        TextFont {
+                            font_size: 16.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        SensitivityText,
+                    ));
+                    spawn_cheat_action_button(row, "+", SensitivityIncButton);
+                });
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    spawn_cheat_action_button(row, "Kill All", CheatKillAllButton);
+                    spawn_cheat_action_button(row, "+100", SpawnMoreZombiesButton);
+                });
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    spawn_cheat_action_button(row, "Heal Nearest", HealNearestButton);
+                    spawn_cheat_action_button(row, "1HP Nearest", NearDeathNearestButton);
+                });
             });
         });
-}
-// Shared visual style for both cheat button flavors below — toggle buttons
+}// Shared visual style for both cheat button flavors below — toggle buttons
 // additionally get recolored by update_cheat_toggle_colors once spawned;
 // action buttons (momentary, no on/off state) stay this same color always.
 fn spawn_cheat_button_node(parent: &mut ChildSpawnerCommands, label: &str, marker: impl Component) {
@@ -3624,6 +3737,35 @@ fn update_settings_menu(visible: Res<SettingsMenuVisible>, mut menu: Query<&mut 
     node.display = if visible.0 { Display::Flex } else { Display::None };
 }
 
+fn settings_menu_page_buttons(
+    mut page_index: ResMut<SettingsMenuPageIndex>,
+    prev_btn: Query<&Interaction, (With<SettingsMenuPrevButton>, Changed<Interaction>)>,
+    next_btn: Query<&Interaction, (With<SettingsMenuNextButton>, Changed<Interaction>)>,
+) {
+    if tapped(&prev_btn) {
+        page_index.0 = (page_index.0 + SETTINGS_MENU_PAGE_COUNT - 1) % SETTINGS_MENU_PAGE_COUNT;
+    }
+    if tapped(&next_btn) {
+        page_index.0 = (page_index.0 + 1) % SETTINGS_MENU_PAGE_COUNT;
+    }
+}
+
+fn update_settings_menu_pages(
+    page_index: Res<SettingsMenuPageIndex>,
+    mut pages: Query<(&SettingsMenuPage, &mut Node)>,
+    mut label: Query<&mut Text, With<SettingsMenuPageLabel>>,
+) {
+    if !page_index.is_changed() {
+        return;
+    }
+    for (page, mut node) in &mut pages {
+        node.display = if page.0 == page_index.0 { Display::Flex } else { Display::None };
+    }
+    if let Ok(mut text) = label.single_mut() {
+        text.0 = format!("{}/{}", page_index.0 + 1, SETTINGS_MENU_PAGE_COUNT);
+    }
+}
+
 // Starts hidden (Display::None) — update_mouse_ui_lock_indicator flips it
 // on only once the player actually locks UI input via Tab.
 fn spawn_mouse_ui_lock_indicator(commands: &mut Commands) {
@@ -3669,6 +3811,39 @@ fn suppress_ui_interaction_when_locked(locked: Res<MouseUiLocked>, mut buttons: 
     }
 }
 
+const TOUCH_CONTROLS_IDLE_HIDE_SECS: f32 = 10.0;
+
+// Auto-hides touch controls (same set hide_ui_when_locked hides) after
+// TOUCH_CONTROLS_IDLE_HIDE_SECS with no touch on screen — decluttering for
+// screenshots/spectating, same idea as most mobile games' HUD auto-hide.
+// Suppressed while the settings menu is open (an idle player reading the
+// menu shouldn't watch its own buttons vanish out from under them) and
+// reset instantly by any touch, anywhere on screen (not just a button —
+// there'd be nothing to tap if the controls are already hidden).
+#[derive(Resource, Default)]
+struct TouchControlsIdleHidden(bool);
+
+fn update_touch_controls_idle_hidden(
+    time: Res<Time>,
+    touches: Res<Touches>,
+    settings_visible: Res<SettingsMenuVisible>,
+    mut idle_elapsed: Local<f32>,
+    mut hidden: ResMut<TouchControlsIdleHidden>,
+) {
+    if settings_visible.0 || touches.iter().next().is_some() {
+        *idle_elapsed = 0.0;
+        if hidden.0 {
+            hidden.0 = false;
+        }
+        return;
+    }
+    *idle_elapsed += time.delta_secs();
+    let should_hide = *idle_elapsed >= TOUCH_CONTROLS_IDLE_HIDE_SECS;
+    if should_hide != hidden.0 {
+        hidden.0 = should_hide;
+    }
+}
+
 // Display::None on a Button/the joystick base hides its entire subtree in
 // one write — border, text children, and (for the joystick) the knob child
 // all go with it, no separate per-component alpha bookkeeping needed. Also
@@ -3681,13 +3856,14 @@ fn suppress_ui_interaction_when_locked(locked: Res<MouseUiLocked>, mut buttons: 
 // incorrectly forced back to Flex on unlock).
 fn hide_ui_when_locked(
     locked: Res<MouseUiLocked>,
+    idle_hidden: Res<TouchControlsIdleHidden>,
     mut buttons: Query<&mut Node, (With<Button>, Without<TouchJoystickBase>)>,
     mut joystick: Query<&mut Node, With<TouchJoystickBase>>,
 ) {
-    if !locked.is_changed() {
+    if !locked.is_changed() && !idle_hidden.is_changed() {
         return;
     }
-    let display = if locked.0 { Display::None } else { Display::Flex };
+    let display = if locked.0 || idle_hidden.0 { Display::None } else { Display::Flex };
     for mut node in &mut buttons {
         node.display = display;
     }
@@ -5192,10 +5368,32 @@ fn touch_reload_button(mut reload: ResMut<TouchReload>, button: Query<&Interacti
     reload.0 = button.iter().any(|interaction| *interaction == Interaction::Pressed);
 }
 
+// No Changed<> gate on either query (unlike touch_jump_button/touch_crouch_
+// button) — see NoclipFlyInput's own doc comment for why noclip flight
+// needs a continuous held level instead of an edge pulse/toggle.
+fn update_noclip_fly_input(
+    mut fly: ResMut<NoclipFlyInput>,
+    jump_button: Query<&Interaction, With<TouchJumpButton>>,
+    crouch_button: Query<&Interaction, With<TouchCrouchButton>>,
+) {
+    fly.up = jump_button.iter().any(|interaction| *interaction == Interaction::Pressed);
+    fly.down = crouch_button.iter().any(|interaction| *interaction == Interaction::Pressed);
+}
+
 // Same tap-edge toggle as touch_aim_button, mirroring toggle_player_stance's
 // own KeyC branch (Standing<->Crouching, switches straight over from Prone
-// too) so a touch tap and a desktop KeyC press behave identically.
-fn touch_crouch_button(button: Query<&Interaction, (With<TouchCrouchButton>, Changed<Interaction>)>, mut player: Query<&mut PlayerStance, With<Player>>) {
+// too) so a touch tap and a desktop KeyC press behave identically. Skipped
+// entirely while noclipping — send_player_input reads TouchCrouchHeld
+// directly for fly-down instead, so tapping Crouch during noclip doesn't
+// leave PlayerStance stuck on Crouching once noclip is turned back off.
+fn touch_crouch_button(
+    noclip: Res<Noclip>,
+    button: Query<&Interaction, (With<TouchCrouchButton>, Changed<Interaction>)>,
+    mut player: Query<&mut PlayerStance, With<Player>>,
+) {
+    if noclip.0 {
+        return;
+    }
     for interaction in &button {
         if *interaction == Interaction::Pressed {
             let Ok(mut stance) = player.single_mut() else {
@@ -5838,8 +6036,7 @@ struct PredictedInputs(std::collections::VecDeque<(u32, ClientInput, f32, f32, b
 fn send_player_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
-    touch_aiming: Res<TouchAiming>,
-    touch_jump: Res<TouchJump>,
+    touch: TouchGameplayInputs,
     time: Res<Time>,
     game_over: Res<GameOver>,
     mut commands: Commands,
@@ -5864,7 +6061,7 @@ fn send_player_input(
     };
     let stance = *stance;
 
-    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
+    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch.aiming.0));
     let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
 
     let mut move_axis = Vec2::ZERO;
@@ -5888,23 +6085,30 @@ fn send_player_input(
 
     *sequence += 1;
     let dt = time.delta_secs();
+    // While noclipping, Crouch flies down (see simulate_noclip_step's own
+    // "vertical" match on input.stance) — touch.noclip_fly.down overrides
+    // the *reported* stance for this input only, without touching the
+    // real PlayerStance component (touch_crouch_button already skips its
+    // own toggle during noclip for the same reason: don't leave the
+    // player stuck Crouching once noclip turns back off).
+    let effective_stance = if noclip.0 && touch.noclip_fly.down { PlayerStance::Crouching } else { stance };
     let input = ClientInput {
         sequence: *sequence,
         move_axis,
         yaw: cam.yaw,
-        // Held while noclipping (hold Space to fly up) vs. a one-shot
-        // press for a real jump — simulate_player_step's two branches
-        // (noclip vs normal) never both read this in the same frame, so
-        // it's safe to give it different semantics per mode instead of
-        // adding a second field.
+        // Held while noclipping (hold Space, or touch.noclip_fly.up, to
+        // fly up) vs. a one-shot press for a real jump —
+        // simulate_player_step's two branches (noclip vs normal) never
+        // both read this in the same frame, so it's safe to give it
+        // different semantics per mode instead of adding a second field.
         jump: if noclip.0 {
-            keys.pressed(KeyCode::Space)
+            keys.pressed(KeyCode::Space) || touch.noclip_fly.up
         } else {
-            keys.just_pressed(KeyCode::Space) || touch_jump.0
+            keys.just_pressed(KeyCode::Space) || touch.jump.0
         },
         sprint: sprinting,
         aiming,
-        stance,
+        stance: effective_stance,
         noclip: noclip.0,
     };
     shared::movement::simulate_player_step(&mover, &mut transform, &mut player, stance, &input, dt);
