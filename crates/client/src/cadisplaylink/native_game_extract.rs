@@ -100,14 +100,36 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     snapshot.zombies =
         zombie_state.get(world).iter().map(|t| t.compute_transform()).collect();
 
-    // Remote players: NetPlayer entities that aren't this client's own —
-    // LocalPlayer is inserted by the game's own `mark_local_player` system
-    // onto whichever NetPlayer matches this client's MyClientId.
+    // Remote players: NetPlayer entities that aren't this client's own.
+    // `Without<LocalPlayer>` alone isn't reliable here — observed empirically
+    // (debug log: camera at [0, 1.46, 14], the one "remote" player at
+    // [0, 0.81, 14] — same X/Z as the camera, only offset in Y by the
+    // ordinary eye-height-above-hip-pivot amount) meaning `mark_local_player`
+    // (an observer on `Add<NetworkId>`, see crates/client/src/lib.rs:1299)
+    // isn't tagging the local client's own entity in this headless setup,
+    // root cause not yet found. Belt-and-suspenders fix: also drop any
+    // NetPlayer whose horizontal (X/Z) position coincides with the camera's
+    // — deliberately horizontal-only, since the camera sits above the
+    // player's own pivot by a fixed eye-height offset even for the correct
+    // entity, so a 3D distance check (tried first) missed this case. A
+    // genuine remote player is never this close horizontally.
+    const LOCAL_PLAYER_EXCLUSION_RADIUS_XZ: f32 = 1.0;
+    let camera_eye_xz = snapshot.camera.as_ref().map(|c| bevy::math::Vec2::new(c.eye[0], c.eye[2]));
     let mut remote_state: SystemState<
         Query<&GlobalTransform, (With<NetPlayer>, bevy::ecs::query::Without<crate::LocalPlayer>)>,
     > = SystemState::new(world);
-    snapshot.remote_players =
-        remote_state.get(world).iter().map(|t| t.compute_transform()).collect();
+    snapshot.remote_players = remote_state
+        .get(world)
+        .iter()
+        .map(|t| t.compute_transform())
+        .filter(|t| match camera_eye_xz {
+            Some(eye_xz) => {
+                let pos_xz = bevy::math::Vec2::new(t.translation.x, t.translation.z);
+                pos_xz.distance(eye_xz) > LOCAL_PLAYER_EXCLUSION_RADIUS_XZ
+            }
+            None => true,
+        })
+        .collect();
 
     // Static meshes: arena walls/floor + gun scene meshes, both plain
     // Mesh3d/MeshMaterial3d<StandardMaterial> entities — see this module's
