@@ -9,6 +9,7 @@
 #ifndef libbevy_in_app_h
 #define libbevy_in_app_h
 
+#include <stdbool.h>
 #include <stdint.h>
 
 // Opaque pointer to the Rust-side bevy::app::App.
@@ -30,5 +31,19 @@ void cadisplaylink_touch_started(struct bevy_app *app, uint64_t touch_id, float 
 void cadisplaylink_touch_moved(struct bevy_app *app, uint64_t touch_id, float x, float y);
 void cadisplaylink_touch_ended(struct bevy_app *app, uint64_t touch_id, float x, float y);
 void cadisplaylink_touch_cancelled(struct bevy_app *app, uint64_t touch_id, float x, float y);
+
+// Bluetooth keyboard/mouse support (GameController framework, see
+// GameControllerInput.swift) — key_id is our own small numbering (letters
+// 0-25, digits 26-35, then a handful of named keys), NOT a raw GCKeyCode,
+// so the Rust<->Swift contract doesn't depend on an Apple implementation
+// detail (see map_key_id in crates/client/src/cadisplaylink/ffi.rs for the
+// authoritative list both sides agree on).
+void cadisplaylink_key_changed(struct bevy_app *app, uint16_t key_id, bool pressed);
+// Locks mouse-look the instant a hardware mouse connects/disconnects —
+// there's no on-screen cursor to click-to-lock on iOS the way desktop does.
+void cadisplaylink_mouse_connected(struct bevy_app *app, bool connected);
+void cadisplaylink_mouse_moved(struct bevy_app *app, float delta_x, float delta_y);
+// button: 0 = left, 1 = right, 2 = middle.
+void cadisplaylink_mouse_button_changed(struct bevy_app *app, uint8_t button, bool pressed);
 
 #endif /* libbevy_in_app_h */

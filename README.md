@@ -133,4 +133,4 @@ Chỉ khiến app **đủ điều kiện** — hệ điều hành mới quyết 
 - Xem `RECOIL.md` để biết chi tiết hệ thống recoil súng.
 - iOS: cần bật `CADisableMinimumFrameDurationOnPhone` trong Info.plist mới lên được ProMotion 120Hz trên iPhone (đã bật sẵn trong `crates/client/gen/apple/iOS/bevy_in_iOS/Info.plist`).
 - Chưa hỗ trợ Android (chưa có scaffold `gen/android`).
-- Chuột/bàn phím Bluetooth **không** điều khiển được game trên iOS — không liên quan gì đến CADisplayLink, đây là do UIKit/GameController framework, chưa có code bridge riêng cho việc này.
+- Chuột/bàn phím Bluetooth **có** điều khiển được game trên iOS (đã ghép nối qua Settings > Bluetooth của máy trước) — dùng Apple's GameController framework (`GCKeyboard`/`GCMouse`), bridge qua `crates/client/gen/apple/iOS/base/GameControllerInput.swift` → `cadisplaylink_key_changed`/`cadisplaylink_mouse_moved`/`cadisplaylink_mouse_button_changed` (`crates/client/src/cadisplaylink/ffi.rs`). Cắm chuột vào là look tự khoá luôn (không có con trỏ để bấm-khoá như desktop). Yêu cầu iOS 14+ (gated bằng `#available`, không ảnh hưởng máy chạy iOS 13).

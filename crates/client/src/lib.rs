@@ -242,6 +242,21 @@ const TOUCH_JOYSTICK_KNOB_PX: f32 = 64.0;
 // magnitude, so dragging further than this doesn't move any faster.
 const TOUCH_JOYSTICK_RADIUS_PX: f32 = (TOUCH_JOYSTICK_BASE_PX - TOUCH_JOYSTICK_KNOB_PX) / 2.0;
 const TOUCH_FIRE_BUTTON_PX: f32 = 90.0;
+// bevy_ui's own UiStack sorts root-level (parentless) UI nodes by
+// (GlobalZIndex, ZIndex), falling back to ECS table/archetype iteration
+// order — NOT spawn order — for nodes that tie on both. Root nodes are
+// explicitly documented as having no stable ordering guarantee (see
+// bevy_ui-0.18.1/src/stack.rs's test_ui_stack_system doc comment).
+// Confirmed on-device: a churning root UI node (zombie health bar/damage
+// number, spawned+despawned continuously during combat) can render ON TOP
+// of a static button sharing its screen position, hiding it completely
+// (Interaction/hit-testing is unaffected, only the draw order) — this was
+// the real root cause of "buttons randomly disappear but still work".
+// Every persistent/static top-level UI node (buttons, joystick, HUD text)
+// gets this GlobalZIndex so it always draws above anything that doesn't
+// (zombie health bars, floating damage numbers, hit markers all stay at
+// the implicit default of 0).
+const STATIC_UI_Z_INDEX: i32 = 100;
 // Touch drag deltas are raw screen pixels per frame, same unit MouseMotion
 // deltas are — reusing MOUSE_SENSITIVITY directly felt right in theory, but
 // there's no device here to actually verify feel against, so this exists
@@ -271,6 +286,9 @@ struct TouchJoystickKnob;
 struct TouchFireButton;
 #[derive(Component)]
 struct TouchAimButton;
+
+#[derive(Component)]
+struct TouchReloadButton;
 #[derive(Component)]
 struct TouchJumpButton;
 #[derive(Component)]
@@ -328,6 +346,11 @@ impl Default for SensitivityScale {
 // each consume it differently (physics jump vs. a simple bounce).
 #[derive(Resource, Default)]
 struct TouchJump(bool);
+
+// Same one-frame-pulse shape as TouchJump — reload_gun ORs this in
+// alongside keys.just_pressed(KeyCode::KeyR).
+#[derive(Resource, Default)]
+struct TouchReload(bool);
 
 // Crosshair: 4 hash marks pushed apart from center by GAP, which grows with
 // the current bullet spread (see current_bullet_spread/update_crosshair).
@@ -725,6 +748,30 @@ struct SceneRenderTarget(Handle<Image>);
 #[derive(Resource, Default)]
 struct SettingsMenuVisible(bool);
 
+// Toggled by Tab (desktop/hardware keyboard only — no touch button, since
+// this exists specifically to stop a Bluetooth mouse's clicks from hitting
+// touch UI buttons; a touchscreen player has no such problem). While
+// locked, suppress_ui_interaction_when_locked forces every Button's
+// Interaction back to None each frame, right after multi_touch_button_
+// interaction/ui_focus_system compute it and before any *_button consumer
+// system reads it — so a mouse click can never register as a UI tap, only
+// as gameplay input (shoot()/reload_gun etc., which read ButtonInput<
+// MouseButton>/KeyCode directly, not Interaction).
+#[derive(Resource, Default)]
+struct MouseUiLocked(bool);
+
+// Which touch (if any) is currently dragging the settings menu's scroll
+// area — touch_scroll_settings_menu's own equivalent of TouchMoveState/
+// TouchLookState for the joystick/look-drag. scroll_settings_menu (desktop
+// mouse wheel) already exists; this is the touch counterpart, since the
+// menu's own Overflow::scroll_y() + ScrollPosition only gets driven by a
+// wheel today — nothing drags it by finger on a touch-only device.
+#[derive(Resource, Default)]
+struct SettingsMenuScrollState {
+    touch_id: Option<u64>,
+    last_pos_y: f32,
+}
+
 #[derive(Component)]
 struct SettingsMenuRoot;
 
@@ -735,6 +782,11 @@ struct ResolutionScaleButton(f32);
 
 #[derive(Component)]
 struct SettingsToggleButton;
+
+// Marks the small "UI locked (Tab)" HUD text — update_mouse_ui_lock_indicator
+// shows/hides it via Node.display in step with MouseUiLocked.
+#[derive(Component)]
+struct MouseUiLockIndicator;
 
 // Debug/dev: toggled by KeyB. Lets apply_aim_dof's background blur be
 // switched off quickly to check whether DoF is the cause of some visual
@@ -1463,6 +1515,24 @@ fn build_probe_common(app: &mut App) {
         .init_resource::<TouchMoveState>()
         .init_resource::<TouchMoveAxis>()
         .init_resource::<TouchLookState>()
+        // The probe has no settings menu (SettingsMenuRoot is never
+        // spawned here), but touch_move_axis/touch_look are the exact
+        // same shared systems the real game uses and now both read
+        // SettingsMenuVisible to keep the joystick/look-drag zones from
+        // swallowing a tap meant for the menu — without this, those
+        // systems panic on startup ("resource does not exist") since nothing
+        // else in the probe ever initializes it.
+        .init_resource::<SettingsMenuVisible>()
+        // Needed for the diagnostic full-UI spawn (spawn_settings_menu)
+        // below plus touch_scroll_settings_menu, registered in this same
+        // app's Update chain.
+        .init_resource::<SettingsMenuScrollState>()
+        .init_resource::<ProbeChurnTimer>()
+        // Same reasoning as SettingsMenuVisible just above — touch_move_axis/
+        // touch_look also gate on MouseUiLocked (GameControllerInput.swift's
+        // hardware-mouse-click passthrough) now, which only the real game
+        // otherwise initializes.
+        .init_resource::<MouseUiLocked>()
         // touch_look writes into this every frame it's dragging (mirrors
         // mouse_look) — the real game inits it alongside its own input
         // setup; missed here the first time, which is why touch_look
@@ -1477,6 +1547,7 @@ fn build_probe_common(app: &mut App) {
         .init_resource::<TouchJump>()
         .init_resource::<SensitivityScale>()
         .init_resource::<ProbeCrouching>()
+        // (probe has no Gun/reload flow, so no TouchReload here)
         .add_systems(Startup, |mut commands: Commands,
                                 asset_server: Res<AssetServer>,
                                 mut meshes: ResMut<Assets<Mesh>>,
@@ -1594,6 +1665,19 @@ fn build_probe_common(app: &mut App) {
                     ResolutionScaleButton(scale),
                 );
             }
+            // Diagnostic-only: spawns the full real-game UI set (Settings/
+            // Cheats menu, gear button, zombie-count HUD, UI-lock
+            // indicator) here too, on top of the probe's own touch
+            // controls — the deeper cheat systems (cheat_toggle_buttons,
+            // apply_map_render_toggles, etc.) aren't registered for the
+            // probe, so tapping most of these does nothing, but they DO
+            // render, unlocking a way to visually check whether the
+            // "buttons randomly fail to render" issue reproduces with a
+            // much larger number of simultaneous UI nodes on screen than
+            // the probe's own minimal set alone would ever hit.
+            spawn_settings_toggle_button(&mut commands);
+            spawn_settings_menu(&mut commands);
+            spawn_mouse_ui_lock_indicator(&mut commands);
             // Small label so it's obvious at a glance this is the stripped-
             // down probe build, not the real game with a blank screen.
             commands.spawn((
@@ -1626,6 +1710,16 @@ fn build_probe_common(app: &mut App) {
                 resize_scene_render_target,
                 probe_apply_look,
                 probe_move,
+                // Diagnostic full-UI set (see this app's Startup closure's
+                // own comment) — just enough wiring to open/close/scroll
+                // the menu and see everything render; the deeper cheat
+                // logic systems are deliberately NOT registered here.
+                toggle_settings_menu,
+                update_settings_menu,
+                scroll_settings_menu,
+                touch_scroll_settings_menu,
+                probe_spawn_churn_entities,
+                probe_despawn_churn_entities,
             )
                 .chain(),
         );
@@ -1636,6 +1730,26 @@ fn build_probe_common(app: &mut App) {
 // the camera's height, see probe_move.
 #[derive(Resource, Default)]
 struct ProbeCrouching(bool);
+
+// Diagnostic: the real game continuously spawns/despawns UI-adjacent
+// entities during combat (zombie health bars, floating damage numbers, hit
+// markers) — probe's own UI, by contrast, all spawns once at Startup and
+// then sits static. Confirmed (by adding the full real-game UI set to the
+// probe and NOT reproducing the "buttons randomly fail to render" bug)
+// that a large static button count isn't the trigger — this timer instead
+// mimics the CHURN itself, to test whether that's what actually matters.
+#[derive(Resource)]
+struct ProbeChurnTimer(Timer);
+impl Default for ProbeChurnTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(0.1, TimerMode::Repeating))
+    }
+}
+
+// Despawns the entity once this runs out — see probe_spawn_churn_entities/
+// probe_despawn_churn_entities.
+#[derive(Component)]
+struct ProbeChurnEntity(Timer);
 
 // Marks the probe's DirectionalLight so probe_shadow_button can find it
 // without accidentally touching the real game's own sun light (this
@@ -1672,6 +1786,7 @@ fn spawn_probe_render_toggle_button(commands: &mut Commands, label: &str, left_p
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
             Button,
             Interaction::default(),
+            GlobalZIndex(STATIC_UI_Z_INDEX),
             marker,
         ))
         .with_children(|btn| {
@@ -1783,6 +1898,90 @@ fn probe_move(
             *vertical_velocity += PROBE_GRAVITY * dt;
         }
         transform.translation.y += *vertical_velocity * dt;
+    }
+}
+
+// Spawns a little cluster of short-lived UI (mimicking a zombie health bar
+// + floating damage number) on every ProbeChurnTimer tick — random-ish
+// screen position via a cheap LCG-free hash of the tick count so it's not
+// always the exact same spot. Text (font glyph extraction) specifically,
+// since that's the piece most plausibly tied to the "renders nothing the
+// first frame it exists" class of bug (see touch_over_ui's own doc comment
+// on other things already ruled out this session).
+// Deliberately overlaps known static-button hotspots (joystick bottom-left,
+// gear top-right, fire bottom-right) — testing whether a churning
+// root-level UI node (no ZIndex, same as every static button) can render
+// ON TOP of and visually hide a button occupying the same screen position,
+// per bevy_ui's own test-suite admission that root UI siblings have no
+// stable z-order (see bevy_ui-0.18.1/src/stack.rs's test_ui_stack_system
+// doc comment).
+fn probe_spawn_churn_entities(time: Res<Time>, mut timer: ResMut<ProbeChurnTimer>, mut commands: Commands, mut tick: Local<u32>) {
+    if !timer.0.tick(time.delta()).just_finished() {
+        return;
+    }
+    *tick += 1;
+    // Cycle through the joystick / gear / fire button hotspots so each one
+    // gets hit repeatedly rather than just the first.
+    let (node, label) = match *tick % 3 {
+        0 => (
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(16.0),
+                bottom: Val::Px(16.0),
+                width: Val::Px(150.0),
+                height: Val::Px(150.0),
+                ..default()
+            },
+            "JOYSTICK",
+        ),
+        1 => (
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(8.0),
+                top: Val::Px(8.0),
+                width: Val::Px(56.0),
+                height: Val::Px(56.0),
+                ..default()
+            },
+            "GEAR",
+        ),
+        _ => (
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(24.0),
+                bottom: Val::Px(40.0),
+                width: Val::Px(110.0),
+                height: Val::Px(110.0),
+                ..default()
+            },
+            "FIRE",
+        ),
+    };
+    commands.spawn((
+        node,
+        // Fully opaque and bright so if it renders ON TOP of the button
+        // underneath, that's immediately, unambiguously obvious — no
+        // guessing about partial transparency.
+        BackgroundColor(Color::srgb(1.0, 0.0, 1.0)),
+        ProbeChurnEntity(Timer::from_seconds(0.5, TimerMode::Once)),
+    ))
+    .with_children(|n| {
+        n.spawn((
+            Text::new(label),
+            TextFont {
+                font_size: 12.0,
+                ..default()
+            },
+            TextColor(Color::BLACK),
+        ));
+    });
+}
+
+fn probe_despawn_churn_entities(time: Res<Time>, mut commands: Commands, mut churn: Query<(Entity, &mut ProbeChurnEntity)>) {
+    for (entity, mut churn) in &mut churn {
+        if churn.0.tick(time.delta()).just_finished() {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -1961,6 +2160,8 @@ fn build_game_common(app: &mut App) {
         .init_resource::<GodMode>()
         .init_resource::<DebugPanelVisible>()
         .init_resource::<SettingsMenuVisible>()
+        .init_resource::<SettingsMenuScrollState>()
+        .init_resource::<MouseUiLocked>()
         .init_resource::<AimBlurEnabled>()
         .init_resource::<AimDofFocalDistanceAlt>()
         .init_resource::<MouseLookDelta>()
@@ -1982,6 +2183,7 @@ fn build_game_common(app: &mut App) {
         .init_resource::<TouchFiring>()
         .init_resource::<TouchAiming>()
         .init_resource::<TouchJump>()
+        .init_resource::<TouchReload>()
         .init_resource::<SensitivityScale>()
         .add_systems(Startup, (setup, log_window_resolution))
         .add_systems(
@@ -1994,6 +2196,8 @@ fn build_game_common(app: &mut App) {
                 // one below, which is already at the 20-arity tuple limit.
                 (
                     multi_touch_button_interaction,
+                    toggle_mouse_ui_lock,
+                    suppress_ui_interaction_when_locked,
                     touch_move_axis,
                     update_joystick_knob_visual,
                     touch_look,
@@ -2001,6 +2205,7 @@ fn build_game_common(app: &mut App) {
                     touch_aim_button,
                     touch_jump_button,
                     touch_crouch_button,
+                    touch_reload_button,
                 )
                     .chain(),
                 // Settings menu (resolution scale) — independent of the
@@ -2010,9 +2215,11 @@ fn build_game_common(app: &mut App) {
                 (
                     toggle_settings_menu,
                     update_settings_menu,
+                    update_mouse_ui_lock_indicator,
                     resolution_scale_buttons,
                     resize_scene_render_target,
                     scroll_settings_menu,
+                    touch_scroll_settings_menu,
                     cheat_toggle_buttons,
                     apply_map_render_toggles,
                     cheat_toggle_buttons_2,
@@ -2025,6 +2232,7 @@ fn build_game_common(app: &mut App) {
                     update_sensitivity_text,
                     auto_maintain_button,
                     update_auto_maintain_button_color,
+                    hide_ui_when_locked,
                 )
                     .chain(),
                 // Tuples of systems only implement IntoSystemConfigs up to
@@ -2587,6 +2795,7 @@ fn setup(
     spawn_debug_panel(&mut commands);
     spawn_settings_menu(&mut commands);
     spawn_settings_toggle_button(&mut commands);
+    spawn_mouse_ui_lock_indicator(&mut commands);
     if touch_enabled.0 {
         spawn_touch_controls(&mut commands);
     }
@@ -2660,10 +2869,9 @@ fn spawn_settings_menu(commands: &mut Commands) {
                 top: Val::Px(16.0),
                 // Capped well under a landscape phone's typical height, with
                 // the full merged desktop-panel content this now holds —
-                // see scroll_settings_menu (mouse wheel) for how it actually
-                // scrolls. There's no touch-drag scroll yet (only wheel) —
-                // a real gap on mobile if the panel ends up taller than the
-                // screen, flagged rather than silently left out.
+                // see scroll_settings_menu (mouse wheel) and
+                // touch_scroll_settings_menu (touch drag) for how it
+                // actually scrolls.
                 max_height: Val::Px(520.0),
                 overflow: Overflow::scroll_y(),
                 padding: UiRect::all(Val::Px(12.0)),
@@ -2674,6 +2882,7 @@ fn spawn_settings_menu(commands: &mut Commands) {
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
             ScrollPosition::default(),
+            GlobalZIndex(STATIC_UI_Z_INDEX),
             SettingsMenuRoot,
         ))
         .with_children(|menu| {
@@ -2841,7 +3050,6 @@ fn spawn_settings_menu(commands: &mut Commands) {
             });
         });
 }
-
 // Shared visual style for both cheat button flavors below — toggle buttons
 // additionally get recolored by update_cheat_toggle_colors once spawned;
 // action buttons (momentary, no on/off state) stay this same color always.
@@ -3367,6 +3575,7 @@ fn spawn_settings_toggle_button(commands: &mut Commands) {
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
             Button,
             Interaction::default(),
+            GlobalZIndex(STATIC_UI_Z_INDEX),
             SettingsToggleButton,
         ))
         .with_children(|btn| {
@@ -3415,6 +3624,88 @@ fn update_settings_menu(visible: Res<SettingsMenuVisible>, mut menu: Query<&mut 
     node.display = if visible.0 { Display::Flex } else { Display::None };
 }
 
+// Starts hidden (Display::None) — update_mouse_ui_lock_indicator flips it
+// on only once the player actually locks UI input via Tab.
+fn spawn_mouse_ui_lock_indicator(commands: &mut Commands) {
+    commands.spawn((
+        Text::new("UI LOCKED (Tab to unlock)"),
+        TextFont {
+            font_size: 16.0,
+            ..default()
+        },
+        TextColor(Color::srgb(1.0, 0.6, 0.2)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(16.0),
+            left: Val::Percent(50.0),
+            display: Display::None,
+            ..default()
+        },
+        GlobalZIndex(STATIC_UI_Z_INDEX),
+        MouseUiLockIndicator,
+    ));
+}
+
+fn toggle_mouse_ui_lock(keys: Res<ButtonInput<KeyCode>>, mut locked: ResMut<MouseUiLocked>) {
+    if keys.just_pressed(KeyCode::Tab) {
+        locked.0 = !locked.0;
+    }
+}
+
+// Must run after multi_touch_button_interaction/Bevy's own ui_focus_system
+// (both of which set Interaction from touch/mouse position) and before
+// every *_button consumer system in this file — see MouseUiLocked's own
+// doc comment. Forcing back to None (not just skipping) matters: without
+// this, a click that started before the lock was toggled on could still
+// read as Pressed by a downstream system this same frame.
+fn suppress_ui_interaction_when_locked(locked: Res<MouseUiLocked>, mut buttons: Query<&mut Interaction, With<Button>>) {
+    if !locked.0 {
+        return;
+    }
+    for mut interaction in &mut buttons {
+        if *interaction != Interaction::None {
+            *interaction = Interaction::None;
+        }
+    }
+}
+
+// Display::None on a Button/the joystick base hides its entire subtree in
+// one write — border, text children, and (for the joystick) the knob child
+// all go with it, no separate per-component alpha bookkeeping needed. Also
+// cheaper than dimming: a Display::None node is skipped by UI layout and
+// never reaches the render extraction/draw step at all, vs. a dimmed node
+// which still gets laid out and drawn (just with a low-alpha quad/glyphs)
+// every frame. Only touches nodes that are Display::Flex to begin with
+// (idle_only marker components toggling Display::None for other reasons —
+// none currently apply to Button/joystick nodes — would otherwise get
+// incorrectly forced back to Flex on unlock).
+fn hide_ui_when_locked(
+    locked: Res<MouseUiLocked>,
+    mut buttons: Query<&mut Node, (With<Button>, Without<TouchJoystickBase>)>,
+    mut joystick: Query<&mut Node, With<TouchJoystickBase>>,
+) {
+    if !locked.is_changed() {
+        return;
+    }
+    let display = if locked.0 { Display::None } else { Display::Flex };
+    for mut node in &mut buttons {
+        node.display = display;
+    }
+    for mut node in &mut joystick {
+        node.display = display;
+    }
+}
+
+fn update_mouse_ui_lock_indicator(locked: Res<MouseUiLocked>, mut text: Query<&mut Node, With<MouseUiLockIndicator>>) {
+    if !locked.is_changed() {
+        return;
+    }
+    let Ok(mut node) = text.single_mut() else {
+        return;
+    };
+    node.display = if locked.0 { Display::Flex } else { Display::None };
+}
+
 // Desktop mouse wheel scroll for the settings menu — only while it's open
 // (avoids stealing the same wheel adjust_scope_zoom already uses for scope
 // zoom while aiming). MouseScrollUnit::Line (typical mouse wheel "clicks")
@@ -3439,6 +3730,62 @@ fn scroll_settings_menu(
         };
         scroll_pos.y = (scroll_pos.y - delta_y).max(0.0);
     }
+}
+
+// Touch equivalent of scroll_settings_menu — drags ScrollPosition.y to
+// follow a finger, native-scroll-view style (content moves with the
+// finger: dragging up reveals more content below). Same MouseUiLocked
+// gate as touch_move_axis/touch_look (see MouseUiLocked's own doc comment)
+// so an AssistiveTouch-synthesized "touch" from a mouse click doesn't also
+// drag the menu while a hardware mouse is meant to be the only pointer.
+fn touch_scroll_settings_menu(
+    touches: Res<Touches>,
+    visible: Res<SettingsMenuVisible>,
+    mouse_ui_locked: Res<MouseUiLocked>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    menu: Query<(&ComputedNode, &UiGlobalTransform), With<SettingsMenuRoot>>,
+    mut state: ResMut<SettingsMenuScrollState>,
+    mut scroll_pos: Query<&mut ScrollPosition, With<SettingsMenuRoot>>,
+) {
+    if !visible.0 || mouse_ui_locked.0 {
+        state.touch_id = None;
+        return;
+    }
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let scale_factor = window.scale_factor();
+    let Ok((node, transform)) = menu.single() else {
+        return;
+    };
+
+    if let Some(id) = state.touch_id {
+        if touches.get_pressed(id).is_none() {
+            state.touch_id = None;
+        }
+    }
+    if state.touch_id.is_none() {
+        if let Some(touch) = touches
+            .iter_just_pressed()
+            .find(|touch| node.contains_point(*transform, touch.position() * scale_factor))
+        {
+            state.touch_id = Some(touch.id());
+            state.last_pos_y = touch.position().y;
+        }
+    }
+
+    let Some(touch) = state.touch_id.and_then(|id| touches.get_pressed(id)) else {
+        return;
+    };
+    let delta_y = touch.position().y - state.last_pos_y;
+    state.last_pos_y = touch.position().y;
+    if delta_y == 0.0 {
+        return;
+    }
+    let Ok(mut scroll_pos) = scroll_pos.single_mut() else {
+        return;
+    };
+    scroll_pos.y = (scroll_pos.y - delta_y).max(0.0);
 }
 
 // Same Changed<Interaction>-gated Pressed check as toggle_settings_menu — a
@@ -4037,6 +4384,7 @@ fn spawn_health_ui(commands: &mut Commands) {
             top: Val::Px(16.0),
             ..default()
         },
+        GlobalZIndex(STATIC_UI_Z_INDEX),
         HealthUi,
     ));
 }
@@ -4068,6 +4416,7 @@ fn spawn_ammo_ui(commands: &mut Commands) {
             bottom: Val::Px(16.0),
             ..default()
         },
+        GlobalZIndex(STATIC_UI_Z_INDEX),
         AmmoUi,
     ));
 }
@@ -4090,6 +4439,7 @@ fn spawn_ping_ui(commands: &mut Commands) {
             top: Val::Px(16.0),
             ..default()
         },
+        GlobalZIndex(STATIC_UI_Z_INDEX),
         PingUi,
     ));
 }
@@ -4345,6 +4695,7 @@ fn spawn_debug_panel(commands: &mut Commands) {
             display: Display::None,
             ..default()
         },
+        GlobalZIndex(STATIC_UI_Z_INDEX),
         DebugPanelText,
     ));
 }
@@ -4553,6 +4904,7 @@ fn spawn_crosshair(commands: &mut Commands) {
                 align_items: AlignItems::Center,
                 ..default()
             },
+            GlobalZIndex(STATIC_UI_Z_INDEX),
             CrosshairRoot,
         ))
         .with_children(|root| {
@@ -4654,6 +5006,7 @@ fn spawn_touch_controls(commands: &mut Commands) {
             // similarly-light patch of scene behind it.
             BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+            GlobalZIndex(STATIC_UI_Z_INDEX),
             TouchJoystickBase,
         ))
         .with_children(|base| {
@@ -4687,6 +5040,7 @@ fn spawn_touch_controls(commands: &mut Commands) {
         BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
         Button,
         Interaction::default(),
+        GlobalZIndex(STATIC_UI_Z_INDEX),
         TouchFireButton,
     ));
 
@@ -4710,6 +5064,7 @@ fn spawn_touch_controls(commands: &mut Commands) {
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
             Button,
             Interaction::default(),
+            GlobalZIndex(STATIC_UI_Z_INDEX),
             TouchAimButton,
         ))
         .with_children(|btn| {
@@ -4717,6 +5072,40 @@ fn spawn_touch_controls(commands: &mut Commands) {
                 Text::new("ADS"),
                 TextFont {
                     font_size: 12.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+        });
+
+    // Reload — to the left of Fire (same row/height), out of the way of
+    // ADS above and a firing thumb still resting on Fire.
+    commands
+        .spawn((
+            Node {
+                width: Val::Px(TOUCH_FIRE_BUTTON_PX * 0.7),
+                height: Val::Px(TOUCH_FIRE_BUTTON_PX * 0.7),
+                position_type: PositionType::Absolute,
+                right: Val::Px(32.0 + TOUCH_FIRE_BUTTON_PX + 16.0),
+                bottom: Val::Px(48.0 + (TOUCH_FIRE_BUTTON_PX - TOUCH_FIRE_BUTTON_PX * 0.7) / 2.0),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(TOUCH_FIRE_BUTTON_PX * 0.35)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(1.0, 0.8, 0.2, 0.4)),
+            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+            Button,
+            Interaction::default(),
+            GlobalZIndex(STATIC_UI_Z_INDEX),
+            TouchReloadButton,
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                Text::new("RELOAD"),
+                TextFont {
+                    font_size: 10.0,
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -4764,6 +5153,7 @@ fn spawn_touch_round_button(commands: &mut Commands, label: &str, left_px: f32, 
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
             Button,
             Interaction::default(),
+            GlobalZIndex(STATIC_UI_Z_INDEX),
             marker,
         ))
         .with_children(|btn| {
@@ -4795,6 +5185,11 @@ fn touch_aim_button(mut aiming: ResMut<TouchAiming>, button: Query<&Interaction,
 // and minimal_map_probe_main; each has its own consumer of TouchJump.
 fn touch_jump_button(mut jump: ResMut<TouchJump>, button: Query<&Interaction, (With<TouchJumpButton>, Changed<Interaction>)>) {
     jump.0 = button.iter().any(|interaction| *interaction == Interaction::Pressed);
+}
+
+// Same one-frame-pulse shape as touch_jump_button.
+fn touch_reload_button(mut reload: ResMut<TouchReload>, button: Query<&Interaction, (With<TouchReloadButton>, Changed<Interaction>)>) {
+    reload.0 = button.iter().any(|interaction| *interaction == Interaction::Pressed);
 }
 
 // Same tap-edge toggle as touch_aim_button, mirroring toggle_player_stance's
@@ -4845,19 +5240,54 @@ fn touch_over_ui(touch_id: u64, hover_map: &HoverMap, interactive: &Query<(), Wi
         .is_some_and(|hits| hits.keys().any(|&entity| interactive.contains(entity)))
 }
 
+// touch_over_ui above is a no-op in this custom CADisplayLink pipeline —
+// HoverMap only gets populated by bevy_picking's touch_pick_events system,
+// which reads WindowEvent::TouchInput, and this app only ever emits the
+// raw TouchInput message (see ffi.rs's touched()), so HoverMap stays
+// permanently empty and touch_over_ui always returns false. Concretely
+// this meant a touch starting anywhere on the LEFT half of the screen —
+// including on top of the open settings menu, which can span past the
+// midline — always got claimed by the joystick (touch_move_axis) first,
+// so the menu's own touch_scroll_settings_menu never got a chance to see
+// that touch. This hand-rolled rect check (same ComputedNode::contains_
+// point technique multi_touch_button_interaction/touch_scroll_settings_
+// menu already use) is a working substitute, scoped to just the one node
+// that actually needs excluding here.
+fn touch_over_settings_menu(
+    pos_physical: Vec2,
+    visible: &SettingsMenuVisible,
+    menu: &Query<(&ComputedNode, &UiGlobalTransform), With<SettingsMenuRoot>>,
+) -> bool {
+    visible.0 && menu.single().is_ok_and(|(node, transform)| node.contains_point(*transform, pos_physical))
+}
+
 fn touch_move_axis(
     touches: Res<Touches>,
     windows: Query<&Window, With<PrimaryWindow>>,
     hover_map: Res<HoverMap>,
     interactive: Query<(), With<Interaction>>,
+    mouse_ui_locked: Res<MouseUiLocked>,
+    settings_visible: Res<SettingsMenuVisible>,
+    settings_menu: Query<(&ComputedNode, &UiGlobalTransform), With<SettingsMenuRoot>>,
     mut state: ResMut<TouchMoveState>,
     mut axis: ResMut<TouchMoveAxis>,
 ) {
+    // AssistiveTouch (the only way to use a Bluetooth mouse on iPhone —
+    // see GameControllerInput.swift) synthesizes real UITouch events at the
+    // pointer's location on click, which this system sees exactly like a
+    // finger tap — MouseUiLocked exists so a mouse click can't drive
+    // movement via the joystick zone this way.
+    if mouse_ui_locked.0 {
+        state.touch_id = None;
+        axis.0 = Vec2::ZERO;
+        return;
+    }
     let Ok(window) = windows.single() else {
         axis.0 = Vec2::ZERO;
         return;
     };
     let half_width = window.width() / 2.0;
+    let scale_factor = window.scale_factor();
 
     if let Some(id) = state.touch_id {
         if touches.get_pressed(id).is_none() {
@@ -4865,10 +5295,11 @@ fn touch_move_axis(
         }
     }
     if state.touch_id.is_none() {
-        if let Some(touch) = touches
-            .iter_just_pressed()
-            .find(|touch| touch.position().x < half_width && !touch_over_ui(touch.id(), &hover_map, &interactive))
-        {
+        if let Some(touch) = touches.iter_just_pressed().find(|touch| {
+            touch.position().x < half_width
+                && !touch_over_ui(touch.id(), &hover_map, &interactive)
+                && !touch_over_settings_menu(touch.position() * scale_factor, &settings_visible, &settings_menu)
+        }) {
             state.touch_id = Some(touch.id());
             state.origin = touch.position();
         }
@@ -4911,15 +5342,27 @@ fn touch_look(
     windows: Query<&Window, With<PrimaryWindow>>,
     hover_map: Res<HoverMap>,
     interactive: Query<(), With<Interaction>>,
+    mouse_ui_locked: Res<MouseUiLocked>,
+    settings_visible: Res<SettingsMenuVisible>,
+    settings_menu: Query<(&ComputedNode, &UiGlobalTransform), With<SettingsMenuRoot>>,
     mut state: ResMut<TouchLookState>,
     mut look_delta: ResMut<MouseLookDelta>,
     sensitivity_scale: Res<SensitivityScale>,
     mut query: Query<&mut FpsCamera>,
 ) {
+    // See touch_move_axis's own comment on MouseUiLocked/AssistiveTouch —
+    // same reasoning here so a mouse click on the right half doesn't also
+    // yank the camera via the touch look-drag zone while GCMouse deltas
+    // (mouse_look) are already driving it.
+    if mouse_ui_locked.0 {
+        state.touch_id = None;
+        return;
+    }
     let Ok(window) = windows.single() else {
         return;
     };
     let half_width = window.width() / 2.0;
+    let scale_factor = window.scale_factor();
 
     if let Some(id) = state.touch_id {
         if touches.get_pressed(id).is_none() {
@@ -4927,10 +5370,11 @@ fn touch_look(
         }
     }
     if state.touch_id.is_none() {
-        if let Some(touch) = touches
-            .iter_just_pressed()
-            .find(|touch| touch.position().x >= half_width && !touch_over_ui(touch.id(), &hover_map, &interactive))
-        {
+        if let Some(touch) = touches.iter_just_pressed().find(|touch| {
+            touch.position().x >= half_width
+                && !touch_over_ui(touch.id(), &hover_map, &interactive)
+                && !touch_over_settings_menu(touch.position() * scale_factor, &settings_visible, &settings_menu)
+        }) {
             state.touch_id = Some(touch.id());
             state.last_pos = touch.position();
         }
@@ -5770,11 +6214,12 @@ fn on_shot_fx(
 fn reload_gun(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
+    touch_reload: Res<TouchReload>,
     game_over: Res<GameOver>,
     reload_sound: Res<ReloadSound>,
     mut gun: Query<&mut Gun>,
 ) {
-    if game_over.0 || !keys.just_pressed(KeyCode::KeyR) {
+    if game_over.0 || !(keys.just_pressed(KeyCode::KeyR) || touch_reload.0) {
         return;
     }
     let Ok(mut gun) = gun.single_mut() else {
