@@ -275,7 +275,7 @@ final class TouchHUD {
         didSet { healthLabel.text = "HP \(health)" }
     }
 
-    func install(in parent: UIView, fireAction: @escaping () -> Void) {
+    func install(in parent: UIView, fireAction: @escaping () -> Void, fireUpAction: @escaping () -> Void = {}) {
         // Joystick — bottom-left, semi-transparent circles.
         joystickBase.frame = CGRect(x: 0, y: 0, width: joystickRadius * 2, height: joystickRadius * 2)
         joystickBase.layer.cornerRadius = joystickRadius
@@ -300,8 +300,14 @@ final class TouchHUD {
         fireButton.setTitleColor(.white, for: .normal)
         fireButton.titleLabel?.font = .boldSystemFont(ofSize: 14)
         fireButton.addTarget(self, action: #selector(handleFireTouchDown), for: .touchDown)
+        // Phase 6 Step 5 (real shooting): release needs its own event so a
+        // held FIRE button maps to a held mouse-left-button, matching
+        // desktop's own hold-to-auto-fire — touchUpInside/Outside/Cancel
+        // all count as "finger lifted", not just a clean tap-release.
+        fireButton.addTarget(self, action: #selector(handleFireTouchUp), for: [.touchUpInside, .touchUpOutside, .touchCancel])
         parent.addSubview(fireButton)
         self.fireAction = fireAction
+        self.fireUpAction = fireUpAction
 
         // Health/ammo HUD — top corners.
         healthLabel.text = "HP \(health)"
@@ -327,18 +333,30 @@ final class TouchHUD {
     }
 
     private var fireAction: (() -> Void)?
+    private var fireUpAction: (() -> Void)?
+
+    @objc private func handleFireTouchUp() {
+        fireUpAction?()
+    }
 
     @objc private func handleFireTouchDown() {
-        guard ammo > 0 else { return }
-        ammo -= 1
+        // This `ammo` counter is purely this demo HUD's own decoration (see
+        // TouchHUD's doc comment) — real-game mode's actual ammo lives in
+        // the headless App's own `Gun` component and is what really gates
+        // firing (see `shoot()` in crates/client/src/lib.rs), so don't let
+        // this fake counter block the real fire trigger below once it
+        // hits 0; only skip the cosmetic decrement/flash.
+        if ammo > 0 {
+            ammo -= 1
+            UIView.animate(withDuration: 0.05, animations: {
+                self.fireButton.backgroundColor = UIColor.systemRed.withAlphaComponent(0.9)
+            }, completion: { _ in
+                UIView.animate(withDuration: 0.15) {
+                    self.fireButton.backgroundColor = UIColor.systemRed.withAlphaComponent(0.55)
+                }
+            })
+        }
         fireAction?()
-        UIView.animate(withDuration: 0.05, animations: {
-            self.fireButton.backgroundColor = UIColor.systemRed.withAlphaComponent(0.9)
-        }, completion: { _ in
-            UIView.animate(withDuration: 0.15) {
-                self.fireButton.backgroundColor = UIColor.systemRed.withAlphaComponent(0.55)
-            }
-        })
     }
 
     func layout(in parent: UIView) {
@@ -427,9 +445,11 @@ class ViewController: UIViewController {
         if #available(iOS 13.4, *) {
             self.metalV.addInteraction(UIPointerInteraction(delegate: self))
         }
-        touchHUD.install(in: self.view) { [weak self] in
-            self?.handleFire()
-        }
+        touchHUD.install(in: self.view, fireAction: { [weak self] in
+            self?.handleFire(pressed: true)
+        }, fireUpAction: { [weak self] in
+            self?.handleFire(pressed: false)
+        })
     }
 
     override func viewDidLayoutSubviews() {
@@ -437,11 +457,22 @@ class ViewController: UIViewController {
         touchHUD.layout(in: self.view)
     }
 
-    // No shooting logic wired to the renderer yet (Phase 4 is the UI
-    // layer existing and being interactive, not full gameplay) — just
-    // proves the button press reaches Swift code.
-    private func handleFire() {
-        print("[touch-hud] fire, ammo=\(touchHUD.ammo)")
+    // Phase 6 Step 5 (real shooting): in real-game-renderer mode, drive the
+    // headless App's own `ButtonInput<MouseButton>::Left` exactly like a
+    // desktop left-click — the real `shoot()` system (crates/client/src/
+    // lib.rs) already reads that unmodified, no new Rust code needed. The
+    // headless app's synthetic PrimaryWindow starts with CursorOptions
+    // grab_mode already Locked (see native_game_app.rs), so `shoot()`'s
+    // cursor-grab gate is satisfied from the start — press=true starts
+    // (held = auto-fire at the game's own FIRE_RATE), press=false on
+    // release stops it, same semantics as holding down a real mouse button.
+    private func handleFire(pressed: Bool) {
+        if USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe {
+            native_metal_probe_mouse_button_changed(probe, 0, pressed)
+        }
+        if pressed {
+            print("[touch-hud] fire, ammo=\(touchHUD.ammo)")
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
