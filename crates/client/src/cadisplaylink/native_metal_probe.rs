@@ -17,6 +17,15 @@ use metal::{
 };
 use objc::{runtime::Object, *};
 
+// Phase 6 Step 4: draws the REAL game's own level (spawn_test_arena's walls
+// + floor, the ak47_scope gun) instead of this probe's own hardcoded
+// Sponza/box-arena — reusing every pipeline/shader built below unchanged,
+// only the vertex data and camera pose source change. See
+// native_game_app.rs (headless App) and native_game_extract.rs
+// (extraction).
+use super::native_game_app::build_headless_game_ecs_app;
+use super::native_game_extract::{extract_render_snapshot, ExtractedMesh};
+
 // The real game's own Sponza asset — loaded directly via the `gltf` crate
 // (see gltf_scene.rs), no offline conversion needed. (Model I/O on iOS
 // doesn't support .gltf at all — confirmed on-device via
@@ -429,6 +438,13 @@ pub struct NativeMetalProbe {
     // the actual architectural risk the plan calls out.
     ecs_app: bevy::app::App,
     start_time: std::time::Instant,
+    // Phase 6 Step 4 (temporary, alongside `ecs_app`'s toy patrol World):
+    // `Some` only when constructed via `new(view, true)` — the headless
+    // real game (build_game_common: physics/networking/AI/prediction),
+    // ticked and extracted every frame instead of the toy `ecs_app`. When
+    // present, `render_frame` draws its static geometry (arena+gun) and
+    // drives the camera from its `FpsCamera` instead of touch input.
+    real_game_app: Option<bevy::app::App>,
 }
 
 #[derive(bevy::ecs::component::Component, Clone, Copy)]
@@ -503,12 +519,54 @@ fn build_entity_ecs_app() -> bevy::app::App {
     app
 }
 
+// Flattens the real game's extracted static meshes (arena walls/floor +
+// gun scene geometry, see native_game_extract.rs) into a plain triangle
+// list in the SAME `Vertex{position,normal,color}` layout the box-arena
+// pipeline (`self.pipeline`/`SHADER_SOURCE`) already expects — so drawing
+// them needs no new shader, just a fresh `MTLBuffer` each frame (same
+// "rebuild a small buffer per frame" precedent as the skinned-mesh joint
+// buffer below). Bakes each mesh's `Transform` into world-space positions/
+// normals on the CPU, matching how Sponza/box-arena vertices are already
+// pre-baked at load time (no per-draw model matrix in this shader).
+fn bake_static_meshes(meshes: &[ExtractedMesh]) -> Vec<Vertex> {
+    let mut verts = Vec::new();
+    for mesh in meshes {
+        let color = [mesh.base_color[0], mesh.base_color[1], mesh.base_color[2]];
+        let vertex_at = |idx: usize| -> Vertex {
+            let local_pos = bevy::math::Vec3::from_array(mesh.positions[idx]);
+            let local_normal = if mesh.normals.is_empty() {
+                bevy::math::Vec3::Y
+            } else {
+                bevy::math::Vec3::from_array(mesh.normals[idx])
+            };
+            let world_pos = mesh.transform.transform_point(local_pos);
+            let world_normal = (mesh.transform.rotation * local_normal).normalize_or_zero();
+            Vertex { position: world_pos.to_array(), normal: world_normal.to_array(), color }
+        };
+        if mesh.indices.is_empty() {
+            for idx in 0..mesh.positions.len() {
+                verts.push(vertex_at(idx));
+            }
+        } else {
+            for &idx in &mesh.indices {
+                verts.push(vertex_at(idx as usize));
+            }
+        }
+    }
+    verts
+}
+
 impl NativeMetalProbe {
     // `view` is the raw UIView* handed over from Swift — same FFI contract
     // as the existing cadisplaylink module (see ios_view.rs). We reach
     // into it via objc msg_send! to grab its CAMetalLayer, exactly what
     // MetalView.swift's `layerClass` override already made it.
-    pub unsafe fn new(view: *mut Object) -> Self {
+    // `real_game` selects Phase 6 Step 4's mode: draw the real game's own
+    // level (arena+gun, camera driven by FpsCamera) instead of this
+    // probe's own toy Sponza/box-arena/patrol World. Every pipeline/shader
+    // below is still built either way — only which World gets ticked and
+    // which vertex data feeds `self.pipeline` differs, in `render_frame`.
+    pub unsafe fn new(view: *mut Object, real_game: bool) -> Self {
         let device = Device::system_default().expect("no Metal device");
         let raw_layer: *mut Object = msg_send![view, layer];
         // MetalLayer wraps a CAMetalLayer* Objective-C object the same way
@@ -622,6 +680,7 @@ impl NativeMetalProbe {
         let zombie_model = super::skinned_gltf::load_skinned_gltf(&device, &zombie_path);
 
         let ecs_app = build_entity_ecs_app();
+        let real_game_app = if real_game { Some(build_headless_game_ecs_app()) } else { None };
 
         let scope_color_descriptor = metal::TextureDescriptor::new();
         scope_color_descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
@@ -698,6 +757,7 @@ impl NativeMetalProbe {
             quad_vertex_buffer,
             ecs_app,
             start_time: std::time::Instant::now(),
+            real_game_app,
         }
     }
 
@@ -782,8 +842,16 @@ impl NativeMetalProbe {
         extracted: &[(bevy::transform::components::Transform, EntityKind, f32)],
         now: f32,
         use_sponza: bool,
+        real_game_buffer: Option<(&metal::Buffer, usize)>,
     ) {
-        if use_sponza {
+        if let Some((buffer, vertex_count)) = real_game_buffer {
+            let uniforms = Uniforms { view_projection, light_dir, _pad: 0.0 };
+            encoder.set_render_pipeline_state(&self.pipeline);
+            encoder.set_vertex_buffer(0, Some(buffer), 0);
+            encoder.set_vertex_bytes(1, std::mem::size_of::<Uniforms>() as u64, &uniforms as *const _ as *const _);
+            encoder.set_fragment_bytes(1, std::mem::size_of::<Uniforms>() as u64, &uniforms as *const _ as *const _);
+            encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, vertex_count as u64);
+        } else if use_sponza {
             encoder.set_render_pipeline_state(self.sponza_pipeline.as_ref().unwrap());
             encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
             for mesh in &self.sponza_meshes {
@@ -895,8 +963,36 @@ impl NativeMetalProbe {
         let texture = drawable.texture();
 
         let use_sponza = self.sponza_pipeline.is_some() && !self.sponza_meshes.is_empty();
+        let is_real_game = self.real_game_app.is_some();
+
+        // Phase 6 Step 4: tick the real headless game App (if this probe
+        // was constructed with `real_game: true`) and extract a fresh
+        // snapshot — camera pose comes from the game's own FpsCamera
+        // instead of touch input, and the arena+gun geometry gets rebaked
+        // into a plain vertex buffer each frame (see bake_static_meshes).
+        let mut real_game_vertices: Option<Vec<Vertex>> = None;
+        if let Some(app) = &mut self.real_game_app {
+            app.update();
+            let snapshot = extract_render_snapshot(app.world_mut());
+            if let Some(cam) = &snapshot.camera {
+                self.camera_position = cam.eye;
+                self.camera_yaw = cam.yaw;
+                self.camera_pitch = cam.pitch;
+            }
+            real_game_vertices = Some(bake_static_meshes(&snapshot.static_meshes));
+        }
+        let real_game_buffer = real_game_vertices.as_ref().filter(|v| !v.is_empty()).map(|vertices| {
+            let buffer = self.device.new_buffer_with_data(
+                vertices.as_ptr() as *const _,
+                (vertices.len() * std::mem::size_of::<Vertex>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            (buffer, vertices.len())
+        });
+
+        let use_camera_state = use_sponza || is_real_game;
         let aspect = width as f32 / height.max(1) as f32;
-        let far = if use_sponza { 500.0 } else { 100.0 };
+        let far = if use_camera_state { 500.0 } else { 100.0 };
         let (sin_pitch, cos_pitch) = self.camera_pitch.sin_cos();
         let (sin_yaw, cos_yaw) = self.camera_yaw.sin_cos();
         let look_dir = [-sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch];
@@ -905,12 +1001,12 @@ impl NativeMetalProbe {
             self.camera_position[1] + look_dir[1],
             self.camera_position[2] + look_dir[2],
         ];
-        let view = if use_sponza {
+        let view = if use_camera_state {
             look_at(self.camera_position, center, [0.0, 1.0, 0.0])
         } else {
             look_at([0.0, 3.0, 10.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0])
         };
-        let proj = perspective(if use_sponza { 60.0_f32 } else { 45.0 }.to_radians(), aspect, 0.05, far);
+        let proj = perspective(if use_camera_state { 60.0_f32 } else { 45.0 }.to_radians(), aspect, 0.05, far);
         let light_dir = {
             let v = [-4.0f32, -8.0, -4.0];
             let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
@@ -930,8 +1026,16 @@ impl NativeMetalProbe {
         // entirely. Collected into an owned Vec (not a live query/World
         // borrow) so draw_scene can be called twice — once per camera —
         // without re-ticking Time in between.
-        self.ecs_app.update();
-        let extracted: Vec<(bevy::transform::components::Transform, EntityKind, f32)> = {
+        // In real-game mode the toy patrol World is irrelevant (its
+        // hardcoded zombies/soldier would just float inside the real
+        // arena) — skip ticking/extracting it and draw no skinned entities
+        // for now. Real zombie/player rendering from `real_game_app`'s own
+        // Zombie/NetPlayer transforms is follow-up work, not part of this
+        // step (which is about seeing the arena+gun geometry at all).
+        let extracted: Vec<(bevy::transform::components::Transform, EntityKind, f32)> = if is_real_game {
+            Vec::new()
+        } else {
+            self.ecs_app.update();
             let mut query_state = self
                 .ecs_app
                 .world_mut()
@@ -955,7 +1059,15 @@ impl NativeMetalProbe {
         let scope_command_buffer = self.queue.new_command_buffer();
         let scope_encoder = scope_command_buffer.new_render_command_encoder(scope_pass_descriptor);
         scope_encoder.set_depth_stencil_state(&self.depth_state);
-        self.draw_scene(scope_encoder, scope_view_projection, light_dir, &extracted, now, use_sponza);
+        self.draw_scene(
+            scope_encoder,
+            scope_view_projection,
+            light_dir,
+            &extracted,
+            now,
+            use_sponza,
+            real_game_buffer.as_ref().map(|(b, n)| (b, *n)),
+        );
         scope_encoder.end_encoding();
         scope_command_buffer.commit();
 
@@ -977,7 +1089,15 @@ impl NativeMetalProbe {
         let command_buffer = self.queue.new_command_buffer();
         let encoder = command_buffer.new_render_command_encoder(pass_descriptor);
         encoder.set_depth_stencil_state(&self.depth_state);
-        self.draw_scene(encoder, view_projection, light_dir, &extracted, now, use_sponza);
+        self.draw_scene(
+            encoder,
+            view_projection,
+            light_dir,
+            &extracted,
+            now,
+            use_sponza,
+            real_game_buffer.as_ref().map(|(b, n)| (b, *n)),
+        );
 
         if let Some(quad_pipeline) = &self.quad_pipeline {
             encoder.set_render_pipeline_state(quad_pipeline);

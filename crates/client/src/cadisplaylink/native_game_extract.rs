@@ -19,11 +19,13 @@ use bevy::transform::components::Transform;
 
 use shared::{NetPlayer, Zombie};
 
-/// One drawable static mesh — arena walls/floor (`spawn_test_arena`,
-/// `crates/client/src/lib.rs:3915`) and the gun's glTF-scene-instantiated
-/// child meshes (`GUN_PATH = "models/ak47_scope.glb"`) both show up here,
-/// since both carry plain `Mesh3d`/`MeshMaterial3d<StandardMaterial>` once
-/// Bevy's scene spawner has run — no separate code path needed for either.
+/// One drawable static mesh — currently just arena walls/floor
+/// (`spawn_test_arena`, `crates/client/src/lib.rs:3915`); the gun's
+/// glTF-scene-instantiated child meshes (`GUN_PATH =
+/// "models/ak47_scope.glb"`) are deliberately excluded (see the
+/// `Without<ChildOf>` filter below) until parent-chain composition is
+/// implemented — treating their parent-relative `Transform` as world
+/// space renders them in the wrong place/scale.
 pub struct ExtractedMesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
@@ -101,11 +103,19 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     > = SystemState::new(world);
     snapshot.remote_players = remote_state.get(world).iter().copied().collect();
 
-    // Static meshes: arena walls/floor + gun scene meshes, both plain
-    // Mesh3d/MeshMaterial3d<StandardMaterial> entities — see this module's
-    // doc comment on ExtractedMesh.
+    // Static meshes: arena walls/floor only for now — excludes anything
+    // with a `ChildOf` (the gun's scene-instantiated meshes are parented
+    // to the gun root, itself `ChildOf(camera)`; their `Transform` is
+    // local to that parent chain, not world space, so treating it as
+    // world-space like this module does for root-level entities renders
+    // them in the wrong place/scale). Composing the full parent chain
+    // (camera -> gun root -> mesh) is real follow-up work, not yet done —
+    // see this module's doc comment on ExtractedMesh.
     let mut mesh_state: SystemState<(
-        Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>, &Transform)>,
+        Query<
+            (&Mesh3d, &MeshMaterial3d<StandardMaterial>, &Transform),
+            Without<bevy::ecs::hierarchy::ChildOf>,
+        >,
         Res<Assets<Mesh>>,
         Res<Assets<StandardMaterial>>,
     )> = SystemState::new(world);

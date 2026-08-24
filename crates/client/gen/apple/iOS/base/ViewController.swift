@@ -36,7 +36,17 @@ let USE_RUST_METAL_DEMO = true
 // backend at all and ticks it repeatedly, printing zombie/player counts —
 // see native_game_app_create/tick in cadisplaylink/ffi.rs. No renderer
 // reads from it yet. Remove once Phase 6 Step 1 is confirmed working.
-let RUN_HEADLESS_GAME_APP_SPIKE = true
+let RUN_HEADLESS_GAME_APP_SPIKE = false
+// Phase 6 Step 4: when true (and USE_RUST_METAL_DEMO is also true), the
+// Rust+Metal probe draws the REAL game's own level (spawn_test_arena's
+// walls+floor, the ak47_scope gun) instead of its own Sponza/box-arena
+// demo scene, with the camera driven by the game's own FpsCamera instead
+// of touch input — see native_metal_probe_create_real_game in ffi.rs.
+// Separate from RUN_HEADLESS_GAME_APP_SPIKE (that one boots its OWN
+// headless App with no renderer at all; this one boots the renderer WITH
+// a headless App wired in) — only one of the two should be true at once,
+// they'd otherwise run two independent, un-networked copies of the game.
+let USE_REAL_GAME_NATIVE_RENDERER = true
 
 private let arenaHalfSize: Float = 10.0
 private let arenaWallHeight: Float = 4.0
@@ -438,7 +448,11 @@ class ViewController: UIViewController {
         if USE_RUST_METAL_DEMO {
             if rustMetalProbe == nil {
                 let viewPointer = Unmanaged.passUnretained(self.metalV).toOpaque()
-                rustMetalProbe = native_metal_probe_create(viewPointer, Float(UIScreen.main.nativeScale))
+                if USE_REAL_GAME_NATIVE_RENDERER {
+                    rustMetalProbe = native_metal_probe_create_real_game(viewPointer, Float(UIScreen.main.nativeScale))
+                } else {
+                    rustMetalProbe = native_metal_probe_create(viewPointer, Float(UIScreen.main.nativeScale))
+                }
                 if #available(iOS 15.0, *) {
                     displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
                 }
