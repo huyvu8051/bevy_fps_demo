@@ -95,6 +95,7 @@ fn create_bevy_window(app: &mut App, view_obj: IosViewObj) {
 // (networking, UI, zombies, debug tooling — all identical to the
 // winit-driven app).
 pub(crate) fn build_cadisplaylink_game_app(view_obj: IosViewObj) -> App {
+    eprintln!("[cadisplaylink] build_cadisplaylink_game_app (REAL GAME) starting");
     use avian3d::prelude::PhysicsPlugins;
     use bevy::app::{PluginsState, TaskPoolOptions, TaskPoolPlugin};
     use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
@@ -147,6 +148,7 @@ pub(crate) fn build_cadisplaylink_game_app(view_obj: IosViewObj) -> App {
 // networking, no FPS overlay, no game logic of any kind), to measure raw
 // achievable FPS/CPU independent of everything else in this app.
 pub(crate) fn build_cadisplaylink_fps_probe_app(view_obj: IosViewObj) -> App {
+    eprintln!("[cadisplaylink] build_cadisplaylink_fps_probe_app (PROBE) starting");
     use bevy::app::{PluginsState, TaskPoolOptions, TaskPoolPlugin};
     use bevy::window::WindowPlugin;
     use bevy::winit::WinitPlugin;
@@ -164,6 +166,10 @@ pub(crate) fn build_cadisplaylink_fps_probe_app(view_obj: IosViewObj) -> App {
             }),
     );
     app.add_systems(bevy::app::Startup, crate::fps_probe::spawn_arena_and_camera);
+    app.add_systems(
+        bevy::app::Update,
+        (crate::fps_probe::fly_camera_move, crate::fps_probe::fly_camera_look),
+    );
 
     create_bevy_window(&mut app, view_obj);
 
