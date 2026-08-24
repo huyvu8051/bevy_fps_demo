@@ -45,6 +45,12 @@ use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 #[cfg(target_os = "ios")]
 mod cadisplaylink;
 
+// Standalone FPS probe (camera + a small static primitive-built room, no
+// game logic at all) — see its own module doc comment. Only reachable via
+// cadisplaylink::build_cadisplaylink_fps_probe_app.
+#[cfg(target_os = "ios")]
+mod fps_probe;
+
 // Downloaded once into assets/models/ so the app doesn't depend on a network
 // request (and a remote repo's file layout) every time it starts.
 // To load from a URL instead, add the WebAssetPlugin back (see bevy::asset::io::web)
@@ -1497,551 +1503,6 @@ fn log_client_connection_state(state: Res<State<ClientState>>) {
     }
 }
 
-// Diagnostic probe for the iOS fps/CPU investigation — camera + Sponza map
-// and nothing else (no networking, zombies, physics, UI, or touch controls,
-// nothing beyond what DefaultPlugins itself runs). On Simulator this used
-// about half the CPU of the full game (~48% vs ~110%), flat over 60s with no
-// growth either way, so the map's own render cost is already a big chunk of
-// the baseline — but Simulator doesn't reproduce real Metal/device behavior,
-// so this still needs a real-device run to mean anything for the actual bug.
-// Toggle with the MINIMAL_MAP_PROBE env var (Xcode: Edit Scheme > Run >
-// Arguments > Environment Variables — same place RUST_LOG already lives, no
-// code changes needed to flip it) — set it to anything to run this instead
-// of the real game.
-fn minimal_map_probe_main() {
-    let mut app = App::new();
-    app.add_plugins((
-        DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                mode: if cfg!(target_os = "ios") || cfg!(target_os = "android") {
-                    WindowMode::BorderlessFullscreen(MonitorSelection::Current)
-                } else {
-                    WindowMode::Windowed
-                },
-                ..default()
-            }),
-            ..default()
-        }),
-        // touch_look/touch_move_axis need Res<HoverMap>, which comes
-        // from bevy_picking's core plugin — the real game gets it as a
-        // side effect of adding MeshPickingPlugin (for its zombie/gun
-        // raycasts), but this probe never picks any 3D meshes, so
-        // without adding it explicitly here too, HoverMap never gets
-        // inserted and both touch systems panic on a missing resource
-        // the moment they run.
-        MeshPickingPlugin,
-    ))
-    .insert_resource(if cfg!(target_os = "ios") || cfg!(target_os = "android") {
-        WinitSettings {
-            focused_mode: UpdateMode::reactive(std::time::Duration::from_secs_f32(1.0 / 60.0)),
-            ..WinitSettings::game()
-        }
-    } else {
-        WinitSettings::game()
-    });
-    build_probe_common(&mut app);
-    app.run();
-}
-
-// Everything the probe needs that has nothing to do with which windowing
-// backend is driving it (winit vs. the CADisplayLink FFI entry point below)
-// — factored out so both can build the exact same scene/systems and the
-// CPU/FPS comparison between the two is apples-to-apples on identical game
-// logic, not just similarly-shaped logic.
-fn build_probe_common(app: &mut App) {
-    app
-        // Same FPS overlay + refresh rate as the real game (see its own
-        // FpsOverlayPlugin comment) — the whole point of this probe build is
-        // to have a number to read while eyeballing whether it stutters.
-        .add_plugins(FpsOverlayPlugin {
-            config: bevy::dev_tools::fps_overlay::FpsOverlayConfig {
-                refresh_interval: std::time::Duration::from_secs_f32(1.0 / 60.0),
-                ..default()
-            },
-        })
-        // Touch controls wired in for this probe too — same joystick/look
-        // systems the real game uses, reused as-is (they only need
-        // FpsCamera + the Touch* resources, nothing else from the real
-        // game), so this can test whether the controller UI still
-        // randomly disappears / stops responding in an otherwise-trivial
-        // scene with none of the real game's networking/zombie/UI
-        // complexity around it.
-        .init_resource::<TouchMoveState>()
-        .init_resource::<TouchMoveAxis>()
-        .init_resource::<TouchLookState>()
-        // The probe has no settings menu (SettingsMenuRoot is never
-        // spawned here), but touch_move_axis/touch_look are the exact
-        // same shared systems the real game uses and now both read
-        // SettingsMenuVisible to keep the joystick/look-drag zones from
-        // swallowing a tap meant for the menu — without this, those
-        // systems panic on startup ("resource does not exist") since nothing
-        // else in the probe ever initializes it.
-        .init_resource::<SettingsMenuVisible>()
-        // Needed for the diagnostic full-UI spawn (spawn_settings_menu)
-        // below plus touch_scroll_settings_menu, registered in this same
-        // app's Update chain.
-        .init_resource::<SettingsMenuScrollState>()
-        .init_resource::<SettingsMenuPageIndex>()
-        .init_resource::<ProbeChurnTimer>()
-        // Same reasoning as SettingsMenuVisible just above — touch_move_axis/
-        // touch_look also gate on MouseUiLocked (GameControllerInput.swift's
-        // hardware-mouse-click passthrough) now, which only the real game
-        // otherwise initializes.
-        .init_resource::<MouseUiLocked>()
-        // touch_look writes into this every frame it's dragging (mirrors
-        // mouse_look) — the real game inits it alongside its own input
-        // setup; missed here the first time, which is why touch_look
-        // panicked on "Resource does not exist" the moment a drag started.
-        .init_resource::<MouseLookDelta>()
-        // Jump/crouch buttons — same UI (spawn_touch_controls spawns them
-        // unconditionally) and the same generic TouchJump edge-pulse the
-        // real game uses, but this probe has no Player/PlayerStance to
-        // toggle, so it gets its own tiny crouch-toggle resource + a
-        // probe-only button handler (probe_crouch_button) instead of the
-        // real game's touch_crouch_button.
-        .init_resource::<TouchJump>()
-        .init_resource::<SensitivityScale>()
-        .init_resource::<ProbeCrouching>()
-        // (probe has no Gun/reload flow, so no TouchReload here)
-        .add_systems(Startup, |mut commands: Commands,
-                                asset_server: Res<AssetServer>,
-                                mut meshes: ResMut<Assets<Mesh>>,
-                                mut materials: ResMut<Assets<StandardMaterial>>,
-                                mut images: ResMut<Assets<Image>>,
-                                windows: Query<&Window, With<PrimaryWindow>>| {
-            // Same dynamic-resolution-scale render target the real game
-            // uses (setup()'s own comment has the full explanation) —
-            // migrated here so the probe can A/B render-resolution cost
-            // the same way, instead of only being able to guess from the
-            // real game's numbers.
-            let (window_width, window_height) = windows
-                .single()
-                .map(|window| (window.resolution.physical_width(), window.resolution.physical_height()))
-                .unwrap_or((1280, 720));
-            let mut scene_image = Image::new_fill(
-                scaled_scene_extent(window_width, window_height, RESOLUTION_SCALE_DEFAULT),
-                TextureDimension::D2,
-                &[0, 0, 0, 255],
-                TextureFormat::Bgra8UnormSrgb,
-                RenderAssetUsages::default(),
-            );
-            scene_image.texture_descriptor.usage =
-                TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
-            let scene_image_handle = images.add(scene_image);
-            commands.insert_resource(SceneRenderTarget(scene_image_handle.clone()));
-            commands.insert_resource(RenderResolutionScale::default());
-
-            commands.spawn((
-                Camera3d::default(),
-                // Starts Off, matching the real game's own main cameras —
-                // toggleable at runtime via the MSAA button (see
-                // probe_msaa_button) to A/B the render cost live.
-                Msaa::Off,
-                Transform::from_xyz(0.0, 3.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
-                FpsCamera { yaw: 0.0, pitch: 0.0 },
-                // Renders into the resolution-scaled offscreen texture
-                // instead of the window directly — see present_camera/the
-                // fullscreen ImageNode right below for how it reaches the
-                // screen.
-                RenderTarget::from(scene_image_handle.clone()),
-            ));
-            // present_camera: routes all UI (via IsDefaultUiCamera) to the
-            // window at full native resolution, same as the real game's
-            // setup() — only the 3D scene (the ImageNode below) is scaled.
-            commands.spawn((Camera2d, IsDefaultUiCamera));
-            // Fullscreen quad showing the scaled render, stretched to fill
-            // the window. Spawned before any other UI so it stays the
-            // back-most sibling (Bevy UI draws root nodes in insertion
-            // order) — otherwise it'd paint over the touch controls.
-            // Pickable::IGNORE for the same reason as the real game's
-            // identical node: without it, this fullscreen node counts as
-            // "touch is over UI" for every touch anywhere on screen,
-            // breaking touch_move_axis/touch_look outright.
-            commands.spawn((
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    position_type: PositionType::Absolute,
-                    ..default()
-                },
-                ImageNode::new(scene_image_handle),
-                Pickable::IGNORE,
-            ));
-            commands.spawn((
-                DirectionalLight {
-                    illuminance: 3000.0,
-                    // Starts disabled (Bevy's own default) — toggleable via
-                    // the SHADOW button (see probe_shadow_button).
-                    shadows_enabled: false,
-                    ..default()
-                },
-                Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
-                ProbeSun,
-            ));
-            // PROBE_SIMPLE_SCENE=1 swaps the (fairly heavy, many-material)
-            // Sponza gltf for a bare cube + floor plane — isolates whether
-            // the ~20% idle CPU on-device comes from scene/asset complexity
-            // at all, vs. being pure wgpu/Metal render-thread overhead that
-            // shows up even with next to nothing on screen.
-            let scene_label = if std::env::var("PROBE_SIMPLE_SCENE").is_ok() {
-                commands.spawn((
-                    Mesh3d(meshes.add(Plane3d::default().mesh().size(50.0, 50.0))),
-                    MeshMaterial3d(materials.add(Color::srgb(0.3, 0.3, 0.35))),
-                    Transform::from_xyz(0.0, 0.0, 0.0),
-                ));
-                commands.spawn((
-                    Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-                    MeshMaterial3d(materials.add(Color::srgb(0.8, 0.2, 0.2))),
-                    Transform::from_xyz(0.0, 0.5, 0.0),
-                ));
-                "bare cube"
-            } else {
-                commands.spawn(SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(SCENE_PATH))));
-                "Sponza"
-            };
-            spawn_touch_controls(&mut commands);
-            // Render-cost toggles (top-left, out of the way of the
-            // joystick/look/jump/crouch UI and the FPS overlay in the
-            // top-left corner) — lets us A/B the actual GPU cost of
-            // MSAA/shadows live on-device instead of guessing.
-            spawn_probe_render_toggle_button(&mut commands, "MSAA", 16.0, Color::srgba(0.3, 0.6, 1.0, 0.4), ProbeMsaaButton);
-            spawn_probe_render_toggle_button(&mut commands, "SHADOW", 84.0, Color::srgba(0.6, 0.3, 1.0, 0.4), ProbeShadowButton);
-            // Resolution-scale presets — same RESOLUTION_SCALE_PRESETS/
-            // ResolutionScaleButton/resolution_scale_buttons the real
-            // game's settings menu uses, just laid out as standalone
-            // buttons here instead of behind a menu (the probe has no
-            // settings menu).
-            for (i, &scale) in RESOLUTION_SCALE_PRESETS.iter().enumerate() {
-                spawn_probe_render_toggle_button(
-                    &mut commands,
-                    &format!("{:.0}%", scale * 100.0),
-                    152.0 + i as f32 * 64.0,
-                    Color::srgba(0.3, 1.0, 0.6, 0.4),
-                    ResolutionScaleButton(scale),
-                );
-            }
-            // Diagnostic-only: spawns the full real-game UI set (Settings/
-            // Cheats menu, gear button, zombie-count HUD, UI-lock
-            // indicator) here too, on top of the probe's own touch
-            // controls — the deeper cheat systems (cheat_toggle_buttons,
-            // apply_map_render_toggles, etc.) aren't registered for the
-            // probe, so tapping most of these does nothing, but they DO
-            // render, unlocking a way to visually check whether the
-            // "buttons randomly fail to render" issue reproduces with a
-            // much larger number of simultaneous UI nodes on screen than
-            // the probe's own minimal set alone would ever hit.
-            spawn_settings_toggle_button(&mut commands);
-            spawn_settings_menu(&mut commands);
-            spawn_mouse_ui_lock_indicator(&mut commands);
-            // Small label so it's obvious at a glance this is the stripped-
-            // down probe build, not the real game with a blank screen.
-            commands.spawn((
-                Text::new(format!("MINIMAL MAP PROBE — camera + {scene_label} only, no game logic")),
-                TextFont {
-                    font_size: 14.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(1.0, 1.0, 0.3)),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(16.0),
-                    bottom: Val::Px(16.0),
-                    ..default()
-                },
-            ));
-        })
-        .add_systems(
-            Update,
-            (
-                multi_touch_button_interaction,
-                touch_move_axis,
-                update_joystick_knob_visual,
-                touch_look,
-                touch_jump_button,
-                probe_crouch_button,
-                probe_msaa_button,
-                probe_shadow_button,
-                resolution_scale_buttons,
-                resize_scene_render_target,
-                probe_apply_look,
-                probe_move,
-                // Diagnostic full-UI set (see this app's Startup closure's
-                // own comment) — just enough wiring to open/close/scroll
-                // the menu and see everything render; the deeper cheat
-                // logic systems are deliberately NOT registered here.
-                toggle_settings_menu,
-                update_settings_menu,
-                settings_menu_page_buttons,
-                update_settings_menu_pages,
-                scroll_settings_menu,
-                touch_scroll_settings_menu,
-                probe_spawn_churn_entities,
-                probe_despawn_churn_entities,
-            )
-                .chain(),
-        );
-}
-
-// Probe-only stand-in for PlayerStance (which doesn't exist here — no
-// Player entity, no shared::movement simulation) — just enough to offset
-// the camera's height, see probe_move.
-#[derive(Resource, Default)]
-struct ProbeCrouching(bool);
-
-// Diagnostic: the real game continuously spawns/despawns UI-adjacent
-// entities during combat (zombie health bars, floating damage numbers, hit
-// markers) — probe's own UI, by contrast, all spawns once at Startup and
-// then sits static. Confirmed (by adding the full real-game UI set to the
-// probe and NOT reproducing the "buttons randomly fail to render" bug)
-// that a large static button count isn't the trigger — this timer instead
-// mimics the CHURN itself, to test whether that's what actually matters.
-#[derive(Resource)]
-struct ProbeChurnTimer(Timer);
-impl Default for ProbeChurnTimer {
-    fn default() -> Self {
-        Self(Timer::from_seconds(0.1, TimerMode::Repeating))
-    }
-}
-
-// Despawns the entity once this runs out — see probe_spawn_churn_entities/
-// probe_despawn_churn_entities.
-#[derive(Component)]
-struct ProbeChurnEntity(Timer);
-
-// Marks the probe's DirectionalLight so probe_shadow_button can find it
-// without accidentally touching the real game's own sun light (this
-// function tree is never reachable from the real game, but the marker
-// keeps the query unambiguous regardless).
-#[derive(Component)]
-struct ProbeSun;
-
-#[derive(Component)]
-struct ProbeMsaaButton;
-#[derive(Component)]
-struct ProbeShadowButton;
-
-// Positioned below the FPS overlay (top-left corner) rather than reusing
-// spawn_touch_round_button's bottom-anchored layout, since "80px from the
-// bottom" would land in a different spot depending on screen height —
-// top-anchored is safe under 16:9 vs. 19.5:9 phones alike.
-fn spawn_probe_render_toggle_button(commands: &mut Commands, label: &str, left_px: f32, color: Color, marker: impl Component) {
-    commands
-        .spawn((
-            Node {
-                width: Val::Px(56.0),
-                height: Val::Px(56.0),
-                position_type: PositionType::Absolute,
-                left: Val::Px(left_px),
-                top: Val::Px(80.0),
-                border: UiRect::all(Val::Px(2.0)),
-                border_radius: BorderRadius::all(Val::Px(28.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(color),
-            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
-            Button,
-            Interaction::default(),
-            GlobalZIndex(STATIC_UI_Z_INDEX),
-            marker,
-        ))
-        .with_children(|btn| {
-            btn.spawn((
-                Text::new(label),
-                TextFont {
-                    font_size: 10.0,
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-            ));
-        });
-}
-
-// Toggles the probe camera's Msaa component between Off and Sample4 on tap
-// — a live A/B test of MSAA's actual render cost, since the probe starts
-// with it Off (matching the real game's main cameras) and there's no
-// keyboard on iOS to flip a debug flag any other way.
-fn probe_msaa_button(
-    button: Query<&Interaction, (With<ProbeMsaaButton>, Changed<Interaction>)>,
-    mut camera: Query<&mut Msaa, With<Camera3d>>,
-) {
-    for interaction in &button {
-        if *interaction == Interaction::Pressed {
-            let Ok(mut msaa) = camera.single_mut() else {
-                return;
-            };
-            *msaa = if *msaa == Msaa::Off { Msaa::Sample4 } else { Msaa::Off };
-        }
-    }
-}
-
-// Same idea for shadow rendering — starts disabled (Bevy's own
-// DirectionalLight default), toggled live to A/B its render cost.
-fn probe_shadow_button(
-    button: Query<&Interaction, (With<ProbeShadowButton>, Changed<Interaction>)>,
-    mut sun: Query<&mut DirectionalLight, With<ProbeSun>>,
-) {
-    for interaction in &button {
-        if *interaction == Interaction::Pressed {
-            let Ok(mut light) = sun.single_mut() else {
-                return;
-            };
-            light.shadows_enabled = !light.shadows_enabled;
-        }
-    }
-}
-
-// Tap-edge toggle, same pattern as touch_aim_button/touch_crouch_button —
-// reacts to the exact same TouchCrouchButton UI entity the real game's
-// touch_crouch_button does, just with a different (probe-only) target to
-// mutate since there's no PlayerStance here.
-fn probe_crouch_button(mut crouching: ResMut<ProbeCrouching>, button: Query<&Interaction, (With<TouchCrouchButton>, Changed<Interaction>)>) {
-    for interaction in &button {
-        if *interaction == Interaction::Pressed {
-            crouching.0 = !crouching.0;
-        }
-    }
-}
-
-// Copies FpsCamera.yaw/pitch (written by touch_look) straight into the
-// camera's own Transform.rotation — the real game does this indirectly via
-// apply_view_recoil (which also layers in recoil kick on top), way more
-// than this probe needs. No clamping beyond what touch_look itself already
-// applies to pitch.
-fn probe_apply_look(camera: Query<(&FpsCamera, &mut Transform), With<Camera3d>>) {
-    for (cam, mut transform) in camera {
-        transform.rotation = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
-    }
-}
-
-// Camera's spawn height (see Startup system above) — also doubles as the
-// probe's "ground" floor for the fake jump/gravity below, since there's no
-// real collider to land on here.
-const PROBE_GROUND_Y: f32 = 3.0;
-const PROBE_JUMP_SPEED: f32 = 6.0;
-const PROBE_GRAVITY: f32 = -18.0;
-const PROBE_CROUCH_OFFSET: f32 = -0.6;
-
-// Same move_axis-rotated-by-yaw math send_player_input/simulate_player_step
-// use for the real game, minus everything about server prediction/physics
-// collision — this probe has no server and no colliders to run into, so a
-// flat translate is all that's needed to test whether the joystick itself
-// still works. Jump/crouch are a simple fake: no real ground collider here,
-// so "grounded" is just "at or below the crouch-adjusted PROBE_GROUND_Y",
-// and TouchJump's edge pulse (see its own doc comment) only does anything
-// while grounded, same as the real game's simulate_player_step gate.
-fn probe_move(
-    time: Res<Time>,
-    touch_axis: Res<TouchMoveAxis>,
-    touch_jump: Res<TouchJump>,
-    crouching: Res<ProbeCrouching>,
-    mut vertical_velocity: Local<f32>,
-    camera: Query<(&FpsCamera, &mut Transform), With<Camera3d>>,
-) {
-    let dt = time.delta_secs();
-    let ground_y = PROBE_GROUND_Y + if crouching.0 { PROBE_CROUCH_OFFSET } else { 0.0 };
-    for (cam, mut transform) in camera {
-        if touch_axis.0 != Vec2::ZERO {
-            let move_dir = Quat::from_rotation_y(cam.yaw) * Vec3::new(touch_axis.0.x, 0.0, -touch_axis.0.y);
-            transform.translation += move_dir * MOVE_SPEED * dt;
-        }
-
-        let grounded = transform.translation.y <= ground_y;
-        if grounded {
-            transform.translation.y = ground_y;
-            *vertical_velocity = if touch_jump.0 { PROBE_JUMP_SPEED } else { 0.0 };
-        } else {
-            *vertical_velocity += PROBE_GRAVITY * dt;
-        }
-        transform.translation.y += *vertical_velocity * dt;
-    }
-}
-
-// Spawns a little cluster of short-lived UI (mimicking a zombie health bar
-// + floating damage number) on every ProbeChurnTimer tick — random-ish
-// screen position via a cheap LCG-free hash of the tick count so it's not
-// always the exact same spot. Text (font glyph extraction) specifically,
-// since that's the piece most plausibly tied to the "renders nothing the
-// first frame it exists" class of bug (see touch_over_ui's own doc comment
-// on other things already ruled out this session).
-// Deliberately overlaps known static-button hotspots (joystick bottom-left,
-// gear top-right, fire bottom-right) — testing whether a churning
-// root-level UI node (no ZIndex, same as every static button) can render
-// ON TOP of and visually hide a button occupying the same screen position,
-// per bevy_ui's own test-suite admission that root UI siblings have no
-// stable z-order (see bevy_ui-0.18.1/src/stack.rs's test_ui_stack_system
-// doc comment).
-fn probe_spawn_churn_entities(time: Res<Time>, mut timer: ResMut<ProbeChurnTimer>, mut commands: Commands, mut tick: Local<u32>) {
-    if !timer.0.tick(time.delta()).just_finished() {
-        return;
-    }
-    *tick += 1;
-    // Cycle through the joystick / gear / fire button hotspots so each one
-    // gets hit repeatedly rather than just the first.
-    let (node, label) = match *tick % 3 {
-        0 => (
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(16.0),
-                bottom: Val::Px(16.0),
-                width: Val::Px(150.0),
-                height: Val::Px(150.0),
-                ..default()
-            },
-            "JOYSTICK",
-        ),
-        1 => (
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(8.0),
-                top: Val::Px(8.0),
-                width: Val::Px(56.0),
-                height: Val::Px(56.0),
-                ..default()
-            },
-            "GEAR",
-        ),
-        _ => (
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(24.0),
-                bottom: Val::Px(40.0),
-                width: Val::Px(110.0),
-                height: Val::Px(110.0),
-                ..default()
-            },
-            "FIRE",
-        ),
-    };
-    commands.spawn((
-        node,
-        // Fully opaque and bright so if it renders ON TOP of the button
-        // underneath, that's immediately, unambiguously obvious — no
-        // guessing about partial transparency.
-        BackgroundColor(Color::srgb(1.0, 0.0, 1.0)),
-        ProbeChurnEntity(Timer::from_seconds(0.5, TimerMode::Once)),
-    ))
-    .with_children(|n| {
-        n.spawn((
-            Text::new(label),
-            TextFont {
-                font_size: 12.0,
-                ..default()
-            },
-            TextColor(Color::BLACK),
-        ));
-    });
-}
-
-fn probe_despawn_churn_entities(time: Res<Time>, mut commands: Commands, mut churn: Query<(Entity, &mut ProbeChurnEntity)>) {
-    for (entity, mut churn) in &mut churn {
-        if churn.0.tick(time.delta()).just_finished() {
-            commands.entity(entity).despawn();
-        }
-    }
-}
-
 // #[bevy_main] requires the fn to be named exactly `main` — see its own
 // macro's compile-error message. Desktop's src/main.rs (a thin `fn main() {
 // client::main(); }`) and iOS's start_app extern shim below both call this
@@ -2049,16 +1510,6 @@ fn probe_despawn_churn_entities(time: Res<Time>, mut commands: Commands, mut chu
 // regardless of platform.
 #[bevy_main]
 pub fn main() {
-    // See minimal_map_probe_main's own doc comment — flips to the stripped-
-    // down probe scene when MINIMAL_MAP_PROBE is set (Xcode scheme env var;
-    // does nothing for an icon-tap launch, only Xcode Run — see the real
-    // game's SERVER_ADDR default above for the same caveat handled the
-    // other way, by temporarily changing the hardcoded fallback instead).
-    if std::env::var("MINIMAL_MAP_PROBE").is_ok() {
-        minimal_map_probe_main();
-        return;
-    }
-
     let mut app = App::new();
     app.add_plugins((
             // Desktop: WindowResolution is left at Bevy's default (a plain
@@ -2120,12 +1571,12 @@ pub fn main() {
             // refresh_interval (100ms, 10x/sec) reads as a flicker rather
             // than a number — slowed to 30x/sec (see PING_UI_REFRESH_SECS
             // below, kept at the same rate for consistency).
-            FpsOverlayPlugin {
-                config: bevy::dev_tools::fps_overlay::FpsOverlayConfig {
-                    refresh_interval: std::time::Duration::from_secs_f32(1.0 / 60.0),
-                    ..default()
-                },
-            },
+            // FpsOverlayPlugin {
+            //     config: bevy::dev_tools::fps_overlay::FpsOverlayConfig {
+            //         refresh_interval: std::time::Duration::from_secs_f32(1.0 / 60.0),
+            //         ..default()
+            //     },
+            // },
             RepliconPlugins,
             RepliconRenetPlugins,
         ))
@@ -2194,7 +1645,8 @@ fn build_game_common(app: &mut App) {
         .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
         .init_resource::<ZombieCountUi>()
         .init_resource::<AutoMaintainUi>()
-        .add_systems(Startup, connect_to_server)
+        //.add_systems(Startup, connect_to_server)
+        /*
         .add_systems(
             Update,
             (
@@ -2204,13 +1656,14 @@ fn build_game_common(app: &mut App) {
                 auto_reconnect,
             ),
         )
-        .add_systems(OnExit(ClientState::Connected), despawn_replicated_on_disconnect)
-        .add_observer(mark_local_player)
-        .add_observer(on_zombie_replicated)
-        .add_observer(on_net_transform_replicated)
-        .add_observer(on_net_player_replicated)
-        .add_observer(on_shot_fx)
-        .add_observer(on_game_state_event)
+        */
+        //.add_systems(OnExit(ClientState::Connected), despawn_replicated_on_disconnect)
+        //.add_observer(mark_local_player)
+        //.add_observer(on_zombie_replicated)
+        //.add_observer(on_net_transform_replicated)
+        //.add_observer(on_net_player_replicated)
+        //.add_observer(on_shot_fx)
+        //.add_observer(on_game_state_event)
         .init_resource::<Noclip>()
         .init_resource::<FreezeZombies>()
         .init_resource::<ShowHitboxes>()
@@ -2245,140 +1698,125 @@ fn build_game_common(app: &mut App) {
         .init_resource::<NoclipFlyInput>()
         .init_resource::<TouchReload>()
         .init_resource::<SensitivityScale>()
-        .add_systems(Startup, (setup, log_window_resolution))
-        .add_systems(
-            Update,
+        .add_systems(Startup, (setup /*, log_window_resolution */,));
+    // CPU bisection (temporary, not deleted): the ENTIRE Update schedule
+    // below is commented out — rock-bottom baseline with only whatever
+    // Bevy/wgpu itself does every frame (extraction/prepare/render graph)
+    // plus setup()'s one-time Startup spawn (Sponza, lights, gun/zombie
+    // models, all UI). No per-frame game logic at all. Compare this
+    // Metal HUD reading against the full game to see how much of the CPU
+    // cost is "our systems" vs. fixed engine/render overhead.
+    /*
+    app.add_systems(
+        Update,
+        (
             (
-                // Touch input sources run before the group below reads
-                // their output (TouchMoveAxis in send_player_input,
-                // FpsCamera/MouseLookDelta in apply_view_recoil) — a
-                // separate leading group rather than folding into the next
-                // one below, which is already at the 20-arity tuple limit.
+                multi_touch_button_interaction,
+                toggle_mouse_ui_lock,
+                suppress_ui_interaction_when_locked,
+                touch_move_axis,
+                update_joystick_knob_visual,
+                touch_look,
+                touch_fire_button,
+                touch_aim_button,
+                touch_jump_button,
+                update_noclip_fly_input,
+                touch_crouch_button,
+                touch_reload_button,
+            )
+                .chain(),
+            (
                 (
-                    multi_touch_button_interaction,
-                    toggle_mouse_ui_lock,
-                    suppress_ui_interaction_when_locked,
-                    touch_move_axis,
-                    update_joystick_knob_visual,
-                    touch_look,
-                    touch_fire_button,
-                    touch_aim_button,
-                    touch_jump_button,
-                    update_noclip_fly_input,
-                    touch_crouch_button,
-                    touch_reload_button,
-                )
-                    .chain(),
-                // Settings menu (resolution scale) — independent of the
-                // gameplay chain below, so its own small group rather than
-                // pushed into an already near-the-20-arity-limit tuple (see
-                // that group's own comment on why it's already split up).
-                (
-                    (
-                        toggle_settings_menu,
-                        update_settings_menu,
-                        settings_menu_page_buttons,
-                        update_settings_menu_pages,
-                        update_mouse_ui_lock_indicator,
-                        resolution_scale_buttons,
-                        resize_scene_render_target,
-                        scroll_settings_menu,
-                        touch_scroll_settings_menu,
-                        cheat_toggle_buttons,
-                        apply_map_render_toggles,
-                    )
-                        .chain(),
-                    (
-                        cheat_toggle_buttons_2,
-                        update_cheat_toggle_colors,
-                        cheat_kill_all_button,
-                        cheat_zombie_health_buttons,
-                        zombie_count_buttons,
-                        update_zombie_count_text,
-                        sensitivity_buttons,
-                        update_sensitivity_text,
-                        auto_maintain_button,
-                        update_auto_maintain_button_color,
-                        update_touch_controls_idle_hidden,
-                        hide_ui_when_locked,
-                    )
-                        .chain(),
-                )
-                    .chain(),
-                // Tuples of systems only implement IntoSystemConfigs up to
-                // arity 20, so this is split into nested chained groups
-                // rather than one flat tuple — .chain() on the outer tuple
-                // still orders everything from grab_cursor through
-                // despawn_blood_stains, just via a few hops instead of one.
-                (
-                    grab_cursor,
-                    toggle_noclip,
-                    toggle_player_stance,
-                    toggle_debug_flags,
-                    debug_panel_actions,
-                    mouse_look,
-                    shoot,
-                    reload_gun,
-                    apply_lean_input,
-                    apply_view_recoil,
-                    apply_aim_zoom,
-                    apply_aim_dof,
-                    send_player_input,
-                    predict_player_movement,
-                    sync_camera_to_player,
-                    sync_player_model,
-                    update_zombie_lod,
-                    zombies_damage_player,
+                    toggle_settings_menu,
+                    update_settings_menu,
+                    settings_menu_page_buttons,
+                    update_settings_menu_pages,
+                    update_mouse_ui_lock_indicator,
+                    resolution_scale_buttons,
+                    resize_scene_render_target,
+                    scroll_settings_menu,
+                    touch_scroll_settings_menu,
+                    cheat_toggle_buttons,
+                    apply_map_render_toggles,
                 )
                     .chain(),
                 (
-                    check_game_over,
-                    restart_game,
-                    restart_button,
-                    wire_zombie_animations,
-                    wire_zombie_hitbox_bones,
-                    wire_gun_mesh,
-                    update_zombie_animation,
-                    freeze_zombie_animations,
-                    wire_player_model_animations,
-                    update_remote_player_model_animation,
-                    update_local_player_model_animation,
-                    update_health_ui,
-                    update_zombie_health_bars,
-                    update_floating_damage_texts,
-                )
-                    .chain(),
-                (
-                    adjust_scope_zoom,
-                    // gun_view_animation must run before sync_scope_camera
-                    // and update_scope_lens — both mirror per-frame gun
-                    // state (look_sway_roll, bob_phase/blend, ads_blend,
-                    // recoil_roll, etc.) that gun_view_animation computes
-                    // fresh each frame. Running sync_scope_camera first
-                    // meant it read last frame's stale value instead,
-                    // invisible most of the time but a visible one-frame
-                    // lag between the lens quad and the round scope
-                    // camera's own rendered content during a fast mouse
-                    // whip (reported in-game).
-                    gun_view_animation,
-                    sync_scope_camera,
-                    update_scope_lens,
-                    update_ammo_ui,
-                    update_ping_ui,
-                    update_crosshair,
-                    draw_zombie_hitboxes,
-                    update_debug_panel,
-                    despawn_hit_markers,
-                    despawn_muzzle_flashes,
-                    update_smoke,
-                    update_blood_particles,
-                    update_spark_particles,
-                    despawn_blood_stains,
+                    cheat_toggle_buttons_2,
+                    update_cheat_toggle_colors,
+                    cheat_kill_all_button,
+                    cheat_zombie_health_buttons,
+                    zombie_count_buttons,
+                    update_zombie_count_text,
+                    sensitivity_buttons,
+                    update_sensitivity_text,
+                    auto_maintain_button,
+                    update_auto_maintain_button_color,
+                    update_touch_controls_idle_hidden,
+                    hide_ui_when_locked,
                 )
                     .chain(),
             )
                 .chain(),
-        );
+            (
+                grab_cursor,
+                toggle_noclip,
+                toggle_player_stance,
+                toggle_debug_flags,
+                debug_panel_actions,
+                mouse_look,
+                shoot,
+                reload_gun,
+                apply_lean_input,
+                apply_view_recoil,
+                apply_aim_zoom,
+                apply_aim_dof,
+                send_player_input,
+                predict_player_movement,
+                sync_camera_to_player,
+                sync_player_model,
+                update_zombie_lod,
+                zombies_damage_player,
+            )
+                .chain(),
+            (
+                check_game_over,
+                restart_game,
+                restart_button,
+                wire_zombie_animations,
+                wire_zombie_hitbox_bones,
+                wire_gun_mesh,
+                update_zombie_animation,
+                freeze_zombie_animations,
+                wire_player_model_animations,
+                update_remote_player_model_animation,
+                update_local_player_model_animation,
+                update_health_ui,
+                update_zombie_health_bars,
+                update_floating_damage_texts,
+            )
+                .chain(),
+            (
+                adjust_scope_zoom,
+                gun_view_animation,
+                sync_scope_camera,
+                update_scope_lens,
+                update_ammo_ui,
+                update_ping_ui,
+                update_crosshair,
+                draw_zombie_hitboxes,
+                update_debug_panel,
+                despawn_hit_markers,
+                despawn_muzzle_flashes,
+                update_smoke,
+                update_blood_particles,
+                update_spark_particles,
+                despawn_blood_stains,
+            )
+                .chain(),
+        )
+            .chain(),
+    );
+    */
 }
 
 #[derive(Resource)]

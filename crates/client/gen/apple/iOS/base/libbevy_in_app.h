@@ -15,10 +15,10 @@
 // Opaque pointer to the Rust-side bevy::app::App.
 struct bevy_app;
 
-struct bevy_app *cadisplaylink_create_app(void *view, float scale_factor);
-// Full real game (networking/UI/zombies/debug tooling) instead of the
-// stripped-down probe scene.
 struct bevy_app *cadisplaylink_create_game_app(void *view, float scale_factor);
+// Camera + a small static primitive-built room, no game logic at all — see
+// crates/client/src/fps_probe.rs.
+struct bevy_app *cadisplaylink_create_fps_probe_app(void *view, float scale_factor);
 
 void cadisplaylink_enter_frame(struct bevy_app *app);
 void cadisplaylink_release_app(struct bevy_app *app);

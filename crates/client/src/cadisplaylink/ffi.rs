@@ -4,7 +4,7 @@
 //! Swift — our probe's joystick (left half) and look-drag (right half)
 //! need two simultaneous touches to both work at once.
 
-use super::{IosViewObj, build_cadisplaylink_game_app, build_cadisplaylink_probe_app};
+use super::{IosViewObj, build_cadisplaylink_fps_probe_app, build_cadisplaylink_game_app};
 use bevy::app::App;
 use bevy::ecs::{entity::Entity, system::Query, world::FromWorld};
 use bevy::input::ButtonState;
@@ -42,21 +42,20 @@ fn warm_up_app(app: &mut App) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_create_app(view: *mut objc::runtime::Object, scale_factor: f32) -> *mut std::ffi::c_void {
-    let view_obj = IosViewObj { view, scale_factor };
-    let mut app = build_cadisplaylink_probe_app(view_obj);
-    warm_up_app(&mut app);
-    Box::into_raw(Box::new(app)) as *mut std::ffi::c_void
-}
-
-// Real game (networking + UI + zombies + all debug tooling), same App
-// enter_frame/touch_*/release_app below operate on regardless of which of
-// these two constructors built it.
-#[unsafe(no_mangle)]
 pub extern "C" fn cadisplaylink_create_game_app(view: *mut objc::runtime::Object, scale_factor: f32) -> *mut std::ffi::c_void {
     let view_obj = IosViewObj { view, scale_factor };
     let mut app = build_cadisplaylink_game_app(view_obj);
     warm_up_app(&mut app);
+    Box::into_raw(Box::new(app)) as *mut std::ffi::c_void
+}
+
+// crate::fps_probe's App — camera + static room, no game logic — for
+// measuring raw achievable FPS/CPU. Skips warm_up_app on purpose: there's
+// no UI/async asset loading here to warm up for.
+#[unsafe(no_mangle)]
+pub extern "C" fn cadisplaylink_create_fps_probe_app(view: *mut objc::runtime::Object, scale_factor: f32) -> *mut std::ffi::c_void {
+    let view_obj = IosViewObj { view, scale_factor };
+    let app = build_cadisplaylink_fps_probe_app(view_obj);
     Box::into_raw(Box::new(app)) as *mut std::ffi::c_void
 }
 

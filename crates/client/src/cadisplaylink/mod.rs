@@ -6,7 +6,7 @@
 //! Swift via the extern "C" functions in ffi.rs — never touched by the
 //! normal winit-driven app or by desktop builds.
 
-use crate::{build_game_common, build_probe_common};
+use crate::build_game_common;
 use bevy::app::{App, PluginGroup};
 use bevy::ecs::{
     entity::Entity,
@@ -90,51 +90,10 @@ fn create_bevy_window(app: &mut App, view_obj: IosViewObj) {
     state.apply(app.world_mut());
 }
 
-// Builds the exact same probe scene/systems build_probe_common (shared
-// with minimal_map_probe_main) sets up, minus anything winit-specific —
-// this is the CADisplayLink counterpart to that function's App, used only
-// via the FFI entry points below.
-pub(crate) fn build_cadisplaylink_probe_app(view_obj: IosViewObj) -> App {
-    use bevy::app::{PluginsState, TaskPoolOptions, TaskPoolPlugin};
-    use bevy::window::WindowPlugin;
-    use bevy::winit::WinitPlugin;
-    use bevy::DefaultPlugins;
-
-    let mut app = App::new();
-    app.add_plugins(
-        DefaultPlugins
-            .build()
-            .disable::<WinitPlugin>()
-            .set(WindowPlugin::default())
-            // Matches minimal_map_probe_main's iOS TaskPoolOptions cap —
-            // without this, the default sizing counts efficiency cores the
-            // same as performance cores and over-spawns threads, which
-            // would make this comparison unfair in winit's favor.
-            .set(TaskPoolPlugin {
-                task_pool_options: TaskPoolOptions::with_num_threads(4),
-                ..Default::default()
-            }),
-    );
-    build_probe_common(&mut app);
-
-    create_bevy_window(&mut app, view_obj);
-
-    if app.plugins_state() != PluginsState::Ready {
-        while app.plugins_state() == PluginsState::Adding {
-            #[cfg(not(target_arch = "wasm32"))]
-            bevy::tasks::tick_global_task_pools_on_main_thread();
-        }
-    }
-    app.finish();
-    app.cleanup();
-
-    app
-}
-
-// Real-game counterpart of build_cadisplaylink_probe_app — same plugin set
-// main() adds (minus WinitPlugin/WinitSettings, which don't apply here),
-// then build_game_common for everything else (networking, UI, zombies,
-// debug tooling — all identical to the winit-driven app).
+// Same plugin set main() adds (minus WinitPlugin/WinitSettings, which
+// don't apply here), then build_game_common for everything else
+// (networking, UI, zombies, debug tooling — all identical to the
+// winit-driven app).
 pub(crate) fn build_cadisplaylink_game_app(view_obj: IosViewObj) -> App {
     use avian3d::prelude::PhysicsPlugins;
     use bevy::app::{PluginsState, TaskPoolOptions, TaskPoolPlugin};
@@ -168,6 +127,43 @@ pub(crate) fn build_cadisplaylink_game_app(view_obj: IosViewObj) -> App {
         RepliconRenetPlugins,
     ));
     build_game_common(&mut app);
+
+    create_bevy_window(&mut app, view_obj);
+
+    if app.plugins_state() != PluginsState::Ready {
+        while app.plugins_state() == PluginsState::Adding {
+            #[cfg(not(target_arch = "wasm32"))]
+            bevy::tasks::tick_global_task_pools_on_main_thread();
+        }
+    }
+    app.finish();
+    app.cleanup();
+
+    app
+}
+
+// See crate::fps_probe's own module doc comment — camera + a small static
+// room, DefaultPlugins and nothing else (no picking, no physics, no
+// networking, no FPS overlay, no game logic of any kind), to measure raw
+// achievable FPS/CPU independent of everything else in this app.
+pub(crate) fn build_cadisplaylink_fps_probe_app(view_obj: IosViewObj) -> App {
+    use bevy::app::{PluginsState, TaskPoolOptions, TaskPoolPlugin};
+    use bevy::window::WindowPlugin;
+    use bevy::winit::WinitPlugin;
+    use bevy::DefaultPlugins;
+
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .build()
+            .disable::<WinitPlugin>()
+            .set(WindowPlugin::default())
+            .set(TaskPoolPlugin {
+                task_pool_options: TaskPoolOptions::with_num_threads(4),
+                ..Default::default()
+            }),
+    );
+    app.add_systems(bevy::app::Startup, crate::fps_probe::spawn_arena_and_camera);
 
     create_bevy_window(&mut app, view_obj);
 

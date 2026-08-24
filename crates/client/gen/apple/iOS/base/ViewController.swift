@@ -56,13 +56,12 @@ class ViewController: UIViewController {
 
     func createBevyApp() {
         let viewPointer = Unmanaged.passUnretained(self.metalV).toOpaque()
-        // Defaults to the real game. MINIMAL_MAP_PROBE=1 (pass via
-        // `devicectl device process launch -e '{"MINIMAL_MAP_PROBE":"1"}'`)
-        // switches to the stripped-down probe scene instead — same env var
-        // name/purpose as the (now legacy) winit-driven app's own toggle,
-        // for a consistent debugging workflow.
-        if ProcessInfo.processInfo.environment["MINIMAL_MAP_PROBE"] != nil {
-            bevyApp = cadisplaylink_create_app(viewPointer, Float(UIScreen.main.nativeScale))
+        // FPS_PROBE=1 (via `devicectl device process launch -e
+        // '{"FPS_PROBE":"1"}'`) switches to crates/client/src/fps_probe.rs —
+        // camera + a small static room, no game logic at all — to measure
+        // raw achievable FPS/CPU. Defaults to the real game otherwise.
+        if ProcessInfo.processInfo.environment["FPS_PROBE"] != nil {
+            bevyApp = cadisplaylink_create_fps_probe_app(viewPointer, Float(UIScreen.main.nativeScale))
         } else {
             bevyApp = cadisplaylink_create_game_app(viewPointer, Float(UIScreen.main.nativeScale))
         }
