@@ -340,6 +340,52 @@ fragment float4 skinned_fragment(VertexOut in [[stage_in]],
 }
 "#;
 
+// Phase 3's other half: a second camera (narrow FOV, same
+// position/orientation as the main one — simulates a rifle scope) rendered
+// into an offscreen texture, then composited as a small picture-in-picture
+// quad over the main view. Same offscreen-render-target-then-present-on-a-
+// quad indirection the real game's own scope camera already uses (see
+// setup()'s own comment there), reimplemented against this renderer
+// instead of bevy_render.
+const SCOPE_TEXTURE_SIZE: u64 = 512;
+
+const QUAD_SHADER_SOURCE: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct QuadVertex {
+    packed_float2 position;
+    packed_float2 uv;
+};
+
+struct QuadVertexOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex QuadVertexOut quad_vertex(uint vid [[vertex_id]],
+                                  const device QuadVertex *verts [[buffer(0)]]) {
+    QuadVertexOut out;
+    QuadVertex v = verts[vid];
+    out.position = float4(v.position, 0.0, 1.0);
+    out.uv = v.uv;
+    return out;
+}
+
+fragment float4 quad_fragment(QuadVertexOut in [[stage_in]],
+                               texture2d<float> tex [[texture(0)]],
+                               sampler texSampler [[sampler(0)]]) {
+    return tex.sample(texSampler, in.uv);
+}
+"#;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct QuadVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+}
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct SkinnedUniforms {
@@ -369,6 +415,10 @@ pub struct NativeMetalProbe {
     skinned_pipeline: Option<RenderPipelineState>,
     soldier_model: Option<super::skinned_gltf::SkinnedModel>,
     zombie_model: Option<super::skinned_gltf::SkinnedModel>,
+    scope_color_texture: metal::Texture,
+    scope_depth_texture: metal::Texture,
+    quad_pipeline: Option<RenderPipelineState>,
+    quad_vertex_buffer: metal::Buffer,
     // Phase 3: entities now genuinely live in a Bevy ECS World (see
     // ecs_app below) instead of a hardcoded Vec — patrol movement runs as
     // a real Bevy system over real Transform components. Real
@@ -573,6 +623,56 @@ impl NativeMetalProbe {
 
         let ecs_app = build_entity_ecs_app();
 
+        let scope_color_descriptor = metal::TextureDescriptor::new();
+        scope_color_descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        scope_color_descriptor.set_width(SCOPE_TEXTURE_SIZE);
+        scope_color_descriptor.set_height(SCOPE_TEXTURE_SIZE);
+        scope_color_descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        scope_color_descriptor.set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        let scope_color_texture = device.new_texture(&scope_color_descriptor);
+
+        let scope_depth_descriptor = metal::TextureDescriptor::new();
+        scope_depth_descriptor.set_pixel_format(MTLPixelFormat::Depth32Float);
+        scope_depth_descriptor.set_width(SCOPE_TEXTURE_SIZE);
+        scope_depth_descriptor.set_height(SCOPE_TEXTURE_SIZE);
+        scope_depth_descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        scope_depth_descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
+        let scope_depth_texture = device.new_texture(&scope_depth_descriptor);
+
+        let quad_pipeline = match device.new_library_with_source(QUAD_SHADER_SOURCE, &compile_options) {
+            Ok(library) => {
+                let vertex_fn = library.get_function("quad_vertex", None).unwrap();
+                let fragment_fn = library.get_function("quad_fragment", None).unwrap();
+                let descriptor = RenderPipelineDescriptor::new();
+                descriptor.set_vertex_function(Some(&vertex_fn));
+                descriptor.set_fragment_function(Some(&fragment_fn));
+                descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+                device.new_render_pipeline_state(&descriptor).ok()
+            }
+            Err(err) => {
+                eprintln!("[native_metal_probe] quad shader compile failed: {err}");
+                None
+            }
+        };
+        // Picture-in-picture rectangle in the top-right corner, in NDC
+        // (-1..1) space — no view/projection needed, it's drawn directly
+        // over the finished main-camera frame. Two triangles, position +
+        // uv interleaved per vertex (same "raw device buffer, no vertex
+        // descriptor" reasoning as every other shader in this file).
+        let quad_verts = [
+            QuadVertex { position: [0.55, 0.55], uv: [0.0, 0.0] },
+            QuadVertex { position: [0.95, 0.55], uv: [1.0, 0.0] },
+            QuadVertex { position: [0.95, 0.95], uv: [1.0, 1.0] },
+            QuadVertex { position: [0.55, 0.55], uv: [0.0, 0.0] },
+            QuadVertex { position: [0.95, 0.95], uv: [1.0, 1.0] },
+            QuadVertex { position: [0.55, 0.95], uv: [0.0, 1.0] },
+        ];
+        let quad_vertex_buffer = device.new_buffer_with_data(
+            quad_verts.as_ptr() as *const _,
+            (quad_verts.len() * std::mem::size_of::<QuadVertex>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
         Self {
             device,
             layer,
@@ -592,6 +692,10 @@ impl NativeMetalProbe {
             skinned_pipeline,
             soldier_model,
             zombie_model,
+            scope_color_texture,
+            scope_depth_texture,
+            quad_pipeline,
+            quad_vertex_buffer,
             ecs_app,
             start_time: std::time::Instant::now(),
         }
@@ -664,55 +768,21 @@ impl NativeMetalProbe {
         }
     }
 
-    pub fn render_frame(&mut self) {
-        self.sync_drawable_size();
-        let drawable_size = self.layer.drawable_size();
-        let (width, height) = (drawable_size.width as u64, drawable_size.height as u64);
-        let depth_texture = self.ensure_depth_texture(width, height);
-        let Some(drawable) = self.layer.next_drawable() else { return };
-        let texture = drawable.texture();
-
-        let use_sponza = self.sponza_pipeline.is_some() && !self.sponza_meshes.is_empty();
-        let aspect = width as f32 / height.max(1) as f32;
-        let far = if use_sponza { 500.0 } else { 100.0 };
-        let proj = perspective(if use_sponza { 60.0_f32 } else { 45.0 }.to_radians(), aspect, 0.05, far);
-        let view = if use_sponza {
-            let (sin_pitch, cos_pitch) = self.camera_pitch.sin_cos();
-            let (sin_yaw, cos_yaw) = self.camera_yaw.sin_cos();
-            let look_dir = [-sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch];
-            let center = [
-                self.camera_position[0] + look_dir[0],
-                self.camera_position[1] + look_dir[1],
-                self.camera_position[2] + look_dir[2],
-            ];
-            look_at(self.camera_position, center, [0.0, 1.0, 0.0])
-        } else {
-            look_at([0.0, 3.0, 10.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0])
-        };
-        let light_dir = {
-            let v = [-4.0f32, -8.0, -4.0];
-            let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-            [v[0] / len, v[1] / len, v[2] / len]
-        };
-        let view_projection = mat_mul(proj, view);
-
-        let pass_descriptor = RenderPassDescriptor::new();
-        let color_attachment = pass_descriptor.color_attachments().object_at(0).unwrap();
-        color_attachment.set_texture(Some(texture));
-        color_attachment.set_load_action(MTLLoadAction::Clear);
-        color_attachment.set_store_action(MTLStoreAction::Store);
-        color_attachment.set_clear_color(MTLClearColor::new(1.0, 0.0, 1.0, 1.0));
-
-        let depth_attachment = pass_descriptor.depth_attachment().unwrap();
-        depth_attachment.set_texture(Some(&depth_texture));
-        depth_attachment.set_load_action(MTLLoadAction::Clear);
-        depth_attachment.set_store_action(MTLStoreAction::DontCare);
-        depth_attachment.set_clear_depth(1.0);
-
-        let command_buffer = self.queue.new_command_buffer();
-        let encoder = command_buffer.new_render_command_encoder(pass_descriptor);
-        encoder.set_depth_stencil_state(&self.depth_state);
-
+    // Shared between the main-camera pass and the scope pass — draws
+    // Sponza's static meshes (or the box-arena fallback) plus every
+    // extracted entity, against whatever view_projection/render target
+    // the caller already bound on `encoder`. This is what actually makes
+    // "two cameras" cheap to add: same draw calls, just re-run once per
+    // camera with a different matrix and target texture.
+    fn draw_scene(
+        &self,
+        encoder: &metal::RenderCommandEncoderRef,
+        view_projection: [[f32; 4]; 4],
+        light_dir: [f32; 3],
+        extracted: &[(bevy::transform::components::Transform, EntityKind, f32)],
+        now: f32,
+        use_sponza: bool,
+    ) {
         if use_sponza {
             encoder.set_render_pipeline_state(self.sponza_pipeline.as_ref().unwrap());
             encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
@@ -753,85 +823,168 @@ impl NativeMetalProbe {
             encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, self.vertex_count as u64);
         }
 
-        if let Some(pipeline) = &self.skinned_pipeline {
-            let now = self.start_time.elapsed().as_secs_f32();
+        let Some(pipeline) = &self.skinned_pipeline else { return };
+        encoder.set_render_pipeline_state(pipeline);
+        encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
 
-            // Tick the ECS world (advances Time, runs patrol_system over
-            // every Patrol+Transform entity), then extract — this is the
-            // actual "extract" seam the plan calls for: a plain Vec built
-            // from a Query, decoupled from bevy_render entirely. Collected
-            // into an owned Vec (not held as a live query/World borrow)
-            // so the draw loop below can freely borrow self.device /
-            // self.soldier_model etc. at the same time.
-            self.ecs_app.update();
-            let extracted: Vec<(bevy::transform::components::Transform, EntityKind, f32)> = {
-                let mut query_state = self
-                    .ecs_app
-                    .world_mut()
-                    .query::<(&bevy::transform::components::Transform, &EntityKind, &AnimOffset)>();
-                query_state.iter(self.ecs_app.world()).map(|(t, k, a)| (*t, *k, a.0)).collect()
+        for (transform, kind, anim_offset) in extracted {
+            let model = match kind {
+                EntityKind::Soldier => self.soldier_model.as_ref(),
+                EntityKind::Zombie => self.zombie_model.as_ref(),
             };
+            let Some(model) = model else { continue };
 
-            encoder.set_render_pipeline_state(pipeline);
-            encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
+            let [qx, qy, qz, qw] = transform.rotation.to_array();
+            let (x2, y2, z2) = (qx + qx, qy + qy, qz + qz);
+            let (xx, xy, xz) = (qx * x2, qx * y2, qx * z2);
+            let (yy, yz, zz) = (qy * y2, qy * z2, qz * z2);
+            let (wx, wy, wz) = (qw * x2, qw * y2, qw * z2);
+            let model_matrix = [
+                [1.0 - (yy + zz), xy + wz, xz - wy, 0.0],
+                [xy - wz, 1.0 - (xx + zz), yz + wx, 0.0],
+                [xz + wy, yz - wx, 1.0 - (xx + yy), 0.0],
+                [transform.translation.x, transform.translation.y, transform.translation.z, 1.0],
+            ];
 
-            for (transform, kind, anim_offset) in &extracted {
-                let model = match kind {
-                    EntityKind::Soldier => self.soldier_model.as_ref(),
-                    EntityKind::Zombie => self.zombie_model.as_ref(),
+            let joint_matrices = model.compute_joint_matrices(0, now + anim_offset);
+            let joint_buffer = self.device.new_buffer_with_data(
+                joint_matrices.as_ptr() as *const _,
+                (joint_matrices.len() * std::mem::size_of::<[[f32; 4]; 4]>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+
+            for mesh in &model.meshes {
+                let skinned_uniforms = SkinnedUniforms {
+                    view_projection,
+                    model_matrix,
+                    light_dir,
+                    _pad: 0.0,
+                    base_color_factor: mesh.base_color_factor,
                 };
-                let Some(model) = model else { continue };
-
-                let [qx, qy, qz, qw] = transform.rotation.to_array();
-                let (x2, y2, z2) = (qx + qx, qy + qy, qz + qz);
-                let (xx, xy, xz) = (qx * x2, qx * y2, qx * z2);
-                let (yy, yz, zz) = (qy * y2, qy * z2, qz * z2);
-                let (wx, wy, wz) = (qw * x2, qw * y2, qw * z2);
-                let model_matrix = [
-                    [1.0 - (yy + zz), xy + wz, xz - wy, 0.0],
-                    [xy - wz, 1.0 - (xx + zz), yz + wx, 0.0],
-                    [xz + wy, yz - wx, 1.0 - (xx + yy), 0.0],
-                    [transform.translation.x, transform.translation.y, transform.translation.z, 1.0],
-                ];
-
-                let joint_matrices = model.compute_joint_matrices(0, now + anim_offset);
-                let joint_buffer = self.device.new_buffer_with_data(
-                    joint_matrices.as_ptr() as *const _,
-                    (joint_matrices.len() * std::mem::size_of::<[[f32; 4]; 4]>()) as u64,
-                    MTLResourceOptions::StorageModeShared,
+                encoder.set_vertex_buffer(0, Some(&mesh.vertex_buffer), 0);
+                encoder.set_vertex_buffer(2, Some(&joint_buffer), 0);
+                encoder.set_vertex_bytes(
+                    1,
+                    std::mem::size_of::<SkinnedUniforms>() as u64,
+                    &skinned_uniforms as *const _ as *const _,
                 );
-
-                for mesh in &model.meshes {
-                    let skinned_uniforms = SkinnedUniforms {
-                        view_projection,
-                        model_matrix,
-                        light_dir,
-                        _pad: 0.0,
-                        base_color_factor: mesh.base_color_factor,
-                    };
-                    encoder.set_vertex_buffer(0, Some(&mesh.vertex_buffer), 0);
-                    encoder.set_vertex_buffer(2, Some(&joint_buffer), 0);
-                    encoder.set_vertex_bytes(
-                        1,
-                        std::mem::size_of::<SkinnedUniforms>() as u64,
-                        &skinned_uniforms as *const _ as *const _,
-                    );
-                    encoder.set_fragment_bytes(
-                        1,
-                        std::mem::size_of::<SkinnedUniforms>() as u64,
-                        &skinned_uniforms as *const _ as *const _,
-                    );
-                    let texture = mesh.base_color_texture.as_ref().unwrap_or(&self.white_texture);
-                    encoder.set_fragment_texture(0, Some(texture));
-                    encoder.draw_indexed_primitives(
-                        MTLPrimitiveType::Triangle,
-                        mesh.index_count as u64,
-                        MTLIndexType::UInt32,
-                        &mesh.index_buffer,
-                        0,
-                    );
-                }
+                encoder.set_fragment_bytes(
+                    1,
+                    std::mem::size_of::<SkinnedUniforms>() as u64,
+                    &skinned_uniforms as *const _ as *const _,
+                );
+                let texture = mesh.base_color_texture.as_ref().unwrap_or(&self.white_texture);
+                encoder.set_fragment_texture(0, Some(texture));
+                encoder.draw_indexed_primitives(
+                    MTLPrimitiveType::Triangle,
+                    mesh.index_count as u64,
+                    MTLIndexType::UInt32,
+                    &mesh.index_buffer,
+                    0,
+                );
             }
+        }
+    }
+
+    pub fn render_frame(&mut self) {
+        self.sync_drawable_size();
+        let drawable_size = self.layer.drawable_size();
+        let (width, height) = (drawable_size.width as u64, drawable_size.height as u64);
+        let depth_texture = self.ensure_depth_texture(width, height);
+        let Some(drawable) = self.layer.next_drawable() else { return };
+        let texture = drawable.texture();
+
+        let use_sponza = self.sponza_pipeline.is_some() && !self.sponza_meshes.is_empty();
+        let aspect = width as f32 / height.max(1) as f32;
+        let far = if use_sponza { 500.0 } else { 100.0 };
+        let (sin_pitch, cos_pitch) = self.camera_pitch.sin_cos();
+        let (sin_yaw, cos_yaw) = self.camera_yaw.sin_cos();
+        let look_dir = [-sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch];
+        let center = [
+            self.camera_position[0] + look_dir[0],
+            self.camera_position[1] + look_dir[1],
+            self.camera_position[2] + look_dir[2],
+        ];
+        let view = if use_sponza {
+            look_at(self.camera_position, center, [0.0, 1.0, 0.0])
+        } else {
+            look_at([0.0, 3.0, 10.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0])
+        };
+        let proj = perspective(if use_sponza { 60.0_f32 } else { 45.0 }.to_radians(), aspect, 0.05, far);
+        let light_dir = {
+            let v = [-4.0f32, -8.0, -4.0];
+            let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            [v[0] / len, v[1] / len, v[2] / len]
+        };
+        let view_projection = mat_mul(proj, view);
+        // Scope camera: same eye/orientation as the main camera, just a
+        // much narrower FOV (12° vs 60°) — simulates a zoomed rifle scope
+        // without needing separate camera-aim state yet.
+        let scope_proj = perspective(12.0_f32.to_radians(), 1.0, 0.05, far);
+        let scope_view_projection = mat_mul(scope_proj, view);
+
+        let now = self.start_time.elapsed().as_secs_f32();
+        // Tick the ECS world once (advances Time, runs patrol_system over
+        // every Patrol+Transform entity), then extract — the actual
+        // "extract" seam the plan calls for, decoupled from bevy_render
+        // entirely. Collected into an owned Vec (not a live query/World
+        // borrow) so draw_scene can be called twice — once per camera —
+        // without re-ticking Time in between.
+        self.ecs_app.update();
+        let extracted: Vec<(bevy::transform::components::Transform, EntityKind, f32)> = {
+            let mut query_state = self
+                .ecs_app
+                .world_mut()
+                .query::<(&bevy::transform::components::Transform, &EntityKind, &AnimOffset)>();
+            query_state.iter(self.ecs_app.world()).map(|(t, k, a)| (*t, *k, a.0)).collect()
+        };
+
+        // Pass 1: scope camera into the offscreen texture.
+        let scope_pass_descriptor = RenderPassDescriptor::new();
+        let scope_color = scope_pass_descriptor.color_attachments().object_at(0).unwrap();
+        scope_color.set_texture(Some(&self.scope_color_texture));
+        scope_color.set_load_action(MTLLoadAction::Clear);
+        scope_color.set_store_action(MTLStoreAction::Store);
+        scope_color.set_clear_color(MTLClearColor::new(0.05, 0.05, 0.05, 1.0));
+        let scope_depth = scope_pass_descriptor.depth_attachment().unwrap();
+        scope_depth.set_texture(Some(&self.scope_depth_texture));
+        scope_depth.set_load_action(MTLLoadAction::Clear);
+        scope_depth.set_store_action(MTLStoreAction::DontCare);
+        scope_depth.set_clear_depth(1.0);
+
+        let scope_command_buffer = self.queue.new_command_buffer();
+        let scope_encoder = scope_command_buffer.new_render_command_encoder(scope_pass_descriptor);
+        scope_encoder.set_depth_stencil_state(&self.depth_state);
+        self.draw_scene(scope_encoder, scope_view_projection, light_dir, &extracted, now, use_sponza);
+        scope_encoder.end_encoding();
+        scope_command_buffer.commit();
+
+        // Pass 2: main camera straight to the drawable, then the scope
+        // texture composited as a picture-in-picture quad on top.
+        let pass_descriptor = RenderPassDescriptor::new();
+        let color_attachment = pass_descriptor.color_attachments().object_at(0).unwrap();
+        color_attachment.set_texture(Some(texture));
+        color_attachment.set_load_action(MTLLoadAction::Clear);
+        color_attachment.set_store_action(MTLStoreAction::Store);
+        color_attachment.set_clear_color(MTLClearColor::new(1.0, 0.0, 1.0, 1.0));
+
+        let depth_attachment = pass_descriptor.depth_attachment().unwrap();
+        depth_attachment.set_texture(Some(&depth_texture));
+        depth_attachment.set_load_action(MTLLoadAction::Clear);
+        depth_attachment.set_store_action(MTLStoreAction::DontCare);
+        depth_attachment.set_clear_depth(1.0);
+
+        let command_buffer = self.queue.new_command_buffer();
+        let encoder = command_buffer.new_render_command_encoder(pass_descriptor);
+        encoder.set_depth_stencil_state(&self.depth_state);
+        self.draw_scene(encoder, view_projection, light_dir, &extracted, now, use_sponza);
+
+        if let Some(quad_pipeline) = &self.quad_pipeline {
+            encoder.set_render_pipeline_state(quad_pipeline);
+            encoder.set_vertex_buffer(0, Some(&self.quad_vertex_buffer), 0);
+            encoder.set_fragment_texture(0, Some(&self.scope_color_texture));
+            encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
+            encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
         }
 
         encoder.end_encoding();
