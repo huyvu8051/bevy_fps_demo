@@ -13,11 +13,25 @@
 use bevy::asset::Assets;
 use bevy::ecs::query::With;
 use bevy::ecs::system::{Query, Res, SystemState};
+use bevy::image::Image;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::mesh::{Mesh, Mesh3d};
+use bevy::render::render_resource::TextureFormat;
 use bevy::transform::components::{GlobalTransform, Transform};
 
 use shared::{NetPlayer, Zombie};
+
+/// Raw RGBA8 pixel data for one mesh's base-color texture, extracted from
+/// Bevy's `Image` asset — `None` on the `ExtractedMesh` when the material
+/// has no texture (flat `base_color` factor only) or when its CPU-side
+/// pixel format isn't one of the common RGBA8 variants glTF base-color
+/// textures normally load as (extraction just skips it in that case,
+/// falling back to a flat-tinted draw rather than failing).
+pub struct ExtractedTexture {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
 
 /// One drawable static mesh — arena walls/floor (`spawn_test_arena`,
 /// `crates/client/src/lib.rs:3915`) and the gun's glTF-scene-instantiated
@@ -35,33 +49,89 @@ use shared::{NetPlayer, Zombie};
 pub struct ExtractedMesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
+    /// Empty if the source mesh has no UV attribute (e.g. the arena's
+    /// `Cuboid` primitives, which do have one — but guard rather than
+    /// assume) — the renderer falls back to `[0.0, 0.0]` per vertex, which
+    /// combined with `texture: None` just shows the flat `base_color` tint.
+    pub uvs: Vec<[f32; 2]>,
     /// Empty if the source `Mesh` isn't indexed (shouldn't happen for
     /// anything built via `meshes.add(Cuboid::new(..))` or loaded glTF, both
     /// of which are always indexed, but guard rather than assume).
     pub indices: Vec<u32>,
     pub base_color: [f32; 4],
+    pub texture: Option<ExtractedTexture>,
     /// World-space transform at extraction time (from `GlobalTransform`,
     /// converted to a plain `Transform` for the renderer's convenience —
     /// see `bake_static_meshes` in native_metal_probe.rs).
     pub transform: Transform,
 }
 
-/// Camera pose, replicating `apply_view_recoil`'s rotation composition
-/// (`crates/client/src/lib.rs:5144`) minus the recoil/lean terms (headless
-/// has no input driving those yet — Step 3): `eye` is the `FpsCamera`
-/// entity's own world-space translation (already kept in sync with the
-/// player entity by the game's own systems), `yaw`/`pitch` straight from
-/// `FpsCamera` so a renderer can build `Quat::from_euler(YXZ, yaw, pitch, 0)`
-/// itself without this module depending on any Metal/view-matrix code.
+/// Camera pose. `eye` is the `FpsCamera` entity's own world-space
+/// translation. `rotation` is that entity's actual world-space rotation —
+/// deliberately read straight off `GlobalTransform` rather than
+/// reconstructed from `FpsCamera.yaw/.pitch`, because the *final* rotation
+/// each tick is `apply_view_recoil`'s composition of yaw + pitch +
+/// `ViewRecoil`'s kick + `Lean`'s roll (crates/client/src/lib.rs:5144) —
+/// reconstructing from the raw component fields silently drops recoil kick
+/// and lean roll, which is exactly why gun recoil was visible (baked into
+/// the gun mesh's own transform) but the camera/crosshair never shook to
+/// match. `yaw`/`pitch` are kept too (pre-recoil, straight off the
+/// component) since they're still useful for e.g. UI that cares about the
+/// player's intended look direction rather than its recoil-jittered one.
 pub struct CameraSnapshot {
     pub eye: [f32; 3],
+    pub rotation: [f32; 4],
     pub yaw: f32,
     pub pitch: f32,
+    /// The real `Gun.ads_blend` (0 = hip fire, 1 = fully aimed) — drives
+    /// whether/how strongly a renderer should show a scope-zoom overlay,
+    /// instead of a probe-only guess at whether the player is aiming.
+    pub ads_blend: f32,
+    /// The real `ScopeZoom` resource value (magnification factor, e.g.
+    /// 6..25 — see `SCOPE_MIN_ZOOM`/`SCOPE_MAX_ZOOM` in
+    /// crates/client/src/lib.rs), so a scope overlay's FOV can be computed
+    /// the same way the real game does (`SCOPE_BASE_FOV / zoom`) instead
+    /// of a hardcoded guess.
+    pub scope_zoom: f32,
+    /// The real `Gun.wall_raise` (0 = normal, 1 = fully raised to clear a
+    /// wall) — `update_scope_lens` (crates/client/src/lib.rs:6050) hides
+    /// the scope even mid-ADS once this crosses
+    /// `SCOPE_HIDDEN_WALL_RAISE_THRESHOLD`, so a renderer needs it too to
+    /// match the real on/off condition exactly (`ads_blend` alone isn't
+    /// enough).
+    pub wall_raise: f32,
+}
+
+/// The real `ScopeCamera` entity's own state (crates/client/src/lib.rs,
+/// `struct ScopeCamera` at line 1065) — reading this directly, instead of
+/// reimplementing `sync_scope_camera`/`update_scope_lens`'s math
+/// ourselves, is what makes the scope view's camera-shoulder-swap sweep,
+/// recoil kick, reload dip/tilt, and walk-bob all "just work" without a
+/// single line of that logic duplicated here: those two real systems
+/// already compute the exact final `Transform`/`Camera.is_active`/
+/// `Projection.fov` every tick inside this same headless App, we only
+/// need to read the result. `desktop` (the real winit/wgpu build) shows
+/// this exact system working correctly already, since it's 100% the same
+/// `build_game_common` code — nothing about this needed reimplementing,
+/// only extracting.
+pub struct ScopeCameraSnapshot {
+    pub eye: [f32; 3],
+    pub rotation: [f32; 4],
+    /// Real `Camera.is_active`, already gated on the exact
+    /// `ads_blend > SCOPE_ACTIVE_ADS_THRESHOLD && wall_raise <
+    /// SCOPE_HIDDEN_WALL_RAISE_THRESHOLD` condition by `update_scope_lens`
+    /// — supersedes hand-reconstructing that condition from `ads_blend`/
+    /// `wall_raise` alone.
+    pub active: bool,
+    /// Real `Projection::Perspective.fov` (radians), already
+    /// `SCOPE_BASE_FOV / ScopeZoom` per `update_scope_lens`.
+    pub fov: f32,
 }
 
 #[derive(Default)]
 pub struct RenderSnapshot {
     pub camera: Option<CameraSnapshot>,
+    pub scope_camera: Option<ScopeCameraSnapshot>,
     pub zombies: Vec<Transform>,
     pub remote_players: Vec<Transform>,
     pub static_meshes: Vec<ExtractedMesh>,
@@ -69,7 +139,15 @@ pub struct RenderSnapshot {
 
 impl Default for CameraSnapshot {
     fn default() -> Self {
-        Self { eye: [0.0, 0.0, 0.0], yaw: 0.0, pitch: 0.0 }
+        Self {
+            eye: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            yaw: 0.0,
+            pitch: 0.0,
+            ads_blend: 0.0,
+            scope_zoom: 8.0,
+            wall_raise: 0.0,
+        }
     }
 }
 
@@ -81,15 +159,45 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     let mut snapshot = RenderSnapshot::default();
 
     // Camera: the FpsCamera entity's own world-space translation +
-    // yaw/pitch. See this module's doc comment on CameraSnapshot for why
-    // recoil/lean are omitted here (Step 3 concern, not extraction).
-    let mut camera_state: SystemState<Query<(&GlobalTransform, &crate::FpsCamera)>> =
-        SystemState::new(world);
-    if let Some((transform, cam)) = camera_state.get(world).iter().next() {
+    // rotation (see CameraSnapshot's own doc comment for why the real
+    // rotation, not a yaw/pitch reconstruction, is what carries
+    // recoil/lean). `Gun.ads_blend`/`ScopeZoom` ride along here too since
+    // a renderer needs them in lockstep with the camera pose to decide
+    // whether/how to show a scope overlay.
+    let mut camera_state: SystemState<(
+        Query<(&GlobalTransform, &crate::FpsCamera)>,
+        Query<&crate::Gun>,
+        bevy::ecs::system::Res<crate::ScopeZoom>,
+    )> = SystemState::new(world);
+    let (camera_query, gun_query, scope_zoom) = camera_state.get(world);
+    if let Some((transform, cam)) = camera_query.iter().next() {
         snapshot.camera = Some(CameraSnapshot {
             eye: transform.translation().to_array(),
+            rotation: transform.rotation().to_array(),
             yaw: cam.yaw,
             pitch: cam.pitch,
+            ads_blend: gun_query.iter().next().map(|g| g.ads_blend).unwrap_or(0.0),
+            scope_zoom: scope_zoom.0,
+            wall_raise: gun_query.iter().next().map(|g| g.wall_raise).unwrap_or(0.0),
+        });
+    }
+
+    // Scope camera: read the real ScopeCamera entity's own final state
+    // directly — see ScopeCameraSnapshot's own doc comment for why this
+    // supersedes reimplementing sync_scope_camera/update_scope_lens.
+    let mut scope_state: SystemState<
+        Query<(&GlobalTransform, &bevy::camera::Camera, &bevy::camera::Projection), With<crate::ScopeCamera>>,
+    > = SystemState::new(world);
+    if let Some((transform, camera, projection)) = scope_state.get(world).iter().next() {
+        let fov = match projection {
+            bevy::camera::Projection::Perspective(p) => p.fov,
+            _ => 0.0,
+        };
+        snapshot.scope_camera = Some(ScopeCameraSnapshot {
+            eye: transform.translation().to_array(),
+            rotation: transform.rotation().to_array(),
+            active: camera.is_active,
+            fov,
         });
     }
 
@@ -139,8 +247,9 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>, &GlobalTransform)>,
         Res<Assets<Mesh>>,
         Res<Assets<StandardMaterial>>,
+        Res<Assets<Image>>,
     )> = SystemState::new(world);
-    let (mesh_query, meshes, materials) = mesh_state.get(world);
+    let (mesh_query, meshes, materials, images) = mesh_state.get(world);
     for (mesh3d, material3d, transform) in mesh_query.iter() {
         let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
         let Some(material) = materials.get(&material3d.0) else { continue };
@@ -153,19 +262,54 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             Some(bevy::mesh::VertexAttributeValues::Float32x3(n)) => n.clone(),
             _ => Vec::new(),
         };
+        let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x2(uv)) => uv.clone(),
+            _ => Vec::new(),
+        };
         let indices = mesh
             .indices()
             .map(|i| i.iter().map(|v| v as u32).collect())
             .unwrap_or_default();
 
+        // Only the common RGBA8 variants glTF base-color textures normally
+        // decode to — anything else (compressed formats like KTX2/Basis,
+        // etc.) this module has no reason to own a conversion for.
+        let has_texture_handle = material.base_color_texture.is_some();
+        let texture = material.base_color_texture.as_ref().and_then(|handle| {
+            let image = images.get(handle)?;
+            let data = image.data.as_ref()?;
+            match image.texture_descriptor.format {
+                TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => Some(ExtractedTexture {
+                    width: image.texture_descriptor.size.width,
+                    height: image.texture_descriptor.size.height,
+                    rgba: data.clone(),
+                }),
+                _ => None,
+            }
+        });
+        // A material WITH a texture assigned that we couldn't decode (as
+        // opposed to a material with no texture at all, which legitimately
+        // renders via its flat base_color tint) previously fell back to an
+        // opaque white placeholder — visible on the gun's scope lens as a
+        // solid white/gray disk sitting inside the optic, since that
+        // element's actual texture uses an unsupported format. Hiding the
+        // mesh entirely is a deliberately temporary stand-in for real
+        // format support until decoding whatever format that texture
+        // actually is becomes worth doing.
+        if has_texture_handle && texture.is_none() {
+            continue;
+        }
+
         snapshot.static_meshes.push(ExtractedMesh {
             positions,
             normals,
+            uvs,
             indices,
             base_color: {
                 let s = material.base_color.to_srgba();
                 [s.red, s.green, s.blue, s.alpha]
             },
+            texture,
             transform: transform.compute_transform(),
         });
     }

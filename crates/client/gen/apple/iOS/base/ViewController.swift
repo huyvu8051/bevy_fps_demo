@@ -257,10 +257,40 @@ private extension Comparable {
 // button decrements a local ammo counter with no actual shooting wired to
 // the renderer yet — this phase is about the UI layer existing and being
 // visible/interactive, not full gameplay integration.
+// Phase 6 Step 5 cont'd: the extra action buttons (jump/aim/crouch/sprint/
+// reload) beyond fire — each maps 1:1 to a desktop key/mouse binding the
+// real game already reads (see crates/client/src/lib.rs), so pressing one
+// just synthesizes that same KeyboardInput/MouseButtonInput via the
+// existing FFI (no new Rust code, same technique as FIRE/Step 5):
+//   .jump      -> KeyCode::Space,      just_pressed edge (send_player_input)
+//   .aim       -> MouseButton::Right,  held            (is_aiming)
+//   .crouch    -> KeyCode::KeyC,       just_pressed toggle (toggle_player_stance)
+//   .sprint    -> KeyCode::ShiftLeft,  held            (send_player_input)
+//   .reload    -> KeyCode::KeyR,       just_pressed edge (reload_gun)
+//   .menu      -> KeyCode::F1,         just_pressed toggle (toggle_settings_menu)
+//   .leanLeft  -> KeyCode::KeyQ,       held            (apply_lean_input)
+//   .leanRight -> KeyCode::KeyE,       held            (apply_lean_input)
+//   .prone     -> KeyCode::KeyX,       just_pressed toggle (Standing<->Prone)
+// Not wired: gun recoil (ViewRecoil) needs no button at all — shoot()
+// already applies it automatically on every real shot, same as desktop.
+enum TouchHUDButton: Int {
+    case jump = 0, aim = 1, crouch = 2, sprint = 3, reload = 4
+    case menu = 5, leanLeft = 6, leanRight = 7, prone = 8
+}
+
 final class TouchHUD {
     let joystickBase = UIView()
     let joystickKnob = UIView()
     let fireButton = UIButton(type: .custom)
+    let jumpButton = UIButton(type: .custom)
+    let aimButton = UIButton(type: .custom)
+    let crouchButton = UIButton(type: .custom)
+    let sprintButton = UIButton(type: .custom)
+    let reloadButton = UIButton(type: .custom)
+    let menuButton = UIButton(type: .custom)
+    let leanLeftButton = UIButton(type: .custom)
+    let leanRightButton = UIButton(type: .custom)
+    let proneButton = UIButton(type: .custom)
     let healthLabel = UILabel()
     let ammoLabel = UILabel()
     let crosshairH = UIView()
@@ -275,7 +305,13 @@ final class TouchHUD {
         didSet { healthLabel.text = "HP \(health)" }
     }
 
-    func install(in parent: UIView, fireAction: @escaping () -> Void, fireUpAction: @escaping () -> Void = {}) {
+    func install(
+        in parent: UIView,
+        fireAction: @escaping () -> Void,
+        fireUpAction: @escaping () -> Void = {},
+        buttonDownAction: @escaping (TouchHUDButton) -> Void = { _ in },
+        buttonUpAction: @escaping (TouchHUDButton) -> Void = { _ in }
+    ) {
         // Joystick — bottom-left, semi-transparent circles.
         joystickBase.frame = CGRect(x: 0, y: 0, width: joystickRadius * 2, height: joystickRadius * 2)
         joystickBase.layer.cornerRadius = joystickRadius
@@ -299,15 +335,37 @@ final class TouchHUD {
         fireButton.setTitle("FIRE", for: .normal)
         fireButton.setTitleColor(.white, for: .normal)
         fireButton.titleLabel?.font = .boldSystemFont(ofSize: 14)
-        fireButton.addTarget(self, action: #selector(handleFireTouchDown), for: .touchDown)
-        // Phase 6 Step 5 (real shooting): release needs its own event so a
-        // held FIRE button maps to a held mouse-left-button, matching
-        // desktop's own hold-to-auto-fire — touchUpInside/Outside/Cancel
-        // all count as "finger lifted", not just a clean tap-release.
-        fireButton.addTarget(self, action: #selector(handleFireTouchUp), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        // Phase 6 Step 5 cont'd: FIRE (and AIM, see configureExtraButton's
+        // own note) is deliberately NOT a real interactive UIControl —
+        // UIButton's own touch tracking would exclusively claim any touch
+        // that starts on it, so ViewController's touchesBegan/Moved/Ended
+        // (which already drives look-around for any touch in the right
+        // half of the screen) would never see it move, and holding FIRE
+        // while dragging to track a target wouldn't turn the camera at
+        // all. ViewController does its own hit-testing against this
+        // button's frame instead (see fireHitTest), so the SAME touch can
+        // be both "fire is held" AND "this is the look-drag touch".
+        fireButton.isUserInteractionEnabled = false
         parent.addSubview(fireButton)
         self.fireAction = fireAction
         self.fireUpAction = fireUpAction
+        self.buttonDownAction = buttonDownAction
+        self.buttonUpAction = buttonUpAction
+
+        // Extra action buttons — small semi-transparent circles clustered
+        // above FIRE, thumb-reachable from the same hand.
+        configureExtraButton(jumpButton, title: "JUMP", tag: .jump, color: .systemBlue)
+        configureExtraButton(aimButton, title: "AIM", tag: .aim, color: .systemPurple)
+        configureExtraButton(crouchButton, title: "CROUCH", tag: .crouch, color: .systemTeal)
+        configureExtraButton(sprintButton, title: "SPRINT", tag: .sprint, color: .systemOrange)
+        configureExtraButton(reloadButton, title: "RELOAD", tag: .reload, color: .systemGray)
+        configureExtraButton(menuButton, title: "MENU", tag: .menu, color: .darkGray)
+        configureExtraButton(leanLeftButton, title: "◄ LEAN", tag: .leanLeft, color: .systemGreen)
+        configureExtraButton(leanRightButton, title: "LEAN ►", tag: .leanRight, color: .systemGreen)
+        configureExtraButton(proneButton, title: "PRONE", tag: .prone, color: .systemTeal)
+        for btn in [jumpButton, aimButton, crouchButton, sprintButton, reloadButton, menuButton, leanLeftButton, leanRightButton, proneButton] {
+            parent.addSubview(btn)
+        }
 
         // Health/ammo HUD — top corners.
         healthLabel.text = "HP \(health)"
@@ -334,12 +392,78 @@ final class TouchHUD {
 
     private var fireAction: (() -> Void)?
     private var fireUpAction: (() -> Void)?
+    private var buttonDownAction: ((TouchHUDButton) -> Void)?
+    private var buttonUpAction: ((TouchHUDButton) -> Void)?
 
-    @objc private func handleFireTouchUp() {
-        fireUpAction?()
+    private func configureExtraButton(_ button: UIButton, title: String, tag: TouchHUDButton, color: UIColor) {
+        let radius: CGFloat = 26
+        button.frame = CGRect(x: 0, y: 0, width: radius * 2, height: radius * 2)
+        button.layer.cornerRadius = radius
+        button.backgroundColor = color.withAlphaComponent(0.45)
+        button.setTitle(title, for: .normal)
+        button.setTitleColor(.white, for: .normal)
+        button.titleLabel?.font = .boldSystemFont(ofSize: 9)
+        button.titleLabel?.adjustsFontSizeToFitWidth = true
+        button.tag = tag.rawValue
+        // AIM is the one other button (besides FIRE) you'd realistically
+        // want to hold while also dragging to adjust aim — same
+        // "don't let UIButton exclusively claim the touch" reasoning as
+        // fireButton above, handled instead by ViewController's own
+        // hit-testing (aimHitTest) so the touch can drive both ADS and
+        // look-around at once. Every other extra button is a genuine
+        // tap-once action with no reason to drag while held, so they keep
+        // normal UIButton tracking.
+        if tag == .aim {
+            button.isUserInteractionEnabled = false
+        } else {
+            button.addTarget(self, action: #selector(handleExtraTouchDown(_:)), for: .touchDown)
+            button.addTarget(self, action: #selector(handleExtraTouchUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        }
     }
 
-    @objc private func handleFireTouchDown() {
+    @objc private func handleExtraTouchDown(_ sender: UIButton) {
+        guard let button = TouchHUDButton(rawValue: sender.tag) else { return }
+        UIView.animate(withDuration: 0.05) {
+            sender.backgroundColor = sender.backgroundColor?.withAlphaComponent(0.85)
+        }
+        buttonDownAction?(button)
+    }
+
+    @objc private func handleExtraTouchUp(_ sender: UIButton) {
+        guard let button = TouchHUDButton(rawValue: sender.tag) else { return }
+        UIView.animate(withDuration: 0.15) {
+            sender.backgroundColor = sender.backgroundColor?.withAlphaComponent(0.45)
+        }
+        buttonUpAction?(button)
+    }
+
+    // Same reasoning as triggerFireDown/Up below — aimButton also has
+    // isUserInteractionEnabled=false, so it never reaches
+    // handleExtraTouchDown/Up's flash animation; replicate just the visual
+    // here for ViewController to call directly.
+    func flashAim(pressed: Bool) {
+        if pressed {
+            UIView.animate(withDuration: 0.05) {
+                self.aimButton.backgroundColor = self.aimButton.backgroundColor?.withAlphaComponent(0.85)
+            }
+        } else {
+            UIView.animate(withDuration: 0.15) {
+                self.aimButton.backgroundColor = self.aimButton.backgroundColor?.withAlphaComponent(0.45)
+            }
+        }
+    }
+
+    // Not @objc/UIControl-target-action anymore — fireButton has
+    // isUserInteractionEnabled=false (see its own comment), so
+    // ViewController's touchesBegan/Ended call these directly once its own
+    // hit-test against fireButton.frame decides a touch pressed/released it.
+    // Deliberately does NOT call `fireAction`/`fireUpAction` — those are
+    // ViewController's own callback INTO here; calling them back out again
+    // would recurse into ViewController.handleFire, which is what called
+    // this in the first place.
+    func triggerFireUp() {}
+
+    func triggerFireDown() {
         // This `ammo` counter is purely this demo HUD's own decoration (see
         // TouchHUD's doc comment) — real-game mode's actual ammo lives in
         // the headless App's own `Gun` component and is what really gates
@@ -356,17 +480,56 @@ final class TouchHUD {
                 }
             })
         }
-        fireAction?()
     }
 
     func layout(in parent: UIView) {
         let bounds = parent.bounds
         let margin: CGFloat = 24
-        joystickBase.center = CGPoint(x: margin + joystickRadius, y: bounds.height - margin - joystickRadius)
+        // iOS safe area (notch/Dynamic Island/home-indicator/rounded
+        // corners) — in this landscape-only app the meaningful insets are
+        // .left/.right (whichever side the sensor housing rotates to) and
+        // .bottom (home indicator strip); pull every edge-hugging control
+        // in from the raw view bounds by margin + the matching inset
+        // instead of a flat margin, so nothing sits under those system
+        // areas or gets clipped by the display's rounded corners.
+        let safeArea = parent.safeAreaInsets
+        let leftMargin = margin + safeArea.left
+        let rightMargin = margin + safeArea.right
+        let topMargin = margin + safeArea.top
+        let bottomMargin = margin + safeArea.bottom
+        joystickBase.center = CGPoint(x: leftMargin + joystickRadius, y: bounds.height - bottomMargin - joystickRadius)
         joystickKnob.center = joystickBase.center
-        fireButton.center = CGPoint(x: bounds.width - margin - fireButton.bounds.width / 2, y: bounds.height - margin - fireButton.bounds.height / 2)
-        healthLabel.frame.origin = CGPoint(x: margin, y: margin + 20)
-        ammoLabel.frame.origin = CGPoint(x: bounds.width - margin - ammoLabel.bounds.width, y: margin + 20)
+        fireButton.center = CGPoint(x: bounds.width - rightMargin - fireButton.bounds.width / 2, y: bounds.height - bottomMargin - fireButton.bounds.height / 2)
+        // JUMP/AIM: right thumb's other two most-used actions, flanking
+        // FIRE directly (same reach as FIRE itself) instead of floating
+        // over the gun model higher up the screen.
+        jumpButton.center = CGPoint(x: fireButton.center.x, y: fireButton.frame.minY - margin - jumpButton.bounds.height / 2)
+        aimButton.center = CGPoint(x: fireButton.frame.minX - margin - aimButton.bounds.width / 2, y: fireButton.center.y)
+        healthLabel.frame.origin = CGPoint(x: leftMargin, y: topMargin + 20)
+        ammoLabel.frame.origin = CGPoint(x: bounds.width - rightMargin - ammoLabel.bounds.width, y: topMargin + 20)
+        // CROUCH/SPRINT/RELOAD: less time-critical, tucked under the ammo
+        // counter in the empty upper-right corner instead — clear of both
+        // the gun model and the FIRE/JUMP/AIM cluster. Must come after
+        // ammoLabel's own origin is set above, since it anchors off
+        // ammoLabel.frame.maxY.
+        let topRow = [crouchButton, proneButton, sprintButton, reloadButton]
+        let topSpacing: CGFloat = 8
+        let topY = ammoLabel.frame.maxY + margin + crouchButton.bounds.height / 2
+        var nextLeft = bounds.width - rightMargin
+        for btn in topRow {
+            nextLeft -= btn.bounds.width
+            btn.center = CGPoint(x: nextLeft + btn.bounds.width / 2, y: topY)
+            nextLeft -= topSpacing
+        }
+        // MENU: top-left, below HP — well clear of the combat cluster,
+        // mirrors a pause/settings button's conventional corner placement.
+        menuButton.center = CGPoint(x: healthLabel.frame.minX + menuButton.bounds.width / 2, y: healthLabel.frame.maxY + margin + menuButton.bounds.height / 2)
+        // LEAN L/R: flank the move joystick above it, left thumb's other
+        // most-used action while strafing — matches WASD+Q/E's proximity
+        // on desktop.
+        let leanY = joystickBase.frame.minY - margin - leanLeftButton.bounds.height / 2
+        leanLeftButton.center = CGPoint(x: joystickBase.center.x - joystickRadius, y: leanY)
+        leanRightButton.center = CGPoint(x: joystickBase.center.x + joystickRadius, y: leanY)
         crosshairH.frame = CGRect(x: bounds.midX - 10, y: bounds.midY - 1, width: 20, height: 2)
         crosshairV.frame = CGRect(x: bounds.midX - 1, y: bounds.midY - 10, width: 2, height: 20)
     }
@@ -418,6 +581,14 @@ class ViewController: UIViewController {
     private var moveTouchCurrent: CGPoint = .zero
     private var lookTouch: UITouch?
     private var lookTouchLast: CGPoint = .zero
+    // FIRE/AIM: track which UITouch (if any) started inside each button's
+    // hit area, so it can be recognized again on move/end even though the
+    // SAME touch is very likely also `lookTouch` (see fireButton/aimButton's
+    // own isUserInteractionEnabled=false comments) — holding either button
+    // and dragging rotates the camera exactly like an ordinary look-drag,
+    // while still keeping fire/aim engaged until that finger lifts.
+    private var fireTouch: UITouch?
+    private var aimTouch: UITouch?
     private var lastFrameTime: CFTimeInterval = CACurrentMediaTime()
     private let touchHUD = TouchHUD()
     // Bluetooth keyboard/mouse (GameController framework) — see
@@ -449,6 +620,10 @@ class ViewController: UIViewController {
             self?.handleFire(pressed: true)
         }, fireUpAction: { [weak self] in
             self?.handleFire(pressed: false)
+        }, buttonDownAction: { [weak self] button in
+            self?.handleExtraButton(button, pressed: true)
+        }, buttonUpAction: { [weak self] button in
+            self?.handleExtraButton(button, pressed: false)
         })
     }
 
@@ -467,11 +642,57 @@ class ViewController: UIViewController {
     // (held = auto-fire at the game's own FIRE_RATE), press=false on
     // release stops it, same semantics as holding down a real mouse button.
     private func handleFire(pressed: Bool) {
+        if pressed {
+            touchHUD.triggerFireDown()
+        } else {
+            touchHUD.triggerFireUp()
+        }
         if USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe {
             native_metal_probe_mouse_button_changed(probe, 0, pressed)
         }
         if pressed {
             print("[touch-hud] fire, ammo=\(touchHUD.ammo)")
+        }
+    }
+
+    // Phase 6 Step 5 cont'd: jump/aim/crouch/sprint/reload, same
+    // "synthesize the exact desktop key/mouse event the real game already
+    // reads" approach as handleFire — see TouchHUDButton's own doc comment
+    // for which KeyCode/MouseButton each one maps to and why (key_id
+    // numbers match map_key_id in crates/client/src/cadisplaylink/ffi.rs:
+    // letters A-Z are 0-25, so C=2, R=17; Space=36; ShiftLeft=38).
+    // `jump`/`crouch`/`reload` are just_pressed-edge reads in the real
+    // game, so a plain press+release (not held) is correct even though the
+    // button might be held longer by the finger — sending press-down once
+    // is what produces that edge; only aim/sprint care about hold duration.
+    private func handleExtraButton(_ button: TouchHUDButton, pressed: Bool) {
+        if button == .aim {
+            touchHUD.flashAim(pressed: pressed)
+        }
+        guard USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe else { return }
+        switch button {
+        case .jump:
+            native_metal_probe_key_changed(probe, 36, pressed) // Space
+        case .aim:
+            native_metal_probe_mouse_button_changed(probe, 1, pressed) // MouseButton::Right
+        case .crouch:
+            if pressed { native_metal_probe_key_changed(probe, 2, true) } // KeyC, just_pressed toggle
+            else { native_metal_probe_key_changed(probe, 2, false) }
+        case .sprint:
+            native_metal_probe_key_changed(probe, 38, pressed) // ShiftLeft
+        case .reload:
+            if pressed { native_metal_probe_key_changed(probe, 17, true) } // KeyR, just_pressed edge
+            else { native_metal_probe_key_changed(probe, 17, false) }
+        case .menu:
+            if pressed { native_metal_probe_key_changed(probe, 46, true) } // F1, just_pressed toggle
+            else { native_metal_probe_key_changed(probe, 46, false) }
+        case .leanLeft:
+            native_metal_probe_key_changed(probe, 16, pressed) // KeyQ, held
+        case .leanRight:
+            native_metal_probe_key_changed(probe, 4, pressed) // KeyE, held
+        case .prone:
+            if pressed { native_metal_probe_key_changed(probe, 23, true) } // KeyX, just_pressed toggle
+            else { native_metal_probe_key_changed(probe, 23, false) }
         }
     }
 
@@ -825,6 +1046,23 @@ class ViewController: UIViewController {
         if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
             for touch in touches {
                 let location = touch.location(in: self.metalV)
+                // FIRE/AIM hit-test (see fireButton/aimButton's own
+                // isUserInteractionEnabled=false comments) — checked
+                // against self.view's coordinate space since that's where
+                // TouchHUD laid the buttons out. Deliberately doesn't
+                // `continue`/skip the isLeftHalf check below: a touch that
+                // starts on FIRE/AIM is *also* eligible to become
+                // lookTouch (it will, since both buttons sit in the right
+                // half), so holding down and dragging fires/aims AND
+                // rotates the camera with the same finger.
+                let viewLocation = touch.location(in: self.view)
+                if fireTouch == nil, touchHUD.fireButton.frame.contains(viewLocation) {
+                    fireTouch = touch
+                    handleFire(pressed: true)
+                } else if aimTouch == nil, touchHUD.aimButton.frame.contains(viewLocation) {
+                    aimTouch = touch
+                    handleExtraButton(.aim, pressed: true)
+                }
                 let isLeftHalf = location.x < self.metalV.bounds.width / 2.0
                 if isLeftHalf, moveTouch == nil {
                     moveTouch = touch
@@ -876,6 +1114,14 @@ class ViewController: UIViewController {
             }
             if touch == lookTouch {
                 lookTouch = nil
+            }
+            if touch == fireTouch {
+                fireTouch = nil
+                handleFire(pressed: false)
+            }
+            if touch == aimTouch {
+                aimTouch = nil
+                handleExtraButton(.aim, pressed: false)
             }
         }
     }

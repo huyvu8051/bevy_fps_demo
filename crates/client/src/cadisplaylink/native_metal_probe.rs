@@ -384,6 +384,16 @@ vertex QuadVertexOut quad_vertex(uint vid [[vertex_id]],
 fragment float4 quad_fragment(QuadVertexOut in [[stage_in]],
                                texture2d<float> tex [[texture(0)]],
                                sampler texSampler [[sampler(0)]]) {
+    // Circular mask (real game's scope lens is round, fitting the scope
+    // tube opening — see update_scope_lens/SCOPE_LENS_SIZE in
+    // crates/client/src/lib.rs) instead of a square PIP box. Discarding
+    // outside the inscribed circle just leaves whatever the main camera
+    // already drew showing through — no blending needed for the cutout
+    // itself.
+    float2 centered = in.uv - float2(0.5, 0.5);
+    if (length(centered) > 0.5) {
+        discard_fragment();
+    }
     return tex.sample(texSampler, in.uv);
 }
 "#;
@@ -445,6 +455,38 @@ pub struct NativeMetalProbe {
     // present, `render_frame` draws its static geometry (arena+gun) and
     // drives the camera from its `FpsCamera` instead of touch input.
     real_game_app: Option<bevy::app::App>,
+    // Cache of per-static-mesh textures (arena walls/floor, gun scene
+    // meshes) — GPU texture upload is far more expensive than the small
+    // per-frame vertex buffer rebuild, so unlike vertex data (which must be
+    // rebaked every frame since Transform can change — gun sway/recoil),
+    // textures are only (re)uploaded when the mesh count changes (i.e. new
+    // assets finished loading), keyed positionally by index into
+    // `RenderSnapshot::static_meshes` (stable frame-to-frame since the same
+    // entities keep existing once spawned).
+    real_game_textures: Vec<Option<metal::Texture>>,
+    // Real-game mode only: the FpsCamera entity's actual world-space
+    // rotation quaternion (xyzw), straight from GlobalTransform — includes
+    // ViewRecoil's kick and Lean's roll, unlike camera_yaw/camera_pitch
+    // (which only ever hold the pre-recoil base angles). Identity when not
+    // yet set / not in real-game mode.
+    real_game_camera_rotation: [f32; 4],
+    // Real `Gun.ads_blend`/`ScopeZoom` — drive whether the scope PIP
+    // overlay shows at all (only while actually aiming, not the demo
+    // probe's always-on PIP) and its FOV (matching the real game's
+    // `SCOPE_BASE_FOV / zoom` formula instead of a fixed guess).
+    real_game_ads_blend: f32,
+    real_game_scope_zoom: f32,
+    real_game_wall_raise: f32,
+    // The real ScopeCamera entity's own state (see ScopeCameraSnapshot's
+    // doc comment on native_game_extract.rs) — using this directly instead
+    // of the main camera's transform + our own reconstructed show/hide
+    // condition is what gives the scope view its real shoulder-swap sweep,
+    // recoil kick, reload dip, and walk-bob for free, and the real
+    // Camera.is_active/Projection.fov instead of an approximation.
+    real_game_scope_eye: [f32; 3],
+    real_game_scope_rotation: [f32; 4],
+    real_game_scope_active: bool,
+    real_game_scope_fov: f32,
 }
 
 #[derive(bevy::ecs::component::Component, Clone, Copy)]
@@ -519,41 +561,80 @@ fn build_entity_ecs_app() -> bevy::app::App {
     app
 }
 
-// Flattens the real game's extracted static meshes (arena walls/floor +
-// gun scene geometry, see native_game_extract.rs) into a plain triangle
-// list in the SAME `Vertex{position,normal,color}` layout the box-arena
-// pipeline (`self.pipeline`/`SHADER_SOURCE`) already expects — so drawing
-// them needs no new shader, just a fresh `MTLBuffer` each frame (same
-// "rebuild a small buffer per frame" precedent as the skinned-mesh joint
-// buffer below). Bakes each mesh's `Transform` into world-space positions/
-// normals on the CPU, matching how Sponza/box-arena vertices are already
-// pre-baked at load time (no per-draw model matrix in this shader).
-fn bake_static_meshes(meshes: &[ExtractedMesh]) -> Vec<Vertex> {
+// Flattens ONE of the real game's extracted static meshes (arena
+// walls/floor, or one of the gun's glTF-scene child meshes — see
+// native_game_extract.rs) into a plain triangle list in the SAME
+// `GltfVertex{position,normal,uv}` layout Sponza's own meshes already use
+// (see gltf_scene.rs) — so drawing them with real textures needs no new
+// shader/pipeline, just reusing `self.sponza_pipeline`/`self.sponza_sampler`
+// unchanged, with a fresh `MTLBuffer` each frame (same "rebuild a small
+// buffer per frame" precedent as the skinned-mesh joint buffer below).
+// Bakes each mesh's `Transform` into world-space positions/normals on the
+// CPU, matching how Sponza/box-arena vertices are already pre-baked at
+// load time (no per-draw model matrix in this shader).
+fn bake_static_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::GltfVertex> {
     let mut verts = Vec::new();
-    for mesh in meshes {
-        let color = [mesh.base_color[0], mesh.base_color[1], mesh.base_color[2]];
-        let vertex_at = |idx: usize| -> Vertex {
-            let local_pos = bevy::math::Vec3::from_array(mesh.positions[idx]);
-            let local_normal = if mesh.normals.is_empty() {
-                bevy::math::Vec3::Y
-            } else {
-                bevy::math::Vec3::from_array(mesh.normals[idx])
-            };
-            let world_pos = mesh.transform.transform_point(local_pos);
-            let world_normal = (mesh.transform.rotation * local_normal).normalize_or_zero();
-            Vertex { position: world_pos.to_array(), normal: world_normal.to_array(), color }
-        };
-        if mesh.indices.is_empty() {
-            for idx in 0..mesh.positions.len() {
-                verts.push(vertex_at(idx));
-            }
+    let vertex_at = |idx: usize| -> super::gltf_scene::GltfVertex {
+        let local_pos = bevy::math::Vec3::from_array(mesh.positions[idx]);
+        let local_normal = if mesh.normals.is_empty() {
+            bevy::math::Vec3::Y
         } else {
-            for &idx in &mesh.indices {
-                verts.push(vertex_at(idx as usize));
-            }
+            bevy::math::Vec3::from_array(mesh.normals[idx])
+        };
+        let uv = if mesh.uvs.is_empty() { [0.0, 0.0] } else { mesh.uvs[idx] };
+        let world_pos = mesh.transform.transform_point(local_pos);
+        let world_normal = (mesh.transform.rotation * local_normal).normalize_or_zero();
+        super::gltf_scene::GltfVertex { position: world_pos.to_array(), normal: world_normal.to_array(), uv }
+    };
+    if mesh.indices.is_empty() {
+        for idx in 0..mesh.positions.len() {
+            verts.push(vertex_at(idx));
+        }
+    } else {
+        for &idx in &mesh.indices {
+            verts.push(vertex_at(idx as usize));
         }
     }
     verts
+}
+
+// One real-game static mesh (arena wall/floor, or a gun scene child mesh),
+// ready to draw this frame — see bake_static_mesh_vertices and
+// render_frame's texture-cache handling for how these get built.
+// `texture: None` (untextured material, or an unsupported CPU pixel format
+// — see native_game_extract.rs) falls back to `self.white_texture` in
+// `draw_scene`, same fallback Sponza's own meshes already use.
+// Real-game scope PIP: a small circle centered on screen (matching where
+// the real game's lens quad sits, dead center in the scope tube — see
+// SCOPE_LENS_OFFSET/update_scope_lens in crates/client/src/lib.rs) instead
+// of the demo probe's fixed top-right box. `half_height` is in NDC
+// (-1..1); `aspect` (width/height) corrects the X half-width so the quad
+// is a true circle in screen space rather than an ellipse stretched by a
+// non-square viewport — same reasoning perspective() already applies to
+// the main projection's own aspect correction.
+fn build_centered_quad(device: &Device, aspect: f32, half_height: f32) -> metal::Buffer {
+    let half_w = half_height / aspect;
+    let half_h = half_height;
+    let verts = [
+        QuadVertex { position: [-half_w, -half_h], uv: [0.0, 0.0] },
+        QuadVertex { position: [half_w, -half_h], uv: [1.0, 0.0] },
+        QuadVertex { position: [half_w, half_h], uv: [1.0, 1.0] },
+        QuadVertex { position: [-half_w, -half_h], uv: [0.0, 0.0] },
+        QuadVertex { position: [half_w, half_h], uv: [1.0, 1.0] },
+        QuadVertex { position: [-half_w, half_h], uv: [0.0, 1.0] },
+    ];
+    device.new_buffer_with_data(
+        verts.as_ptr() as *const _,
+        (verts.len() * std::mem::size_of::<QuadVertex>()) as u64,
+        MTLResourceOptions::StorageModeShared,
+    )
+}
+
+struct RealGameMeshDraw<'a> {
+    vertex_buffer: metal::Buffer,
+    vertex_count: usize,
+    base_color_factor: [f32; 4],
+    texture: Option<&'a metal::Texture>,
 }
 
 impl NativeMetalProbe {
@@ -622,11 +703,26 @@ impl NativeMetalProbe {
                 let sponza_pipeline_descriptor = RenderPipelineDescriptor::new();
                 sponza_pipeline_descriptor.set_vertex_function(Some(&sponza_vertex_fn));
                 sponza_pipeline_descriptor.set_fragment_function(Some(&sponza_fragment_fn));
-                sponza_pipeline_descriptor
-                    .color_attachments()
-                    .object_at(0)
-                    .unwrap()
-                    .set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+                let sponza_color_attachment = sponza_pipeline_descriptor.color_attachments().object_at(0).unwrap();
+                sponza_color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+                // Real-game materials with `AlphaMode::Blend` (e.g. the
+                // scope lens glass on the ak47_scope model) carry alpha < 1
+                // in their base_color/texture — without blending enabled
+                // here, Metal ignores that alpha and paints every fragment
+                // fully opaque regardless of what the fragment shader
+                // returns, which is why the lens looked solid instead of
+                // see-through once real textures/materials replaced the
+                // earlier flat-color placeholder. Standard "source over"
+                // blending: opaque (alpha=1) surfaces render identically to
+                // unblended, so this is safe for the arena/gun's mostly-
+                // opaque geometry too, not just the lens.
+                sponza_color_attachment.set_blending_enabled(true);
+                sponza_color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+                sponza_color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
+                sponza_color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+                sponza_color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+                sponza_color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+                sponza_color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
                 sponza_pipeline_descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
                 device.new_render_pipeline_state(&sponza_pipeline_descriptor).ok()
             }
@@ -758,6 +854,15 @@ impl NativeMetalProbe {
             ecs_app,
             start_time: std::time::Instant::now(),
             real_game_app,
+            real_game_textures: Vec::new(),
+            real_game_camera_rotation: [0.0, 0.0, 0.0, 1.0],
+            real_game_ads_blend: 0.0,
+            real_game_scope_zoom: 8.0,
+            real_game_wall_raise: 0.0,
+            real_game_scope_eye: [0.0, 0.0, 0.0],
+            real_game_scope_rotation: [0.0, 0.0, 0.0, 1.0],
+            real_game_scope_active: false,
+            real_game_scope_fov: 12.0_f32.to_radians(),
         }
     }
 
@@ -853,15 +958,37 @@ impl NativeMetalProbe {
         extracted: &[(bevy::transform::components::Transform, EntityKind, f32)],
         now: f32,
         use_sponza: bool,
-        real_game_buffer: Option<(&metal::Buffer, usize)>,
+        real_game_meshes: Option<&[RealGameMeshDraw]>,
     ) {
-        if let Some((buffer, vertex_count)) = real_game_buffer {
-            let uniforms = Uniforms { view_projection, light_dir, _pad: 0.0 };
-            encoder.set_render_pipeline_state(&self.pipeline);
-            encoder.set_vertex_buffer(0, Some(buffer), 0);
-            encoder.set_vertex_bytes(1, std::mem::size_of::<Uniforms>() as u64, &uniforms as *const _ as *const _);
-            encoder.set_fragment_bytes(1, std::mem::size_of::<Uniforms>() as u64, &uniforms as *const _ as *const _);
-            encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, vertex_count as u64);
+        if let Some(meshes) = real_game_meshes {
+            // Reuses Sponza's own pipeline/shader (position+normal+uv,
+            // textured) unchanged — arena/gun geometry is textured exactly
+            // like Sponza's, just rebaked into world space fresh each frame
+            // (see bake_static_mesh_vertices) instead of once at load time.
+            encoder.set_render_pipeline_state(self.sponza_pipeline.as_ref().unwrap());
+            encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
+            for m in meshes {
+                let sponza_uniforms = SponzaUniforms {
+                    view_projection,
+                    light_dir,
+                    _pad: 0.0,
+                    base_color_factor: m.base_color_factor,
+                };
+                encoder.set_vertex_buffer(0, Some(&m.vertex_buffer), 0);
+                encoder.set_vertex_bytes(
+                    1,
+                    std::mem::size_of::<SponzaUniforms>() as u64,
+                    &sponza_uniforms as *const _ as *const _,
+                );
+                encoder.set_fragment_bytes(
+                    1,
+                    std::mem::size_of::<SponzaUniforms>() as u64,
+                    &sponza_uniforms as *const _ as *const _,
+                );
+                let texture = m.texture.unwrap_or(&self.white_texture);
+                encoder.set_fragment_texture(0, Some(texture));
+                encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, m.vertex_count as u64);
+            }
         } else if use_sponza {
             encoder.set_render_pipeline_state(self.sponza_pipeline.as_ref().unwrap());
             encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
@@ -981,7 +1108,7 @@ impl NativeMetalProbe {
         // snapshot — camera pose comes from the game's own FpsCamera
         // instead of touch input, and the arena+gun geometry gets rebaked
         // into a plain vertex buffer each frame (see bake_static_meshes).
-        let mut real_game_vertices: Option<Vec<Vertex>> = None;
+        let mut real_game_static_meshes: Vec<super::native_game_extract::ExtractedMesh> = Vec::new();
         // Real zombies/remote players, reusing the toy patrol World's own
         // `(Transform, EntityKind, AnimOffset)` shape (anim_offset always
         // 0.0 here — no per-entity animation phase offset needed since
@@ -996,34 +1123,87 @@ impl NativeMetalProbe {
                 self.camera_position = cam.eye;
                 self.camera_yaw = cam.yaw;
                 self.camera_pitch = cam.pitch;
+                self.real_game_camera_rotation = cam.rotation;
+                self.real_game_ads_blend = cam.ads_blend;
+                self.real_game_scope_zoom = cam.scope_zoom;
+                self.real_game_wall_raise = cam.wall_raise;
             }
-            real_game_vertices = Some(bake_static_meshes(&snapshot.static_meshes));
+            if let Some(scope_cam) = &snapshot.scope_camera {
+                self.real_game_scope_eye = scope_cam.eye;
+                self.real_game_scope_rotation = scope_cam.rotation;
+                self.real_game_scope_active = scope_cam.active;
+                self.real_game_scope_fov = scope_cam.fov;
+            } else {
+                self.real_game_scope_active = false;
+            }
+            real_game_static_meshes = snapshot.static_meshes;
             real_game_extracted.extend(snapshot.zombies.into_iter().map(|t| (t, EntityKind::Zombie, 0.0)));
             real_game_extracted
                 .extend(snapshot.remote_players.into_iter().map(|t| (t, EntityKind::Soldier, 0.0)));
         }
-        let real_game_buffer = real_game_vertices.as_ref().filter(|v| !v.is_empty()).map(|vertices| {
-            let buffer = self.device.new_buffer_with_data(
-                vertices.as_ptr() as *const _,
-                (vertices.len() * std::mem::size_of::<Vertex>()) as u64,
-                MTLResourceOptions::StorageModeShared,
-            );
-            (buffer, vertices.len())
-        });
+        // Texture cache: only (re)upload when the mesh count changed (see
+        // `real_game_textures`'s own doc comment on the struct) — building
+        // a fresh `Device` clone rather than borrowing `self.device`
+        // directly sidesteps a disjoint-field-borrow fight with the
+        // `self.real_game_textures = ...` assignment right after.
+        if self.real_game_textures.len() != real_game_static_meshes.len() {
+            let device = self.device.clone();
+            self.real_game_textures = real_game_static_meshes
+                .iter()
+                .map(|m| m.texture.as_ref().map(|t| super::gltf_scene::upload_texture(&device, t.width, t.height, &t.rgba)))
+                .collect();
+        }
+        let real_game_meshes: Vec<RealGameMeshDraw> = real_game_static_meshes
+            .iter()
+            .zip(self.real_game_textures.iter())
+            .map(|(mesh, texture)| {
+                let verts = bake_static_mesh_vertices(mesh);
+                let vertex_buffer = self.device.new_buffer_with_data(
+                    verts.as_ptr() as *const _,
+                    (verts.len() * std::mem::size_of::<super::gltf_scene::GltfVertex>()) as u64,
+                    MTLResourceOptions::StorageModeShared,
+                );
+                RealGameMeshDraw {
+                    vertex_buffer,
+                    vertex_count: verts.len(),
+                    base_color_factor: mesh.base_color,
+                    texture: texture.as_ref(),
+                }
+            })
+            .collect();
+        let real_game_meshes_opt =
+            if real_game_meshes.is_empty() { None } else { Some(real_game_meshes.as_slice()) };
 
         let use_camera_state = use_sponza || is_real_game;
         let aspect = width as f32 / height.max(1) as f32;
         let far = if use_camera_state { 500.0 } else { 100.0 };
-        let (sin_pitch, cos_pitch) = self.camera_pitch.sin_cos();
-        let (sin_yaw, cos_yaw) = self.camera_yaw.sin_cos();
-        let look_dir = [-sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch];
+        // Real-game mode: derive look direction + up from the actual
+        // camera rotation quaternion (includes ViewRecoil kick + Lean
+        // roll — see real_game_camera_rotation's own doc comment), not
+        // reconstructed from yaw/pitch alone, so gun-fire recoil/lean
+        // actually shakes/tilts the view like the real game — previously
+        // the camera stayed perfectly steady through every shot even
+        // though the gun mesh itself visibly kicked, since both are
+        // baked from the same real transform data but only the gun's was
+        // being read from the real rotation.
+        let (look_dir, up) = if is_real_game {
+            let rotation = bevy::math::Quat::from_array(self.real_game_camera_rotation);
+            (
+                (rotation * bevy::math::Vec3::NEG_Z).to_array(),
+                (rotation * bevy::math::Vec3::Y).to_array(),
+            )
+        } else {
+            let (sin_pitch, cos_pitch) = self.camera_pitch.sin_cos();
+            let (sin_yaw, cos_yaw) = self.camera_yaw.sin_cos();
+            ([-sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch], [0.0, 1.0, 0.0])
+        };
         let center = [
             self.camera_position[0] + look_dir[0],
             self.camera_position[1] + look_dir[1],
             self.camera_position[2] + look_dir[2],
         ];
         let view = if use_camera_state {
-            look_at(self.camera_position, center, [0.0, 1.0, 0.0])
+            look_at(self.camera_position, center, up)
         } else {
             look_at([0.0, 3.0, 10.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0])
         };
@@ -1034,11 +1214,34 @@ impl NativeMetalProbe {
             [v[0] / len, v[1] / len, v[2] / len]
         };
         let view_projection = mat_mul(proj, view);
-        // Scope camera: same eye/orientation as the main camera, just a
-        // much narrower FOV (12° vs 60°) — simulates a zoomed rifle scope
-        // without needing separate camera-aim state yet.
-        let scope_proj = perspective(12.0_f32.to_radians(), 1.0, 0.05, far);
-        let scope_view_projection = mat_mul(scope_proj, view);
+        // Scope camera: reads the REAL ScopeCamera entity's own state
+        // (see ScopeCameraSnapshot's doc comment on native_game_extract.rs)
+        // instead of reusing the main camera's transform + a hand-picked
+        // FOV/threshold — `sync_scope_camera`/`update_scope_lens`
+        // (crates/client/src/lib.rs) already compute the exact eye
+        // position (with shoulder-swap sweep, recoil kick, reload dip,
+        // walk-bob all baked in), `Camera.is_active`, and `Projection.fov`
+        // every tick, unmodified, inside this same headless App — this is
+        // just extracting that result, the same way the real desktop
+        // build already shows it working. The demo probe (not real-game
+        // mode) keeps its old always-on fixed-12°-FOV PIP reusing the main
+        // camera's transform, since it has no real ScopeCamera to read.
+        let show_scope = if is_real_game { self.real_game_scope_active } else { true };
+        let (scope_view, scope_fov) = if is_real_game {
+            let rotation = bevy::math::Quat::from_array(self.real_game_scope_rotation);
+            let scope_forward = (rotation * bevy::math::Vec3::NEG_Z).to_array();
+            let scope_up = (rotation * bevy::math::Vec3::Y).to_array();
+            let scope_center = [
+                self.real_game_scope_eye[0] + scope_forward[0],
+                self.real_game_scope_eye[1] + scope_forward[1],
+                self.real_game_scope_eye[2] + scope_forward[2],
+            ];
+            (look_at(self.real_game_scope_eye, scope_center, scope_up), self.real_game_scope_fov)
+        } else {
+            (view, 12.0_f32.to_radians())
+        };
+        let scope_proj = perspective(scope_fov, 1.0, 0.05, far);
+        let scope_view_projection = mat_mul(scope_proj, scope_view);
 
         let now = self.start_time.elapsed().as_secs_f32();
         // Tick the ECS world once (advances Time, runs patrol_system over
@@ -1062,33 +1265,38 @@ impl NativeMetalProbe {
             query_state.iter(self.ecs_app.world()).map(|(t, k, a)| (*t, *k, a.0)).collect()
         };
 
-        // Pass 1: scope camera into the offscreen texture.
-        let scope_pass_descriptor = RenderPassDescriptor::new();
-        let scope_color = scope_pass_descriptor.color_attachments().object_at(0).unwrap();
-        scope_color.set_texture(Some(&self.scope_color_texture));
-        scope_color.set_load_action(MTLLoadAction::Clear);
-        scope_color.set_store_action(MTLStoreAction::Store);
-        scope_color.set_clear_color(MTLClearColor::new(0.05, 0.05, 0.05, 1.0));
-        let scope_depth = scope_pass_descriptor.depth_attachment().unwrap();
-        scope_depth.set_texture(Some(&self.scope_depth_texture));
-        scope_depth.set_load_action(MTLLoadAction::Clear);
-        scope_depth.set_store_action(MTLStoreAction::DontCare);
-        scope_depth.set_clear_depth(1.0);
+        // Pass 1: scope camera into the offscreen texture — skipped
+        // entirely in real-game mode while not aiming (see `show_scope`),
+        // both to avoid the wasted render pass and so the PIP quad below
+        // doesn't composite a stale/irrelevant frame over the main view.
+        if show_scope {
+            let scope_pass_descriptor = RenderPassDescriptor::new();
+            let scope_color = scope_pass_descriptor.color_attachments().object_at(0).unwrap();
+            scope_color.set_texture(Some(&self.scope_color_texture));
+            scope_color.set_load_action(MTLLoadAction::Clear);
+            scope_color.set_store_action(MTLStoreAction::Store);
+            scope_color.set_clear_color(MTLClearColor::new(0.05, 0.05, 0.05, 1.0));
+            let scope_depth = scope_pass_descriptor.depth_attachment().unwrap();
+            scope_depth.set_texture(Some(&self.scope_depth_texture));
+            scope_depth.set_load_action(MTLLoadAction::Clear);
+            scope_depth.set_store_action(MTLStoreAction::DontCare);
+            scope_depth.set_clear_depth(1.0);
 
-        let scope_command_buffer = self.queue.new_command_buffer();
-        let scope_encoder = scope_command_buffer.new_render_command_encoder(scope_pass_descriptor);
-        scope_encoder.set_depth_stencil_state(&self.depth_state);
-        self.draw_scene(
-            scope_encoder,
-            scope_view_projection,
-            light_dir,
-            &extracted,
-            now,
-            use_sponza,
-            real_game_buffer.as_ref().map(|(b, n)| (b, *n)),
-        );
-        scope_encoder.end_encoding();
-        scope_command_buffer.commit();
+            let scope_command_buffer = self.queue.new_command_buffer();
+            let scope_encoder = scope_command_buffer.new_render_command_encoder(scope_pass_descriptor);
+            scope_encoder.set_depth_stencil_state(&self.depth_state);
+            self.draw_scene(
+                scope_encoder,
+                scope_view_projection,
+                light_dir,
+                &extracted,
+                now,
+                use_sponza,
+                real_game_meshes_opt,
+            );
+            scope_encoder.end_encoding();
+            scope_command_buffer.commit();
+        }
 
         // Pass 2: main camera straight to the drawable, then the scope
         // texture composited as a picture-in-picture quad on top.
@@ -1115,15 +1323,25 @@ impl NativeMetalProbe {
             &extracted,
             now,
             use_sponza,
-            real_game_buffer.as_ref().map(|(b, n)| (b, *n)),
+            real_game_meshes_opt,
         );
 
-        if let Some(quad_pipeline) = &self.quad_pipeline {
-            encoder.set_render_pipeline_state(quad_pipeline);
-            encoder.set_vertex_buffer(0, Some(&self.quad_vertex_buffer), 0);
-            encoder.set_fragment_texture(0, Some(&self.scope_color_texture));
-            encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
-            encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+        if show_scope {
+            if let Some(quad_pipeline) = &self.quad_pipeline {
+                // Real-game mode: a circle dead center (matches the real
+                // lens quad's screen position — see build_centered_quad's
+                // own doc comment); the demo probe keeps its original
+                // fixed top-right box, which has no real "is this actually
+                // where the lens sits" state to match.
+                let real_game_quad_buffer =
+                    is_real_game.then(|| build_centered_quad(&self.device, aspect, 0.35));
+                let quad_buffer = real_game_quad_buffer.as_ref().unwrap_or(&self.quad_vertex_buffer);
+                encoder.set_render_pipeline_state(quad_pipeline);
+                encoder.set_vertex_buffer(0, Some(quad_buffer), 0);
+                encoder.set_fragment_texture(0, Some(&self.scope_color_texture));
+                encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
+                encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+            }
         }
 
         encoder.end_encoding();

@@ -21,7 +21,23 @@ use bevy::asset::AssetApp;
 // a full DefaultPlugins/WinitPlugin/RenderPlugin stack underneath it.
 pub fn build_headless_game_ecs_app() -> App {
     let mut app = App::new();
+    // Proactive pass over bevy_internal's actual `DefaultPlugins` member
+    // list (checked directly against
+    // bevy_internal-0.18.1/src/default_plugins.rs) instead of continuing
+    // to find gaps one panic at a time: every plugin in that list with no
+    // window/GPU/render dependency, added here up front. Explicitly still
+    // excluded, same reasoning as before: WindowPlugin, AccessibilityPlugin,
+    // WinitPlugin, RenderPlugin, PipelinedRenderingPlugin, CorePipelinePlugin,
+    // PostProcessPlugin (this is where Bloom/DepthOfField live — genuinely
+    // can't run without a real GPU/RenderApp, not a headless-safe gap),
+    // AntiAliasPlugin, UiRenderPlugin, PbrPlugin, GizmoRenderPlugin — every
+    // one of those either creates an OS window/wgpu device directly or only
+    // does render-world extraction work that assumes a RenderApp sub-app
+    // already exists.
+    app.add_plugins(bevy::app::PanicHandlerPlugin);
+    app.add_plugins(bevy::log::LogPlugin::default());
     app.add_plugins(bevy::MinimalPlugins);
+    app.add_plugins(bevy::diagnostic::DiagnosticsPlugin);
     // build_game_common calls init_state (ClientState), which needs
     // StatesPlugin's StateTransition schedule — normally pulled in for
     // free by DefaultPlugins. Confirmed as the first real gap by actually
@@ -49,6 +65,21 @@ pub fn build_headless_game_ecs_app() -> App {
     // not exist" on the very first `app.update()`.
     app.add_plugins(bevy::mesh::MeshPlugin);
     app.add_plugins(bevy::image::ImagePlugin::default());
+    // Also in DefaultPlugins' own list, also GPU-free (pure ECS data/
+    // bookkeeping — the actual GPU work each does is entirely inside
+    // render-world extraction systems that only run once a RenderApp
+    // sub-app exists, same pattern as MeshPlugin/ImagePlugin above).
+    app.add_plugins(bevy::camera::CameraPlugin);
+    app.add_plugins(bevy::light::LightPlugin);
+    app.add_plugins(bevy::text::TextPlugin);
+    // UiPlugin's own image-node system (bevy_ui::widget::image::
+    // update_image_content_size_system) reads Assets<TextureAtlasLayout>
+    // unconditionally — that asset type normally comes from bevy_sprite's
+    // SpritePlugin, which we don't want (its other systems assume a
+    // RenderApp). Same "just register the asset type" fix as
+    // StandardMaterial/AudioSource above.
+    app.init_asset::<bevy::image::TextureAtlasLayout>();
+    app.add_plugins(bevy::ui::UiPlugin::default());
     app.add_plugins(bevy::scene::ScenePlugin);
     app.add_plugins(bevy::gltf::GltfPlugin::default());
     // `StandardMaterial` is normally registered by `bevy_pbr::PbrPlugin` via
