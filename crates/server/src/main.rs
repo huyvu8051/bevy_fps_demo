@@ -16,7 +16,7 @@ use shared::{
     resolve_bone_world_positions, zombie_hit_damage_bones, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
-    SetAutoMaintainZombies, SetZombieCount,
+    SetAutoMaintainZombies, SetAutopilot, SetZombieCount,
     ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
     ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, wire_zombie_hitbox_bones,
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
@@ -179,6 +179,7 @@ fn main() {
         .add_client_event::<SetZombieCount>(Channel::Ordered)
         .add_client_event::<ClearAllZombies>(Channel::Ordered)
         .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
+        .add_client_event::<SetAutopilot>(Channel::Ordered)
         .init_resource::<PendingRespawns>()
         .init_resource::<GameOver>()
         .init_resource::<DebugBotIdCounter>()
@@ -197,7 +198,15 @@ fn main() {
         .add_systems(
             Update,
             (
-                move_players,
+                // Overwrites this tick's ClientInput.move_axis/yaw/sprint
+                // for any player with ServerAutopilot(true) BEFORE
+                // move_players consumes it — see server_autopilot_think's
+                // own doc comment. Explicitly chained (not just listed
+                // alongside move_players) since both write the same
+                // ClientInput component and Bevy doesn't guarantee an
+                // order between non-conflicting-looking systems in a
+                // plain tuple.
+                (server_autopilot_pick_target, server_autopilot_think, move_players).chain(),
                 (move_zombies, record_zombie_history).chain(),
                 (bot_pick_target, move_debug_bots, debug_bot_fire).chain(),
                 tick_respawns,
@@ -222,6 +231,7 @@ fn main() {
         .add_observer(on_set_zombie_count)
         .add_observer(on_clear_all_zombies)
         .add_observer(on_set_auto_maintain_zombies)
+        .add_observer(on_set_autopilot)
         .add_observer(on_player_died)
         .add_observer(on_request_restart)
         .add_observer(handle_fire_shot)
@@ -321,7 +331,34 @@ fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands) {
         LastProcessedInput::default(),
         PlayerThreat::default(),
         Replicated,
+        // Server-side autopilot (see server_autopilot_pick_target/
+        // server_autopilot_think below) — ON by default, matching the
+        // client-side predecessor's own Default. Not replicated: it's
+        // server bookkeeping the client only ever talks to through the
+        // SetAutopilot event, same as e.g. PlayerThreat.
+        ServerAutopilot::default(),
+        ServerAutopilotState::default(),
     ));
+}
+
+// Per-player AI takeover switch — see SetAutopilot's own doc comment
+// (crates/shared) for why this is per-entity rather than a world resource
+// like AutoMaintainZombies.
+#[derive(Component)]
+struct ServerAutopilot(bool);
+impl Default for ServerAutopilot {
+    fn default() -> Self {
+        ServerAutopilot(true)
+    }
+}
+
+fn on_set_autopilot(trigger: On<FromClient<SetAutopilot>>, mut players: Query<&mut ServerAutopilot>) {
+    let Some(entity) = trigger.client_id.entity() else {
+        return;
+    };
+    if let Ok(mut autopilot) = players.get_mut(entity) {
+        autopilot.0 = trigger.message.0;
+    }
 }
 
 // Server-only (not replicated) aggro state — see ZOMBIE_THREAT_DISTANCE_BONUS
@@ -713,6 +750,273 @@ fn debug_bot_fire(
             message: ShotFx::ZombieHit { point: hit_point, normal, damage, killed },
         });
     }
+}
+
+// --- Server-side player autopilot -----------------------------------------
+// Ported from the client's own crates/client/src/autopilot.rs (now removed
+// there — see SetAutopilot's doc comment in crates/shared for why this
+// moved server-side): same nearest-zombie targeting, rate-limited aim
+// tracking, and swarm-aware retreat/approach/dodge decision, just driving
+// this Player entity's own ClientInput component directly instead of a
+// client-local AutopilotIntent resource, and resolving shots itself
+// (mirroring debug_bot_fire) instead of going through the FireShot event —
+// there's no clientside "camera" here to compute a ray from, and no
+// round-trip to wait on since this runs authoritatively already.
+//
+// Values mirror the removed client module's own constants exactly (same
+// tuning, just relocated) — see that module's own doc comment (now only in
+// git history) for the "why 14m, why 12 degrees" reasoning behind each.
+const SERVER_AUTOPILOT_DETECT_RANGE: f32 = 35.0;
+const SERVER_AUTOPILOT_ENGAGE_RANGE: f32 = 14.0;
+const SERVER_AUTOPILOT_RETREAT_RANGE: f32 = 5.0;
+const SERVER_AUTOPILOT_RETARGET_INTERVAL: f32 = 1.2;
+const SERVER_AUTOPILOT_TURN_RATE_DEG: f32 = 360.0;
+const SERVER_AUTOPILOT_FIRE_AIM_TOLERANCE_DEG: f32 = 12.0;
+const SERVER_AUTOPILOT_SPRINT_APPROACH_DISTANCE: f32 = 22.0;
+const SERVER_AUTOPILOT_IDLE_SCAN_DEG_PER_SEC: f32 = 20.0;
+const SERVER_AUTOPILOT_DODGE_CYCLE_HZ: f32 = 0.4;
+const SERVER_AUTOPILOT_DODGE_DUTY_CYCLE: f32 = 0.35;
+// Movement/aim decisions (the O(zombie count) nearby-scan for swarm
+// retreat) are throttled to this rate, same "don't recompute faster than
+// the result can even be acted on" reasoning as the removed client
+// module's own AUTOPILOT_DECISION_HZ — aim tracking and the fire gate
+// still run every server tick (30Hz, there's no 120Hz ProMotion concern
+// here) since both are O(1) against the single already-committed target.
+const SERVER_AUTOPILOT_DECISION_HZ: f32 = 20.0;
+// The real gun's own FIRE_RATE (crates/client/src/lib.rs) is a private
+// client-only constant (ammo/reload is purely cosmetic, never sent to or
+// checked by the server — see handle_fire_shot's own "no anti-cheat goals"
+// stance), so this is a same-value server-local mirror rather than an
+// import, to make autopilot's fire rate match what firing the real gun
+// manually would feel like.
+const SERVER_AUTOPILOT_FIRE_INTERVAL_SECS: f32 = 0.1;
+
+// Server-only (not replicated) per-player AI state — mirrors the removed
+// client module's AutopilotState (target/retarget_timer) plus its own
+// FpsCamera.yaw/pitch fields (the server has no camera component at all
+// for real players, only NetTransform.yaw for movement facing — see
+// SetAutopilot's own doc comment on why pitch isn't replicated back to the
+// owning client's view).
+#[derive(Component, Default)]
+struct ServerAutopilotState {
+    target: Option<Entity>,
+    retarget_timer: f32,
+    aim_yaw: f32,
+    aim_pitch: f32,
+    fire_timer: f32,
+    decision_timer: f32,
+    dodge_step_parity: bool,
+}
+
+// Nearest-zombie-in-range targeting, commit-and-periodically-reevaluate —
+// identical shape to bot_pick_target above, just gated on ServerAutopilot
+// and running against real Player entities instead of DebugBot ones.
+fn server_autopilot_pick_target(
+    time: Res<Time>,
+    mut players: Query<(&Transform, &ServerAutopilot, &mut ServerAutopilotState), With<Player>>,
+    zombies: Query<(Entity, &Transform), With<Zombie>>,
+) {
+    for (transform, autopilot, mut state) in &mut players {
+        if !autopilot.0 {
+            continue;
+        }
+        state.retarget_timer -= time.delta_secs();
+        let target_alive = state.target.is_some_and(|target| zombies.contains(target));
+        if !target_alive || state.retarget_timer <= 0.0 {
+            state.target = zombies
+                .iter()
+                .map(|(zombie, zombie_transform)| (zombie, transform.translation.distance(zombie_transform.translation)))
+                .filter(|&(_, distance)| distance <= SERVER_AUTOPILOT_DETECT_RANGE)
+                .min_by(|(_, a), (_, b)| a.total_cmp(b))
+                .map(|(zombie, _)| zombie);
+            state.retarget_timer = SERVER_AUTOPILOT_RETARGET_INTERVAL;
+        }
+    }
+}
+
+// The actual "AI": aims (rate-limited, writing this player's own aim_yaw/
+// aim_pitch rather than a shared camera), decides whether to fire (and
+// resolves the shot itself, mirroring debug_bot_fire — real per-bone hit
+// detection, no lag comp needed since this has no network round-trip of
+// its own to compensate for), and decides movement (swarm-aware retreat/
+// approach/dodge, written into this same tick's ClientInput component so
+// move_players — which runs right after this in the same .chain() —
+// applies it through the exact same simulate_player_step path a real
+// player's input would take).
+fn server_autopilot_think(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut players: Query<(Entity, &Transform, &ServerAutopilot, &mut ServerAutopilotState, &mut ClientInput)>,
+    mut zombies: Query<(Entity, &Transform, &mut Health, &mut KnockbackVelocity, &ZombieHitboxBones), (With<Zombie>, Without<Player>)>,
+    bone_transforms: Query<&GlobalTransform>,
+    network_ids: Query<&NetworkId>,
+    mut threats: Query<&mut PlayerThreat>,
+    mut respawns: ResMut<PendingRespawns>,
+    director_spawned: Query<(), With<DirectorSpawned>>,
+) {
+    let dt = time.delta_secs();
+    let turn_step = SERVER_AUTOPILOT_TURN_RATE_DEG.to_radians() * dt;
+
+    for (entity, transform, autopilot, mut state, mut input) in &mut players {
+        if !autopilot.0 {
+            continue;
+        }
+        state.fire_timer -= dt;
+
+        let Some(target) = state.target else {
+            // Nothing in range — hold position, slowly scan for something
+            // to find, same as the removed client module's own idle case.
+            state.aim_yaw += SERVER_AUTOPILOT_IDLE_SCAN_DEG_PER_SEC.to_radians() * dt;
+            input.move_axis = Vec2::ZERO;
+            input.yaw = state.aim_yaw;
+            input.sprint = false;
+            input.jump = false;
+            continue;
+        };
+        let Ok((zombie_entity, zombie_transform, ..)) = zombies.get(target) else {
+            continue;
+        };
+
+        // Aim tracking and the fire gate: O(1), every tick.
+        let origin = transform.translation + Vec3::Y * DEBUG_BOT_EYE_HEIGHT;
+        let to_target = zombie_transform.translation - origin;
+        let horizontal_distance = Vec2::new(to_target.x, to_target.z).length();
+        let desired_yaw = (-to_target.x).atan2(-to_target.z);
+        let desired_pitch = to_target.y.atan2(horizontal_distance.max(0.01)).clamp(-1.5, 1.5);
+        state.aim_yaw = turn_towards_angle(state.aim_yaw, desired_yaw, turn_step);
+        state.aim_pitch = turn_towards_angle(state.aim_pitch, desired_pitch, turn_step);
+
+        let raw_aim_error = (state.aim_yaw - desired_yaw).rem_euclid(std::f32::consts::TAU);
+        let aim_error = raw_aim_error.min(std::f32::consts::TAU - raw_aim_error);
+        let in_range = horizontal_distance <= SERVER_AUTOPILOT_ENGAGE_RANGE + 1.0;
+        let aimed = aim_error < SERVER_AUTOPILOT_FIRE_AIM_TOLERANCE_DEG.to_radians();
+
+        if in_range && aimed && state.fire_timer <= 0.0 {
+            state.fire_timer = SERVER_AUTOPILOT_FIRE_INTERVAL_SECS;
+            if let Ok(mut threat) = threats.get_mut(entity) {
+                threat.0 += PLAYER_THREAT_PER_SHOT;
+            }
+            if let Ok(network_id) = network_ids.get(entity) {
+                commands.server_trigger(ToClients {
+                    mode: SendMode::Broadcast,
+                    message: PlayerFiredFx { shooter_network_id: network_id.get() },
+                });
+            }
+            let aim_direction = Vec3::new(
+                -state.aim_pitch.cos() * state.aim_yaw.sin(),
+                state.aim_pitch.sin(),
+                -state.aim_pitch.cos() * state.aim_yaw.cos(),
+            );
+            if let Ok(direction) = Dir3::new(aim_direction) {
+                let capsule = Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH);
+                if let Some((hit_distance, normal)) =
+                    capsule.cast_ray(zombie_transform.translation, zombie_transform.rotation, origin, *direction, MAX_SHOT_DISTANCE, true)
+                {
+                    let hit_point = origin + *direction * hit_distance;
+                    if let Ok((_, _, mut zombie_health, mut knockback, bones)) = zombies.get_mut(zombie_entity) {
+                        let resolved_bones = resolve_bone_world_positions(bones, |bone| bone_transforms.get(bone).ok().map(|g| g.translation()));
+                        let damage = zombie_hit_damage_bones(hit_point, &resolved_bones);
+                        zombie_health.0 -= damage;
+                        let killed = zombie_health.0 <= 0.0;
+                        if killed {
+                            let was_director_spawn = director_spawned.contains(zombie_entity);
+                            commands.entity(zombie_entity).despawn();
+                            if !was_director_spawn {
+                                respawns.0.push(ZOMBIE_RESPAWN_DELAY);
+                            }
+                        } else {
+                            let push = Vec3::new(aim_direction.x, 0.0, aim_direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
+                            knockback.0 += push;
+                        }
+                        // Full Broadcast, not BroadcastExcept: unlike a real
+                        // player firing, there's no client-side prediction
+                        // of this shot to avoid double-showing — same
+                        // reasoning as debug_bot_fire's own Broadcast.
+                        commands.server_trigger(ToClients {
+                            mode: SendMode::Broadcast,
+                            message: ShotFx::ZombieHit { point: hit_point, normal, damage, killed },
+                        });
+                    }
+                }
+            }
+        }
+
+        input.yaw = state.aim_yaw;
+        input.jump = false;
+
+        // Movement decision — throttled; keeps last decided move_axis/
+        // sprint on skipped ticks (already held in the ClientInput
+        // component from the previous tick this ran).
+        state.decision_timer -= dt;
+        if state.decision_timer > 0.0 {
+            continue;
+        }
+        state.decision_timer = 1.0 / SERVER_AUTOPILOT_DECISION_HZ;
+
+        // No low-health retreat bonus here (unlike the removed client
+        // module, which read the player's own Health directly): the
+        // server has no Health component on Player entities at all —
+        // damage from zombies is computed purely client-side (see
+        // Director's own doc comment above on why DIRECTOR_MELEE_RANGE
+        // measures pressure a different way for the same reason). A
+        // straightforward v2 add if this is worth doing would be
+        // replicating Health server-side for real players too.
+        let retreat_range = SERVER_AUTOPILOT_RETREAT_RANGE;
+
+        let nearby: Vec<Vec3> = zombies
+            .iter()
+            .map(|(_, t, ..)| t.translation)
+            .filter(|p| transform.translation.distance(*p) <= retreat_range)
+            .collect();
+
+        let move_axis = if !nearby.is_empty() {
+            let average = nearby.iter().copied().sum::<Vec3>() / nearby.len() as f32;
+            let away = transform.translation - average;
+            yaw_relative_axis(state.aim_yaw, away)
+        } else if horizontal_distance > SERVER_AUTOPILOT_ENGAGE_RANGE {
+            Vec2::new(0.0, 1.0) // approach — forward is toward-target since yaw tracks it
+        } else {
+            // Comfortable band: brief side-step dodges rather than a
+            // continuous sway — see the removed client module's own doc
+            // comment on why (a nonstop nonzero move_axis would drive the
+            // Walk animation/NetTransform.moving nonstop even though net
+            // displacement is ~0).
+            let phase = (time.elapsed_secs() * SERVER_AUTOPILOT_DODGE_CYCLE_HZ).rem_euclid(1.0);
+            if phase < SERVER_AUTOPILOT_DODGE_DUTY_CYCLE {
+                let direction = if state.dodge_step_parity { 1.0 } else { -1.0 };
+                state.dodge_step_parity = !state.dodge_step_parity;
+                Vec2::new(direction, 0.0)
+            } else {
+                Vec2::ZERO
+            }
+        };
+
+        input.move_axis = move_axis;
+        input.sprint = nearby.is_empty() && horizontal_distance > SERVER_AUTOPILOT_SPRINT_APPROACH_DISTANCE;
+    }
+}
+
+// Shortest-path angle interpolation, rate-limited — same as the removed
+// client module's own turn_towards_angle (and this file's own
+// turn_towards, the Quat version zombies/debug bots use for facing).
+fn turn_towards_angle(current: f32, target: f32, max_step: f32) -> f32 {
+    let mut delta = (target - current) % std::f32::consts::TAU;
+    if delta > std::f32::consts::PI {
+        delta -= std::f32::consts::TAU;
+    } else if delta < -std::f32::consts::PI {
+        delta += std::f32::consts::TAU;
+    }
+    current + delta.clamp(-max_step, max_step)
+}
+
+// Converts a world-space direction into the yaw-relative (x=right,
+// y=forward) axis space ClientInput.move_axis already uses — same as the
+// removed client module's own yaw_relative_axis.
+fn yaw_relative_axis(yaw: f32, world_dir: Vec3) -> Vec2 {
+    let forward = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
+    let right = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
+    let flat = Vec3::new(world_dir.x, 0.0, world_dir.z).normalize_or_zero();
+    Vec2::new(flat.dot(right), flat.dot(forward))
 }
 
 fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<NavMesh>>) {
