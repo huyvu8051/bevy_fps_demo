@@ -1347,7 +1347,7 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], director_spawned: boo
 // Same asset the client renders — see crates/client's ZOMBIE_PATH — loaded
 // here purely for its scene graph + animation curves (no RenderPlugin ever
 // touches it, confirmed in Phase 1's spike).
-const SERVER_ZOMBIE_PATH: &str = "models/zombie.glb";
+const SERVER_ZOMBIE_PATH: &str = "characters/zombie/mesh/zombie.glb";
 // zombie.glb's animation order, per client::lib.rs's own ZOMBIE_ANIM_*
 // constants (BITE=0, CRAWL=1, IDLE=2, RUN=3, WALK=4) — reusing the same
 // index here rather than redefining it, since both sides load the exact

@@ -66,10 +66,27 @@ Vì bevy_ui **không được vẽ** trong renderer Metal riêng này (chỉ v�
 
 Cờ bật/tắt renderer mới nằm ở đầu `ViewController.swift`: `USE_RUST_METAL_DEMO`/`USE_REAL_GAME_NATIVE_RENDERER` (mặc định cả hai `true` — renderer Metal viết tay, vẽ game thật).
 
-**Build + cài lên thiết bị thật** (thay UUID bằng thiết bị của bạn, xem qua `xcrun devicectl list devices`):
+**Build + cài lên thiết bị thật** — 1 lệnh duy nhất, tự lo hết (cargo build → copy `.a` vào Xcode project → `xcodebuild` cho đúng thiết bị đang cắm → `devicectl install` + `launch`):
 ```bash
-cd crates/client/gen/apple
+scripts/deploy_ios_device.sh
+```
+Nhiều thiết bị cắm cùng lúc thì lọc theo tên:
+```bash
+scripts/deploy_ios_device.sh Huy
+```
+Máy đang khoá thì install vẫn thành công nhưng launch sẽ báo lỗi (`Locked`) — mở khoá máy rồi tự bấm icon hoặc chạy lại lệnh trên.
+
+**Build + cài lên Simulator** — script song song, dùng `simctl` thay `devicectl`, tự boot Simulator nếu chưa chạy:
+```bash
+scripts/deploy_ios_simulator.sh
+```
+
+<details>
+<summary>Các bước thủ công bên trong script (tham khảo khi cần debug riêng từng bước, thay UUID bằng thiết bị của bạn — xem qua <code>xcrun devicectl list devices</code>)</summary>
+
+```bash
 cargo build -p client --target aarch64-apple-ios   # từ workspace root
+cp target/aarch64-apple-ios/debug/libclient.a crates/client/gen/apple/iOS/libs/debug/libclient.a
 cp target/aarch64-apple-ios/debug/libclient.a crates/client/gen/apple/iOS/libs/debug/libbevy_in_app.a
 
 cd crates/client/gen/apple/iOS
@@ -78,9 +95,24 @@ xcodebuild -project bevy_in_iOS.xcodeproj -scheme bevy_in_iOS -sdk iphoneos -con
 
 xcrun devicectl device install app --device <DEVICE_UUID> \
   "$(xcodebuild -project bevy_in_iOS.xcodeproj -scheme bevy_in_iOS -sdk iphoneos -configuration Debug -showBuildSettings 2>/dev/null | awk -F'= ' '/ CONFIGURATION_BUILD_DIR/{d=$2} / FULL_PRODUCT_NAME /{n=$2} END{print d"/"n}')"
+
+xcrun devicectl device process launch --device <DEVICE_UUID> com.huyvu8051.bevyfpsdemo
 ```
+</details>
 
 Mở app bằng cách bấm icon trên máy như bình thường — mặc định chạy game đầy đủ.
+
+### Build nhanh hơn khi lặp lại (sửa code → deploy lại nhiều lần)
+
+Đo thật bằng `xcodebuild -showBuildTimingSummary` để tìm đúng chỗ chậm thay vì đoán — kết quả bất ngờ: **không phải** lúc compile Rust, **không phải** lúc copy file `.a` (2.5GB nhưng APFS copy-on-write nên gần như tức thời), mà là bước **CodeSign** của Xcode, chiếm gần hết thời gian build (19s / ~22s tổng lúc mọi thứ khác đã cache ấm). CodeSign chậm vì nó phải hash toàn bộ nội dung binary — mà binary debug của Rust ở đây link tĩnh `bevy`+`avian3d`+mọi dependency kèm đầy đủ debug info, ra tới **191MB**.
+
+Cách sửa (đã áp dụng sẵn trong `scripts/deploy_ios_*.sh`, không cần làm gì thêm):
+1. **Profile `dev-fast`** (`Cargo.toml`, root): `debug = "line-tables-only"` (giữ số dòng cho backtrace, bỏ debug info chi tiết biến/kiểu) + `strip = "debuginfo"`. Cắt binary từ 2.58GB xuống **1.24GB** (~52%) → CodeSign còn **~9.5s** (đo thật, giảm gần một nửa đúng theo tỉ lệ size). Cần debug LLDB thật (breakpoint, xem biến) thì build tay bằng profile `dev` gốc (`cargo build --profile dev`) — không đổi gì, vẫn còn nguyên.
+2. **Tái sử dụng derived data** giữa các lần chạy thay vì `rm -rf` mỗi lần (2 script cũ trước đây xoá sạch, ép Xcode build lại từ đầu) — để Xcode tự incremental, đo được tiết kiệm thêm ~13s. Nghi ngờ derived data hỏng/kỳ lạ thì thêm `--clean` làm tham số đầu tiên: `scripts/deploy_ios_simulator.sh --clean`.
+
+Kết quả: **cả chu trình sửa code → build → deploy → launch còn ~20 giây** (đo thật, cache ấm), so với trước đây mỗi lần đều full build lại (>1 phút).
+
+**Về hot reload**: đã tìm hiểu (`dexterous_developer`/`hot-lib-reloader`) — **không khả thi trên thiết bị thật**, đây là giới hạn cứng của iOS từ iOS 10 trở đi (sandbox chặn `dlopen` bất kỳ code nào không nằm sẵn trong app bundle lúc cài, kể cả build dev có entitlement `get-task-allow`). Trên Simulator thì có khả năng khả thi hơn (Simulator chạy như 1 process macOS bình thường, `dlopen` ít bị chặn hơn) nhưng cần đổi `crate-type` sang thêm `cdylib` riêng cho path Simulator — dự án này cố tình chỉ dùng `staticlib` vì từng dính crash `dyld` thật trên thiết bị khi build kèm `cdylib` (xem comment trong `crates/client/Cargo.toml`). Chưa làm — nếu 20s/lần vẫn chưa đủ nhanh, đây là hướng tiếp theo đáng thử nhưng tốn công hơn hẳn 2 thay đổi ở trên.
 
 ### Chế độ "minimal map probe" (debug UI/perf)
 
