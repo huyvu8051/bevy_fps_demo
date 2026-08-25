@@ -96,7 +96,7 @@ struct Vertex {
 
 struct Uniforms {
     float4x4 viewProjection;
-    float3 lightDir;
+    packed_float3 lightDir;
 };
 
 struct VertexOut {
@@ -118,7 +118,7 @@ vertex VertexOut vertex_main(uint vid [[vertex_id]],
 
 fragment float4 fragment_main(VertexOut in [[stage_in]],
                                constant Uniforms &uniforms [[buffer(1)]]) {
-    float diffuse = max(dot(normalize(in.normal), -normalize(uniforms.lightDir)), 0.0);
+    float diffuse = max(dot(normalize(in.normal), -normalize(float3(uniforms.lightDir))), 0.0);
     float3 lit = in.color * (0.35 + 0.65 * diffuse);
     return float4(lit, 1.0);
 }
@@ -232,7 +232,7 @@ struct Vertex {
 
 struct Uniforms {
     float4x4 viewProjection;
-    float3 lightDir;
+    packed_float3 lightDir;
     float4 baseColorFactor;
 };
 
@@ -257,7 +257,7 @@ fragment float4 sponza_fragment(VertexOut in [[stage_in]],
                                  constant Uniforms &uniforms [[buffer(1)]],
                                  texture2d<float> baseColorTexture [[texture(0)]],
                                  sampler texSampler [[sampler(0)]]) {
-    float diffuse = max(dot(normalize(in.normal), -normalize(uniforms.lightDir)), 0.0);
+    float diffuse = max(dot(normalize(in.normal), -normalize(float3(uniforms.lightDir))), 0.0);
     float4 texColor = baseColorTexture.sample(texSampler, in.uv);
     float4 baseColor = texColor * uniforms.baseColorFactor;
     float3 lit = baseColor.rgb * (0.35 + 0.65 * diffuse);
@@ -296,7 +296,7 @@ struct Vertex {
 struct Uniforms {
     float4x4 viewProjection;
     float4x4 modelMatrix;
-    float3 lightDir;
+    packed_float3 lightDir;
     float _pad;
     float4 baseColorFactor;
 };
@@ -332,19 +332,31 @@ fragment float4 skinned_fragment(VertexOut in [[stage_in]],
                                   constant Uniforms &uniforms [[buffer(1)]],
                                   texture2d<float> baseColorTexture [[texture(0)]],
                                   sampler texSampler [[sampler(0)]]) {
-    float diffuse = max(dot(normalize(in.normal), -normalize(uniforms.lightDir)), 0.0);
+    // Root cause finally found via a 3-step device/Simulator console+shader
+    // bisection: (1) raw texColor sample alone → colorful — rules out
+    // texture binding/decode; (2) texColor * uniforms.baseColorFactor →
+    // solid black — isolates the bug to reading baseColorFactor itself;
+    // (3) `float3 lightDir` (MSL default alignment 16, per-member — NOT the
+    // GLSL std140 "vec3 forces the next struct member to a 16-byte
+    // boundary" rule some docs conflate this with, but the net effect
+    // here was the same: Metal placed `_pad`/`baseColorFactor` at
+    // different byte offsets than Rust's tightly-packed repr(C)
+    // `SkinnedUniforms`/`SponzaUniforms`, since a lone `float3` still
+    // consumes a rounded-up 16-byte slot when a scalar or vec4 follows —
+    // so every read of `baseColorFactor` (and anything after `lightDir`)
+    // was landing 16 bytes short, into what was actually the tail of
+    // `lightDir`+`_pad` and the START of `baseColorFactor`'s own true
+    // location, i.e. reading zeroed/undefined memory beyond the buffer's
+    // real (Rust-sized) end for this struct's last field. Switching
+    // `lightDir` to `packed_float3` (4-byte-aligned, exactly matching
+    // Rust's `[f32; 3]`) makes both sides agree on every offset after it.
+    // sponza_fragment/QUAD's demo Uniforms never surfaced this as visibly
+    // broken purely by luck of what garbage/adjacent data ended up in the
+    // misread slot for those call sites, not because they were unaffected.
+    float diffuse = max(dot(normalize(in.normal), -normalize(float3(uniforms.lightDir))), 0.0);
     float4 texColor = baseColorTexture.sample(texSampler, in.uv);
     float4 baseColor = texColor * uniforms.baseColorFactor;
-    // soldier.glb's materials have no base color texture at all, and some
-    // of their baseColorFactor values are extremely dark (e.g. ~0.03) —
-    // real gear colors (black straps/vest), but combined with this
-    // shader's 0.35 ambient floor that multiplies straight through, they
-    // rendered as an indistinguishable solid black silhouette on-device.
-    // Floor the color itself (not just the lighting term) so dark
-    // materials stay visible/distinguishable; brighter ones (e.g. skin
-    // tone) are unaffected.
-    float3 flooredColor = max(baseColor.rgb, float3(0.12));
-    float3 lit = flooredColor * (0.35 + 0.65 * diffuse);
+    float3 lit = baseColor.rgb * (0.35 + 0.65 * diffuse);
     return float4(lit, baseColor.a);
 }
 "#;
@@ -955,8 +967,15 @@ impl NativeMetalProbe {
         encoder: &metal::RenderCommandEncoderRef,
         view_projection: [[f32; 4]; 4],
         light_dir: [f32; 3],
-        extracted: &[(bevy::transform::components::Transform, EntityKind, f32)],
-        now: f32,
+        // 4th field is `(clip_index, anim_time)` — an *absolute* time to
+        // feed `compute_joint_matrices` directly, not an offset added to
+        // `now` the way the toy demo's own AnimOffset component used to
+        // work (that math now happens once at the call site instead, see
+        // both places this is built below, so this fn doesn't need `now`
+        // for animation at all anymore — real-game zombies use their
+        // actual AnimationPlayer's seek_time, not wall-clock time).
+        extracted: &[(bevy::transform::components::Transform, EntityKind, (usize, f32))],
+        _now: f32,
         use_sponza: bool,
         real_game_meshes: Option<&[RealGameMeshDraw]>,
     ) {
@@ -1033,12 +1052,32 @@ impl NativeMetalProbe {
         encoder.set_render_pipeline_state(pipeline);
         encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
 
-        for (transform, kind, anim_offset) in extracted {
+        for (transform, kind, (anim_clip_index, anim_time)) in extracted {
             let model = match kind {
                 EntityKind::Soldier => self.soldier_model.as_ref(),
                 EntityKind::Zombie => self.zombie_model.as_ref(),
             };
             let Some(model) = model else { continue };
+
+            // The real game never scales the Zombie entity's own Transform
+            // (that's what native_game_extract.rs's GlobalTransform query
+            // reads) — ZOMBIE_SCALE (0.25×) and ZOMBIE_MODEL_Y_OFFSET (feet-
+            // to-capsule-center) are both applied only to the mesh's own
+            // *child* entity, parented under the zombie (see
+            // `zombie_mesh_bundle` in crate::lib). Omitting both here drew
+            // zombie.glb at its raw, unscaled size — ~4x too big — floating
+            // at the capsule's center instead of standing on its feet.
+            // PLAYER_MODEL_PATH (soldier.glb) needs neither correction: its
+            // own node hierarchy already bakes in a correcting scale (see
+            // that constant's own doc comment in crate::lib), so it's
+            // spawned at Bevy's default 1.0 scale with no offset — matches
+            // `mesh_scale`/`y_offset` both defaulting to identity for it.
+            let (mesh_scale, y_offset) = match kind {
+                EntityKind::Zombie => {
+                    (shared::ZOMBIE_SCALE, -(shared::ZOMBIE_RADIUS + shared::ZOMBIE_LENGTH / 2.0))
+                }
+                EntityKind::Soldier => (1.0, 0.0),
+            };
 
             let [qx, qy, qz, qw] = transform.rotation.to_array();
             let (x2, y2, z2) = (qx + qx, qy + qy, qz + qz);
@@ -1046,13 +1085,18 @@ impl NativeMetalProbe {
             let (yy, yz, zz) = (qy * y2, qy * z2, qz * z2);
             let (wx, wy, wz) = (qw * x2, qw * y2, qw * z2);
             let model_matrix = [
-                [1.0 - (yy + zz), xy + wz, xz - wy, 0.0],
-                [xy - wz, 1.0 - (xx + zz), yz + wx, 0.0],
-                [xz + wy, yz - wx, 1.0 - (xx + yy), 0.0],
-                [transform.translation.x, transform.translation.y, transform.translation.z, 1.0],
+                [(1.0 - (yy + zz)) * mesh_scale, (xy + wz) * mesh_scale, (xz - wy) * mesh_scale, 0.0],
+                [(xy - wz) * mesh_scale, (1.0 - (xx + zz)) * mesh_scale, (yz + wx) * mesh_scale, 0.0],
+                [(xz + wy) * mesh_scale, (yz - wx) * mesh_scale, (1.0 - (xx + yy)) * mesh_scale, 0.0],
+                [
+                    transform.translation.x,
+                    transform.translation.y + y_offset,
+                    transform.translation.z,
+                    1.0,
+                ],
             ];
 
-            let joint_matrices = model.compute_joint_matrices(0, now + anim_offset);
+            let joint_matrices = model.compute_joint_matrices(*anim_clip_index, *anim_time);
             let joint_buffer = self.device.new_buffer_with_data(
                 joint_matrices.as_ptr() as *const _,
                 (joint_matrices.len() * std::mem::size_of::<[[f32; 4]; 4]>()) as u64,
@@ -1102,6 +1146,10 @@ impl NativeMetalProbe {
 
         let use_sponza = self.sponza_pipeline.is_some() && !self.sponza_meshes.is_empty();
         let is_real_game = self.real_game_app.is_some();
+        // Moved up from further below (used to only be needed just before
+        // the draw_scene calls) — the remote-player extraction just below
+        // now needs it too, for its static PLAYER_MODEL_ANIM_WALK pose.
+        let now = self.start_time.elapsed().as_secs_f32();
 
         // Phase 6 Step 4: tick the real headless game App (if this probe
         // was constructed with `real_game: true`) and extract a fresh
@@ -1110,11 +1158,13 @@ impl NativeMetalProbe {
         // into a plain vertex buffer each frame (see bake_static_meshes).
         let mut real_game_static_meshes: Vec<super::native_game_extract::ExtractedMesh> = Vec::new();
         // Real zombies/remote players, reusing the toy patrol World's own
-        // `(Transform, EntityKind, AnimOffset)` shape (anim_offset always
-        // 0.0 here — no per-entity animation phase offset needed since
-        // these aren't hand-placed patrol dummies) so draw_scene's
-        // existing skinned-mesh loop draws them completely unchanged.
-        let mut real_game_extracted: Vec<(bevy::transform::components::Transform, EntityKind, f32)> =
+        // `(Transform, EntityKind, (clip_index, anim_time))` shape so
+        // draw_scene's existing skinned-mesh loop draws them unchanged —
+        // zombies now carry their REAL AnimationPlayer's clip+seek_time
+        // (see ZombieRenderState's own doc comment: the same "extract the
+        // real thing" principle already applied to camera/scope camera),
+        // not a hand-placed patrol dummy's phase offset.
+        let mut real_game_extracted: Vec<(bevy::transform::components::Transform, EntityKind, (usize, f32))> =
             Vec::new();
         if let Some(app) = &mut self.real_game_app {
             app.update();
@@ -1137,16 +1187,47 @@ impl NativeMetalProbe {
                 self.real_game_scope_active = false;
             }
             real_game_static_meshes = snapshot.static_meshes;
-            real_game_extracted.extend(snapshot.zombies.into_iter().map(|t| (t, EntityKind::Zombie, 0.0)));
-            real_game_extracted
-                .extend(snapshot.remote_players.into_iter().map(|t| (t, EntityKind::Soldier, 0.0)));
+            real_game_extracted.extend(
+                snapshot
+                    .zombies
+                    .into_iter()
+                    .map(|z| (z.transform, EntityKind::Zombie, (z.anim_clip_index, z.anim_time))),
+            );
+            // Remote players: no per-entity pose extraction wired up yet
+            // (out of scope for this pass, which was specifically about
+            // zombie.glb's 5 poses — see update_zombie_animation) — keep
+            // playing PLAYER_MODEL_ANIM_WALK statically rather than the
+            // previous hardcoded clip 0, which was correct for neither.
+            real_game_extracted.extend(
+                snapshot
+                    .remote_players
+                    .into_iter()
+                    .map(|t| (t, EntityKind::Soldier, (crate::PLAYER_MODEL_ANIM_WALK, now))),
+            );
         }
-        // Texture cache: only (re)upload when the mesh count changed (see
-        // `real_game_textures`'s own doc comment on the struct) — building
-        // a fresh `Device` clone rather than borrowing `self.device`
-        // directly sidesteps a disjoint-field-borrow fight with the
-        // `self.real_game_textures = ...` assignment right after.
-        if self.real_game_textures.len() != real_game_static_meshes.len() {
+        // Texture cache: (re)upload when the mesh count changed OR when any
+        // mesh's texture-presence flipped since the last check (see
+        // `real_game_textures`'s own doc comment on the struct). Count
+        // alone isn't enough: the gun's own texture loads asynchronously
+        // (Bevy's asset server), so on the frame this list first stabilizes
+        // at its final length, some meshes may still legitimately have
+        // `texture: None` (still loading) rather than "no texture by
+        // design" — caching that snapshot permanently left the gun stuck
+        // rendering flat white (texture=None -> white_texture fallback)
+        // for the rest of the app's life once its real texture DID finish
+        // loading a moment later, since the count itself never changed
+        // again to re-trigger a rebuild. Comparing the has-texture pattern
+        // (not the pixels themselves — cheap) catches that transition.
+        // Building a fresh `Device` clone rather than borrowing
+        // `self.device` directly sidesteps a disjoint-field-borrow fight
+        // with the `self.real_game_textures = ...` assignment right after.
+        let texture_pattern_changed = self.real_game_textures.len() != real_game_static_meshes.len()
+            || self
+                .real_game_textures
+                .iter()
+                .zip(real_game_static_meshes.iter())
+                .any(|(cached, mesh)| cached.is_some() != mesh.texture.is_some());
+        if texture_pattern_changed {
             let device = self.device.clone();
             self.real_game_textures = real_game_static_meshes
                 .iter()
@@ -1243,7 +1324,6 @@ impl NativeMetalProbe {
         let scope_proj = perspective(scope_fov, 1.0, 0.05, far);
         let scope_view_projection = mat_mul(scope_proj, scope_view);
 
-        let now = self.start_time.elapsed().as_secs_f32();
         // Tick the ECS world once (advances Time, runs patrol_system over
         // every Patrol+Transform entity), then extract — the actual
         // "extract" seam the plan calls for, decoupled from bevy_render
@@ -1254,7 +1334,7 @@ impl NativeMetalProbe {
         // hardcoded zombies/soldier would just float inside the real
         // arena) — skip ticking/extracting it and draw the real
         // zombies/remote players collected above instead.
-        let extracted: Vec<(bevy::transform::components::Transform, EntityKind, f32)> = if is_real_game {
+        let extracted: Vec<(bevy::transform::components::Transform, EntityKind, (usize, f32))> = if is_real_game {
             real_game_extracted
         } else {
             self.ecs_app.update();
@@ -1262,7 +1342,20 @@ impl NativeMetalProbe {
                 .ecs_app
                 .world_mut()
                 .query::<(&bevy::transform::components::Transform, &EntityKind, &AnimOffset)>();
-            query_state.iter(self.ecs_app.world()).map(|(t, k, a)| (*t, *k, a.0)).collect()
+            query_state
+                .iter(self.ecs_app.world())
+                .map(|(t, k, a)| {
+                    // No real AnimationPlayer to read for these hand-placed
+                    // patrol dummies (see AnimOffset's own doc comment) —
+                    // just keep them walking, staggered by AnimOffset's old
+                    // per-entity phase, same visual as before this change.
+                    let clip_index = match k {
+                        EntityKind::Zombie => crate::ZOMBIE_ANIM_WALK,
+                        EntityKind::Soldier => crate::PLAYER_MODEL_ANIM_WALK,
+                    };
+                    (*t, *k, (clip_index, now + a.0))
+                })
+                .collect()
         };
 
         // Pass 1: scope camera into the offscreen texture — skipped

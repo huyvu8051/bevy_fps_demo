@@ -408,6 +408,318 @@ pub extern "C" fn native_metal_probe_mouse_button_changed(obj: *mut std::ffi::c_
     }
 }
 
+// Native Swift settings-menu overlay (see native_menu.rs's doc comment for
+// why: our custom Metal renderer never draws any `bevy_ui` content, so the
+// real game's own `spawn_settings_menu` UI is invisible no matter how
+// correctly `SettingsMenuVisible` itself toggles). All of these read/write
+// the same headless real-game `World` `native_metal_probe_*` input
+// functions already target — no-ops if this probe isn't in real-game mode.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_menu_visible(obj: *mut std::ffi::c_void) -> bool {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    probe.real_game_app_mut().map(super::native_menu::menu_visible).unwrap_or(false)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_set_menu_visible(obj: *mut std::ffi::c_void, visible: bool) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::set_menu_visible(app, visible);
+    }
+}
+
+// Death/restart — the real game's own "GAME OVER" bevy_ui overlay is
+// invisible on iOS for the same reason the settings menu was (see
+// native_menu.rs's own doc comment on game_over/trigger_restart). Not
+// debug-gated: dying and restarting is normal gameplay in every build.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_game_over(obj: *mut std::ffi::c_void) -> bool {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    probe.real_game_app_mut().map(super::native_menu::game_over).unwrap_or(false)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_trigger_restart(obj: *mut std::ffi::c_void) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::trigger_restart(app);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_get_sensitivity(obj: *mut std::ffi::c_void) -> f32 {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    probe.real_game_app_mut().map(super::native_menu::sensitivity).unwrap_or(1.0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_set_sensitivity(obj: *mut std::ffi::c_void, value: f32) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::set_sensitivity(app, value);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_get_player_hp(obj: *mut std::ffi::c_void) -> f32 {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    probe.real_game_app_mut().map(super::native_menu::player_hp).unwrap_or(-1.0)
+}
+
+// Cheat controls — debug builds only, mirroring the same
+// `#[cfg(debug_assertions)]` gate just added around `spawn_settings_menu`'s
+// cheat buttons in crate::lib, so a release build's native menu can't
+// reach these through this door either. In release builds these still
+// link (Swift always calls the same symbol names) but are no-ops, since a
+// release `ViewController` build should also compile out the cheat UI
+// entirely via its own `#if DEBUG` gate — see ViewController.swift.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_get_god_mode(obj: *mut std::ffi::c_void) -> bool {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    return probe.real_game_app_mut().map(super::native_menu::god_mode).unwrap_or(false);
+    #[cfg(not(debug_assertions))]
+    { let _ = probe; false }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_set_god_mode(obj: *mut std::ffi::c_void, on: bool) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::set_god_mode(app, on);
+    }
+    #[cfg(not(debug_assertions))]
+    { let _ = (probe, on); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_get_noclip(obj: *mut std::ffi::c_void) -> bool {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    return probe.real_game_app_mut().map(super::native_menu::noclip).unwrap_or(false);
+    #[cfg(not(debug_assertions))]
+    { let _ = probe; false }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_set_noclip(obj: *mut std::ffi::c_void, on: bool) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::set_noclip(app, on);
+    }
+    #[cfg(not(debug_assertions))]
+    { let _ = (probe, on); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_get_freeze_zombies(obj: *mut std::ffi::c_void) -> bool {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    return probe.real_game_app_mut().map(super::native_menu::freeze_zombies).unwrap_or(false);
+    #[cfg(not(debug_assertions))]
+    { let _ = probe; false }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_set_freeze_zombies(obj: *mut std::ffi::c_void, on: bool) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::set_freeze_zombies(app, on);
+    }
+    #[cfg(not(debug_assertions))]
+    { let _ = (probe, on); }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_trigger_kill_all_zombies(obj: *mut std::ffi::c_void) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::trigger_kill_all_zombies(app);
+    }
+    #[cfg(not(debug_assertions))]
+    { let _ = probe; }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_trigger_spawn_more_zombies(obj: *mut std::ffi::c_void) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::trigger_spawn_more_zombies(app);
+    }
+    #[cfg(not(debug_assertions))]
+    { let _ = probe; }
+}
+
+// The remaining Cheats-page toggles (Gun/MSAA/Shadow, Hitboxes/AimBlur/
+// PlayerMdl, NoZAnim/NoHPBar/FullLOD) are all the exact same "no-op unless
+// debug, read/write a plain local bool" shape as god_mode/noclip/
+// freeze_zombies above, so a macro generates the extern "C" get/set pair
+// per resource rather than hand-copying the same 12 lines 9 times more.
+macro_rules! bool_toggle_ffi {
+    ($get_ffi:ident, $set_ffi:ident, $get:path, $set:path) => {
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $get_ffi(obj: *mut std::ffi::c_void) -> bool {
+            let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+            #[cfg(debug_assertions)]
+            return probe.real_game_app_mut().map($get).unwrap_or(false);
+            #[cfg(not(debug_assertions))]
+            {
+                let _ = probe;
+                false
+            }
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $set_ffi(obj: *mut std::ffi::c_void, on: bool) {
+            let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+            #[cfg(debug_assertions)]
+            if let Some(app) = probe.real_game_app_mut() {
+                $set(app, on);
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                let _ = (probe, on);
+            }
+        }
+    };
+}
+
+bool_toggle_ffi!(
+    native_metal_probe_get_gun_visible,
+    native_metal_probe_set_gun_visible,
+    super::native_menu::gun_visible,
+    super::native_menu::set_gun_visible
+);
+bool_toggle_ffi!(
+    native_metal_probe_get_map_msaa,
+    native_metal_probe_set_map_msaa,
+    super::native_menu::map_msaa,
+    super::native_menu::set_map_msaa
+);
+bool_toggle_ffi!(
+    native_metal_probe_get_map_shadows,
+    native_metal_probe_set_map_shadows,
+    super::native_menu::map_shadows,
+    super::native_menu::set_map_shadows
+);
+bool_toggle_ffi!(
+    native_metal_probe_get_show_hitboxes,
+    native_metal_probe_set_show_hitboxes,
+    super::native_menu::show_hitboxes,
+    super::native_menu::set_show_hitboxes
+);
+bool_toggle_ffi!(
+    native_metal_probe_get_aim_blur_enabled,
+    native_metal_probe_set_aim_blur_enabled,
+    super::native_menu::aim_blur_enabled,
+    super::native_menu::set_aim_blur_enabled
+);
+bool_toggle_ffi!(
+    native_metal_probe_get_zombie_anim_disabled,
+    native_metal_probe_set_zombie_anim_disabled,
+    super::native_menu::zombie_anim_disabled,
+    super::native_menu::set_zombie_anim_disabled
+);
+bool_toggle_ffi!(
+    native_metal_probe_get_zombie_health_bars_hidden,
+    native_metal_probe_set_zombie_health_bars_hidden,
+    super::native_menu::zombie_health_bars_hidden,
+    super::native_menu::set_zombie_health_bars_hidden
+);
+bool_toggle_ffi!(
+    native_metal_probe_get_zombie_lod_disabled,
+    native_metal_probe_set_zombie_lod_disabled,
+    super::native_menu::zombie_lod_disabled,
+    super::native_menu::set_zombie_lod_disabled
+);
+bool_toggle_ffi!(
+    native_metal_probe_get_player_model_visible,
+    native_metal_probe_set_player_model_visible,
+    super::native_menu::player_model_visible,
+    super::native_menu::set_player_model_visible
+);
+
+// Zombie count +/-10 and Heal Nearest/1HP Nearest — same debug-only gate,
+// same no-op-in-release shape as trigger_kill_all_zombies above.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_get_zombie_target_count(obj: *mut std::ffi::c_void) -> u32 {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    return probe.real_game_app_mut().map(super::native_menu::zombie_target_count).unwrap_or(10);
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = probe;
+        10
+    }
+}
+
+// Real, current headcount — not debug-gated (it's just a display value,
+// not a cheat), unlike the target count above. See live_zombie_count's own
+// doc comment for why the target alone was reported as a confusing/wrong
+// "counter".
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_get_live_zombie_count(obj: *mut std::ffi::c_void) -> u32 {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    probe.real_game_app_mut().map(super::native_menu::live_zombie_count).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_zombie_count_dec(obj: *mut std::ffi::c_void) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::zombie_count_dec(app);
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = probe;
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_zombie_count_inc(obj: *mut std::ffi::c_void) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::zombie_count_inc(app);
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = probe;
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_heal_nearest_zombie(obj: *mut std::ffi::c_void) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::heal_nearest_zombie(app);
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = probe;
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_near_death_nearest_zombie(obj: *mut std::ffi::c_void) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    #[cfg(debug_assertions)]
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::near_death_nearest_zombie(app);
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = probe;
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn cadisplaylink_release_app(obj: *mut std::ffi::c_void) {
     let app: Box<App> = unsafe { Box::from_raw(obj as *mut App) };

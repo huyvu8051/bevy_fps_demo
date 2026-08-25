@@ -591,6 +591,14 @@ class ViewController: UIViewController {
     private var aimTouch: UITouch?
     private var lastFrameTime: CFTimeInterval = CACurrentMediaTime()
     private let touchHUD = TouchHUD()
+    // Native settings-menu overlay — see SettingsMenuView.swift's own doc
+    // comment for why this exists instead of relying on bevy_ui.
+    private let settingsMenu = SettingsMenuView()
+    private var settingsMenuWasVisible = false
+    // Native death/restart overlay — see GameOverView.swift's own doc
+    // comment for why this exists instead of relying on bevy_ui.
+    private let gameOverView = GameOverView()
+    private var gameOverWasVisible = false
     // Bluetooth keyboard/mouse (GameController framework) — see
     // GameControllerInput.swift. Created after bevyApp so its "wire
     // already-connected devices" check in init() has a real app pointer
@@ -625,11 +633,196 @@ class ViewController: UIViewController {
         }, buttonUpAction: { [weak self] button in
             self?.handleExtraButton(button, pressed: false)
         })
+
+        self.view.addSubview(settingsMenu)
+        settingsMenu.onClose = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_menu_visible(probe, false)
+        }
+        settingsMenu.onSensitivityDec = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            let current = native_metal_probe_get_sensitivity(probe)
+            native_metal_probe_set_sensitivity(probe, current - 0.25)
+        }
+        settingsMenu.onSensitivityInc = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            let current = native_metal_probe_get_sensitivity(probe)
+            native_metal_probe_set_sensitivity(probe, current + 0.25)
+        }
+        #if DEBUG
+        settingsMenu.onToggleGodMode = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_god_mode(probe, !native_metal_probe_get_god_mode(probe))
+        }
+        settingsMenu.onToggleNoclip = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_noclip(probe, !native_metal_probe_get_noclip(probe))
+        }
+        settingsMenu.onToggleFreeze = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_freeze_zombies(probe, !native_metal_probe_get_freeze_zombies(probe))
+        }
+        settingsMenu.onKillAll = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_trigger_kill_all_zombies(probe)
+        }
+        settingsMenu.onSpawnMore = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_trigger_spawn_more_zombies(probe)
+        }
+        settingsMenu.onZombieCountDec = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_zombie_count_dec(probe)
+        }
+        settingsMenu.onZombieCountInc = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_zombie_count_inc(probe)
+        }
+        settingsMenu.onHealNearest = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_heal_nearest_zombie(probe)
+        }
+        settingsMenu.onNearDeathNearest = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_near_death_nearest_zombie(probe)
+        }
+        settingsMenu.onToggleGun = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_gun_visible(probe, !native_metal_probe_get_gun_visible(probe))
+        }
+        settingsMenu.onToggleMsaa = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_map_msaa(probe, !native_metal_probe_get_map_msaa(probe))
+        }
+        settingsMenu.onToggleShadow = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_map_shadows(probe, !native_metal_probe_get_map_shadows(probe))
+        }
+        settingsMenu.onToggleHitboxes = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_show_hitboxes(probe, !native_metal_probe_get_show_hitboxes(probe))
+        }
+        settingsMenu.onToggleAimBlur = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_aim_blur_enabled(probe, !native_metal_probe_get_aim_blur_enabled(probe))
+        }
+        settingsMenu.onTogglePlayerModel = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_player_model_visible(probe, !native_metal_probe_get_player_model_visible(probe))
+        }
+        settingsMenu.onToggleNoZombieAnim = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_zombie_anim_disabled(probe, !native_metal_probe_get_zombie_anim_disabled(probe))
+        }
+        settingsMenu.onToggleNoHpBar = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_zombie_health_bars_hidden(probe, !native_metal_probe_get_zombie_health_bars_hidden(probe))
+        }
+        settingsMenu.onToggleFullLod = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_zombie_lod_disabled(probe, !native_metal_probe_get_zombie_lod_disabled(probe))
+        }
+        #endif
+
+        self.view.addSubview(gameOverView)
+        gameOverView.onRestart = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_trigger_restart(probe)
+        }
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         touchHUD.layout(in: self.view)
+        settingsMenu.layout(in: self.view)
+        gameOverView.layout(in: self.view)
+    }
+
+    // Polled once per frame (see enterFrame) — mirrors syncSettingsMenu's
+    // own poll-not-push pattern, since GameOver can also become true from
+    // the server's own GameStateEvent broadcast (on_game_state_event in
+    // crate::lib), not just this client's own check_game_over.
+    private func syncGameOver() {
+        guard USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe else { return }
+        let visible = native_metal_probe_game_over(probe)
+        gameOverView.isHidden = !visible
+        if visible && !gameOverWasVisible {
+            gameOverView.layout(in: self.view)
+        }
+        gameOverWasVisible = visible
+    }
+
+    // Polled once per frame (see enterFrame) — the HUD's own `health`
+    // property (TouchHUD.swift) previously never got written to at all
+    // (only used to build the initial "HP 100" label text), so it silently
+    // stayed at its hardcoded default forever regardless of real damage.
+    // native_metal_probe_get_player_hp reads the same real Health
+    // component the settings menu's own HP row already reads (see
+    // syncSettingsMenu below) — -1 before the local player has spawned
+    // yet, in which case the HUD just keeps showing its last known value
+    // rather than flashing to a wrong number.
+    private func syncHud() {
+        guard USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe else { return }
+        let hp = native_metal_probe_get_player_hp(probe)
+        if hp >= 0 {
+            touchHUD.health = Int(hp.rounded())
+        }
+    }
+
+    // Polled once per frame (see enterFrame) rather than only on the MENU
+    // button's own press — SettingsMenuVisible can also flip via a
+    // hardware F1 key (GameControllerInput.swift), so this stays correct
+    // regardless of which input source toggled it.
+    private func syncSettingsMenu() {
+        guard USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe else { return }
+        let visible = native_metal_probe_menu_visible(probe)
+        settingsMenu.isHidden = !visible
+        if visible {
+            let sensitivity = native_metal_probe_get_sensitivity(probe)
+            let hp = native_metal_probe_get_player_hp(probe)
+            let zombieLiveCount = native_metal_probe_get_live_zombie_count(probe)
+            #if DEBUG
+            let godMode = native_metal_probe_get_god_mode(probe)
+            let noclip = native_metal_probe_get_noclip(probe)
+            let freeze = native_metal_probe_get_freeze_zombies(probe)
+            let zombieTargetCount = native_metal_probe_get_zombie_target_count(probe)
+            let gunVisible = native_metal_probe_get_gun_visible(probe)
+            let mapMsaa = native_metal_probe_get_map_msaa(probe)
+            let mapShadows = native_metal_probe_get_map_shadows(probe)
+            let showHitboxes = native_metal_probe_get_show_hitboxes(probe)
+            let aimBlur = native_metal_probe_get_aim_blur_enabled(probe)
+            let playerModelVisible = native_metal_probe_get_player_model_visible(probe)
+            let zombieAnimDisabled = native_metal_probe_get_zombie_anim_disabled(probe)
+            let zombieHealthBarsHidden = native_metal_probe_get_zombie_health_bars_hidden(probe)
+            let zombieLodDisabled = native_metal_probe_get_zombie_lod_disabled(probe)
+            #else
+            let godMode = false
+            let noclip = false
+            let freeze = false
+            let zombieTargetCount: UInt32 = 0
+            let gunVisible = false
+            let mapMsaa = false
+            let mapShadows = false
+            let showHitboxes = false
+            let aimBlur = false
+            let playerModelVisible = false
+            let zombieAnimDisabled = false
+            let zombieHealthBarsHidden = false
+            let zombieLodDisabled = false
+            #endif
+            if !settingsMenuWasVisible {
+                settingsMenu.layout(in: self.view)
+            }
+            settingsMenu.refresh(
+                sensitivity: sensitivity, playerHp: hp,
+                godMode: godMode, noclip: noclip, freezeZombies: freeze,
+                zombieLiveCount: zombieLiveCount, zombieTargetCount: zombieTargetCount,
+                gunVisible: gunVisible, mapMsaa: mapMsaa, mapShadows: mapShadows,
+                showHitboxes: showHitboxes, aimBlur: aimBlur, playerModelVisible: playerModelVisible,
+                zombieAnimDisabled: zombieAnimDisabled, zombieHealthBarsHidden: zombieHealthBarsHidden, zombieLodDisabled: zombieLodDisabled
+            )
+        }
+        settingsMenuWasVisible = visible
     }
 
     // Phase 6 Step 5 (real shooting): in real-game-renderer mode, drive the
@@ -1011,6 +1204,9 @@ class ViewController: UIViewController {
             }
             native_metal_probe_update_camera(probe, forward, strafe, lookDx, lookDy, deltaTime)
             native_metal_probe_render_frame(probe)
+            syncHud()
+            syncSettingsMenu()
+            syncGameOver()
             return
         }
         if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {

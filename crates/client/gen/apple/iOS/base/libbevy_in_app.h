@@ -72,6 +72,71 @@ void cadisplaylink_mouse_moved(struct bevy_app *app, float delta_x, float delta_
 // button: 0 = left, 1 = right, 2 = middle.
 void cadisplaylink_mouse_button_changed(struct bevy_app *app, uint8_t button, bool pressed);
 
+// Native Swift settings-menu overlay — our custom Metal renderer never
+// draws bevy_ui content, so the real game's own settings menu is invisible
+// no matter how correctly SettingsMenuVisible itself toggles (F1/MENU
+// button). These read/write that real headless World directly instead —
+// see crates/client/src/cadisplaylink/native_menu.rs. No-ops (return
+// false/0/-1) if the probe isn't in real-game mode.
+bool native_metal_probe_menu_visible(struct native_metal_probe *probe);
+void native_metal_probe_set_menu_visible(struct native_metal_probe *probe, bool visible);
+float native_metal_probe_get_sensitivity(struct native_metal_probe *probe);
+void native_metal_probe_set_sensitivity(struct native_metal_probe *probe, float value);
+float native_metal_probe_get_player_hp(struct native_metal_probe *probe);
+// Cheat controls — debug builds only (compiled out / no-op in release,
+// mirroring the #[cfg(debug_assertions)] gate on spawn_settings_menu's own
+// cheat buttons). Kill All / Spawn +100 need a live server connection
+// (server-authoritative replicon events) — same requirement normal play
+// already has.
+bool native_metal_probe_get_god_mode(struct native_metal_probe *probe);
+void native_metal_probe_set_god_mode(struct native_metal_probe *probe, bool on);
+bool native_metal_probe_get_noclip(struct native_metal_probe *probe);
+void native_metal_probe_set_noclip(struct native_metal_probe *probe, bool on);
+bool native_metal_probe_get_freeze_zombies(struct native_metal_probe *probe);
+void native_metal_probe_set_freeze_zombies(struct native_metal_probe *probe, bool on);
+void native_metal_probe_trigger_kill_all_zombies(struct native_metal_probe *probe);
+void native_metal_probe_trigger_spawn_more_zombies(struct native_metal_probe *probe);
+// Remaining Cheats-page toggles (page 1's Gun/MSAA/Shadow, Hitboxes/
+// AimBlur/PlayerMdl, NoZAnim/NoHPBar/FullLOD rows) — same debug-only,
+// no-op-in-release contract as the toggles above.
+bool native_metal_probe_get_gun_visible(struct native_metal_probe *probe);
+void native_metal_probe_set_gun_visible(struct native_metal_probe *probe, bool on);
+bool native_metal_probe_get_map_msaa(struct native_metal_probe *probe);
+void native_metal_probe_set_map_msaa(struct native_metal_probe *probe, bool on);
+bool native_metal_probe_get_map_shadows(struct native_metal_probe *probe);
+void native_metal_probe_set_map_shadows(struct native_metal_probe *probe, bool on);
+bool native_metal_probe_get_show_hitboxes(struct native_metal_probe *probe);
+void native_metal_probe_set_show_hitboxes(struct native_metal_probe *probe, bool on);
+bool native_metal_probe_get_aim_blur_enabled(struct native_metal_probe *probe);
+void native_metal_probe_set_aim_blur_enabled(struct native_metal_probe *probe, bool on);
+bool native_metal_probe_get_zombie_anim_disabled(struct native_metal_probe *probe);
+void native_metal_probe_set_zombie_anim_disabled(struct native_metal_probe *probe, bool on);
+bool native_metal_probe_get_zombie_health_bars_hidden(struct native_metal_probe *probe);
+void native_metal_probe_set_zombie_health_bars_hidden(struct native_metal_probe *probe, bool on);
+bool native_metal_probe_get_zombie_lod_disabled(struct native_metal_probe *probe);
+void native_metal_probe_set_zombie_lod_disabled(struct native_metal_probe *probe, bool on);
+bool native_metal_probe_get_player_model_visible(struct native_metal_probe *probe);
+void native_metal_probe_set_player_model_visible(struct native_metal_probe *probe, bool on);
+// Zombie count +/-10 (needs a live server, same as Kill All/Spawn +100)
+// and Heal Nearest/1HP Nearest (client-side cosmetic write only — gets
+// overwritten by the next server replication update, same pre-existing
+// limitation the real game's own version has).
+uint32_t native_metal_probe_get_zombie_target_count(struct native_metal_probe *probe);
+// Real, current headcount (not debug-gated, just a display value) — the
+// target count above never reflects Spawn +100/Kill All/natural deaths.
+uint32_t native_metal_probe_get_live_zombie_count(struct native_metal_probe *probe);
+void native_metal_probe_zombie_count_dec(struct native_metal_probe *probe);
+void native_metal_probe_zombie_count_inc(struct native_metal_probe *probe);
+void native_metal_probe_heal_nearest_zombie(struct native_metal_probe *probe);
+void native_metal_probe_near_death_nearest_zombie(struct native_metal_probe *probe);
+// Death/restart — normal gameplay, not debug-gated. The real game's own
+// "GAME OVER" bevy_ui overlay never renders on iOS (same reason the
+// settings menu didn't), so a native equivalent is needed to see it at
+// all and to restart. Restart needs a live server (server-authoritative,
+// same as Kill All/Spawn +100).
+bool native_metal_probe_game_over(struct native_metal_probe *probe);
+void native_metal_probe_trigger_restart(struct native_metal_probe *probe);
+
 // Phase 6 Step 1 feasibility spike: the real game's gameplay App
 // (physics/networking/AI/prediction) with no window/render backend at all
 // — see crates/client/src/cadisplaylink/native_game_app.rs. Not wired into

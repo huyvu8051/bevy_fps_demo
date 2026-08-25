@@ -301,6 +301,12 @@ pub fn load_skinned_gltf(device: &Device, path: &std::path::Path) -> Option<Skin
             );
 
             let pbr = primitive.material().pbr_metallic_roughness();
+            // Confirmed via a device/Simulator console read that this binds
+            // correctly for zombie.glb specifically (base_color_texture=
+            // true, factor=[1,1,1,1]) — the earlier "renders solid black"
+            // report wasn't a texture-loading bug at all; see
+            // native_metal_probe.rs's skinned_fragment for what it actually
+            // was (a since-reverted per-channel color floor).
             let base_color_texture =
                 pbr.base_color_texture().and_then(|info| textures.get(info.texture().source().index()).cloned().flatten());
 

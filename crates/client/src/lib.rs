@@ -640,9 +640,29 @@ const ZOMBIE_HEALTH_BAR_HEIGHT_PX: f32 = 6.0;
 const ZOMBIE_HEALTH_BAR_MAX_VISIBLE: usize = 30;
 
 // Animation clip order inside zombie.glb: 0=Bite, 1=Crawl, 2=Idle, 3=Run,
-// 4=Walk (read from the file's own animations list).
+// 4=Walk (read from the file's own animations list). All 5 are wired up
+// (see ZombiePose/update_zombie_animation) — previously only Idle/Walk
+// were used, leaving Bite/Crawl/Run dead assets despite shipping in the
+// model.
+const ZOMBIE_ANIM_BITE: usize = 0;
+const ZOMBIE_ANIM_CRAWL: usize = 1;
 const ZOMBIE_ANIM_IDLE: usize = 2;
+const ZOMBIE_ANIM_RUN: usize = 3;
 const ZOMBIE_ANIM_WALK: usize = 4;
+// Health fraction (of ZOMBIE_MAX_HEALTH) at/below which a zombie switches
+// to the Crawl pose instead of Walk/Run — a "nearly dead, drag itself
+// toward you" visual telegraph. Chosen loosely (no reference precedent —
+// this state didn't exist before), aiming for "clearly wounded, not
+// premature": one hit above the point ZOMBIE_MAX_HEALTH=8.0's head-shot
+// one-shot-kill would apply anyway.
+const ZOMBIE_CRAWL_HEALTH_FRACTION: f32 = 0.35;
+// Distance (same units as ZOMBIE_STOP_DISTANCE=1.2/ZOMBIE_CHASE_RANGE=60)
+// below which a moving zombie switches from Walk to Run — a "closing in
+// for the kill" tension beat as it nears melee range, distinct from
+// ZOMBIE_STOP_DISTANCE (which gates the Bite pose/actual damage tick, much
+// closer). No reference precedent for this threshold either; picked as a
+// noticeably-closer-than-chase-range midpoint.
+const ZOMBIE_RUN_DISTANCE: f32 = 10.0;
 // Animation clip order inside soldier.glb (24 clips total, read from the
 // file's own animations list) — only these two are used, picked to match
 // zombie's idle/walk pair: 4=Idle, 22=Walk.
@@ -1146,10 +1166,20 @@ struct BloodStain {
 struct ZombieAnimationPlayer(Entity);
 
 // Tracks which clip update_zombie_animation last picked, so it only issues
-// a play() when NetTransform.moving actually flips instead of every frame
-// (NetTransform.translation itself changes nearly every frame regardless).
-#[derive(Component, Default)]
-struct ZombiePlayingWalk(bool);
+// a play() when the computed pose actually changes instead of every frame
+// (NetTransform.translation/Health both change nearly every frame
+// regardless). Was a plain bool (Walk vs Idle only) before all 5 of
+// zombie.glb's clips got wired up — see update_zombie_animation's own doc
+// comment for the priority order these variants are picked in.
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
+enum ZombiePose {
+    #[default]
+    Idle,
+    Walk,
+    Run,
+    Crawl,
+    Bite,
+}
 
 // Bone entities used for nearest-bone hit detection (see zombie_hit_damage).
 // zombie.glb's rig (single skinned mesh, bones only for animation — see the
@@ -1868,6 +1898,9 @@ struct ZombieAnim {
     graph: Handle<AnimationGraph>,
     idle: AnimationNodeIndex,
     walk: AnimationNodeIndex,
+    run: AnimationNodeIndex,
+    crawl: AnimationNodeIndex,
+    bite: AnimationNodeIndex,
 }
 
 #[derive(Resource)]
@@ -2119,15 +2152,19 @@ fn setup(
         PlayerModelAnimRoot,
     ));
 
-    let zombie_clips: Vec<Handle<AnimationClip>> = [ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_WALK]
-        .into_iter()
-        .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(ZOMBIE_PATH)))
-        .collect();
+    let zombie_clips: Vec<Handle<AnimationClip>> =
+        [ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_WALK, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_BITE]
+            .into_iter()
+            .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(ZOMBIE_PATH)))
+            .collect();
     let (zombie_graph, zombie_nodes) = AnimationGraph::from_clips(zombie_clips);
     let zombie_anim = ZombieAnim {
         graph: graphs.add(zombie_graph),
         idle: zombie_nodes[0],
         walk: zombie_nodes[1],
+        run: zombie_nodes[2],
+        crawl: zombie_nodes[3],
+        bite: zombie_nodes[4],
     };
 
     // No local zombie spawning here anymore — zombies are server-spawned
@@ -2478,54 +2515,64 @@ fn spawn_settings_menu(commands: &mut Commands) {
                 // FreezeZombies resources and kill-all/spawn-one actions the
                 // desktop keys already drive, just from a tap instead of a
                 // keypress — same underlying behavior on both platforms.
-                page.spawn((
-                    Text::new("Cheats"),
-                    TextFont {
-                        font_size: 16.0,
+                // Gated to debug builds only (previously spawned
+                // unconditionally, in every build including release) — same
+                // reasoning as the KeyP debug panel these mirror, which was
+                // always implicitly "hidden" behind requiring a physical
+                // keyboard but had no actual build-time gate either; a real
+                // player shouldn't find a God Mode/Kill All button in their
+                // Settings menu.
+                #[cfg(debug_assertions)]
+                {
+                    page.spawn((
+                        Text::new("Cheats"),
+                        TextFont {
+                            font_size: 16.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                    page.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(8.0),
                         ..default()
-                    },
-                    TextColor(Color::WHITE),
-                ));
-                page.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    spawn_cheat_toggle_button(row, "Noclip", CheatNoclipButton);
-                    spawn_cheat_toggle_button(row, "God", CheatGodModeButton);
-                    spawn_cheat_toggle_button(row, "Freeze", CheatFreezeButton);
-                });
-                page.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    spawn_cheat_toggle_button(row, "Gun", CheatGunButton);
-                    spawn_cheat_toggle_button(row, "MSAA", CheatMsaaButton);
-                    spawn_cheat_toggle_button(row, "Shadow", CheatShadowButton);
-                });
-                page.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    spawn_cheat_toggle_button(row, "Hitboxes", CheatHitboxesButton);
-                    spawn_cheat_toggle_button(row, "AimBlur", CheatAimBlurButton);
-                    spawn_cheat_toggle_button(row, "PlayerMdl", CheatPlayerModelButton);
-                });
-                page.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    spawn_cheat_toggle_button(row, "NoZAnim", CheatZombieAnimButton);
-                    spawn_cheat_toggle_button(row, "NoHPBar", CheatZombieHealthBarsButton);
-                    spawn_cheat_toggle_button(row, "FullLOD", CheatZombieLodButton);
-                });
+                    })
+                    .with_children(|row| {
+                        spawn_cheat_toggle_button(row, "Noclip", CheatNoclipButton);
+                        spawn_cheat_toggle_button(row, "God", CheatGodModeButton);
+                        spawn_cheat_toggle_button(row, "Freeze", CheatFreezeButton);
+                    });
+                    page.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(8.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        spawn_cheat_toggle_button(row, "Gun", CheatGunButton);
+                        spawn_cheat_toggle_button(row, "MSAA", CheatMsaaButton);
+                        spawn_cheat_toggle_button(row, "Shadow", CheatShadowButton);
+                    });
+                    page.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(8.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        spawn_cheat_toggle_button(row, "Hitboxes", CheatHitboxesButton);
+                        spawn_cheat_toggle_button(row, "AimBlur", CheatAimBlurButton);
+                        spawn_cheat_toggle_button(row, "PlayerMdl", CheatPlayerModelButton);
+                    });
+                    page.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(8.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        spawn_cheat_toggle_button(row, "NoZAnim", CheatZombieAnimButton);
+                        spawn_cheat_toggle_button(row, "NoHPBar", CheatZombieHealthBarsButton);
+                        spawn_cheat_toggle_button(row, "FullLOD", CheatZombieLodButton);
+                    });
+                }
             });
 
             menu.spawn((
@@ -2585,24 +2632,30 @@ fn spawn_settings_menu(commands: &mut Commands) {
                     ));
                     spawn_cheat_action_button(row, "+", SensitivityIncButton);
                 });
-                page.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    spawn_cheat_action_button(row, "Kill All", CheatKillAllButton);
-                    spawn_cheat_action_button(row, "+100", SpawnMoreZombiesButton);
-                });
-                page.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    spawn_cheat_action_button(row, "Heal Nearest", HealNearestButton);
-                    spawn_cheat_action_button(row, "1HP Nearest", NearDeathNearestButton);
-                });
+                // Same debug-build-only gate as page 0's "Cheats" section
+                // above — Kill All / Heal Nearest / 1HP Nearest are testing
+                // tools, not something a real player should have.
+                #[cfg(debug_assertions)]
+                {
+                    page.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(8.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        spawn_cheat_action_button(row, "Kill All", CheatKillAllButton);
+                        spawn_cheat_action_button(row, "+100", SpawnMoreZombiesButton);
+                    });
+                    page.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(8.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        spawn_cheat_action_button(row, "Heal Nearest", HealNearestButton);
+                        spawn_cheat_action_button(row, "1HP Nearest", NearDeathNearestButton);
+                    });
+                }
             });
         });
 }// Shared visual style for both cheat button flavors below — toggle buttons
@@ -3486,7 +3539,7 @@ fn zombie_cosmetic_bundle() -> impl Bundle {
         ZombieHitboxBones::default(),
         KnockbackVelocity::default(),
         ZombieAttackTimer::default(),
-        ZombiePlayingWalk::default(),
+        ZombiePose::default(),
     )
 }
 
@@ -6533,23 +6586,58 @@ fn wire_zombie_hitbox_bones(
 // Switches a zombie between its Walk and Idle clips based on the server's
 // replicated NetTransform.moving flag (Chase itself isn't replicated — see
 // NetTransform's own comment on why).
+// All 5 of zombie.glb's clips, picked by priority (highest first) from
+// state this client already computes/has locally — no new replication
+// needed, same "each client checks distance/Health itself" precedent
+// zombies_damage_player already set for the identical ZOMBIE_STOP_DISTANCE
+// melee check:
+//   1. Bite  — within ZOMBIE_STOP_DISTANCE of the local player (the same
+//      range zombies_damage_player uses to actually deal damage) —
+//      overrides everything else while in melee range, wounded or not.
+//   2. Crawl — Health at/below ZOMBIE_CRAWL_HEALTH_FRACTION of max, not
+//      currently biting — a "nearly dead" telegraph with no prior
+//      precedent in this codebase (there was no wounded-state concept
+//      before this).
+//   3. Run   — moving (NetTransform.moving) and within ZOMBIE_RUN_DISTANCE
+//      of the player, not crawling/biting — a "closing in" tension beat.
+//   4. Walk  — moving, none of the above.
+//   5. Idle  — not moving, none of the above.
 fn update_zombie_animation(
     anim: Res<ZombieAnim>,
-    mut zombies: Query<(&NetTransform, &ZombieAnimationPlayer, &mut ZombiePlayingWalk), With<Zombie>>,
+    player: Query<&Transform, With<Player>>,
+    mut zombies: Query<(&Transform, &NetTransform, &Health, &ZombieAnimationPlayer, &mut ZombiePose), With<Zombie>>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    for (net_transform, link, mut playing_walk) in &mut zombies {
-        if net_transform.moving == playing_walk.0 {
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+    for (zombie_transform, net_transform, health, link, mut pose) in &mut zombies {
+        let distance = zombie_transform.translation.distance(player_transform.translation);
+        let new_pose = if distance <= ZOMBIE_STOP_DISTANCE {
+            ZombiePose::Bite
+        } else if health.0 / ZOMBIE_MAX_HEALTH <= ZOMBIE_CRAWL_HEALTH_FRACTION {
+            ZombiePose::Crawl
+        } else if net_transform.moving && distance <= ZOMBIE_RUN_DISTANCE {
+            ZombiePose::Run
+        } else if net_transform.moving {
+            ZombiePose::Walk
+        } else {
+            ZombiePose::Idle
+        };
+        if new_pose == *pose {
             continue;
         }
-        playing_walk.0 = net_transform.moving;
+        *pose = new_pose;
         if let Ok(mut player) = players.get_mut(link.0) {
             player.stop_all();
-            if net_transform.moving {
-                player.play(anim.walk).repeat();
-            } else {
-                player.play(anim.idle).repeat();
-            }
+            let node = match new_pose {
+                ZombiePose::Idle => anim.idle,
+                ZombiePose::Walk => anim.walk,
+                ZombiePose::Run => anim.run,
+                ZombiePose::Crawl => anim.crawl,
+                ZombiePose::Bite => anim.bite,
+            };
+            player.play(node).repeat();
         }
     }
 }

@@ -11,9 +11,10 @@
 //! draw-call wiring.
 
 use bevy::asset::Assets;
-use bevy::ecs::query::With;
+use bevy::ecs::query::{With, Without};
 use bevy::ecs::system::{Query, Res, SystemState};
 use bevy::image::Image;
+use bevy::mesh::skinning::SkinnedMesh;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::render::render_resource::TextureFormat;
@@ -132,9 +133,29 @@ pub struct ScopeCameraSnapshot {
 pub struct RenderSnapshot {
     pub camera: Option<CameraSnapshot>,
     pub scope_camera: Option<ScopeCameraSnapshot>,
-    pub zombies: Vec<Transform>,
+    pub zombies: Vec<ZombieRenderState>,
     pub remote_players: Vec<Transform>,
     pub static_meshes: Vec<ExtractedMesh>,
+}
+
+/// A zombie's world transform plus which of zombie.glb's 5 embedded poses
+/// (Idle/Walk/Run/Crawl/Bite — see `crate::ZombiePose`/
+/// `update_zombie_animation`) its real `AnimationPlayer` is actually
+/// playing right now, and how far into that clip. Extracting this instead
+/// of hardcoding a clip index is the same "extract the real thing, don't
+/// reimplement it" principle this module already applies to the camera/
+/// scope camera — the pose decision (distance/Health thresholds) already
+/// lives in `update_zombie_animation`; duplicating that logic here would
+/// just be a second place for the two to drift apart.
+pub struct ZombieRenderState {
+    pub transform: Transform,
+    /// Matches zombie.glb's own animation list order (0=Bite, 1=Crawl,
+    /// 2=Idle, 3=Run, 4=Walk) — what `skinned_gltf::SkinnedModel::
+    /// compute_joint_matrices`'s `clip_index` parameter expects. Falls
+    /// back to 2 (Idle) if no `AnimationPlayer` is found/playing yet (e.g.
+    /// the zombie's glTF scene is still loading asynchronously).
+    pub anim_clip_index: usize,
+    pub anim_time: f32,
 }
 
 impl Default for CameraSnapshot {
@@ -201,12 +222,46 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         });
     }
 
-    // Zombies: plain marker + world-space transform, per the plan's own
-    // extraction spec.
-    let mut zombie_state: SystemState<Query<&GlobalTransform, With<Zombie>>> =
-        SystemState::new(world);
-    snapshot.zombies =
-        zombie_state.get(world).iter().map(|t| t.compute_transform()).collect();
+    // Zombies: world-space transform plus real animation-pose state — see
+    // ZombieRenderState's own doc comment. `ZombieAnimationPlayer(Entity)`
+    // (crate::lib) links each zombie root to the descendant entity that
+    // actually carries the `AnimationPlayer` (the glTF scene loads
+    // asynchronously, so it isn't the same entity and may not exist yet).
+    let mut zombie_state: SystemState<(
+        Query<(&GlobalTransform, Option<&crate::ZombieAnimationPlayer>), With<Zombie>>,
+        Query<&bevy::animation::AnimationPlayer>,
+        bevy::ecs::system::Res<crate::ZombieAnim>,
+    )> = SystemState::new(world);
+    let (zombie_query, anim_players, zombie_anim) = zombie_state.get(world);
+    snapshot.zombies = zombie_query
+        .iter()
+        .map(|(transform, link)| {
+            // Look up which of the 5 AnimationNodeIndex handles ZombieAnim
+            // hands out is actually playing, then map it back to zombie.glb's
+            // own raw clip index (skinned_gltf's compute_joint_matrices takes
+            // a clip index, not a graph node) — see ZombiePose's priority
+            // order in update_zombie_animation for how that pose was picked.
+            let (anim_clip_index, anim_time) = link
+                .and_then(|link| anim_players.get(link.0).ok())
+                .and_then(|player| player.playing_animations().next())
+                .map(|(node, active)| {
+                    let clip_index = if *node == zombie_anim.bite {
+                        0
+                    } else if *node == zombie_anim.crawl {
+                        1
+                    } else if *node == zombie_anim.run {
+                        3
+                    } else if *node == zombie_anim.walk {
+                        4
+                    } else {
+                        2 // idle, and the fallback for any unrecognized node
+                    };
+                    (clip_index, active.seek_time())
+                })
+                .unwrap_or((2, 0.0));
+            ZombieRenderState { transform: transform.compute_transform(), anim_clip_index, anim_time }
+        })
+        .collect();
 
     // Remote players: NetPlayer entities that aren't this client's own.
     // `Without<LocalPlayer>` alone isn't reliable here — observed empirically
@@ -243,8 +298,23 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // Mesh3d/MeshMaterial3d<StandardMaterial> entities — see this module's
     // doc comment on ExtractedMesh for why GlobalTransform (not local
     // Transform) is what makes the parented gun meshes come out correct.
+    //
+    // `Without<SkinnedMesh>` excludes zombie.glb/soldier.glb's own
+    // Mesh3d/MeshMaterial3d child entities (Bevy's scene spawner
+    // instantiates those from each Zombie/NetPlayer's SceneRoot, same as
+    // it does for the gun's meshes here) — those already get drawn once,
+    // correctly GPU-skinned, via `real_game_extracted`'s own
+    // EntityKind::Zombie/Soldier skinned-model path (native_metal_probe.rs)
+    // using the probe's separately-loaded zombie_model/soldier_model.
+    // Without this filter, this query ALSO baked their raw bind-pose
+    // vertex positions (no skinning applied — this query has no way to
+    // apply joint transforms) as a second, oversized/unanimated "static"
+    // mesh sitting on top of the correctly animated one — the exact same
+    // "garbled giant mesh" failure mode as the gun's own GlobalTransform-
+    // propagation bug noted above, just from skipping skinning instead of
+    // skipping GlobalTransform.
     let mut mesh_state: SystemState<(
-        Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>, &GlobalTransform)>,
+        Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>, &GlobalTransform), Without<SkinnedMesh>>,
         Res<Assets<Mesh>>,
         Res<Assets<StandardMaterial>>,
         Res<Assets<Image>>,

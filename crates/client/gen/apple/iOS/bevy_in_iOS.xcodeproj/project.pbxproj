@@ -20,6 +20,8 @@
 		ADC0D0F0295161DA00388970 /* libbevy_in_app.a in Frameworks */ = {isa = PBXBuildFile; fileRef = ADC0D0EF295161DA00388970 /* libbevy_in_app.a */; };
 		ADC0D0F2295172CA00388970 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ADC0D0F1295172CA00388970 /* AudioToolbox.framework */; };
 		C00BEAA0420C572A4F4C40B4 /* GameControllerInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0201D3F45F1DFD3C0056C58C /* GameControllerInput.swift */; };
+		A1B2C3D4E5F60708192A3B4C /* SettingsMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60708192A3B4D /* SettingsMenuView.swift */; };
+		B2C3D4E5F60708192A3B4C5D /* GameOverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60708192A3B4C5E /* GameOverView.swift */; };
 		F5FB20BA2D235B16391FF374 /* GameController.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ABFF1EF359D90F2D357C2A71 /* GameController.framework */; };
 /* End PBXBuildFile section */
 
@@ -41,6 +43,8 @@
 		ADC0D0EF295161DA00388970 /* libbevy_in_app.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libbevy_in_app.a; path = libs/debug/libbevy_in_app.a; sourceTree = "<group>"; };
 		ADC0D0F1295172CA00388970 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX13.1.sdk/System/Library/Frameworks/AudioToolbox.framework; sourceTree = DEVELOPER_DIR; };
 		0201D3F45F1DFD3C0056C58C /* GameControllerInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameControllerInput.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60708192A3B4D /* SettingsMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsMenuView.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60708192A3B4C5E /* GameOverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameOverView.swift; sourceTree = "<group>"; };
 		ABFF1EF359D90F2D357C2A71 /* GameController.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = GameController.framework; path = System/Library/Frameworks/GameController.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -65,6 +69,8 @@
 				AD4B1FF026EB1B90008A6AEE /* ViewController.swift */,
 				AD6C6A83295401050079516D /* ViewController+CoreMotion.swift */,
 				0201D3F45F1DFD3C0056C58C /* GameControllerInput.swift */,
+				A1B2C3D4E5F60708192A3B4D /* SettingsMenuView.swift */,
+				B2C3D4E5F60708192A3B4C5E /* GameOverView.swift */,
 				ADA4699026EB27CB008B1C7B /* libbevy_in_app.h */,
 				AD4B200026EB1D31008A6AEE /* MetalView.swift */,
 				ADA4699226EB2F9A008B1C7B /* bevy_in_iOS-Bridging-Header.h */,
@@ -192,6 +198,8 @@
 				AD4B1FED26EB1B90008A6AEE /* AppDelegate.swift in Sources */,
 				AD6C6A84295401050079516D /* ViewController+CoreMotion.swift in Sources */,
 				C00BEAA0420C572A4F4C40B4 /* GameControllerInput.swift in Sources */,
+				A1B2C3D4E5F60708192A3B4C /* SettingsMenuView.swift in Sources */,
+				B2C3D4E5F60708192A3B4C5D /* GameOverView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
