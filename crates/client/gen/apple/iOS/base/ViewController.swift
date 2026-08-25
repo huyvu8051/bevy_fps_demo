@@ -941,6 +941,18 @@ class ViewController: UIViewController {
                 if #available(iOS 15.0, *) {
                     displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
                 }
+                // Bluetooth keyboard/mouse support (GameControllerInput.swift)
+                // was previously only ever constructed in createBevyApp(),
+                // which this rustMetalProbe branch (the one actually taken by
+                // default — see USE_RUST_METAL_DEMO above) never calls, so a
+                // connected keyboard/mouse silently did nothing: keyChanged
+                // handlers were never installed. GameControllerInput's own
+                // dispatch functions already pick whichever backend
+                // (rustMetalProbe vs bevyApp) is live, so only the
+                // construction site needed to move, not the class itself.
+                if #available(iOS 14.0, *), gameControllerInput == nil {
+                    gameControllerInput = GameControllerInput(viewController: self)
+                }
             }
         } else if USE_NATIVE_METAL_DEMO {
             if metalDevice == nil {
