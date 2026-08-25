@@ -187,6 +187,15 @@ pub struct RenderSnapshot {
     pub sun: Option<SunSnapshot>,
     pub floating_damage: Vec<FloatingDamageSnapshot>,
     pub health_bars: Vec<HealthBarSnapshot>,
+    /// The `MapMsaaOn` cheat-menu toggle (crate::lib) — previously only
+    /// ever read by `apply_map_render_toggles` to sync bevy_render's own
+    /// `Msaa` component (the desktop/winit build's render path), which
+    /// this renderer never touches at all, so toggling it in-game visibly
+    /// did nothing here. Extracted so native_metal_probe.rs can actually
+    /// switch between its own MSAA-on/MSAA-off compiled pipeline pairs —
+    /// same button, now with a real effect on both render paths instead of
+    /// just one.
+    pub map_msaa_on: bool,
 }
 
 /// A still-alive floating damage number, already positioned/faded by
@@ -427,6 +436,10 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         let c = sun.color.to_srgba();
         SunSnapshot { direction: transform.forward().to_array(), color: [c.red, c.green, c.blue] }
     });
+
+    // MSAA toggle: see RenderSnapshot::map_msaa_on's own doc comment.
+    let mut msaa_toggle_state: SystemState<Res<crate::MapMsaaOn>> = SystemState::new(world);
+    snapshot.map_msaa_on = msaa_toggle_state.get(world).0;
 
     // Floating damage numbers: see FloatingDamageSnapshot's own doc comment.
     let mut damage_state: SystemState<

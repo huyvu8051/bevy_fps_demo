@@ -726,17 +726,31 @@ pub struct NativeMetalProbe {
     layer: MetalLayer,
     queue: CommandQueue,
     pipeline: RenderPipelineState,
+    // Sample-count-1 twin of `pipeline` — see MSAA_SAMPLE_COUNT's own doc
+    // comment and RenderSnapshot::map_msaa_on for why the MapMsaaOn toggle
+    // needs a second compiled pipeline per shader rather than a uniform.
+    pipeline_no_msaa: RenderPipelineState,
     vertex_buffer: metal::Buffer,
     vertex_count: usize,
     depth_state: metal::DepthStencilState,
     depth_texture: Option<metal::Texture>,
+    // Sample-count-1 twin of depth_texture, used when MapMsaaOn is off —
+    // then the main pass renders straight into the drawable with no
+    // resolve step at all, same as before MSAA existed in this renderer.
+    depth_texture_no_msaa: Option<metal::Texture>,
     // The main pass's actual multisampled render target — see
     // MSAA_SAMPLE_COUNT's own doc comment. Recreated (ensure_msaa_color_
     // texture) whenever the drawable resizes, same caching pattern as
     // depth_texture. Resolved into the real drawable texture each frame
     // (MTLStoreAction::MultisampleResolve), never sampled directly.
     msaa_color_texture: Option<metal::Texture>,
+    // This frame's MapMsaaOn value (native_game_extract.rs), read each
+    // frame the real game App ticks — decides which pipeline/texture twin
+    // above render_frame binds. Defaults matching MapMsaaOn's own Default
+    // (false/off) until the first extraction.
+    msaa_enabled: bool,
     sponza_pipeline: Option<RenderPipelineState>,
+    sponza_pipeline_no_msaa: Option<RenderPipelineState>,
     sponza_meshes: Vec<super::gltf_scene::GltfMesh>,
     sponza_sampler: metal::SamplerState,
     white_texture: metal::Texture,
@@ -744,6 +758,7 @@ pub struct NativeMetalProbe {
     camera_yaw: f32,
     camera_pitch: f32,
     skinned_pipeline: Option<RenderPipelineState>,
+    skinned_pipeline_no_msaa: Option<RenderPipelineState>,
     soldier_model: Option<super::skinned_gltf::SkinnedModel>,
     zombie_model: Option<super::skinned_gltf::SkinnedModel>,
     scope_color_texture: metal::Texture,
@@ -751,7 +766,11 @@ pub struct NativeMetalProbe {
     // scope_color_texture above — see its own doc comment at construction.
     scope_color_texture_msaa: metal::Texture,
     scope_depth_texture: metal::Texture,
+    // Sample-count-1 twin of scope_depth_texture, used when MapMsaaOn is
+    // off.
+    scope_depth_texture_no_msaa: metal::Texture,
     quad_pipeline: Option<RenderPipelineState>,
+    quad_pipeline_no_msaa: Option<RenderPipelineState>,
     quad_vertex_buffer: metal::Buffer,
     // Phase 3: entities now genuinely live in a Bevy ECS World (see
     // ecs_app below) instead of a hardcoded Vec — patrol movement runs as
@@ -813,6 +832,7 @@ pub struct NativeMetalProbe {
     // `None` pipeline means the shader failed to compile, same
     // fail-soft pattern sponza/skinned/quad already use.
     ui_pipeline: Option<RenderPipelineState>,
+    ui_pipeline_no_msaa: Option<RenderPipelineState>,
     ui_sampler: metal::SamplerState,
     font_atlas_texture: metal::Texture,
     ui_floating_damage: Vec<FloatingDamageSnapshot>,
@@ -1057,47 +1077,78 @@ impl NativeMetalProbe {
         pipeline_descriptor.set_raster_sample_count(MSAA_SAMPLE_COUNT);
         let pipeline = device.new_render_pipeline_state(&pipeline_descriptor).expect("pipeline creation failed");
 
+        // Same shader, sample_count 1 — the MapMsaaOn-off variant (see
+        // MSAA_SAMPLE_COUNT's own doc comment and RenderSnapshot::
+        // map_msaa_on for why a second compiled pipeline is needed rather
+        // than just changing a uniform: Metal ties rasterSampleCount to the
+        // PSO, not something a shader can branch on at draw time).
+        let pipeline_no_msaa_descriptor = RenderPipelineDescriptor::new();
+        pipeline_no_msaa_descriptor.set_vertex_function(Some(&vertex_fn));
+        pipeline_no_msaa_descriptor.set_fragment_function(Some(&fragment_fn));
+        pipeline_no_msaa_descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        pipeline_no_msaa_descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+        let pipeline_no_msaa =
+            device.new_render_pipeline_state(&pipeline_no_msaa_descriptor).expect("pipeline creation failed");
+
         let depth_descriptor = metal::DepthStencilDescriptor::new();
         depth_descriptor.set_depth_compare_function(metal::MTLCompareFunction::Less);
         depth_descriptor.set_depth_write_enabled(true);
         let depth_state = device.new_depth_stencil_state(&depth_descriptor);
 
-        let sponza_pipeline = match device.new_library_with_source(SPONZA_SHADER_SOURCE, &compile_options) {
-            Ok(sponza_library) => {
-                let sponza_vertex_fn = sponza_library.get_function("sponza_vertex", None).unwrap();
-                let sponza_fragment_fn = sponza_library.get_function("sponza_fragment", None).unwrap();
-                let sponza_pipeline_descriptor = RenderPipelineDescriptor::new();
-                sponza_pipeline_descriptor.set_vertex_function(Some(&sponza_vertex_fn));
-                sponza_pipeline_descriptor.set_fragment_function(Some(&sponza_fragment_fn));
-                let sponza_color_attachment = sponza_pipeline_descriptor.color_attachments().object_at(0).unwrap();
-                sponza_color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-                // Real-game materials with `AlphaMode::Blend` (e.g. the
-                // scope lens glass on the ak47_scope model) carry alpha < 1
-                // in their base_color/texture — without blending enabled
-                // here, Metal ignores that alpha and paints every fragment
-                // fully opaque regardless of what the fragment shader
-                // returns, which is why the lens looked solid instead of
-                // see-through once real textures/materials replaced the
-                // earlier flat-color placeholder. Standard "source over"
-                // blending: opaque (alpha=1) surfaces render identically to
-                // unblended, so this is safe for the arena/gun's mostly-
-                // opaque geometry too, not just the lens.
-                sponza_color_attachment.set_blending_enabled(true);
-                sponza_color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
-                sponza_color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
-                sponza_color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
-                sponza_color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::SourceAlpha);
-                sponza_color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-                sponza_color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-                sponza_pipeline_descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
-                sponza_pipeline_descriptor.set_raster_sample_count(MSAA_SAMPLE_COUNT);
-                device.new_render_pipeline_state(&sponza_pipeline_descriptor).ok()
-            }
-            Err(err) => {
-                eprintln!("[native_metal_probe] sponza shader compile failed: {err}");
-                None
-            }
-        };
+        // Builds one Sponza RenderPipelineDescriptor (shared blend setup)
+        // at the given sample count — used twice below (MSAA on/off) so the
+        // two pipelines can't drift out of sync with each other.
+        fn build_sponza_descriptor(
+            vertex_fn: &metal::FunctionRef,
+            fragment_fn: &metal::FunctionRef,
+            sample_count: u64,
+        ) -> RenderPipelineDescriptor {
+            let descriptor = RenderPipelineDescriptor::new();
+            descriptor.set_vertex_function(Some(vertex_fn));
+            descriptor.set_fragment_function(Some(fragment_fn));
+            let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+            color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+            // Real-game materials with `AlphaMode::Blend` (e.g. the scope
+            // lens glass on the ak47_scope model) carry alpha < 1 in their
+            // base_color/texture — without blending enabled here, Metal
+            // ignores that alpha and paints every fragment fully opaque
+            // regardless of what the fragment shader returns, which is why
+            // the lens looked solid instead of see-through once real
+            // textures/materials replaced the earlier flat-color
+            // placeholder. Standard "source over" blending: opaque
+            // (alpha=1) surfaces render identically to unblended, so this
+            // is safe for the arena/gun's mostly-opaque geometry too, not
+            // just the lens.
+            color_attachment.set_blending_enabled(true);
+            color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+            color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
+            color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+            color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+            color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+            color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+            descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+            descriptor.set_raster_sample_count(sample_count);
+            descriptor
+        }
+
+        let (sponza_pipeline, sponza_pipeline_no_msaa) =
+            match device.new_library_with_source(SPONZA_SHADER_SOURCE, &compile_options) {
+                Ok(sponza_library) => {
+                    let sponza_vertex_fn = sponza_library.get_function("sponza_vertex", None).unwrap();
+                    let sponza_fragment_fn = sponza_library.get_function("sponza_fragment", None).unwrap();
+                    let msaa_descriptor =
+                        build_sponza_descriptor(&sponza_vertex_fn, &sponza_fragment_fn, MSAA_SAMPLE_COUNT);
+                    let no_msaa_descriptor = build_sponza_descriptor(&sponza_vertex_fn, &sponza_fragment_fn, 1);
+                    (
+                        device.new_render_pipeline_state(&msaa_descriptor).ok(),
+                        device.new_render_pipeline_state(&no_msaa_descriptor).ok(),
+                    )
+                }
+                Err(err) => {
+                    eprintln!("[native_metal_probe] sponza shader compile failed: {err}");
+                    (None, None)
+                }
+            };
         let gltf_path = std::path::Path::new(&bundle_resource_path().unwrap_or_default()).join(SPONZA_GLTF_RELATIVE_PATH);
         let sponza_meshes = super::gltf_scene::load_gltf_scene(&device, &gltf_path);
 
@@ -1120,23 +1171,37 @@ impl NativeMetalProbe {
         let white_texture = device.new_texture(&white_texture_descriptor);
         white_texture.replace_region(metal::MTLRegion::new_2d(0, 0, 1, 1), 0, [255u8, 255, 255, 255].as_ptr() as *const _, 4);
 
-        let skinned_pipeline = match device.new_library_with_source(SKINNED_SHADER_SOURCE, &compile_options) {
-            Ok(library) => {
-                let vertex_fn = library.get_function("skinned_vertex", None).unwrap();
-                let fragment_fn = library.get_function("skinned_fragment", None).unwrap();
-                let descriptor = RenderPipelineDescriptor::new();
-                descriptor.set_vertex_function(Some(&vertex_fn));
-                descriptor.set_fragment_function(Some(&fragment_fn));
-                descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-                descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
-                descriptor.set_raster_sample_count(MSAA_SAMPLE_COUNT);
-                device.new_render_pipeline_state(&descriptor).ok()
-            }
-            Err(err) => {
-                eprintln!("[native_metal_probe] skinned shader compile failed: {err}");
-                None
-            }
-        };
+        fn build_skinned_descriptor(
+            vertex_fn: &metal::FunctionRef,
+            fragment_fn: &metal::FunctionRef,
+            sample_count: u64,
+        ) -> RenderPipelineDescriptor {
+            let descriptor = RenderPipelineDescriptor::new();
+            descriptor.set_vertex_function(Some(vertex_fn));
+            descriptor.set_fragment_function(Some(fragment_fn));
+            descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+            descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+            descriptor.set_raster_sample_count(sample_count);
+            descriptor
+        }
+
+        let (skinned_pipeline, skinned_pipeline_no_msaa) =
+            match device.new_library_with_source(SKINNED_SHADER_SOURCE, &compile_options) {
+                Ok(library) => {
+                    let vertex_fn = library.get_function("skinned_vertex", None).unwrap();
+                    let fragment_fn = library.get_function("skinned_fragment", None).unwrap();
+                    let msaa_descriptor = build_skinned_descriptor(&vertex_fn, &fragment_fn, MSAA_SAMPLE_COUNT);
+                    let no_msaa_descriptor = build_skinned_descriptor(&vertex_fn, &fragment_fn, 1);
+                    (
+                        device.new_render_pipeline_state(&msaa_descriptor).ok(),
+                        device.new_render_pipeline_state(&no_msaa_descriptor).ok(),
+                    )
+                }
+                Err(err) => {
+                    eprintln!("[native_metal_probe] skinned shader compile failed: {err}");
+                    (None, None)
+                }
+            };
         let resource_path = bundle_resource_path().unwrap_or_default();
         let soldier_path = std::path::Path::new(&resource_path).join("assets/models/soldier.glb");
         let soldier_model = super::skinned_gltf::load_skinned_gltf(&device, &soldier_path);
@@ -1181,22 +1246,44 @@ impl NativeMetalProbe {
         scope_depth_descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
         let scope_depth_texture = device.new_texture(&scope_depth_descriptor);
 
-        let quad_pipeline = match device.new_library_with_source(QUAD_SHADER_SOURCE, &compile_options) {
-            Ok(library) => {
-                let vertex_fn = library.get_function("quad_vertex", None).unwrap();
-                let fragment_fn = library.get_function("quad_fragment", None).unwrap();
-                let descriptor = RenderPipelineDescriptor::new();
-                descriptor.set_vertex_function(Some(&vertex_fn));
-                descriptor.set_fragment_function(Some(&fragment_fn));
-                descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-                descriptor.set_raster_sample_count(MSAA_SAMPLE_COUNT);
-                device.new_render_pipeline_state(&descriptor).ok()
-            }
-            Err(err) => {
-                eprintln!("[native_metal_probe] quad shader compile failed: {err}");
-                None
-            }
-        };
+        // Sample-count-1 counterpart of scope_depth_texture, for the
+        // MapMsaaOn-off path — the scope pass then renders straight into
+        // scope_color_texture with no resolve step at all (see
+        // render_frame), same as before MSAA existed in this renderer.
+        let scope_depth_no_msaa_descriptor = metal::TextureDescriptor::new();
+        scope_depth_no_msaa_descriptor.set_pixel_format(MTLPixelFormat::Depth32Float);
+        scope_depth_no_msaa_descriptor.set_width(SCOPE_TEXTURE_SIZE);
+        scope_depth_no_msaa_descriptor.set_height(SCOPE_TEXTURE_SIZE);
+        scope_depth_no_msaa_descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        scope_depth_no_msaa_descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
+        let scope_depth_texture_no_msaa = device.new_texture(&scope_depth_no_msaa_descriptor);
+
+        fn build_quad_descriptor(vertex_fn: &metal::FunctionRef, fragment_fn: &metal::FunctionRef, sample_count: u64) -> RenderPipelineDescriptor {
+            let descriptor = RenderPipelineDescriptor::new();
+            descriptor.set_vertex_function(Some(vertex_fn));
+            descriptor.set_fragment_function(Some(fragment_fn));
+            descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+            descriptor.set_raster_sample_count(sample_count);
+            descriptor
+        }
+
+        let (quad_pipeline, quad_pipeline_no_msaa) =
+            match device.new_library_with_source(QUAD_SHADER_SOURCE, &compile_options) {
+                Ok(library) => {
+                    let vertex_fn = library.get_function("quad_vertex", None).unwrap();
+                    let fragment_fn = library.get_function("quad_fragment", None).unwrap();
+                    let msaa_descriptor = build_quad_descriptor(&vertex_fn, &fragment_fn, MSAA_SAMPLE_COUNT);
+                    let no_msaa_descriptor = build_quad_descriptor(&vertex_fn, &fragment_fn, 1);
+                    (
+                        device.new_render_pipeline_state(&msaa_descriptor).ok(),
+                        device.new_render_pipeline_state(&no_msaa_descriptor).ok(),
+                    )
+                }
+                Err(err) => {
+                    eprintln!("[native_metal_probe] quad shader compile failed: {err}");
+                    (None, None)
+                }
+            };
         // Picture-in-picture rectangle in the top-right corner, in NDC
         // (-1..1) space — no view/projection needed, it's drawn directly
         // over the finished main-camera frame. Two triangles, position +
@@ -1216,34 +1303,44 @@ impl NativeMetalProbe {
             MTLResourceOptions::StorageModeShared,
         );
 
-        let ui_pipeline = match device.new_library_with_source(UI_SHADER_SOURCE, &compile_options) {
-            Ok(library) => {
-                let vertex_fn = library.get_function("ui_vertex", None).unwrap();
-                let fragment_fn = library.get_function("ui_fragment", None).unwrap();
-                let descriptor = RenderPipelineDescriptor::new();
-                descriptor.set_vertex_function(Some(&vertex_fn));
-                descriptor.set_fragment_function(Some(&fragment_fn));
-                let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
-                color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-                // Health bar backgrounds are translucent black and glyph
-                // quads carry a coverage-shaped alpha (see build_font_atlas)
-                // — both need real alpha blending, unlike quad_pipeline's
-                // opaque scope PIP above.
-                color_attachment.set_blending_enabled(true);
-                color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
-                color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
-                color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
-                color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::SourceAlpha);
-                color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-                color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-                descriptor.set_raster_sample_count(MSAA_SAMPLE_COUNT);
-                device.new_render_pipeline_state(&descriptor).ok()
-            }
-            Err(err) => {
-                eprintln!("[native_metal_probe] ui shader compile failed: {err}");
-                None
-            }
-        };
+        fn build_ui_descriptor(vertex_fn: &metal::FunctionRef, fragment_fn: &metal::FunctionRef, sample_count: u64) -> RenderPipelineDescriptor {
+            let descriptor = RenderPipelineDescriptor::new();
+            descriptor.set_vertex_function(Some(vertex_fn));
+            descriptor.set_fragment_function(Some(fragment_fn));
+            let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+            color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+            // Health bar backgrounds are translucent black and glyph quads
+            // carry a coverage-shaped alpha (see build_font_atlas) — both
+            // need real alpha blending, unlike quad_pipeline's opaque scope
+            // PIP above.
+            color_attachment.set_blending_enabled(true);
+            color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+            color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
+            color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+            color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+            color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+            color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+            descriptor.set_raster_sample_count(sample_count);
+            descriptor
+        }
+
+        let (ui_pipeline, ui_pipeline_no_msaa) =
+            match device.new_library_with_source(UI_SHADER_SOURCE, &compile_options) {
+                Ok(library) => {
+                    let vertex_fn = library.get_function("ui_vertex", None).unwrap();
+                    let fragment_fn = library.get_function("ui_fragment", None).unwrap();
+                    let msaa_descriptor = build_ui_descriptor(&vertex_fn, &fragment_fn, MSAA_SAMPLE_COUNT);
+                    let no_msaa_descriptor = build_ui_descriptor(&vertex_fn, &fragment_fn, 1);
+                    (
+                        device.new_render_pipeline_state(&msaa_descriptor).ok(),
+                        device.new_render_pipeline_state(&no_msaa_descriptor).ok(),
+                    )
+                }
+                Err(err) => {
+                    eprintln!("[native_metal_probe] ui shader compile failed: {err}");
+                    (None, None)
+                }
+            };
         // Nearest, not linear — this is a crisp pixel font/flat-colored
         // rects, not a photo texture; linear filtering would just blur
         // glyph edges. Clamp instead of sponza_sampler's Repeat, since a
@@ -1261,7 +1358,9 @@ impl NativeMetalProbe {
             layer,
             queue,
             pipeline,
+            pipeline_no_msaa,
             sponza_pipeline,
+            sponza_pipeline_no_msaa,
             sponza_meshes,
             sponza_sampler,
             white_texture,
@@ -1269,17 +1368,22 @@ impl NativeMetalProbe {
             vertex_count: vertices.len(),
             depth_state,
             depth_texture: None,
+            depth_texture_no_msaa: None,
             msaa_color_texture: None,
+            msaa_enabled: false,
             camera_position: [0.0, 2.5, 2.0],
             camera_yaw: 0.0,
             camera_pitch: -0.25,
             skinned_pipeline,
+            skinned_pipeline_no_msaa,
             soldier_model,
             zombie_model,
             scope_color_texture,
             scope_color_texture_msaa,
             scope_depth_texture,
+            scope_depth_texture_no_msaa,
             quad_pipeline,
+            quad_pipeline_no_msaa,
             quad_vertex_buffer,
             ecs_app,
             start_time: std::time::Instant::now(),
@@ -1295,6 +1399,7 @@ impl NativeMetalProbe {
             real_game_scope_fov: 12.0_f32.to_radians(),
             real_game_light: FALLBACK_LIGHT,
             ui_pipeline,
+            ui_pipeline_no_msaa,
             ui_sampler,
             font_atlas_texture,
             ui_floating_damage: Vec::new(),
@@ -1382,6 +1487,28 @@ impl NativeMetalProbe {
         tex
     }
 
+    // Sample-count-1 twin of ensure_depth_texture, used when MapMsaaOn is
+    // off (the main pass then renders straight into the drawable, no
+    // msaa_color_texture/resolve step at all).
+    fn ensure_depth_texture_no_msaa(&mut self, width: u64, height: u64) -> metal::Texture {
+        let device = self.device.clone();
+        let device = &device;
+        if let Some(tex) = &self.depth_texture_no_msaa {
+            if tex.width() == width && tex.height() == height {
+                return tex.clone();
+            }
+        }
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_pixel_format(MTLPixelFormat::Depth32Float);
+        descriptor.set_width(width);
+        descriptor.set_height(height);
+        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
+        let tex = device.new_texture(&descriptor);
+        self.depth_texture_no_msaa = Some(tex.clone());
+        tex
+    }
+
     // Same per-frame work as the Swift demo: one render pass, one draw
     // call per mesh, camera fixed (no touch/camera movement in this Rust
     // version — it exists purely to measure encoding cost, not to be a
@@ -1445,13 +1572,22 @@ impl NativeMetalProbe {
         _now: f32,
         use_sponza: bool,
         real_game_meshes: Option<&[RealGameMeshDraw]>,
+        // Selects which of each shader's two compiled pipelines (see
+        // MSAA_SAMPLE_COUNT's own doc comment) to bind — must match
+        // whatever sample count the caller's render pass attachments
+        // actually have, or Metal rejects every draw call in this pass.
+        msaa_enabled: bool,
     ) {
+        let sponza_pipeline = if msaa_enabled { self.sponza_pipeline.as_ref() } else { self.sponza_pipeline_no_msaa.as_ref() };
+        let skinned_pipeline = if msaa_enabled { self.skinned_pipeline.as_ref() } else { self.skinned_pipeline_no_msaa.as_ref() };
+        let demo_pipeline = if msaa_enabled { &self.pipeline } else { &self.pipeline_no_msaa };
+
         if let Some(meshes) = real_game_meshes {
             // Reuses Sponza's own pipeline/shader (position+normal+uv,
             // textured) unchanged — arena/gun geometry is textured exactly
             // like Sponza's, just rebaked into world space fresh each frame
             // (see bake_static_mesh_vertices) instead of once at load time.
-            encoder.set_render_pipeline_state(self.sponza_pipeline.as_ref().unwrap());
+            encoder.set_render_pipeline_state(sponza_pipeline.unwrap());
             encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
             for m in meshes {
                 let sponza_uniforms = SponzaUniforms {
@@ -1481,7 +1617,7 @@ impl NativeMetalProbe {
                 encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, m.vertex_count as u64);
             }
         } else if use_sponza {
-            encoder.set_render_pipeline_state(self.sponza_pipeline.as_ref().unwrap());
+            encoder.set_render_pipeline_state(sponza_pipeline.unwrap());
             encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
             for mesh in &self.sponza_meshes {
                 let sponza_uniforms = SponzaUniforms {
@@ -1531,14 +1667,14 @@ impl NativeMetalProbe {
                 _sun_pad: 0.0,
                 sun_color: light.sun_color,
             };
-            encoder.set_render_pipeline_state(&self.pipeline);
+            encoder.set_render_pipeline_state(demo_pipeline);
             encoder.set_vertex_buffer(0, Some(&self.vertex_buffer), 0);
             encoder.set_vertex_bytes(1, std::mem::size_of::<Uniforms>() as u64, &uniforms as *const _ as *const _);
             encoder.set_fragment_bytes(1, std::mem::size_of::<Uniforms>() as u64, &uniforms as *const _ as *const _);
             encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, self.vertex_count as u64);
         }
 
-        let Some(pipeline) = &self.skinned_pipeline else { return };
+        let Some(pipeline) = skinned_pipeline else { return };
         encoder.set_render_pipeline_state(pipeline);
         encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
 
@@ -1647,10 +1783,6 @@ impl NativeMetalProbe {
         self.sync_drawable_size();
         let drawable_size = self.layer.drawable_size();
         let (width, height) = (drawable_size.width as u64, drawable_size.height as u64);
-        let depth_texture = self.ensure_depth_texture(width, height);
-        let msaa_color_texture = self.ensure_msaa_color_texture(width, height);
-        let Some(drawable) = self.layer.next_drawable() else { return };
-        let texture = drawable.texture();
 
         let use_sponza = self.sponza_pipeline.is_some() && !self.sponza_meshes.is_empty();
         let is_real_game = self.real_game_app.is_some();
@@ -1681,6 +1813,7 @@ impl NativeMetalProbe {
             let snapshot = extract_render_snapshot(app.world_mut());
             self.ui_floating_damage = snapshot.floating_damage;
             self.ui_health_bars = snapshot.health_bars;
+            self.msaa_enabled = snapshot.map_msaa_on;
             if let Some(cam) = &snapshot.camera {
                 self.camera_position = cam.eye;
                 self.camera_yaw = cam.yaw;
@@ -1734,6 +1867,18 @@ impl NativeMetalProbe {
         // Building a fresh `Device` clone rather than borrowing
         // `self.device` directly sidesteps a disjoint-field-borrow fight
         // with the `self.real_game_textures = ...` assignment right after.
+        // Must happen here — after msaa_enabled is set by the extraction
+        // above, but before real_game_meshes below borrows
+        // self.real_game_textures (immutably, for the rest of this
+        // function via RealGameMeshDraw's own lifetime), which would
+        // otherwise conflict with the &mut self these need.
+        let msaa_enabled = self.msaa_enabled;
+        let depth_texture =
+            if msaa_enabled { self.ensure_depth_texture(width, height) } else { self.ensure_depth_texture_no_msaa(width, height) };
+        let msaa_color_texture = msaa_enabled.then(|| self.ensure_msaa_color_texture(width, height));
+        let Some(drawable) = self.layer.next_drawable() else { return };
+        let texture = drawable.texture();
+
         let texture_pattern_changed = self.real_game_textures.len() != real_game_static_meshes.len()
             || self
                 .real_game_textures
@@ -1878,16 +2023,21 @@ impl NativeMetalProbe {
         if show_scope {
             let scope_pass_descriptor = RenderPassDescriptor::new();
             let scope_color = scope_pass_descriptor.color_attachments().object_at(0).unwrap();
-            // Render into the multisampled texture, resolve straight into
-            // scope_color_texture (what quad_fragment actually samples) —
-            // see MSAA_SAMPLE_COUNT's own doc comment.
-            scope_color.set_texture(Some(&self.scope_color_texture_msaa));
-            scope_color.set_resolve_texture(Some(&self.scope_color_texture));
+            if msaa_enabled {
+                // Render into the multisampled texture, resolve straight
+                // into scope_color_texture (what quad_fragment actually
+                // samples) — see MSAA_SAMPLE_COUNT's own doc comment.
+                scope_color.set_texture(Some(&self.scope_color_texture_msaa));
+                scope_color.set_resolve_texture(Some(&self.scope_color_texture));
+                scope_color.set_store_action(MTLStoreAction::MultisampleResolve);
+            } else {
+                scope_color.set_texture(Some(&self.scope_color_texture));
+                scope_color.set_store_action(MTLStoreAction::Store);
+            }
             scope_color.set_load_action(MTLLoadAction::Clear);
-            scope_color.set_store_action(MTLStoreAction::MultisampleResolve);
             scope_color.set_clear_color(MTLClearColor::new(0.05, 0.05, 0.05, 1.0));
             let scope_depth = scope_pass_descriptor.depth_attachment().unwrap();
-            scope_depth.set_texture(Some(&self.scope_depth_texture));
+            scope_depth.set_texture(Some(if msaa_enabled { &self.scope_depth_texture } else { &self.scope_depth_texture_no_msaa }));
             scope_depth.set_load_action(MTLLoadAction::Clear);
             scope_depth.set_store_action(MTLStoreAction::DontCare);
             scope_depth.set_clear_depth(1.0);
@@ -1903,6 +2053,7 @@ impl NativeMetalProbe {
                 now,
                 use_sponza,
                 real_game_meshes_opt,
+                msaa_enabled,
             );
             scope_encoder.end_encoding();
             scope_command_buffer.commit();
@@ -1912,12 +2063,17 @@ impl NativeMetalProbe {
         // texture composited as a picture-in-picture quad on top.
         let pass_descriptor = RenderPassDescriptor::new();
         let color_attachment = pass_descriptor.color_attachments().object_at(0).unwrap();
-        // Render into the multisampled texture, resolve straight into the
-        // real drawable — see MSAA_SAMPLE_COUNT's own doc comment.
-        color_attachment.set_texture(Some(&msaa_color_texture));
-        color_attachment.set_resolve_texture(Some(texture));
+        if let Some(msaa_color_texture) = &msaa_color_texture {
+            // Render into the multisampled texture, resolve straight into
+            // the real drawable — see MSAA_SAMPLE_COUNT's own doc comment.
+            color_attachment.set_texture(Some(msaa_color_texture));
+            color_attachment.set_resolve_texture(Some(texture));
+            color_attachment.set_store_action(MTLStoreAction::MultisampleResolve);
+        } else {
+            color_attachment.set_texture(Some(texture));
+            color_attachment.set_store_action(MTLStoreAction::Store);
+        }
         color_attachment.set_load_action(MTLLoadAction::Clear);
-        color_attachment.set_store_action(MTLStoreAction::MultisampleResolve);
         // No skybox in this renderer at all (see this comment's own history
         // — was a hardcoded debug magenta, meant to make any undrawn area
         // obvious during development, that ended up shipping as-is and
@@ -1946,10 +2102,12 @@ impl NativeMetalProbe {
             now,
             use_sponza,
             real_game_meshes_opt,
+            msaa_enabled,
         );
 
         if show_scope {
-            if let Some(quad_pipeline) = &self.quad_pipeline {
+            let quad_pipeline_ref = if msaa_enabled { &self.quad_pipeline } else { &self.quad_pipeline_no_msaa };
+            if let Some(quad_pipeline) = quad_pipeline_ref {
                 // Real-game mode: a circle dead center (matches the real
                 // lens quad's screen position — see build_centered_quad's
                 // own doc comment); the demo probe keeps its original
@@ -1970,7 +2128,8 @@ impl NativeMetalProbe {
         // Drawn last, screen-space, straight over the finished 3D frame —
         // see UI_SHADER_SOURCE's and prime_camera_viewport's own doc
         // comments for why these were never visible before this pass.
-        if let Some(ui_pipeline) = &self.ui_pipeline {
+        let ui_pipeline_ref = if msaa_enabled { &self.ui_pipeline } else { &self.ui_pipeline_no_msaa };
+        if let Some(ui_pipeline) = ui_pipeline_ref {
             if !self.ui_health_bars.is_empty() || !self.ui_floating_damage.is_empty() {
                 let (view_w, view_h) = self.view_size_points();
                 encoder.set_render_pipeline_state(ui_pipeline);
