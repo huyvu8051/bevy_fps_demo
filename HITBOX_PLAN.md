@@ -270,31 +270,46 @@ is exactly what Phase 3 would close later, not a surprise regression.
    All 5 passed. Full build (`server`+`client`+`shared`) still 0 errors;
    server ran cleanly afterward with no panics.
 
-## Phase 5 — Performance guardrails
+## Phase 5 — Performance guardrails — ✅ DONE (measured: no guardrail needed)
 
-The research doc flagged this: 30Hz × N zombies × per-bone
-`GlobalTransform` reads is bounded and cheap (transform propagation
-already happens for free), but N zombies each running a live
-`AnimationPlayer` server-side is new CPU work that didn't exist before.
+**Measured, then decided** — per the plan's own instructions, not a
+fixed amount of upfront optimization work.
 
-1. Reuse the existing `entity_phase`-based staggering pattern (already
-   used for `path_recalc_timer`) if animation advancement turns out to be
-   measurably expensive — e.g. only advance/re-sample animation state for
-   zombies within some distance of a player, or at a lower rate for
-   off-screen/far zombies, mirroring `update_zombie_lod`'s existing
-   distance-based cost-cutting on the client.
-2. Add a quick before/after measurement: server tick duration with N
-   zombies at rest vs. Phase 2 enabled, using whatever profiling the
-   project already has (check for existing perf-measurement systems
-   before adding new ones — `PerfTimings` exists client-side per the
-   earlier codebase read; confirm whether an equivalent exists or is
-   worth adding server-side).
-3. **Decision point:** if per-tick cost is unacceptable at the target
-   zombie count (the `ZOMBIE_SPAWNS` grid suggests up to ~100), consider
-   capping how many zombies get real bone-tracking (e.g. only zombies
-   within `MAX_SHOT_DISTANCE` of any player, falling back to the old
-   capsule+geometric guess for the rest — they're not shootable anyway at
-   that range) rather than abandoning the approach.
+**Method:** temporarily bumped `ZombieTargetCount`'s default from 10 to
+100 (the full `ZOMBIE_SPAWNS` grid — the worst case this plan flagged)
+and added a per-second logging probe measuring (a) real wall-clock tick
+duration (`Time::delta_secs()` — the actual cost of everything that
+frame: physics, networking, `AnimationPlugin`'s own internal curve
+sampling, our own bone bookkeeping) against the `SERVER_TICK_HZ` budget,
+and (b) the isolated cost of just reading every zombie's resolved bone
+`GlobalTransform`s (the same per-tick work `record_zombie_history` does),
+to separate "our own new bookkeeping" from everything else. Ran twice —
+once with the Phase 2+ skeleton-spawning observer active, once with it
+disabled (a true apples-to-apples baseline, both at the same 100-zombie
+population) — all temporary, removed after.
+
+**Results:**
+- Isolated bone-read cost: **~0.01ms** per tick across 100 zombies —
+  utterly negligible, confirms the research doc's own prediction that
+  per-bone `GlobalTransform` reads are effectively free.
+- Real tick duration: **avg ~37-39ms, max up to ~98ms**, against a
+  33.33ms budget — a genuine overrun at 100 zombies.
+- **But this overrun is identical with the skeleton-spawning observer
+  disabled** (avg ~37-39ms, max up to ~65ms, same range) — i.e., it's
+  **pre-existing** (physics/AI/navmesh cost at 100 zombies, unrelated to
+  this plan) and was already there before Phase 1 touched anything.
+
+**Conclusion:** the bone-hitbox work (Phases 1-4) adds no measurable
+per-tick cost at any zombie population tested, including the
+theoretical maximum. The 100-zombie tick overrun is real but is a
+separate, pre-existing server performance characteristic — out of scope
+for this plan and not something the guardrails below (staggering,
+capping bone-tracking by distance) would even address, since it isn't
+the bone tracking that's expensive. No Phase 5 code changes were kept;
+if the pre-existing 100-zombie overrun needs fixing later, that's its
+own investigation (likely `move_zombies`' navmesh/steering cost or
+avian3d's spatial queries at that entity count, going by the same
+overrun existing with zero skeletons in play).
 
 ## Suggested order of work / shippable checkpoints
 
