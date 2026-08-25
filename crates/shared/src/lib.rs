@@ -995,12 +995,11 @@ pub fn entity_phase(entity: Entity) -> f32 {
 
 // Which body region to aim at, and by how much, for random_aim_point below
 // — deliberately weighted toward center-mass (Body highest), so autopilot
-// reads as "aiming like a person," not a perfect aimbot. Head is excluded
-// entirely (not just given a low weight) per request — see random_aim_point,
-// which never rolls it. Playtest-tunable like every other hitbox constant
-// in this file.
+// reads as "aiming like a person," not a perfect aimbot. Head and Upper arm
+// are excluded entirely (not just given a low weight) per request — see
+// random_aim_point, which never rolls them. Playtest-tunable like every
+// other hitbox constant in this file.
 pub const AIM_REGION_WEIGHT_FOREARM: f32 = 2.0;
-pub const AIM_REGION_WEIGHT_UPPER_ARM: f32 = 3.0;
 pub const AIM_REGION_WEIGHT_THIGH: f32 = 4.0;
 pub const AIM_REGION_WEIGHT_SHIN: f32 = 5.0;
 pub const AIM_REGION_WEIGHT_BODY: f32 = 10.0;
@@ -1020,8 +1019,7 @@ pub const AIM_REGION_WEIGHT_BODY: f32 = 10.0;
 // "showing which body part autopilot is currently aiming at" on screen) —
 // never fed back into damage/collision math, so it's fine as a plain name.
 pub fn random_aim_point(bones: &BoneWorldPositions, target: Entity) -> Option<(Vec3, &'static str)> {
-    const TOTAL_WEIGHT: f32 =
-        AIM_REGION_WEIGHT_FOREARM + AIM_REGION_WEIGHT_UPPER_ARM + AIM_REGION_WEIGHT_THIGH + AIM_REGION_WEIGHT_SHIN + AIM_REGION_WEIGHT_BODY;
+    const TOTAL_WEIGHT: f32 = AIM_REGION_WEIGHT_FOREARM + AIM_REGION_WEIGHT_THIGH + AIM_REGION_WEIGHT_SHIN + AIM_REGION_WEIGHT_BODY;
     let base = entity_phase(target);
     let mut roll = base * TOTAL_WEIGHT;
     // A second, decorrelated-enough draw off the same base for picking a
@@ -1034,11 +1032,6 @@ pub fn random_aim_point(bones: &BoneWorldPositions, target: Entity) -> Option<(V
         return Option::zip(chain[1], chain[2]).map(|(a, b)| (a.midpoint(b), "Forearm"));
     }
     roll -= AIM_REGION_WEIGHT_FOREARM;
-    if roll < AIM_REGION_WEIGHT_UPPER_ARM {
-        let chain = if left { &bones.left_arm } else { &bones.right_arm };
-        return Option::zip(chain[0], chain[1]).map(|(a, b)| (a.midpoint(b), "Upper arm"));
-    }
-    roll -= AIM_REGION_WEIGHT_UPPER_ARM;
     if roll < AIM_REGION_WEIGHT_THIGH {
         let chain = if left { &bones.left_leg } else { &bones.right_leg };
         return Option::zip(chain[0], chain[1]).map(|(a, b)| (a.midpoint(b), "Thigh"));

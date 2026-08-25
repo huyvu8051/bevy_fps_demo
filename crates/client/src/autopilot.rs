@@ -90,6 +90,16 @@ const AUTOPILOT_FIRE_AIM_TOLERANCE_DEG: f32 = 12.0;
 // landing closer to center over a spray instead of climbing off-target).
 // ~4.3 degrees, playtest-tunable.
 const AUTOPILOT_AIM_PITCH_LOWER: f32 = 0.075;
+// Smooth continuous aim sway around the committed aim point, so autopilot
+// doesn't lock dead-still on target — reads as natural human aim, not a
+// robot. Driven by two continuous sin(time * freq) waves (not a per-frame
+// reseeded random jump — that would look like a jitter/snap, not a sway) on
+// distinct-enough frequencies so the path traces an organic loop instead of
+// a perfect circle. Kept slow per request — a fast wobble reads as
+// twitching, not aiming.
+const AUTOPILOT_AIM_WOBBLE_RADIUS: f32 = 0.24;
+const AUTOPILOT_AIM_WOBBLE_FREQ_X: f32 = 0.55;
+const AUTOPILOT_AIM_WOBBLE_FREQ_Y: f32 = 0.7;
 const AUTOPILOT_SPRINT_APPROACH_DISTANCE: f32 = 22.0;
 const AUTOPILOT_LOW_HEALTH_FRACTION: f32 = 0.3;
 const AUTOPILOT_LOW_HEALTH_RETREAT_BONUS: f32 = 4.0;
@@ -198,8 +208,24 @@ pub(crate) fn autopilot_think(
         .map_or((target_transform.translation, None), |(point, region)| (point, Some(region)));
     state.aiming_region = aiming_region;
     let to_target = aim_point - player_transform.translation;
+    // horizontal_distance (used below for both the pitch angle and the fire-
+    // range gate) is deliberately measured off the TRUE target, not the
+    // wobbled one — the wobble should sway the aim, not flicker the engage-
+    // range/fire gate in and out near a boundary.
     let horizontal_distance = Vec2::new(to_target.x, to_target.z).length();
-    let desired_yaw = (-to_target.x).atan2(-to_target.z);
+
+    // Smooth aim wobble — see AUTOPILOT_AIM_WOBBLE_RADIUS's own doc comment.
+    // Basis vectors perpendicular to the look direction so the sway traces a
+    // loop on screen (not, say, a line if it only ever moved along world Y).
+    let look_dir = to_target.normalize_or_zero();
+    let wobble_right = look_dir.cross(Vec3::Y).normalize_or_zero();
+    let wobble_up = wobble_right.cross(look_dir).normalize_or_zero();
+    let t = time.elapsed_secs();
+    let wobble = wobble_right * (ops::sin(t * AUTOPILOT_AIM_WOBBLE_FREQ_X) * AUTOPILOT_AIM_WOBBLE_RADIUS)
+        + wobble_up * (ops::sin(t * AUTOPILOT_AIM_WOBBLE_FREQ_Y + 1.7) * AUTOPILOT_AIM_WOBBLE_RADIUS);
+    let wobbled_target = to_target + wobble;
+
+    let desired_yaw = (-wobbled_target.x).atan2(-wobbled_target.z);
     // Nudged down a fixed amount (AUTOPILOT_AIM_PITCH_LOWER) rather than
     // dynamically compensating for apply_view_recoil's own pitch_kick —
     // recoil kicks the actual fired direction up during a sustained spray,
@@ -207,7 +233,7 @@ pub(crate) fn autopilot_think(
     // landing closer to center over a spray instead of climbing off the
     // top of the target. Simple and good enough; not trying to track the
     // exact live kick value.
-    let desired_pitch = (to_target.y.atan2(horizontal_distance.max(0.01)) - AUTOPILOT_AIM_PITCH_LOWER).clamp(-1.5, 1.5);
+    let desired_pitch = (wobbled_target.y.atan2(horizontal_distance.max(0.01)) - AUTOPILOT_AIM_PITCH_LOWER).clamp(-1.5, 1.5);
     cam.yaw = turn_towards_angle(cam.yaw, desired_yaw, turn_step);
     cam.pitch = turn_towards_angle(cam.pitch, desired_pitch, turn_step);
 
