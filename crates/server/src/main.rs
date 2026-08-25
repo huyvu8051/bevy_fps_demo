@@ -21,8 +21,8 @@ use shared::{
     ZombieAttackTimer, ZombieMotion, ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
-    MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PLAYER_LENGTH,
-    PLAYER_RADIUS, PLAYER_SPAWN,
+    MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PILLAR_RADIUS,
+    PLAYER_LENGTH, PLAYER_RADIUS, PLAYER_SPAWN,
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
     ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
     DIRECTOR_CALM_DURATION_SECS, DIRECTOR_CALM_PRESSURE_THRESHOLD, DIRECTOR_HORDE_SIZE,
@@ -189,6 +189,17 @@ fn spawn_arena_colliders(mut commands: Commands) {
             Transform::from_translation(center),
             RigidBody::Static,
             Collider::cuboid(size_x, ARENA_WALL_HEIGHT, size_z),
+        ));
+    }
+
+    // Free-standing pillars — same positions as NAVMESH_COLUMN_OBSTACLES
+    // (whose column_footprint carves a matching square cutout into the
+    // zombie navmesh), floor-to-ceiling so nothing can shoot/see over them.
+    for &(x, z) in &NAVMESH_COLUMN_OBSTACLES {
+        commands.spawn((
+            Transform::from_xyz(x, ARENA_WALL_HEIGHT / 2.0, z),
+            RigidBody::Static,
+            Collider::cylinder(PILLAR_RADIUS, ARENA_WALL_HEIGHT),
         ));
     }
 }
@@ -623,12 +634,16 @@ fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<Nav
 }
 
 fn column_footprint(x: f32, z: f32) -> Vec<Vec2> {
-    const COLUMN_RADIUS: f32 = 0.5;
+    // Square footprint (not a circle) is a deliberately cheap approximation
+    // for the navmesh cutout — PILLAR_RADIUS is small enough relative to
+    // ZOMBIE_AVOID_PROBE_DISTANCE that the corner rounding error doesn't
+    // matter for pathfinding, and Collider::cylinder below is what actually
+    // determines the pillar's real collision shape.
     vec![
-        Vec2::new(x - COLUMN_RADIUS, z - COLUMN_RADIUS),
-        Vec2::new(x - COLUMN_RADIUS, z + COLUMN_RADIUS),
-        Vec2::new(x + COLUMN_RADIUS, z + COLUMN_RADIUS),
-        Vec2::new(x + COLUMN_RADIUS, z - COLUMN_RADIUS),
+        Vec2::new(x - PILLAR_RADIUS, z - PILLAR_RADIUS),
+        Vec2::new(x - PILLAR_RADIUS, z + PILLAR_RADIUS),
+        Vec2::new(x + PILLAR_RADIUS, z + PILLAR_RADIUS),
+        Vec2::new(x + PILLAR_RADIUS, z - PILLAR_RADIUS),
     ]
 }
 

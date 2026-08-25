@@ -33,9 +33,9 @@ use shared::{
     PlayerDiedFx, PlayerFiredFx,
     PlayerStance, RequestRestart, SetAutoMaintainZombies, SetZombieCount, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieMotion,
-    zombie_hit_damage_geometric, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED, ZOMBIE_ATTACK_INTERVAL,
-    ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH, ZOMBIE_RADIUS, ZOMBIE_SCALE, ZOMBIE_SPAWNS,
-    ZOMBIE_STOP_DISTANCE,
+    zombie_hit_damage_geometric, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_COLUMN_OBSTACLES,
+    PILLAR_RADIUS, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH, ZOMBIE_RADIUS,
+    ZOMBIE_SCALE, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
@@ -4117,6 +4117,24 @@ fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
             Transform::from_translation(center),
             RigidBody::Static,
             Collider::cuboid(size_x, ARENA_WALL_HEIGHT, size_z),
+        ));
+    }
+
+    // Free-standing pillars — cover/obstacles for testing navigation and
+    // line-of-sight (autopilot targeting, zombie pathfinding) instead of
+    // the previously wide-open flat room. Same positions as crates/server's
+    // spawn_arena_colliders and the navmesh cutout (column_footprint in
+    // crates/server, driven by this same NAVMESH_COLUMN_OBSTACLES array),
+    // so the client's visual/collider copy can't drift out of sync with
+    // the server's authoritative one.
+    let pillar_mesh = meshes.add(Cylinder::new(PILLAR_RADIUS, ARENA_WALL_HEIGHT));
+    for &(x, z) in &NAVMESH_COLUMN_OBSTACLES {
+        commands.spawn((
+            Mesh3d(pillar_mesh.clone()),
+            MeshMaterial3d(wall_material.clone()),
+            Transform::from_xyz(x, ARENA_WALL_HEIGHT / 2.0, z),
+            RigidBody::Static,
+            Collider::cylinder(PILLAR_RADIUS, ARENA_WALL_HEIGHT),
         ));
     }
 

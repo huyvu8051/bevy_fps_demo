@@ -83,6 +83,17 @@ const AUTOPILOT_IDLE_SCAN_DEG_PER_SEC: f32 = 20.0;
 // this can't just be a continuous sine wave.
 const AUTOPILOT_DODGE_CYCLE_HZ: f32 = 0.4;
 const AUTOPILOT_DODGE_DUTY_CYCLE: f32 = 0.35;
+// autopilot_think ran its full decision logic (including an O(zombie count)
+// scan for the swarm-retreat check) unconditionally every Update tick — up
+// to 120/sec on a ProMotion iPhone — even though "should I retreat/approach/
+// dodge" doesn't need re-deciding anywhere near that often. Aim tracking
+// (turn_towards_angle) and the fire gate (aim error + the single already-
+// committed target's distance, both O(1)) still run every frame for smooth
+// camera motion and responsive shooting; only the expensive nearby-zombie
+// scan + resulting move_axis/sprint decision is throttled to this rate —
+// same "don't recompute faster than the result can even be acted on"
+// reasoning as send_player_input's own INPUT_SEND_HZ.
+const AUTOPILOT_DECISION_HZ: f32 = 20.0;
 
 // Nearest-in-range, commit-and-reevaluate — same shape as the server's
 // bot_pick_target, adapted to run purely client-side against zombies'
@@ -128,6 +139,7 @@ pub(crate) fn autopilot_think(
     zombies: Query<&Transform, With<Zombie>>,
     health: Query<&Health, With<Player>>,
     mut camera: Query<&mut FpsCamera>,
+    mut decision_timer: Local<f32>,
 ) {
     if !autopilot.0 {
         return;
@@ -152,12 +164,31 @@ pub(crate) fn autopilot_think(
         return;
     };
 
+    // Aim tracking and the fire gate are both O(1) (the single already-
+    // committed target's position, nothing to scan) and stay smooth/
+    // responsive every frame regardless of the decision throttle below.
     let to_target = target_transform.translation - player_transform.translation;
     let horizontal_distance = Vec2::new(to_target.x, to_target.z).length();
     let desired_yaw = (-to_target.x).atan2(-to_target.z);
     let desired_pitch = to_target.y.atan2(horizontal_distance.max(0.01)).clamp(-1.5, 1.5);
     cam.yaw = turn_towards_angle(cam.yaw, desired_yaw, turn_step);
     cam.pitch = turn_towards_angle(cam.pitch, desired_pitch, turn_step);
+
+    let raw_aim_error = (cam.yaw - desired_yaw).rem_euclid(std::f32::consts::TAU);
+    let aim_error = raw_aim_error.min(std::f32::consts::TAU - raw_aim_error);
+    intent.fire =
+        horizontal_distance <= AUTOPILOT_ENGAGE_RANGE + 1.0 && aim_error < AUTOPILOT_FIRE_AIM_TOLERANCE_DEG.to_radians();
+
+    // Everything below is the actual "what should I do about it" decision
+    // — including the O(zombie count) nearby-scan for swarm-retreat — which
+    // doesn't need re-deciding every single frame. Throttled to
+    // AUTOPILOT_DECISION_HZ; move_axis/sprint just keep their last decided
+    // value on skipped frames (still held in the `intent` resource).
+    *decision_timer -= dt;
+    if *decision_timer > 0.0 {
+        return;
+    }
+    *decision_timer = 1.0 / AUTOPILOT_DECISION_HZ;
 
     let low_health = health
         .single()
@@ -205,13 +236,8 @@ pub(crate) fn autopilot_think(
         }
     };
 
-    let raw_aim_error = (cam.yaw - desired_yaw).rem_euclid(std::f32::consts::TAU);
-    let aim_error = raw_aim_error.min(std::f32::consts::TAU - raw_aim_error);
-
     intent.move_axis = move_axis;
     intent.sprint = nearby.is_empty() && horizontal_distance > AUTOPILOT_SPRINT_APPROACH_DISTANCE;
-    intent.fire =
-        horizontal_distance <= AUTOPILOT_ENGAGE_RANGE + 1.0 && aim_error < AUTOPILOT_FIRE_AIM_TOLERANCE_DEG.to_radians();
 }
 
 // Shortest-path angle interpolation, rate-limited — same reasoning as the
