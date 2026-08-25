@@ -24,7 +24,10 @@ use objc::{runtime::Object, *};
 // native_game_app.rs (headless App) and native_game_extract.rs
 // (extraction).
 use super::native_game_app::build_headless_game_ecs_app;
-use super::native_game_extract::{extract_render_snapshot, ExtractedMesh, LightSnapshot, SunSnapshot};
+use super::native_game_extract::{
+    extract_render_snapshot, prime_camera_viewport, ExtractedMesh, FloatingDamageSnapshot, HealthBarSnapshot,
+    LightSnapshot, SunSnapshot,
+};
 
 // Lighting was never actually ported when this renderer took over from
 // bevy_render/wgpu — every fragment shader below used a single hardcoded
@@ -540,6 +543,145 @@ struct QuadVertex {
     uv: [f32; 2],
 }
 
+// bevy_ui was never drawn by this renderer at all (it draws its own scene
+// straight via the `metal` crate, never touching bevy_render's UI render
+// graph) — zombie health bars and floating damage numbers looked simply
+// "not ported" but were actually never screen-projected in the first place
+// (see prime_camera_viewport's doc comment in native_game_extract.rs).
+// Once that's fixed, this is the other half: actually draw them. Reuses
+// the same "position/uv quad straight into NDC, no view/projection" shape
+// as QUAD_SHADER_SOURCE's scope PIP above, plus a per-draw tint uniform so
+// one pipeline covers both flat-colored rects (health bar background/fill,
+// sampling `white_texture` so `texColor` is always (1,1,1,1) and the
+// result is just `tint`) and glyph quads (sampling `font_atlas_texture`,
+// whose texels are (1,1,1,coverage) — see build_font_atlas — so the result
+// is `tint` masked by per-pixel glyph coverage).
+const UI_SHADER_SOURCE: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct UiVertex {
+    packed_float2 position;
+    packed_float2 uv;
+};
+
+struct UiVertexOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+struct UiUniforms {
+    float4 tint;
+};
+
+vertex UiVertexOut ui_vertex(uint vid [[vertex_id]],
+                              const device UiVertex *verts [[buffer(0)]]) {
+    UiVertexOut out;
+    UiVertex v = verts[vid];
+    out.position = float4(v.position, 0.0, 1.0);
+    out.uv = v.uv;
+    return out;
+}
+
+fragment float4 ui_fragment(UiVertexOut in [[stage_in]],
+                             constant UiUniforms &uniforms [[buffer(1)]],
+                             texture2d<float> tex [[texture(0)]],
+                             sampler texSampler [[sampler(0)]]) {
+    float4 texColor = tex.sample(texSampler, in.uv);
+    return texColor * uniforms.tint;
+}
+"#;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct UiVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct UiUniforms {
+    tint: [f32; 4],
+}
+
+// A tiny built-in 5x7 dot-matrix font — just enough glyphs for floating
+// damage numbers ("12.0") and health bar labels ("6.0/8"): digits, '.',
+// and '/'. Generated procedurally into a small RGBA8 atlas texture at
+// startup (build_font_atlas) instead of shipping a font asset/using
+// CoreText, since this renderer already draws everything else via raw
+// vertex data with no asset pipeline of its own. One row, GLYPH_COUNT
+// cells wide, each cell GLYPH_W x GLYPH_H texels — see glyph_index for the
+// character -> cell mapping and glyph_uv_rect for the per-glyph UV rect.
+const GLYPH_W: usize = 5;
+const GLYPH_H: usize = 7;
+const GLYPH_COUNT: usize = 12;
+// Row-major bits, MSB (bit 4) = leftmost pixel, 7 rows per glyph, in
+// glyph_index order: '0'..'9', '.', '/'.
+const GLYPH_BITMAPS: [[u8; GLYPH_H]; GLYPH_COUNT] = [
+    [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110], // 0
+    [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110], // 1
+    [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111], // 2
+    [0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110], // 3
+    [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010], // 4
+    [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110], // 5
+    [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110], // 6
+    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000], // 7
+    [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110], // 8
+    [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100], // 9
+    [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100], // .
+    [0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b00000, 0b00000], // /
+];
+
+fn glyph_index(c: char) -> Option<usize> {
+    match c {
+        '0'..='9' => Some(c as usize - '0' as usize),
+        '.' => Some(10),
+        '/' => Some(11),
+        _ => None,
+    }
+}
+
+// Cell N occupies texels [N*GLYPH_W, (N+1)*GLYPH_W) horizontally, the full
+// GLYPH_H rows vertically — see build_font_atlas for how the texture
+// itself is laid out.
+fn glyph_uv_rect(index: usize) -> (f32, f32) {
+    let u0 = index as f32 / GLYPH_COUNT as f32;
+    let u1 = (index + 1) as f32 / GLYPH_COUNT as f32;
+    (u0, u1)
+}
+
+// One-time RGBA8 atlas build: GLYPH_COUNT cells side by side, each
+// GLYPH_W x GLYPH_H texels. Lit pixels are opaque white (1,1,1,1), unlit
+// pixels fully transparent (0,0,0,0) — see UI_SHADER_SOURCE's own doc
+// comment for why that makes `texColor * tint` do the right thing for
+// both flat rects (sampling `white_texture` instead) and glyphs.
+fn build_font_atlas(device: &Device) -> metal::Texture {
+    let width = (GLYPH_W * GLYPH_COUNT) as u64;
+    let height = GLYPH_H as u64;
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    for (index, bitmap) in GLYPH_BITMAPS.iter().enumerate() {
+        for (row, bits) in bitmap.iter().enumerate() {
+            for col in 0..GLYPH_W {
+                let lit = (bits >> (GLYPH_W - 1 - col)) & 1 != 0;
+                let x = index * GLYPH_W + col;
+                let y = row;
+                let offset = (y * width as usize + x) * 4;
+                let value = if lit { 255 } else { 0 };
+                pixels[offset..offset + 4].copy_from_slice(&[value, value, value, value]);
+            }
+        }
+    }
+    let descriptor = metal::TextureDescriptor::new();
+    descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm);
+    descriptor.set_width(width);
+    descriptor.set_height(height);
+    descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
+    let texture = device.new_texture(&descriptor);
+    texture.replace_region(metal::MTLRegion::new_2d(0, 0, width, height), 0, pixels.as_ptr() as *const _, width * 4);
+    texture
+}
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct SkinnedUniforms {
@@ -631,6 +773,16 @@ pub struct NativeMetalProbe {
     // extraction, or for the toy demo/patrol probe world, which has no
     // ECS lights at all.
     real_game_light: LightUniform,
+    // bevy_ui overlay: pipeline/atlas/sampler for drawing zombie health
+    // bars and floating damage numbers (see UI_SHADER_SOURCE's own doc
+    // comment) plus this frame's already-extracted screen-space data —
+    // `None` pipeline means the shader failed to compile, same
+    // fail-soft pattern sponza/skinned/quad already use.
+    ui_pipeline: Option<RenderPipelineState>,
+    ui_sampler: metal::SamplerState,
+    font_atlas_texture: metal::Texture,
+    ui_floating_damage: Vec<FloatingDamageSnapshot>,
+    ui_health_bars: Vec<HealthBarSnapshot>,
 }
 
 #[derive(bevy::ecs::component::Component, Clone, Copy)]
@@ -772,6 +924,40 @@ fn build_centered_quad(device: &Device, aspect: f32, half_height: f32) -> metal:
         (verts.len() * std::mem::size_of::<QuadVertex>()) as u64,
         MTLResourceOptions::StorageModeShared,
     )
+}
+
+// Screen-space rect helper for the UI overlay: `x`/`y`/`w`/`h` are
+// top-left-origin logical points (matching bevy_ui's `Node.left`/`.top`,
+// per prime_camera_viewport's doc comment), converted straight to Metal
+// NDC (-1..1, Y up) — no view/projection needed, same "straight into clip
+// space" approach build_centered_quad/the scope PIP quad already use.
+// `uv` is [bottom-left, bottom-right, top-right, top-left], V increasing
+// downward (image-space convention) to match `build_font_atlas`.
+fn ndc_ui_rect(x: f32, y: f32, w: f32, h: f32, view_w: f32, view_h: f32, uv: [[f32; 2]; 4]) -> [UiVertex; 6] {
+    let ndc_x0 = (x / view_w) * 2.0 - 1.0;
+    let ndc_x1 = ((x + w) / view_w) * 2.0 - 1.0;
+    let ndc_y0 = 1.0 - (y / view_h) * 2.0;
+    let ndc_y1 = 1.0 - ((y + h) / view_h) * 2.0;
+    [
+        UiVertex { position: [ndc_x0, ndc_y1], uv: uv[0] },
+        UiVertex { position: [ndc_x1, ndc_y1], uv: uv[1] },
+        UiVertex { position: [ndc_x1, ndc_y0], uv: uv[2] },
+        UiVertex { position: [ndc_x0, ndc_y1], uv: uv[0] },
+        UiVertex { position: [ndc_x1, ndc_y0], uv: uv[2] },
+        UiVertex { position: [ndc_x0, ndc_y0], uv: uv[3] },
+    ]
+}
+
+// `set_vertex_bytes`/`set_fragment_bytes` instead of a real `metal::Buffer`
+// — each UI quad is tiny (96 bytes of vertex data) and drawn once, so a
+// full buffer allocation per quad would be pure overhead; Metal's inline
+// "bytes" path exists exactly for this.
+fn draw_ui_quad(encoder: &metal::RenderCommandEncoderRef, verts: &[UiVertex; 6], tint: [f32; 4], texture: &metal::Texture) {
+    encoder.set_vertex_bytes(0, std::mem::size_of::<[UiVertex; 6]>() as u64, verts.as_ptr() as *const _);
+    let uniforms = UiUniforms { tint };
+    encoder.set_fragment_bytes(1, std::mem::size_of::<UiUniforms>() as u64, &uniforms as *const _ as *const _);
+    encoder.set_fragment_texture(0, Some(texture));
+    encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
 }
 
 struct RealGameMeshDraw<'a> {
@@ -972,6 +1158,45 @@ impl NativeMetalProbe {
             MTLResourceOptions::StorageModeShared,
         );
 
+        let ui_pipeline = match device.new_library_with_source(UI_SHADER_SOURCE, &compile_options) {
+            Ok(library) => {
+                let vertex_fn = library.get_function("ui_vertex", None).unwrap();
+                let fragment_fn = library.get_function("ui_fragment", None).unwrap();
+                let descriptor = RenderPipelineDescriptor::new();
+                descriptor.set_vertex_function(Some(&vertex_fn));
+                descriptor.set_fragment_function(Some(&fragment_fn));
+                let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+                color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+                // Health bar backgrounds are translucent black and glyph
+                // quads carry a coverage-shaped alpha (see build_font_atlas)
+                // — both need real alpha blending, unlike quad_pipeline's
+                // opaque scope PIP above.
+                color_attachment.set_blending_enabled(true);
+                color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+                color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
+                color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+                color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+                color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+                color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+                device.new_render_pipeline_state(&descriptor).ok()
+            }
+            Err(err) => {
+                eprintln!("[native_metal_probe] ui shader compile failed: {err}");
+                None
+            }
+        };
+        // Nearest, not linear — this is a crisp pixel font/flat-colored
+        // rects, not a photo texture; linear filtering would just blur
+        // glyph edges. Clamp instead of sponza_sampler's Repeat, since a
+        // glyph quad's UV can legitimately sit exactly on a cell boundary.
+        let ui_sampler_descriptor = metal::SamplerDescriptor::new();
+        ui_sampler_descriptor.set_min_filter(metal::MTLSamplerMinMagFilter::Nearest);
+        ui_sampler_descriptor.set_mag_filter(metal::MTLSamplerMinMagFilter::Nearest);
+        ui_sampler_descriptor.set_address_mode_s(metal::MTLSamplerAddressMode::ClampToEdge);
+        ui_sampler_descriptor.set_address_mode_t(metal::MTLSamplerAddressMode::ClampToEdge);
+        let ui_sampler = device.new_sampler(&ui_sampler_descriptor);
+        let font_atlas_texture = build_font_atlas(&device);
+
         Self {
             device,
             layer,
@@ -1008,6 +1233,11 @@ impl NativeMetalProbe {
             real_game_scope_active: false,
             real_game_scope_fov: 12.0_f32.to_radians(),
             real_game_light: FALLBACK_LIGHT,
+            ui_pipeline,
+            ui_sampler,
+            font_atlas_texture,
+            ui_floating_damage: Vec::new(),
+            ui_health_bars: Vec::new(),
         }
     }
 
@@ -1086,6 +1316,20 @@ impl NativeMetalProbe {
             if (current.width - target.width).abs() > 0.5 || (current.height - target.height).abs() > 0.5 {
                 self.layer.set_drawable_size(target);
             }
+        }
+    }
+
+    // The view's own size in points (not `drawable_size`'s physical
+    // pixels — that's `sync_drawable_size`'s `bounds.size * contents_scale`).
+    // Needed for prime_camera_viewport and the UI overlay's NDC math, both
+    // of which must agree with the logical-pixel space `Node.left/.top`
+    // are laid out in (see prime_camera_viewport's own doc comment for why
+    // that's points, i.e. scale_factor 1.0, not physical pixels).
+    fn view_size_points(&self) -> (f32, f32) {
+        unsafe {
+            let raw_layer = self.layer.as_ptr() as *mut Object;
+            let bounds: CGRect = msg_send![raw_layer, bounds];
+            (bounds.size.width as f32, bounds.size.height as f32)
         }
     }
 
@@ -1332,9 +1576,13 @@ impl NativeMetalProbe {
         // not a hand-placed patrol dummy's phase offset.
         let mut real_game_extracted: Vec<(bevy::transform::components::Transform, EntityKind, (usize, f32))> =
             Vec::new();
+        let (view_width_pts, view_height_pts) = self.view_size_points();
         if let Some(app) = &mut self.real_game_app {
+            prime_camera_viewport(app.world_mut(), view_width_pts, view_height_pts);
             app.update();
             let snapshot = extract_render_snapshot(app.world_mut());
+            self.ui_floating_damage = snapshot.floating_damage;
+            self.ui_health_bars = snapshot.health_bars;
             if let Some(cam) = &snapshot.camera {
                 self.camera_position = cam.eye;
                 self.camera_yaw = cam.yaw;
@@ -1600,6 +1848,51 @@ impl NativeMetalProbe {
                 encoder.set_fragment_texture(0, Some(&self.scope_color_texture));
                 encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
                 encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+            }
+        }
+
+        // bevy_ui overlay: zombie health bars + floating damage numbers.
+        // Drawn last, screen-space, straight over the finished 3D frame —
+        // see UI_SHADER_SOURCE's and prime_camera_viewport's own doc
+        // comments for why these were never visible before this pass.
+        if let Some(ui_pipeline) = &self.ui_pipeline {
+            if !self.ui_health_bars.is_empty() || !self.ui_floating_damage.is_empty() {
+                let (view_w, view_h) = self.view_size_points();
+                encoder.set_render_pipeline_state(ui_pipeline);
+                encoder.set_fragment_sampler_state(0, Some(&self.ui_sampler));
+
+                const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+                for bar in &self.ui_health_bars {
+                    let [x, y] = bar.screen_pos;
+                    let w = crate::ZOMBIE_HEALTH_BAR_WIDTH_PX;
+                    let h = crate::ZOMBIE_HEALTH_BAR_HEIGHT_PX;
+                    // Background — same translucent black
+                    // spawn_zombie_health_bar (crate::lib) gives the real
+                    // bevy_ui Node.
+                    let bg = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
+                    draw_ui_quad(encoder, &bg, [0.0, 0.0, 0.0, 0.5], &self.white_texture);
+                    // Fill — same green ZombieHealthBarFill uses, scaled to
+                    // `fraction` exactly like that Node's own Val::Percent
+                    // width.
+                    let fill = ndc_ui_rect(x, y, w * bar.fraction, h, view_w, view_h, FULL_UV);
+                    draw_ui_quad(encoder, &fill, [0.2, 0.9, 0.2, 1.0], &self.white_texture);
+                }
+
+                for dmg in &self.ui_floating_damage {
+                    let [x, y] = dmg.screen_pos;
+                    let scale = dmg.font_size / GLYPH_H as f32;
+                    let mut cursor_x = x;
+                    for ch in dmg.text.chars() {
+                        let Some(index) = glyph_index(ch) else { continue };
+                        let (u0, u1) = glyph_uv_rect(index);
+                        let uv = [[u0, 1.0], [u1, 1.0], [u1, 0.0], [u0, 0.0]];
+                        let glyph_w = GLYPH_W as f32 * scale;
+                        let glyph_h = GLYPH_H as f32 * scale;
+                        let quad = ndc_ui_rect(cursor_x, y, glyph_w, glyph_h, view_w, view_h, uv);
+                        draw_ui_quad(encoder, &quad, dmg.color, &self.font_atlas_texture);
+                        cursor_x += glyph_w + scale;
+                    }
+                }
             }
         }
 

@@ -11,6 +11,8 @@
 //! draw-call wiring.
 
 use bevy::asset::Assets;
+use bevy::camera::{Camera, Projection, RenderTargetInfo};
+use bevy::ecs::hierarchy::Children;
 use bevy::ecs::query::{With, Without};
 use bevy::ecs::system::{Query, Res, SystemState};
 use bevy::image::Image;
@@ -19,9 +21,44 @@ use bevy::light::{DirectionalLight, PointLight};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::render::render_resource::TextureFormat;
+use bevy::text::{TextColor, TextFont};
 use bevy::transform::components::{GlobalTransform, Transform};
+use bevy::ui::widget::Text;
+use bevy::ui::{Display, Node, Val};
 
 use shared::{NetPlayer, Zombie};
+
+/// The headless real-game `App` has no `Window`/`RenderPlugin` at all (see
+/// `native_game_app.rs`'s own plugin-set doc comment), so `Camera::
+/// world_to_viewport` — which `update_zombie_health_bars` and
+/// `update_floating_damage_texts` (crate::lib) both rely on to place their
+/// bevy_ui `Node`s on screen — always failed: `logical_viewport_size()`
+/// needs `Camera.computed.target_info`, which bevy_render's internal
+/// `camera_system` normally fills in once per frame from the real Window's
+/// size/scale factor, and that system never runs here. Both UI systems
+/// treat a failed projection as "off-screen" and set `Display::None`, so
+/// every floating damage number and zombie health bar silently stayed
+/// hidden forever — not a rendering gap so much as the screen-space data
+/// itself never being computed. Filling in the same fields by hand from
+/// the Metal layer's own known point size (called right before
+/// `app.update()`, every frame, since the view can resize) is far simpler
+/// than pulling in enough of WindowPlugin/RenderPlugin for the real system
+/// to apply, and is the same "extract/patch the minimum Bevy state a
+/// system needs" approach the rest of this module already uses.
+pub fn prime_camera_viewport(world: &mut bevy::ecs::world::World, width_pts: f32, height_pts: f32) {
+    let mut state: SystemState<Query<(&mut Camera, &mut Projection), With<crate::FpsCamera>>> = SystemState::new(world);
+    let mut query = state.get_mut(world);
+    let Ok((mut camera, mut projection)) = query.single_mut() else { return };
+    let (w, h) = (width_pts.max(1.0), height_pts.max(1.0));
+    // No `camera.viewport` override — leaving it `None` means "the full
+    // render target", which `target_info` below now defines.
+    camera.computed.target_info = Some(RenderTargetInfo {
+        physical_size: bevy::math::UVec2::new(w as u32, h as u32),
+        scale_factor: 1.0,
+    });
+    projection.update(w, h);
+    camera.computed.clip_from_view = projection.get_clip_from_view();
+}
 
 /// Raw RGBA8 pixel data for one mesh's base-color texture, extracted from
 /// Bevy's `Image` asset — `None` on the `ExtractedMesh` when the material
@@ -139,6 +176,34 @@ pub struct RenderSnapshot {
     pub static_meshes: Vec<ExtractedMesh>,
     pub light: Option<LightSnapshot>,
     pub sun: Option<SunSnapshot>,
+    pub floating_damage: Vec<FloatingDamageSnapshot>,
+    pub health_bars: Vec<HealthBarSnapshot>,
+}
+
+/// A still-alive floating damage number, already positioned/faded by
+/// `update_floating_damage_texts` (crate::lib) — `screen_pos` is that
+/// system's own `Node.left/.top` (logical points, top-left origin), read
+/// straight off, not re-derived. Only entities left `Display::Flex` by
+/// that system (on-screen, not yet expired) are extracted; see
+/// `prime_camera_viewport`'s doc comment for why this used to always be
+/// empty.
+pub struct FloatingDamageSnapshot {
+    pub screen_pos: [f32; 2],
+    pub text: String,
+    pub color: [f32; 4],
+    pub font_size: f32,
+}
+
+/// A zombie health bar the game has already decided is worth showing —
+/// `update_zombie_health_bars` (crate::lib) owns the "near + nearest
+/// ZOMBIE_HEALTH_BAR_MAX_VISIBLE" selection and the `ZombieHealthBarsHidden`
+/// cheat toggle; this only reads whatever that system left `Display::Flex`,
+/// same as `FloatingDamageSnapshot`, instead of re-deriving that selection
+/// here. `screen_pos`/`fraction` are its own `Node.left/.top` and the fill
+/// child's `Node.width` (a `Val::Percent`), respectively.
+pub struct HealthBarSnapshot {
+    pub screen_pos: [f32; 2],
+    pub fraction: f32,
 }
 
 /// The scene's real `DirectionalLight` ("MainSun", crate::lib — spawned
@@ -353,6 +418,50 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         let c = sun.color.to_srgba();
         SunSnapshot { direction: transform.forward().to_array(), color: [c.red, c.green, c.blue] }
     });
+
+    // Floating damage numbers: see FloatingDamageSnapshot's own doc comment.
+    let mut damage_state: SystemState<
+        Query<(&Node, &Text, &TextColor, &TextFont), With<crate::FloatingDamageText>>,
+    > = SystemState::new(world);
+    snapshot.floating_damage = damage_state
+        .get(world)
+        .iter()
+        .filter(|(node, ..)| node.display == Display::Flex)
+        .filter_map(|(node, text, color, font)| {
+            let (Val::Px(x), Val::Px(y)) = (node.left, node.top) else { return None };
+            let c = color.0.to_srgba();
+            Some(FloatingDamageSnapshot {
+                screen_pos: [x, y],
+                text: text.0.clone(),
+                color: [c.red, c.green, c.blue, c.alpha],
+                font_size: font.font_size,
+            })
+        })
+        .collect();
+
+    // Zombie health bars: see HealthBarSnapshot's own doc comment. Both
+    // queries live in one SystemState so the fill lookup below can borrow
+    // World data for an arbitrary child entity without a second, separately
+    // borrowed SystemState.
+    let mut bar_state: SystemState<(
+        Query<(&Node, &Children), With<crate::ZombieHealthBar>>,
+        Query<&Node, With<crate::ZombieHealthBarFill>>,
+    )> = SystemState::new(world);
+    let (bars, fills) = bar_state.get(world);
+    snapshot.health_bars = bars
+        .iter()
+        .filter(|(node, _)| node.display == Display::Flex)
+        .filter_map(|(node, children)| {
+            let (Val::Px(x), Val::Px(y)) = (node.left, node.top) else { return None };
+            children.iter().find_map(|&child| match fills.get(child) {
+                Ok(fill_node) => match fill_node.width {
+                    Val::Percent(pct) => Some(HealthBarSnapshot { screen_pos: [x, y], fraction: (pct / 100.0).clamp(0.0, 1.0) }),
+                    _ => None,
+                },
+                Err(_) => None,
+            })
+        })
+        .collect();
 
     // Static meshes: arena walls/floor + gun scene meshes, both plain
     // Mesh3d/MeshMaterial3d<StandardMaterial> entities — see this module's
