@@ -56,6 +56,11 @@ pub(crate) struct AutopilotState {
     /// purely a HUD/debug label (see update_debug_panel's "Aiming: {}"
     /// line), never read for anything gameplay-affecting.
     pub(crate) aiming_region: Option<&'static str>,
+    /// Counts down after `target` changes to a different zombie (see
+    /// AUTOPILOT_TARGET_SWITCH_HOLD_MIN/MAX's own doc comment) — fire is
+    /// gated on this hitting 0, so autopilot pauses a beat on acquiring a
+    /// new target instead of instantly spraying it the same frame it swaps.
+    hold_fire_timer: f32,
 }
 
 /// Synthesized "virtual input" for this frame — read by send_player_input/
@@ -78,6 +83,13 @@ const AUTOPILOT_ENGAGE_RANGE: f32 = 14.0;
 // autopilot backs away instead of just stopping.
 const AUTOPILOT_RETREAT_RANGE: f32 = 5.0;
 const AUTOPILOT_RETARGET_INTERVAL: f32 = 1.2;
+// A random pause (rolled once per target switch — see AutopilotState's own
+// hold_fire_timer doc comment) before firing resumes on the new target, so
+// autopilot doesn't keep spraying uninterrupted the instant it swaps to a
+// different zombie — reads as a brief "target acquired" beat instead of a
+// seamless aimbot hand-off.
+const AUTOPILOT_TARGET_SWITCH_HOLD_MIN: f32 = 0.1;
+const AUTOPILOT_TARGET_SWITCH_HOLD_MAX: f32 = 0.3;
 // Rate-limited aim tracking, mirroring ZOMBIE_TURN_RATE_DEG (180.0,
 // shared/src/lib.rs) used everywhere else in this codebase for the same
 // "looks like tracking, not an instant aimbot snap" reasoning.
@@ -142,12 +154,22 @@ pub(crate) fn autopilot_pick_target(
     state.retarget_timer -= time.delta_secs();
     let target_alive = state.target.is_some_and(|target| zombies.contains(target));
     if !target_alive || state.retarget_timer <= 0.0 {
-        state.target = zombies
+        let new_target = zombies
             .iter()
             .map(|(zombie, transform)| (zombie, player_transform.translation.distance(transform.translation)))
             .filter(|&(_, distance)| distance <= AUTOPILOT_DETECT_RANGE)
             .min_by(|(_, a), (_, b)| a.total_cmp(b))
             .map(|(zombie, _)| zombie);
+        if new_target != state.target {
+            // Rolled once here, not re-rolled every frame the hold is
+            // active — a single random duration in
+            // [AUTOPILOT_TARGET_SWITCH_HOLD_MIN, _MAX), same sin-based
+            // "randomness" used elsewhere in this codebase (no rand crate).
+            let base = (ops::sin(time.elapsed_secs() * 947.0) + 1.0) * 0.5;
+            state.hold_fire_timer =
+                AUTOPILOT_TARGET_SWITCH_HOLD_MIN + base * (AUTOPILOT_TARGET_SWITCH_HOLD_MAX - AUTOPILOT_TARGET_SWITCH_HOLD_MIN);
+        }
+        state.target = new_target;
         state.retarget_timer = AUTOPILOT_RETARGET_INTERVAL;
     }
 }
@@ -237,10 +259,13 @@ pub(crate) fn autopilot_think(
     cam.yaw = turn_towards_angle(cam.yaw, desired_yaw, turn_step);
     cam.pitch = turn_towards_angle(cam.pitch, desired_pitch, turn_step);
 
+    state.hold_fire_timer = (state.hold_fire_timer - dt).max(0.0);
+
     let raw_aim_error = (cam.yaw - desired_yaw).rem_euclid(std::f32::consts::TAU);
     let aim_error = raw_aim_error.min(std::f32::consts::TAU - raw_aim_error);
-    intent.fire =
-        horizontal_distance <= AUTOPILOT_ENGAGE_RANGE + 1.0 && aim_error < AUTOPILOT_FIRE_AIM_TOLERANCE_DEG.to_radians();
+    intent.fire = state.hold_fire_timer <= 0.0
+        && horizontal_distance <= AUTOPILOT_ENGAGE_RANGE + 1.0
+        && aim_error < AUTOPILOT_FIRE_AIM_TOLERANCE_DEG.to_radians();
 
     // Everything below is the actual "what should I do about it" decision
     // — including the O(zombie count) nearby-scan for swarm-retreat — which

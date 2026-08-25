@@ -181,6 +181,12 @@ const MUZZLE_LIGHT_RANGE: f32 = 2.0;
 const TRACER_CHANCE: f32 = 0.5;
 const TRACER_LIFETIME: f32 = 0.045;
 const TRACER_RADIUS: f32 = 0.012;
+// Tracer-only nudge below muzzle_world_pos — the tracer's start point was
+// reading as coming from the front sight instead of the barrel itself.
+// Deliberately not folded into MUZZLE_OFFSET (which also positions the
+// flash/smoke quads, unaffected by this report) — this only lowers where
+// the tracer streak starts.
+const TRACER_START_Y_OFFSET: f32 = -0.05;
 
 const SMOKE_LIFETIME: f32 = 0.4;
 const SMOKE_START_SCALE: f32 = 0.35;
@@ -6318,7 +6324,8 @@ fn shoot(
     // shot, or all the way out to MAX_SHOT_DISTANCE on a miss (real tracers
     // fly on past whatever they didn't hit too).
     let tracer_end = predicted_hit.map_or(camera_transform.translation + *direction * MAX_SHOT_DISTANCE, |(_, _, point, _)| point);
-    spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 733.0, muzzle_world_pos, tracer_end);
+    let tracer_start = muzzle_world_pos + Vec3::Y * TRACER_START_Y_OFFSET;
+    spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 733.0, tracer_start, tracer_end);
 
     info!("[shot] fired: origin={:.2?} direction={:.2?}", camera_transform.translation, *direction);
     commands.client_trigger(FireShot {

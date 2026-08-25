@@ -993,24 +993,17 @@ pub fn entity_phase(entity: Entity) -> f32 {
     (entity.index().index() as f32 * 0.618_034).fract()
 }
 
-// Which body region to aim at, and by how much, for random_aim_point below
-// — deliberately weighted toward center-mass (Body highest), so autopilot
-// reads as "aiming like a person," not a perfect aimbot. Head and Upper arm
-// are excluded entirely (not just given a low weight) per request — see
-// random_aim_point, which never rolls them. Playtest-tunable like every
-// other hitbox constant in this file.
-pub const AIM_REGION_WEIGHT_FOREARM: f32 = 2.0;
-pub const AIM_REGION_WEIGHT_THIGH: f32 = 4.0;
-pub const AIM_REGION_WEIGHT_SHIN: f32 = 5.0;
-pub const AIM_REGION_WEIGHT_BODY: f32 = 10.0;
+// Autopilot's aim region — only Body is left (Head, Upper arm, Forearm,
+// Thigh, Shin all excluded per request, in successive rounds) — see
+// random_aim_point, which now always resolves to center-mass. Real players
+// who aim themselves are unaffected; this only narrows autopilot's own pick.
 
-// Weighted-random point on `bones` to aim at (autopilot_think — see
-// AIM_REGION_WEIGHT_* above for the bias). The pick is a pure function of
-// `target` (via entity_phase), not re-rolled every frame — the same
-// committed target keeps aiming at the same body part instead of jittering
-// between regions every tick, and naturally re-rolls whenever autopilot
-// commits to a different target (see AutopilotState's own retarget-timer
-// doc comment).
+// Weighted-random point on `bones` to aim at (autopilot_think). The pick is
+// a pure function of `target` (via entity_phase), not re-rolled every
+// frame — the same committed target keeps aiming at the same body part
+// instead of jittering every tick, and naturally re-rolls whenever
+// autopilot commits to a different target (see AutopilotState's own
+// retarget-timer doc comment).
 // Returns None if the picked region's bones haven't resolved yet (mid-load
 // window, same "eat the brief gap, don't silently substitute a different
 // method" stance zombie_hit_damage_bones takes) — callers just keep
@@ -1018,30 +1011,7 @@ pub const AIM_REGION_WEIGHT_BODY: f32 = 10.0;
 // The `&'static str` half of the return is purely a debug/HUD label (e.g.
 // "showing which body part autopilot is currently aiming at" on screen) —
 // never fed back into damage/collision math, so it's fine as a plain name.
-pub fn random_aim_point(bones: &BoneWorldPositions, target: Entity) -> Option<(Vec3, &'static str)> {
-    const TOTAL_WEIGHT: f32 = AIM_REGION_WEIGHT_FOREARM + AIM_REGION_WEIGHT_THIGH + AIM_REGION_WEIGHT_SHIN + AIM_REGION_WEIGHT_BODY;
-    let base = entity_phase(target);
-    let mut roll = base * TOTAL_WEIGHT;
-    // A second, decorrelated-enough draw off the same base for picking a
-    // side — doesn't need to be statistically perfect, just not visibly
-    // tied to the category roll (e.g. always left when category is high).
-    let left = (base * 97.0).fract() < 0.5;
-
-    if roll < AIM_REGION_WEIGHT_FOREARM {
-        let chain = if left { &bones.left_arm } else { &bones.right_arm };
-        return Option::zip(chain[1], chain[2]).map(|(a, b)| (a.midpoint(b), "Forearm"));
-    }
-    roll -= AIM_REGION_WEIGHT_FOREARM;
-    if roll < AIM_REGION_WEIGHT_THIGH {
-        let chain = if left { &bones.left_leg } else { &bones.right_leg };
-        return Option::zip(chain[0], chain[1]).map(|(a, b)| (a.midpoint(b), "Thigh"));
-    }
-    roll -= AIM_REGION_WEIGHT_THIGH;
-    if roll < AIM_REGION_WEIGHT_SHIN {
-        let chain = if left { &bones.left_leg } else { &bones.right_leg };
-        return Option::zip(chain[1], chain[2]).map(|(a, b)| (a.midpoint(b), "Shin"));
-    }
-    // Body (the remaining/highest-weight bucket).
+pub fn random_aim_point(bones: &BoneWorldPositions, _target: Entity) -> Option<(Vec3, &'static str)> {
     match (bones.belly, bones.chest) {
         (Some(belly), Some(chest)) => Some((belly.midpoint(chest), "Body")),
         (Some(p), None) | (None, Some(p)) => Some((p, "Body")),
