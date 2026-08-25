@@ -506,6 +506,21 @@ fragment float4 skinned_fragment(VertexOut in [[stage_in]],
 // instead of bevy_render.
 const SCOPE_TEXTURE_SIZE: u64 = 512;
 
+// No anti-aliasing anywhere in this renderer at all — every model edge
+// (zombies, walls, gun) rendered visibly jagged, unlike bevy_render's own
+// Msaa::Off... wait, actually unlike this codebase's *other* rendering
+// path, which defaults MSAA on (see crate::lib's Camera3d bundle — Msaa::
+// Off is set there deliberately, but only because bevy_render's TAA/SSAO
+// stack made MSAA redundant on that path; this renderer has neither, so
+// there was nothing softening edges at all). 4x MSAA — the standard
+// quality/cost tradeoff — applied uniformly to every pipeline used by
+// either the main pass or the scope PIP pass, so a single compiled
+// RenderPipelineState per shader still works in both (Metal requires a
+// pipeline's rasterSampleCount to match whatever render pass it's bound
+// to; keeping sample count uniform everywhere avoids needing two compiled
+// variants of every shader).
+const MSAA_SAMPLE_COUNT: u64 = 4;
+
 const QUAD_SHADER_SOURCE: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -715,6 +730,12 @@ pub struct NativeMetalProbe {
     vertex_count: usize,
     depth_state: metal::DepthStencilState,
     depth_texture: Option<metal::Texture>,
+    // The main pass's actual multisampled render target — see
+    // MSAA_SAMPLE_COUNT's own doc comment. Recreated (ensure_msaa_color_
+    // texture) whenever the drawable resizes, same caching pattern as
+    // depth_texture. Resolved into the real drawable texture each frame
+    // (MTLStoreAction::MultisampleResolve), never sampled directly.
+    msaa_color_texture: Option<metal::Texture>,
     sponza_pipeline: Option<RenderPipelineState>,
     sponza_meshes: Vec<super::gltf_scene::GltfMesh>,
     sponza_sampler: metal::SamplerState,
@@ -726,6 +747,9 @@ pub struct NativeMetalProbe {
     soldier_model: Option<super::skinned_gltf::SkinnedModel>,
     zombie_model: Option<super::skinned_gltf::SkinnedModel>,
     scope_color_texture: metal::Texture,
+    // Multisampled scope-pass render target, resolved into
+    // scope_color_texture above — see its own doc comment at construction.
+    scope_color_texture_msaa: metal::Texture,
     scope_depth_texture: metal::Texture,
     quad_pipeline: Option<RenderPipelineState>,
     quad_vertex_buffer: metal::Buffer,
@@ -1030,6 +1054,7 @@ impl NativeMetalProbe {
         pipeline_descriptor.set_fragment_function(Some(&fragment_fn));
         pipeline_descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
         pipeline_descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+        pipeline_descriptor.set_raster_sample_count(MSAA_SAMPLE_COUNT);
         let pipeline = device.new_render_pipeline_state(&pipeline_descriptor).expect("pipeline creation failed");
 
         let depth_descriptor = metal::DepthStencilDescriptor::new();
@@ -1065,6 +1090,7 @@ impl NativeMetalProbe {
                 sponza_color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
                 sponza_color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
                 sponza_pipeline_descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+                sponza_pipeline_descriptor.set_raster_sample_count(MSAA_SAMPLE_COUNT);
                 device.new_render_pipeline_state(&sponza_pipeline_descriptor).ok()
             }
             Err(err) => {
@@ -1103,6 +1129,7 @@ impl NativeMetalProbe {
                 descriptor.set_fragment_function(Some(&fragment_fn));
                 descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
                 descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+                descriptor.set_raster_sample_count(MSAA_SAMPLE_COUNT);
                 device.new_render_pipeline_state(&descriptor).ok()
             }
             Err(err) => {
@@ -1119,6 +1146,9 @@ impl NativeMetalProbe {
         let ecs_app = build_entity_ecs_app();
         let real_game_app = if real_game { Some(build_headless_game_ecs_app()) } else { None };
 
+        // Resolve target — single-sample, still what quad_fragment (the PIP
+        // composite) actually samples from; MSAA never touches this one
+        // directly, see scope_color_texture_msaa below.
         let scope_color_descriptor = metal::TextureDescriptor::new();
         scope_color_descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
         scope_color_descriptor.set_width(SCOPE_TEXTURE_SIZE);
@@ -1127,10 +1157,26 @@ impl NativeMetalProbe {
         scope_color_descriptor.set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
         let scope_color_texture = device.new_texture(&scope_color_descriptor);
 
+        // The scope pass's actual render target — multisampled, resolved
+        // into scope_color_texture above at the end of the pass (see
+        // render_frame's MTLStoreAction::MultisampleResolve). Never sampled
+        // itself, so no ShaderRead usage needed.
+        let scope_color_msaa_descriptor = metal::TextureDescriptor::new();
+        scope_color_msaa_descriptor.set_texture_type(metal::MTLTextureType::D2Multisample);
+        scope_color_msaa_descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        scope_color_msaa_descriptor.set_width(SCOPE_TEXTURE_SIZE);
+        scope_color_msaa_descriptor.set_height(SCOPE_TEXTURE_SIZE);
+        scope_color_msaa_descriptor.set_sample_count(MSAA_SAMPLE_COUNT);
+        scope_color_msaa_descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        scope_color_msaa_descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
+        let scope_color_texture_msaa = device.new_texture(&scope_color_msaa_descriptor);
+
         let scope_depth_descriptor = metal::TextureDescriptor::new();
+        scope_depth_descriptor.set_texture_type(metal::MTLTextureType::D2Multisample);
         scope_depth_descriptor.set_pixel_format(MTLPixelFormat::Depth32Float);
         scope_depth_descriptor.set_width(SCOPE_TEXTURE_SIZE);
         scope_depth_descriptor.set_height(SCOPE_TEXTURE_SIZE);
+        scope_depth_descriptor.set_sample_count(MSAA_SAMPLE_COUNT);
         scope_depth_descriptor.set_storage_mode(metal::MTLStorageMode::Private);
         scope_depth_descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
         let scope_depth_texture = device.new_texture(&scope_depth_descriptor);
@@ -1143,6 +1189,7 @@ impl NativeMetalProbe {
                 descriptor.set_vertex_function(Some(&vertex_fn));
                 descriptor.set_fragment_function(Some(&fragment_fn));
                 descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+                descriptor.set_raster_sample_count(MSAA_SAMPLE_COUNT);
                 device.new_render_pipeline_state(&descriptor).ok()
             }
             Err(err) => {
@@ -1189,6 +1236,7 @@ impl NativeMetalProbe {
                 color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::SourceAlpha);
                 color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
                 color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+                descriptor.set_raster_sample_count(MSAA_SAMPLE_COUNT);
                 device.new_render_pipeline_state(&descriptor).ok()
             }
             Err(err) => {
@@ -1221,6 +1269,7 @@ impl NativeMetalProbe {
             vertex_count: vertices.len(),
             depth_state,
             depth_texture: None,
+            msaa_color_texture: None,
             camera_position: [0.0, 2.5, 2.0],
             camera_yaw: 0.0,
             camera_pitch: -0.25,
@@ -1228,6 +1277,7 @@ impl NativeMetalProbe {
             soldier_model,
             zombie_model,
             scope_color_texture,
+            scope_color_texture_msaa,
             scope_depth_texture,
             quad_pipeline,
             quad_vertex_buffer,
@@ -1284,6 +1334,8 @@ impl NativeMetalProbe {
         }
     }
 
+    // Multisampled — must match the main pass's color attachment sample
+    // count (MSAA_SAMPLE_COUNT) exactly, or Metal rejects the pass.
     fn ensure_depth_texture(&mut self, width: u64, height: u64) -> metal::Texture {
         let device = self.device.clone();
         let device = &device;
@@ -1293,13 +1345,40 @@ impl NativeMetalProbe {
             }
         }
         let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_texture_type(metal::MTLTextureType::D2Multisample);
         descriptor.set_pixel_format(MTLPixelFormat::Depth32Float);
         descriptor.set_width(width);
         descriptor.set_height(height);
+        descriptor.set_sample_count(MSAA_SAMPLE_COUNT);
         descriptor.set_storage_mode(metal::MTLStorageMode::Private);
         descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
         let tex = device.new_texture(&descriptor);
         self.depth_texture = Some(tex.clone());
+        tex
+    }
+
+    // The main pass's real render target — multisampled, resolved into the
+    // drawable's own (single-sample) texture at the end of the pass. Same
+    // resize-on-demand caching as ensure_depth_texture, since the drawable
+    // size can change (device rotation, window resize on macOS Catalyst).
+    fn ensure_msaa_color_texture(&mut self, width: u64, height: u64) -> metal::Texture {
+        let device = self.device.clone();
+        let device = &device;
+        if let Some(tex) = &self.msaa_color_texture {
+            if tex.width() == width && tex.height() == height {
+                return tex.clone();
+            }
+        }
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_texture_type(metal::MTLTextureType::D2Multisample);
+        descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        descriptor.set_width(width);
+        descriptor.set_height(height);
+        descriptor.set_sample_count(MSAA_SAMPLE_COUNT);
+        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
+        let tex = device.new_texture(&descriptor);
+        self.msaa_color_texture = Some(tex.clone());
         tex
     }
 
@@ -1569,6 +1648,7 @@ impl NativeMetalProbe {
         let drawable_size = self.layer.drawable_size();
         let (width, height) = (drawable_size.width as u64, drawable_size.height as u64);
         let depth_texture = self.ensure_depth_texture(width, height);
+        let msaa_color_texture = self.ensure_msaa_color_texture(width, height);
         let Some(drawable) = self.layer.next_drawable() else { return };
         let texture = drawable.texture();
 
@@ -1798,9 +1878,13 @@ impl NativeMetalProbe {
         if show_scope {
             let scope_pass_descriptor = RenderPassDescriptor::new();
             let scope_color = scope_pass_descriptor.color_attachments().object_at(0).unwrap();
-            scope_color.set_texture(Some(&self.scope_color_texture));
+            // Render into the multisampled texture, resolve straight into
+            // scope_color_texture (what quad_fragment actually samples) —
+            // see MSAA_SAMPLE_COUNT's own doc comment.
+            scope_color.set_texture(Some(&self.scope_color_texture_msaa));
+            scope_color.set_resolve_texture(Some(&self.scope_color_texture));
             scope_color.set_load_action(MTLLoadAction::Clear);
-            scope_color.set_store_action(MTLStoreAction::Store);
+            scope_color.set_store_action(MTLStoreAction::MultisampleResolve);
             scope_color.set_clear_color(MTLClearColor::new(0.05, 0.05, 0.05, 1.0));
             let scope_depth = scope_pass_descriptor.depth_attachment().unwrap();
             scope_depth.set_texture(Some(&self.scope_depth_texture));
@@ -1828,10 +1912,22 @@ impl NativeMetalProbe {
         // texture composited as a picture-in-picture quad on top.
         let pass_descriptor = RenderPassDescriptor::new();
         let color_attachment = pass_descriptor.color_attachments().object_at(0).unwrap();
-        color_attachment.set_texture(Some(texture));
+        // Render into the multisampled texture, resolve straight into the
+        // real drawable — see MSAA_SAMPLE_COUNT's own doc comment.
+        color_attachment.set_texture(Some(&msaa_color_texture));
+        color_attachment.set_resolve_texture(Some(texture));
         color_attachment.set_load_action(MTLLoadAction::Clear);
-        color_attachment.set_store_action(MTLStoreAction::Store);
-        color_attachment.set_clear_color(MTLClearColor::new(1.0, 0.0, 1.0, 1.0));
+        color_attachment.set_store_action(MTLStoreAction::MultisampleResolve);
+        // No skybox in this renderer at all (see this comment's own history
+        // — was a hardcoded debug magenta, meant to make any undrawn area
+        // obvious during development, that ended up shipping as-is and
+        // visibly showing through wherever the camera can see past the
+        // arena's own geometry, e.g. over the walls or through any gap).
+        // A flat neutral near-black instead reads as "shadow/void" rather
+        // than a glaring debug color — not a real sky, but close enough to
+        // the arena's own dim ambient tone (spawn_test_arena's wall/floor
+        // base_color, crate::lib) that a stray gap doesn't stand out.
+        color_attachment.set_clear_color(MTLClearColor::new(0.05, 0.055, 0.07, 1.0));
 
         let depth_attachment = pass_descriptor.depth_attachment().unwrap();
         depth_attachment.set_texture(Some(&depth_texture));
