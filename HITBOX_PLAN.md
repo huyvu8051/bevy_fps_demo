@@ -171,40 +171,58 @@ within a couple frames of spawning, confirmed at fluctuating population
 sizes (6-10 in the test run), not just the single spike zombie from
 Phase 1.
 
-## Phase 3 — Pose-level lag compensation (the Valorant/Overwatch part)
+## Phase 3 — Pose-level lag compensation (the Valorant/Overwatch part) — ✅ DONE (3a)
 
-The current `ZombieHistory` only rewinds the **root** transform. A moving/
-attacking zombie's bones move relative to that root too (arm swing,
-lunge), so rewinding only the root and then reading the bones' *current*
-(non-rewound) local offsets would still be slightly wrong during a lunge/
-attack animation — acceptable for a first cut, but worth being explicit
-about the gap:
+Implemented as **3a** (below) — 3b remains a documented option, not
+needed unless playtesting later shows head hitboxes visibly lagging a
+fast animation.
 
-- **3a (cheaper, recommended first cut):** keep bone shapes rigid
-  relative to the root at each instant — i.e., when rewinding for lag
-  comp, snapshot each zombie's **per-bone local offsets from root**
-  alongside the root transform, not just root translation/rotation.
-  Extend `ZombieHistory`'s entry type from `(f32, Vec3, Quat)` to include
-  a small fixed-size array of bone-local offsets (head/chest/belly + a
-  representative limb point is enough — you don't need all 12 limb
-  bones in history, just whichever ones matter for damage regions).
-  This makes `record_zombie_history` read each bone's `GlobalTransform`
-  relative to the zombie root once per tick (cheap — it's already
-  computed by Bevy's transform propagation, no new animation sampling
-  cost, just extra reads) and store it. `zombie_history_at` returns the
-  full rewound bone snapshot instead of just root pos/rot.
-- **3b (full fidelity, do only if 3a proves visibly wrong in testing):**
-  also snapshot/rewind the `AnimationPlayer`'s play-head time and
-  re-sample the animation curve at the exact rewound instant, rather than
-  relying on "whatever bone-local offset happened to be recorded that
-  tick." This is strictly more accurate but meaningfully more complex
-  (needs access to the `AnimationClip` curves directly, bypassing the
-  live `AnimationPlayer`, to evaluate a pose at an arbitrary past time
-  without disturbing the actually-playing animation). Given
-  `LAG_COMPENSATION_MAX_SECS` is only 0.3s and zombie attack/lunge
-  animations are relatively slow, 3a's "nearest recorded tick's bone
-  offsets" is very likely close enough — don't build 3b until profiling/
-  playtesting shows head hitboxes visibly lagging behind a fast animation.
+**What landed** (`crates/server/src/main.rs`):
+1. `ZombieHistory`'s entry type grew from `(f32, Vec3, Quat)` to
+   `(f32, Vec3, Quat, BoneLocalOffsets)`, where `BoneLocalOffsets` stores
+   each resolved bone's position **relative to the root, in the root's
+   own local frame** (`rotation.inverse() * (bone_world - root_world)`)
+   — not a raw world position. This is the detail that makes rewinding
+   correct across rotation, not just translation: reapplying a *past*
+   rotation to a *local* offset reconstructs the bone's true past world
+   position even after the zombie has since turned to face a different
+   way, whereas a stored world position would silently assume orientation
+   never changed.
+2. `record_zombie_history` now also reads `ZombieHitboxBones` + a
+   `Query<&GlobalTransform>` each tick to compute those offsets — cheap,
+   since `GlobalTransform` is already computed for free by Bevy's own
+   transform propagation; no new animation sampling cost.
+3. `zombie_history_at`'s return type changed from `Option<(Vec3, Quat)>`
+   to `Option<(Vec3, Quat, BoneWorldPositions)>` — it now reconstructs
+   full bone world positions at the target instant internally, so callers
+   never need to know the local-offset trick exists at all.
+4. `handle_fire_shot`'s rewound path now gets fully rewound bones
+   straight from `zombie_history_at` — no live `ZombieHitboxBones`/
+   `GlobalTransform` query needed there anymore, simplifying that
+   function's own signature back down. The live-hit fallback path
+   (no history young enough to rewind) and `debug_bot_fire` (deliberately
+   never rewinds at all — no client round-trip to compensate for) still
+   resolve bones live via the Phase 4 `resolve_bone_world_positions`
+   helper.
+5. `shared::zombie_hit_damage_bones` was refactored to take an
+   already-resolved `BoneWorldPositions` struct instead of a
+   `&ZombieHitboxBones` + entity-lookup closure — decouples the damage
+   *decision* from *how the positions were obtained* (live query vs.
+   history rewind), so Phase 3 slotted in without changing that
+   function's own logic, only its callers.
+
+**Verified:**
+- A new permanent regression test
+  (`crates/server`, `hitbox_phase3_tests::
+  rewind_uses_the_rotation_recorded_at_that_instant_not_the_latest_one`)
+  directly proves the rotation-correctness claim: a bone offset recorded
+  while facing one way, rewound after the zombie has since turned 90°,
+  reconstructs the ORIGINAL world position, not the current-orientation
+  one. Passed.
+- All 5 Phase 4 tests still pass after the `BoneWorldPositions` refactor
+  (`cargo test -p server -p shared`: 6 passed, 3 suites).
+- Full workspace build (`server`+`client`+`shared`) still 0 errors;
+  server ran cleanly with no panics afterward.
 
 ## Phase 4 — Replace the damage decision — ✅ DONE (skipped ahead of Phase 3)
 

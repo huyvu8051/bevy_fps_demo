@@ -13,7 +13,7 @@ use bevy_replicon_renet2::{
 };
 use big_brain::prelude::*;
 use shared::{
-    zombie_hit_damage_bones, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
+    resolve_bone_world_positions, zombie_hit_damage_bones, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetZombieCount,
@@ -675,9 +675,11 @@ fn debug_bot_fire(
         };
 
         let hit_point = origin + *direction * hit_distance;
-        let damage = zombie_hit_damage_bones(hit_point, zombie_transform, bones, |bone| {
-            bone_transforms.get(bone).ok().map(|g| g.translation())
-        });
+        // Debug bots don't have client round-trips to rewind, so this
+        // stays on live (not history-rewound) bone positions — see this
+        // function's own doc comment above.
+        let resolved_bones = resolve_bone_world_positions(bones, |bone| bone_transforms.get(bone).ok().map(|g| g.translation()));
+        let damage = zombie_hit_damage_bones(hit_point, zombie_transform, &resolved_bones);
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {
@@ -828,18 +830,49 @@ fn spawn_more_zombies(_trigger: On<FromClient<SpawnMoreZombies>>, mut commands: 
 #[derive(Component)]
 struct DirectorSpawned;
 
-// Recent (translation, rotation) snapshots for lag-compensated hit
-// detection — see handle_fire_shot and record_zombie_history. Not
+// Per-bone offsets in the zombie ROOT's own local frame (i.e. already
+// rotation.inverse()-applied) at the moment a ZombieHistory entry was
+// recorded — HITBOX_PLAN.md Phase 3. Storing local offsets rather than raw
+// world positions is what makes rewinding correct even while the zombie
+// has since turned: reapplying a *past* rotation to a *local* offset gives
+// the bone's world position as it truly was then, whereas a stored world
+// position would silently assume the zombie's orientation never changed.
+#[derive(Clone, Default)]
+struct BoneLocalOffsets {
+    head: Option<Vec3>,
+    chest: Option<Vec3>,
+    belly: Option<Vec3>,
+    limbs: Vec<Vec3>,
+}
+
+// Recent (translation, rotation, bone offsets) snapshots for lag-compensated
+// hit detection — see handle_fire_shot and record_zombie_history. Not
 // replicated (server-only bookkeeping, like ChaseTarget/PlayerThreat).
 #[derive(Component, Default)]
-struct ZombieHistory(std::collections::VecDeque<(f32, Vec3, Quat)>);
+struct ZombieHistory(std::collections::VecDeque<(f32, Vec3, Quat, BoneLocalOffsets)>);
 
-// Runs after move_zombies each tick: records where every zombie is right
-// now, and prunes anything older than LAG_COMPENSATION_MAX_SECS needs.
-fn record_zombie_history(time: Res<Time>, mut zombies: Query<(&Transform, &mut ZombieHistory), With<Zombie>>) {
+// Runs after move_zombies each tick: records where every zombie (root AND
+// each resolved hitbox bone, relative to the root) is right now, and
+// prunes anything older than LAG_COMPENSATION_MAX_SECS needs. Bones that
+// haven't resolved yet (scene still loading) just record None/empty for
+// this tick — zombie_history_at's caller already falls back to the
+// geometric guess for anything that never resolves.
+fn record_zombie_history(
+    time: Res<Time>,
+    mut zombies: Query<(&Transform, &mut ZombieHistory, &ZombieHitboxBones), With<Zombie>>,
+    bone_transforms: Query<&GlobalTransform>,
+) {
     let now = time.elapsed_secs();
-    for (transform, mut history) in &mut zombies {
-        history.0.push_back((now, transform.translation, transform.rotation));
+    for (transform, mut history, bones) in &mut zombies {
+        let inv_rotation = transform.rotation.inverse();
+        let local_offset = |bone: Entity| bone_transforms.get(bone).ok().map(|g| inv_rotation * (g.translation() - transform.translation));
+        let offsets = BoneLocalOffsets {
+            head: bones.head.and_then(local_offset),
+            chest: bones.chest.and_then(local_offset),
+            belly: bones.belly.and_then(local_offset),
+            limbs: bones.limbs.iter().filter_map(|&e| local_offset(e)).collect(),
+        };
+        history.0.push_back((now, transform.translation, transform.rotation, offsets));
         while history.0.front().is_some_and(|&(t, ..)| now - t > LAG_COMPENSATION_MAX_SECS) {
             history.0.pop_front();
         }
@@ -849,13 +882,83 @@ fn record_zombie_history(time: Res<Time>, mut zombies: Query<(&Transform, &mut Z
 // Nearest recorded snapshot to `target_time` — history is only sampled once
 // per server tick (30Hz), so this is a "closest sample" lookup rather than
 // interpolating between two, which is plenty precise for what's ultimately
-// a cosmetic-accuracy-tolerant debug shooter.
-fn zombie_history_at(history: &ZombieHistory, target_time: f32) -> Option<(Vec3, Quat)> {
-    history
-        .0
-        .iter()
-        .min_by(|(a, ..), (b, ..)| (a - target_time).abs().total_cmp(&(b - target_time).abs()))
-        .map(|&(_, translation, rotation)| (translation, rotation))
+// a cosmetic-accuracy-tolerant debug shooter. Reconstructs bone world
+// positions from that same instant's root pose + locally-stored offsets
+// (see BoneLocalOffsets) rather than returning raw offsets, so callers
+// don't need to know this rewinding trick at all — just "where was
+// everything, back then".
+fn zombie_history_at(history: &ZombieHistory, target_time: f32) -> Option<(Vec3, Quat, BoneWorldPositions)> {
+    let &(_, translation, rotation, ref offsets) =
+        history.0.iter().min_by(|(a, ..), (b, ..)| (a - target_time).abs().total_cmp(&(b - target_time).abs()))?;
+    let to_world = |local: Vec3| translation + rotation * local;
+    Some((
+        translation,
+        rotation,
+        BoneWorldPositions {
+            head: offsets.head.map(to_world),
+            chest: offsets.chest.map(to_world),
+            belly: offsets.belly.map(to_world),
+            limbs: offsets.limbs.iter().map(|&l| to_world(l)).collect(),
+        },
+    ))
+}
+
+// Regression test for the core claim HITBOX_PLAN.md Phase 3 rests on:
+// reapplying a PAST rotation to a locally-stored offset reconstructs the
+// bone's true past world position, even after the zombie has since
+// turned to face a different way. Kept permanently (unlike Phase 1/2's
+// throwaway println-based manual checks) since this is exactly the kind
+// of subtle math bug a future refactor could silently reintroduce.
+#[cfg(test)]
+mod hitbox_phase3_tests {
+    use super::*;
+
+    #[test]
+    fn rewind_uses_the_rotation_recorded_at_that_instant_not_the_latest_one() {
+        let mut history = ZombieHistory::default();
+        // t=0: zombie faces +Z (no rotation), head bone 1.0 further along
+        // its own forward axis (local +Z) from the root.
+        history.0.push_back((
+            0.0,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            BoneLocalOffsets {
+                head: Some(Vec3::Z),
+                chest: None,
+                belly: None,
+                limbs: vec![],
+            },
+        ));
+        // t=1: zombie has since turned 90° to face +X, root hasn't moved.
+        // Same local offset recorded (rig didn't change shape, just
+        // orientation) — this is what record_zombie_history would store
+        // every tick regardless of whether the zombie turned in between.
+        let turned = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        history.0.push_back((
+            1.0,
+            Vec3::ZERO,
+            turned,
+            BoneLocalOffsets {
+                head: Some(Vec3::Z),
+                chest: None,
+                belly: None,
+                limbs: vec![],
+            },
+        ));
+
+        // Rewinding to t=0 must place the head where it was WHEN FACING
+        // +Z (world +Z), not where the local offset would land if
+        // rotated by the zombie's current (t=1) orientation.
+        let (_, _, bones_at_0) = zombie_history_at(&history, 0.0).unwrap();
+        assert!(bones_at_0.head.unwrap().distance(Vec3::Z) < 1e-5, "rewound head position: {:?}", bones_at_0.head);
+
+        // Sanity check the other direction too: "rewinding" to t=1 should
+        // place the head where +X-facing rotation puts it (world +X), not
+        // world +Z — confirms the test itself isn't just trivially always
+        // returning the same offset regardless of which entry matched.
+        let (_, _, bones_at_1) = zombie_history_at(&history, 1.0).unwrap();
+        assert!(bones_at_1.head.unwrap().distance(Vec3::X) < 1e-5, "rewound head position: {:?}", bones_at_1.head);
+    }
 }
 
 // Fractional part of entity_index * the golden ratio — a cheap
@@ -1302,8 +1405,7 @@ fn handle_fire_shot(
     renet_server: Res<RenetServer>,
     network_ids: Query<&NetworkId>,
     spatial_query: SpatialQuery,
-    mut zombies: Query<(Entity, &mut Health, &mut KnockbackVelocity, &ZombieHistory, &ZombieHitboxBones), With<Zombie>>,
-    bone_transforms: Query<&GlobalTransform>,
+    mut zombies: Query<(Entity, &mut Health, &mut KnockbackVelocity, &ZombieHistory), With<Zombie>>,
     mut respawns: ResMut<PendingRespawns>,
     mut threats: Query<&mut PlayerThreat>,
     director_spawned: Query<(), With<DirectorSpawned>>,
@@ -1369,28 +1471,26 @@ fn handle_fire_shot(
     let capsule = Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH);
     let rewound_hit = zombies
         .iter()
-        .filter_map(|(entity, _, _, history, _)| {
-            let (position, rotation) = zombie_history_at(history, rewind_time)?;
+        .filter_map(|(entity, _, _, history)| {
+            let (position, rotation, bones) = zombie_history_at(history, rewind_time)?;
             let (distance, normal) = capsule.cast_ray(position, rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
-            Some((distance, entity, position, rotation, normal))
+            Some((distance, entity, position, rotation, bones, normal))
         })
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
 
-    if let Some((distance, entity, position, rotation, normal)) = rewound_hit {
+    if let Some((distance, entity, position, rotation, bones, normal)) = rewound_hit {
         let hit_point = shot.origin + *direction * distance;
-        if let Ok((_, mut health, mut knockback, _, bones)) = zombies.get_mut(entity) {
+        if let Ok((_, mut health, mut knockback, _)) = zombies.get_mut(entity) {
             let rewound_transform = Transform {
                 translation: position,
                 rotation,
                 scale: Vec3::ONE,
             };
-            // Bones' CURRENT world position, not rewound to rewind_time
-            // like the capsule test above — see zombie_hit_damage_bones'
-            // own doc comment (Phase 3, not done yet) for why that's a
-            // known, accepted imprecision for now.
-            let damage = zombie_hit_damage_bones(hit_point, &rewound_transform, bones, |bone| {
-                bone_transforms.get(bone).ok().map(|g| g.translation())
-            });
+            // Bones ARE rewound to rewind_time here too now (Phase 3) —
+            // zombie_history_at reconstructs their world position from
+            // that same past instant's root pose + the offsets recorded
+            // at that tick, not their live position.
+            let damage = zombie_hit_damage_bones(hit_point, &rewound_transform, &bones);
             health.0 -= damage;
             let killed = health.0 <= 0.0;
             if killed {
@@ -1427,16 +1527,15 @@ fn handle_fire_shot(
     // no history yet, or a genuine miss), but the live world raycast still
     // landed directly on a zombie right now — treat that as an ordinary,
     // un-compensated hit instead of silently treating a zombie as a wall.
-    if let Ok((entity, mut health, mut knockback, history, bones)) = zombies.get_mut(hit.entity) {
-        let (position, rotation) = zombie_history_at(history, time.elapsed_secs()).unwrap_or((hit_point, Quat::IDENTITY));
+    if let Ok((entity, mut health, mut knockback, history)) = zombies.get_mut(hit.entity) {
+        let (position, rotation, bones) =
+            zombie_history_at(history, time.elapsed_secs()).unwrap_or((hit_point, Quat::IDENTITY, BoneWorldPositions::default()));
         let live_transform = Transform {
             translation: position,
             rotation,
             scale: Vec3::ONE,
         };
-        let damage = zombie_hit_damage_bones(hit_point, &live_transform, bones, |bone| {
-            bone_transforms.get(bone).ok().map(|g| g.translation())
-        });
+        let damage = zombie_hit_damage_bones(hit_point, &live_transform, &bones);
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {

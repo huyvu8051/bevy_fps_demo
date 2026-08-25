@@ -33,7 +33,7 @@ use shared::{
     PlayerDiedFx, PlayerFiredFx,
     PlayerStance, RequestRestart, SetAutoMaintainZombies, SetZombieCount, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, wire_zombie_hitbox_bones,
-    zombie_hit_damage_bones, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED, ZOMBIE_ATTACK_INTERVAL,
+    resolve_bone_world_positions, zombie_hit_damage_bones, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED, ZOMBIE_ATTACK_INTERVAL,
     ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH, ZOMBIE_RADIUS, ZOMBIE_SCALE, ZOMBIE_SPAWNS,
     ZOMBIE_STOP_DISTANCE,
 };
@@ -6106,9 +6106,8 @@ fn shoot(
         // has always had live (not even lag-compensated, since this is the
         // shooter's own local prediction) bones, unlike the server which
         // needed Phase 1-2's headless-skeleton work first.
-        let damage = zombie_hit_damage_bones(point, transform, bones, |bone| {
-            vfx_assets.bone_transforms.get(bone).ok().map(|g| g.translation())
-        });
+        let resolved_bones = resolve_bone_world_positions(bones, |bone| vfx_assets.bone_transforms.get(bone).ok().map(|g| g.translation()));
+        let damage = zombie_hit_damage_bones(point, transform, &resolved_bones);
         spawn_floating_damage(&mut commands, point, damage);
         spawn_blood_effects(&mut commands, &vfx_assets.blood, &spatial_query, &time, point, normal, Some((entity, global)));
 
