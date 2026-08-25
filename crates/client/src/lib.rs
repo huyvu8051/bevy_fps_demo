@@ -32,12 +32,13 @@ use shared::{
     KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform, Player, PlayerDied,
     ZombieAnimationPlayer,
     PlayerDiedFx, PlayerFiredFx,
-    PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetAutopilot, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
+    PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, wire_zombie_hitbox_bones,
     INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED,
-    HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
+    head_and_neck_positions, HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, NECK_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
+    resolve_bone_world_positions, zombie_hit_damage_ray,
     NAVMESH_COLUMN_OBSTACLES, PILLAR_RADIUS, PROTOCOL_ID, ZOMBIE_ANIM_BITE, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_WALK,
-    ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_MODEL_Y_OFFSET, ZOMBIE_OUTER_LENGTH, ZOMBIE_OUTER_RADIUS, ZOMBIE_PATH,
+    ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_MODEL_Y_OFFSET, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_PATH,
     zombie_pose_for, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_SCALE, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
@@ -49,13 +50,10 @@ use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 #[cfg(target_os = "ios")]
 mod cadisplaylink;
 
-// AI takeover of the local player (auto-aim/move/fire) — two
-// implementations run side by side (this module's own client-side
-// decision loop, and crates/server's server_autopilot_pick_target/
-// server_autopilot_think), selected by AutopilotServerMode. See this
-// module's own doc comment for the full picture and why both exist.
+// AI takeover of the local player (auto-aim/move/fire) — see this module's
+// own doc comment for the full picture.
 mod autopilot;
-use autopilot::{autopilot_pick_target, autopilot_think, Autopilot, AutopilotIntent, AutopilotServerMode, AutopilotState};
+use autopilot::{autopilot_pick_target, autopilot_think, Autopilot, AutopilotIntent, AutopilotState};
 
 // Downloaded once into assets/models/ so the app doesn't depend on a network
 // request (and a remote repo's file layout) every time it starts.
@@ -1686,7 +1684,6 @@ fn build_game_common(app: &mut App) {
         .add_client_event::<SetZombieCount>(Channel::Ordered)
         .add_client_event::<ClearAllZombies>(Channel::Ordered)
         .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
-        .add_client_event::<SetAutopilot>(Channel::Ordered)
         .add_client_event::<SetFreezeZombies>(Channel::Ordered)
         .init_resource::<ZombieCountUi>()
         .init_resource::<AutoMaintainUi>()
@@ -1720,7 +1717,6 @@ fn build_game_common(app: &mut App) {
         // other scenario keeps Noclip's normal off-by-default.
         .insert_resource(Noclip(current_scenario() == Scenario::StressTest))
         .init_resource::<Autopilot>()
-        .init_resource::<AutopilotServerMode>()
         .init_resource::<AutopilotState>()
         .init_resource::<AutopilotIntent>()
         .init_resource::<FreezeZombies>()
@@ -3852,9 +3848,19 @@ fn update_floating_damage_texts(
 // down and landing) — reuses the shoot()'s own SpatialQuery rather than
 // taking one as a fresh parameter, since shoot() is already at Bevy's
 // 16-parameter-per-system limit (see VfxAssets' doc comment).
-// `zombie` is `Some` only when the hit zombie survived (shoot() checks
+// `bone` is `Some` only when the hit zombie survived (shoot() checks
 // health after applying damage) — a wound stain parented to a despawning
-// corpse would just despawn right along with it, so there's no point.
+// corpse would just despawn right along with it, so there's no point. It's
+// the specific BONE nearest the hit (see nearest_zombie_bone/
+// spawn_blood_stain_on_zombie's own doc comment for why a bone, not the
+// zombie's root entity), not "the zombie" in general.
+// `killed` skips the wound stain entirely instead of falling back to a
+// world-space one at hit_point: that fallback sits right where the corpse
+// just was, so it visually reads as "blood still stuck on the body" for
+// its own full BLOOD_STAIN_LIFETIME even though the body itself (and any
+// bone-parented decal on it) is already gone. The floor drips below are
+// left untouched — those are real drips that already fell and landed
+// separately, not blood riding along on the corpse.
 fn spawn_blood_effects(
     commands: &mut Commands,
     blood_assets: &BloodAssets,
@@ -3862,7 +3868,8 @@ fn spawn_blood_effects(
     time: &Time,
     hit_point: Vec3,
     hit_normal: Vec3,
-    zombie: Option<(Entity, &GlobalTransform)>,
+    bone: Option<(Entity, &GlobalTransform)>,
+    killed: bool,
 ) {
     for i in 0..BLOOD_PARTICLE_COUNT {
         // Same "deterministic pseudo-randomness via sin" trick used
@@ -3882,13 +3889,14 @@ fn spawn_blood_effects(
         ));
     }
 
-    // The wound itself — follows the zombie around if it's still alive,
-    // otherwise just sits in world space wherever it landed.
-    match zombie {
-        Some((entity, zombie_global)) => {
-            spawn_blood_stain_on_zombie(commands, blood_assets, entity, zombie_global, hit_point, hit_normal);
+    // The wound itself — follows that bone's own animation if it's still
+    // alive, otherwise just sits in world space wherever it landed.
+    match bone {
+        Some((entity, bone_global)) => {
+            spawn_blood_stain_on_zombie(commands, blood_assets, entity, bone_global, hit_point, hit_normal);
         }
-        None => spawn_blood_stain(commands, blood_assets, None, hit_point, hit_normal),
+        None if !killed => spawn_blood_stain(commands, blood_assets, None, hit_point, hit_normal),
+        None => {}
     }
 
     // A random number of drips land on whatever's below — not always
@@ -3918,7 +3926,7 @@ fn spawn_blood_effects(
 
 // Gates the "you dealt real damage" feedback (floating number + blood) on
 // damage actually being > 0. Before this, a shot that hit the broad-phase
-// zombie capsule (ZOMBIE_OUTER_RADIUS/ZOMBIE_OUTER_LENGTH — deliberately
+// zombie capsule (ZOMBIE_OUTER_RADIUS/ZOMBIE_OUTER_HEIGHT — deliberately
 // wider than the visible mesh, see its own doc comment) but landed outside
 // every real bone
 // hitbox (zombie_hit_damage_bones) still spawned a floating damage number
@@ -3942,11 +3950,12 @@ fn spawn_zombie_hit_feedback(
     point: Vec3,
     normal: Vec3,
     damage: f32,
-    zombie_for_blood: Option<(Entity, &GlobalTransform)>,
+    bone_for_blood: Option<(Entity, &GlobalTransform)>,
+    killed: bool,
 ) {
     if damage > 0.0 {
         spawn_floating_damage(commands, point, damage);
-        spawn_blood_effects(commands, blood_assets, spatial_query, time, point, normal, zombie_for_blood);
+        spawn_blood_effects(commands, blood_assets, spatial_query, time, point, normal, bone_for_blood, killed);
     } else {
         spawn_spark_effects(commands, spark_assets, time, point, normal);
     }
@@ -4006,26 +4015,32 @@ fn spawn_blood_stain(
     }
 }
 
-// Computes the stain's transform relative to the zombie (GlobalTransform::
-// reparented_to handles both the zombie's current rotation and its
-// ZOMBIE_SCALE — without this, a child entity's declared size would end up
-// multiplied by that scale, same issue as the capsule Collider in
-// spawn_zombie) and spawns it as a child, so it rides along as the zombie
-// moves/turns/animates.
+// Parented onto the specific BONE nearest the hit (see nearest_zombie_bone),
+// not the zombie's root entity — the root's own Transform only carries
+// position + yaw (interpolate_net_transform), never the per-bone animation
+// (arms swinging, torso bobbing) that actually moves the visible skin. A
+// stain parented to the root stayed rigidly offset from the root while the
+// real mesh underneath animated independently, reading as floating instead
+// of stuck to skin. Parenting to the actual animated bone entity instead
+// means it inherits that bone's own GlobalTransform — no different than any
+// other cosmetic child of a bone (the mesh itself is one). GlobalTransform::
+// reparented_to handles both the bone's current rotation and ZOMBIE_SCALE —
+// without this, a child entity's declared size would end up multiplied by
+// that scale, same issue as the capsule Collider in spawn_zombie.
 fn spawn_blood_stain_on_zombie(
     commands: &mut Commands,
     blood_assets: &BloodAssets,
-    zombie: Entity,
-    zombie_global: &GlobalTransform,
+    bone: Entity,
+    bone_global: &GlobalTransform,
     hit_point: Vec3,
     hit_normal: Vec3,
 ) {
     let rotation = Quat::from_rotation_arc(Vec3::Z, hit_normal.normalize_or_zero());
     let world_transform =
         GlobalTransform::from(Transform::from_translation(hit_point + hit_normal.normalize_or_zero() * 0.01).with_rotation(rotation));
-    let local_transform = world_transform.reparented_to(zombie_global);
+    let local_transform = world_transform.reparented_to(bone_global);
 
-    commands.entity(zombie).with_children(|parent| {
+    commands.entity(bone).with_children(|parent| {
         parent.spawn((
             Mesh3d(blood_assets.stain_mesh.clone()),
             MeshMaterial3d(blood_assets.stain_material.clone()),
@@ -4569,7 +4584,6 @@ struct DebugPanelToggles<'w> {
     zombie_lod_disabled: Res<'w, ZombieLodDisabled>,
     player_model_visible: Res<'w, PlayerModelVisible>,
     autopilot: Res<'w, Autopilot>,
-    autopilot_server_mode: Res<'w, AutopilotServerMode>,
 }
 
 fn update_debug_panel(
@@ -4624,7 +4638,7 @@ fn update_debug_panel(
          J: Zombie health bars [{}]\n\
          K: Zombie LOD (distance shortcut) [{}]\n\
          T: Player model (debug visual) [{}]\n\
-         I: Autopilot [{}] | Y: Autopilot pilot [{}]\n\
+         I: Autopilot [{}]\n\
          6: Spawn debug bot at crosshair+2m | [/]: select prev/next bot\n\
          9: Move selected bot to crosshair | O: Despawn selected bot\n\
          Debug bots: {} (selected: {})\n\
@@ -4642,7 +4656,6 @@ fn update_debug_panel(
         on_off(!toggles.zombie_lod_disabled.0),
         on_off(toggles.player_model_visible.0),
         on_off(toggles.autopilot.0),
-        if toggles.autopilot_server_mode.0 { "SERVER" } else { "CLIENT" },
         debug_bots.iter().count(),
         selected_bot.0.map_or("none".to_string(), |id| id.to_string()),
         timings.move_zombies_ms,
@@ -5254,8 +5267,7 @@ fn touch_look(
     autopilot: Res<Autopilot>,
 ) {
     // See mouse_look's own doc comment — same reasoning applies here: real
-    // touch-look input is ignored the whole time Autopilot is on, in
-    // either implementation.
+    // touch-look input is ignored the whole time Autopilot is on.
     if autopilot.0 {
         return;
     }
@@ -5346,13 +5358,9 @@ fn mouse_look(
     mut query: Query<&mut FpsCamera>,
     autopilot: Res<Autopilot>,
 ) {
-    // Real look input is ignored the whole time Autopilot is on, in
-    // EITHER implementation (see autopilot's own module doc comment) — in
-    // client mode autopilot_think already wrote FpsCamera.yaw/pitch this
-    // same tick; in server mode there's simply nothing to hand aim back
-    // to (the server tracks no pitch at all, and its own aim_yaw is
-    // server-only bookkeeping, not replicated), so the camera just holds
-    // still instead — a known v1 limitation of that mode specifically.
+    // Real look input is ignored the whole time Autopilot is on (see
+    // autopilot's own module doc comment) — autopilot_think already wrote
+    // FpsCamera.yaw/pitch this same tick.
     if autopilot.0 {
         return;
     }
@@ -5545,7 +5553,6 @@ fn toggle_debug_flags(
     mut zombie_lod_disabled: ResMut<ZombieLodDisabled>,
     mut player_model_visible: ResMut<PlayerModelVisible>,
     mut autopilot: ResMut<Autopilot>,
-    mut autopilot_server_mode: ResMut<AutopilotServerMode>,
 ) {
     if keys.just_pressed(KeyCode::KeyF) {
         freeze.0 = !freeze.0;
@@ -5582,28 +5589,13 @@ fn toggle_debug_flags(
     if keys.just_pressed(KeyCode::KeyT) {
         player_model_visible.0 = !player_model_visible.0;
     }
-    // I: master Autopilot on/off. Y: which implementation runs while it's
-    // on — client-local (crate::autopilot's own decision loop) or
-    // server-side (crates/server's server_autopilot_*, see
-    // AutopilotServerMode's own doc comment for why that exists). Mirrors
-    // exactly what cadisplaylink::native_menu::set_autopilot/
-    // set_autopilot_server_mode do for the iOS Settings-menu equivalent of
-    // these two toggles — same SetAutopilot(on && server_mode) client
-    // event, just reached from a desktop hotkey instead of a UIKit button,
-    // since that module is iOS-only (#[cfg(target_os = "ios")]) and not
-    // reachable from here. Server needs this even when running in client
-    // mode: it's the only way the server knows to turn OFF its own
-    // ServerAutopilot for this player if the local player had switched to
-    // server mode and then toggled Autopilot off (or back to client mode)
-    // — without resending on every change, the server would keep
-    // autopiloting a player who thinks they took manual control back.
+    // I: master Autopilot on/off (client-local, crate::autopilot's own
+    // decision loop — mirrors cadisplaylink::native_menu::set_autopilot's
+    // iOS Settings-menu equivalent, just reached from a desktop hotkey
+    // instead of a UIKit button, since that module is iOS-only
+    // (#[cfg(target_os = "ios")]) and not reachable from here).
     if keys.just_pressed(KeyCode::KeyI) {
         autopilot.0 = !autopilot.0;
-        commands.client_trigger(SetAutopilot(autopilot.0 && autopilot_server_mode.0));
-    }
-    if keys.just_pressed(KeyCode::KeyY) {
-        autopilot_server_mode.0 = !autopilot_server_mode.0;
-        commands.client_trigger(SetAutopilot(autopilot.0 && autopilot_server_mode.0));
     }
 }
 
@@ -5723,36 +5715,34 @@ fn draw_zombie_hitboxes(
         return;
     }
     for (transform, bones) in &zombies {
-        // The actual collision capsule handle_fire_shot/debug_bot_fire test
-        // shots against (Collider::capsule(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_LENGTH),
+        // The actual collision shape handle_fire_shot/debug_bot_fire test
+        // shots against (Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
         // centered on this Transform — see ZOMBIE_MODEL_Y_OFFSET's own doc
         // comment for why the rendered mesh is offset to put its feet at the
-        // capsule's bottom). Drawn in white so it's visually distinct from
-        // the colored damage-region markers below — if this capsule's top
+        // cylinder's bottom). Drawn in white so it's visually distinct from
+        // the colored damage-region markers below — if this cylinder's top
         // ends up rendering above the visible head, that's ZOMBIE_SCALE/
         // ZOMBIE_MESH_REFERENCE_HEIGHT not actually matching the mesh's real
         // height, not a bug in the raycast itself.
-        // abs(): avian3d's Collider::capsule builds the shape from two
-        // endpoints (±length/2), so a negative ZOMBIE_LENGTH just flips
-        // which endpoint is which — the real physics capsule ends up sized
-        // off |length|, same as here. Bevy's gizmo primitive instead adds
-        // half_length + radius directly with no abs(), so without this it
-        // silently draws a squashed, wrong-sized capsule for a negative
-        // input instead of matching what's actually being tested against.
         gizmos.primitive_3d(
-            &Capsule3d { radius: ZOMBIE_OUTER_RADIUS, half_length: (ZOMBIE_OUTER_LENGTH / 2.0).abs() },
+            &Cylinder { radius: ZOMBIE_OUTER_RADIUS, half_height: ZOMBIE_OUTER_HEIGHT / 2.0 },
             Isometry3d::from_translation(transform.translation),
             Color::WHITE,
         );
 
         let mut any_bone = false;
         let bone_pos = |e: Entity| globals.get(e).ok().map(GlobalTransform::translation);
-        // Head has no second joint to span a capsule to (see
-        // zombie_hit_damage_bones' own doc comment), so it's the only
-        // region still drawn as a plain sphere — an honest match for what
-        // it actually is in the hit-test math, not a leftover joint marker.
+        // Head is two spheres, not one — see HEAD_SPHERE_Y_OFFSET's own doc
+        // comment (crates/shared): the Head bone's own resolved position is
+        // raised for the actual head sphere, and the original position now
+        // holds a separate, smaller neck sphere instead (still a headshot).
+        // Neither has a second joint to span a capsule to, so both stay
+        // plain spheres — an honest match for what they actually are in the
+        // hit-test math, not leftover joint markers.
         if let Some(pos) = bones.head.and_then(bone_pos) {
-            gizmos.sphere(Isometry3d::from_translation(pos), HEAD_HITBOX_RADIUS, Color::srgb(1.0, 0.2, 0.2));
+            let (head_pos, neck_pos) = head_and_neck_positions(pos, *transform.forward());
+            gizmos.sphere(Isometry3d::from_translation(head_pos), HEAD_HITBOX_RADIUS, Color::srgb(1.0, 0.2, 0.2));
+            gizmos.sphere(Isometry3d::from_translation(neck_pos), NECK_HITBOX_RADIUS, Color::srgb(1.0, 0.5, 0.5));
             any_bone = true;
         }
         if let (Some(belly), Some(chest)) = (bones.belly.and_then(bone_pos), bones.chest.and_then(bone_pos)) {
@@ -5849,13 +5839,11 @@ fn send_player_input(
     // for the whole Update-schedule `.chain()` tuple this fn sits in.
     // Tuples of SystemParams are themselves valid SystemParams, so nesting
     // sidesteps the limit without restructuring anything else — Autopilot/
-    // AutopilotServerMode/AutopilotIntent are folded into the same tuple
-    // for the same reason.
-    (mut local_moving, mut local_sprinting, autopilot, server_mode, intent): (
+    // AutopilotIntent are folded into the same tuple for the same reason.
+    (mut local_moving, mut local_sprinting, autopilot, intent): (
         ResMut<LocalPlayerMoving>,
         ResMut<LocalPlayerSprinting>,
         Res<Autopilot>,
-        Res<AutopilotServerMode>,
         Res<AutopilotIntent>,
     ),
     mover: MoveAndSlide,
@@ -5881,14 +5869,8 @@ fn send_player_input(
 
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch.aiming.0));
 
-    // Three-way: real input, this module's own AutopilotIntent (client
-    // mode), or nothing at all (server mode — server_autopilot_think
-    // overwrites this player's ClientInput.move_axis/yaw/sprint every
-    // tick server-side regardless of what's sent here, so real WASD/touch
-    // input just isn't read while it's on either).
-    let (move_axis, sprinting) = if autopilot.0 && server_mode.0 {
-        (Vec2::ZERO, false)
-    } else if autopilot.0 {
+    // Real input, or this module's own AutopilotIntent while Autopilot is on.
+    let (move_axis, sprinting) = if autopilot.0 {
         (intent.move_axis, intent.sprint)
     } else {
         let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
@@ -5944,23 +5926,11 @@ fn send_player_input(
         stance: effective_stance,
         noclip: noclip.0,
     };
-    // Skip local prediction only in server mode: this client's own
-    // move_axis is a meaningless Vec2::ZERO there (the real decision is
-    // server-side), so simulating it locally would just hold `transform`
-    // still every frame while the server actually moves the player —
-    // fighting predict_player_movement's own reconciliation
-    // snap-to-NetTransform every time it runs, and reading as constant
-    // rubber-banding. Leaving `pending` empty instead makes that same
-    // reconciliation step a clean "just follow the server" snap with
-    // nothing local to replay on top — see predict_player_movement's own
-    // doc comment; that function needed no changes at all for this.
-    // Client mode (autopilot.0 && !server_mode.0) DOES predict locally,
-    // same as real input — intent.move_axis is this client's own
-    // decision, exactly as authoritative-ish as real WASD.
-    if !(autopilot.0 && server_mode.0) {
-        shared::movement::simulate_player_step(&mover, &mut transform, &mut player, stance, &input, dt);
-        pending.0.push_back((*sequence, input, dt, player.vertical_velocity, player.grounded));
-    }
+    // Predicted locally same as real input — while Autopilot is on,
+    // intent.move_axis is this client's own decision, exactly as
+    // authoritative-ish as real WASD.
+    shared::movement::simulate_player_step(&mover, &mut transform, &mut player, stance, &input, dt);
+    pending.0.push_back((*sequence, input, dt, player.vertical_velocity, player.grounded));
 
     input_send_state.jump_edge_pending |= input.jump;
     input_send_state.elapsed += dt;
@@ -6084,16 +6054,16 @@ fn shoot(
     mut camera: Query<(&Transform, &mut ViewRecoil), With<FpsCamera>>,
     mut gun: Query<&mut Gun>,
     mut vfx_assets: VfxAssets,
-    zombies: Query<(Entity, &Transform), With<Zombie>>,
+    zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
+    globals: Query<&GlobalTransform>,
     touch_firing: Res<TouchFiring>,
     mut cooldown: Local<f32>,
     // Bundled into one nested-tuple param instead of four flat ones — this
     // fn was already at Bevy's flat SystemParam tuple arity limit (16); see
     // send_player_input's own comment for the same constraint and the same
     // nesting fix.
-    (autopilot, server_mode, intent, local_moving, local_sprinting): (
+    (autopilot, intent, local_moving, local_sprinting): (
         Res<Autopilot>,
-        Res<AutopilotServerMode>,
         Res<AutopilotIntent>,
         Res<LocalPlayerMoving>,
         Res<LocalPlayerSprinting>,
@@ -6107,15 +6077,11 @@ fn shoot(
     let Ok(cursor) = cursor.single() else {
         return;
     };
-    // Three-way, same shape as send_player_input: real mouse/touch input,
-    // this module's own AutopilotIntent.fire (client mode), or never (in
-    // server mode the shot is decided AND resolved entirely server-side
-    // by server_autopilot_think — firing locally too would double it up).
-    // Real input is disabled in EITHER autopilot mode, not just server
-    // mode, for the same full-takeover reasoning mouse_look/
+    // Real mouse/touch input, or this module's own AutopilotIntent.fire
+    // while Autopilot is on — same full-takeover reasoning mouse_look/
     // send_player_input already apply.
     let firing = if autopilot.0 {
-        !server_mode.0 && intent.fire
+        intent.fire
     } else {
         (cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Left)) || touch_firing.0
     };
@@ -6225,35 +6191,41 @@ fn shoot(
     // handle_fire_shot) — this sends the exact ray (already carrying this
     // shot's own spread/recoil jitter) for the server to resolve for real.
     // But waiting a full round trip just to show the shooter SOME response
-    // reads as input lag, so this still does its own local capsule-vs-
-    // zombie raycast (client-side zombies have no Collider component to
-    // test against via SpatialQuery, unlike the server, so this builds one
-    // manually — see ZOMBIE_OUTER_RADIUS/ZOMBIE_OUTER_LENGTH) and, on a hit, shows the
-    // hitmarker immediately — an honest "the raycast physically stopped
-    // here" signal that doesn't depend on knowing real damage, so it can't
-    // be wrong the way a locally-guessed damage number could. The floating
-    // damage number and the blood-vs-spark choice (both genuinely need to
-    // know the real damage) instead wait on the server's own ShotConfirmed
-    // (see on_shot_confirmed) — deliberately NOT predicted here anymore, so
-    // what the shooter sees always matches what the zombie's health
-    // actually did, never a local guess that could disagree with the
-    // server's own lag-compensated rewind. No wall-occlusion check against
-    // this predicted ray — acceptable for the current open arena layout
-    // (NAVMESH_COLUMN_OBSTACLES is empty), but a zombie visible through/
-    // behind level geometry could show a mispredicted hitmarker if that
-    // ever changes.
-    let zombie_capsule = Collider::capsule(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_LENGTH);
+    // reads as input lag, so this still does its own local prediction and,
+    // on a hit, shows the hitmarker immediately — an honest "the raycast
+    // physically stopped here" signal that doesn't depend on knowing real
+    // damage, so it can't be wrong the way a locally-guessed damage number
+    // could. The floating damage number and the blood-vs-spark choice (both
+    // genuinely need to know the real damage) instead wait on the server's
+    // own ShotConfirmed (see on_shot_confirmed) — deliberately NOT
+    // predicted here anymore, so what the shooter sees always matches what
+    // the zombie's health actually did, never a local guess that could
+    // disagree with the server's own lag-compensated rewind.
+    //
+    // This casts against the REAL per-bone regions (zombie_hit_damage_ray),
+    // not the wide outer broad-phase capsule (ZOMBIE_OUTER_RADIUS/
+    // ZOMBIE_OUTER_HEIGHT) — that outer shell is only a cheap "did the shot
+    // reach the zombie at all" pre-filter for the server's rewind lookup,
+    // and stopping the visual tracer/hitmarker there reads as the shot
+    // stopping short of the actual model. Every zombie is tested (not just
+    // the nearest outer-shell hit) and the closest REAL bone hit across all
+    // of them wins — the same "don't let one zombie's shell block the one
+    // behind it" fix already applied to the server's rewound_hit. No wall-
+    // occlusion check against this predicted ray — acceptable for the
+    // current open arena layout (NAVMESH_COLUMN_OBSTACLES is empty), but a
+    // zombie visible through/behind level geometry could show a
+    // mispredicted hitmarker if that ever changes.
     let predicted_hit = zombies
         .iter()
-        .filter_map(|(entity, transform)| {
-            zombie_capsule
-                .cast_ray(transform.translation, transform.rotation, camera_transform.translation, *direction, MAX_SHOT_DISTANCE, true)
-                .map(|(distance, normal)| (distance, entity, normal))
+        .filter_map(|(entity, transform, bones)| {
+            let bone_positions = resolve_bone_world_positions(bones, |bone| globals.get(bone).ok().map(GlobalTransform::translation));
+            let forward = *transform.forward();
+            zombie_hit_damage_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, &bone_positions, forward)
+                .map(|(point, normal, _damage)| (point.distance(camera_transform.translation), entity, point, normal))
         })
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
-    if let Some((distance, entity, normal)) = predicted_hit {
-        info!("[shot] local prediction: outer capsule hit zombie={entity} distance={distance:.2}");
-        let point = camera_transform.translation + *direction * distance;
+    if let Some((distance, entity, point, normal)) = predicted_hit {
+        info!("[shot] local prediction: real bone hit zombie={entity} distance={distance:.2}");
         commands.spawn((
             Mesh3d(vfx_assets.hit_assets.mesh.clone()),
             MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
@@ -6278,6 +6250,28 @@ fn shoot(
     });
 }
 
+// Finds whichever bone (head/belly/chest/any limb joint) of `bones` is
+// nearest to `point` and has actually resolved a GlobalTransform — used to
+// pick which specific bone a wound decal should parent onto (see
+// spawn_blood_stain_on_zombie's own doc comment for why a bone, not the
+// zombie's root, is the one that actually animates). Purely a VFX
+// placement choice, not the same "nearest region" zombie_hit_nearest_region
+// (crates/shared) computes for damage-miss diagnostics — this returns an
+// actual Entity to parent onto, not a named region/radius.
+fn nearest_zombie_bone(bones: &ZombieHitboxBones, point: Vec3, globals: &Query<&GlobalTransform>) -> Option<(Entity, GlobalTransform)> {
+    bones
+        .head
+        .into_iter()
+        .chain(bones.belly)
+        .chain(bones.chest)
+        .chain(bones.left_arm.into_iter().flatten())
+        .chain(bones.right_arm.into_iter().flatten())
+        .chain(bones.left_leg.into_iter().flatten())
+        .chain(bones.right_leg.into_iter().flatten())
+        .filter_map(|entity| globals.get(entity).ok().map(|g| (entity, *g)))
+        .min_by(|(_, a), (_, b)| a.translation().distance_squared(point).total_cmp(&b.translation().distance_squared(point)))
+}
+
 // Plays the server-decided outcome of a shot — for every client EXCEPT the
 // shooter, who already predicted and showed this same hit locally in
 // shoot() and is excluded from receiving it at all (see handle_fire_shot's
@@ -6289,7 +6283,7 @@ fn on_shot_fx(
     time: Res<Time>,
     vfx_assets: VfxAssets,
     spatial_query: SpatialQuery,
-    zombies: Query<(Entity, &Transform), With<Zombie>>,
+    zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
 ) {
     match *trigger.event() {
@@ -6310,19 +6304,22 @@ fn on_shot_fx(
 
             // The server doesn't send which zombie entity it was (avoiding
             // cross-network entity mapping for a purely cosmetic detail) —
-            // parenting the wound stain onto whichever zombie is nearest
-            // the hit point is visually indistinguishable and much simpler.
-            let zombie_for_blood = if killed {
+            // whichever zombie is nearest the hit point, then whichever of
+            // ITS bones is nearest, is visually indistinguishable from the
+            // real one and much simpler (see nearest_zombie_bone's own doc
+            // comment for why a bone, not the zombie root).
+            let nearest_bone = if killed {
                 None
             } else {
                 zombies
                     .iter()
-                    .min_by(|(_, a), (_, b)| {
+                    .min_by(|(_, a, _), (_, b, _)| {
                         a.translation.distance_squared(point).total_cmp(&b.translation.distance_squared(point))
                     })
-                    .and_then(|(entity, _)| globals.get(entity).ok().map(|g| (entity, g)))
+                    .and_then(|(_, _, bones)| nearest_zombie_bone(bones, point, &globals))
             };
-            spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, zombie_for_blood);
+            let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
+            spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed);
         }
         ShotFx::SurfaceHit { point, normal } => {
             commands.spawn((
@@ -6350,7 +6347,7 @@ fn on_shot_confirmed(
     time: Res<Time>,
     vfx_assets: VfxAssets,
     spatial_query: SpatialQuery,
-    zombies: Query<(Entity, &Transform), With<Zombie>>,
+    zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
 ) {
     let ShotConfirmed { point, normal, damage, killed } = *trigger.event();
@@ -6359,19 +6356,21 @@ fn on_shot_confirmed(
     } else {
         info!("[shot] server confirmed: outer capsule hit but missed every inner bone capsule (0 damage)");
     }
-    // Same "nearest zombie to the hit point" approximation on_shot_fx uses
-    // — ShotConfirmed doesn't carry which zombie entity it was either, same
-    // reasoning (avoids cross-network entity mapping for a purely cosmetic
-    // detail).
-    let zombie_for_blood = if killed {
+    // Same "nearest zombie, then nearest bone of that zombie" approximation
+    // on_shot_fx uses — ShotConfirmed doesn't carry which zombie entity it
+    // was either, same reasoning (avoids cross-network entity mapping for a
+    // purely cosmetic detail; see nearest_zombie_bone's own doc comment for
+    // why a bone, not the zombie root).
+    let nearest_bone = if killed {
         None
     } else {
         zombies
             .iter()
-            .min_by(|(_, a), (_, b)| a.translation.distance_squared(point).total_cmp(&b.translation.distance_squared(point)))
-            .and_then(|(entity, _)| globals.get(entity).ok().map(|g| (entity, g)))
+            .min_by(|(_, a, _), (_, b, _)| a.translation.distance_squared(point).total_cmp(&b.translation.distance_squared(point)))
+            .and_then(|(_, _, bones)| nearest_zombie_bone(bones, point, &globals))
     };
-    spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, zombie_for_blood);
+    let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
+    spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed);
 }
 
 // Pressing R starts a reload unless the mag's already full or a reload is
