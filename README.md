@@ -151,7 +151,21 @@ open trace.trace   # mở bằng Instruments GUI để xem track GPU
 ```
 Lưu ý: `<DEVICE_UUID_XCTRACE>` khác format với UUID của `devicectl` — lấy qua `xcrun xctrace list devices`.
 
-Riêng số liệu CPU% tự viết tay (không có plugin Bevy hỗ trợ) — xem ví dụ ở `experiments/cadisplaylink_probe/src/simple_scene.rs` (`process_cpu_seconds()`, dùng `libc::getrusage`).
+Riêng số liệu CPU% tự viết tay (không có plugin Bevy hỗ trợ) — lấy qua `libc::getrusage`, tính delta CPU-time/wall-time mỗi giây:
+
+```rust
+fn process_cpu_seconds() -> f64 {
+    unsafe {
+        let mut usage: libc::rusage = std::mem::zeroed();
+        libc::getrusage(libc::RUSAGE_SELF, &mut usage);
+        let user = usage.ru_utime.tv_sec as f64 + usage.ru_utime.tv_usec as f64 / 1_000_000.0;
+        let sys = usage.ru_stime.tv_sec as f64 + usage.ru_stime.tv_usec as f64 / 1_000_000.0;
+        user + sys
+    }
+}
+
+// mỗi ~1s: cpu_percent = (process_cpu_seconds() - lần trước) / wall_time_trôi_qua * 100.0
+```
 
 ### Game Mode (iOS 18+)
 
