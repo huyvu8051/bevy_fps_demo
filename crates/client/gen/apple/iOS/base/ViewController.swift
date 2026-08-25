@@ -25,20 +25,15 @@ import MetalKit
 // specific overhead, not something a "real" Metal app pays for the same
 // scene.
 let USE_NATIVE_METAL_DEMO = false
-// Control experiment: same 5-cuboid arena, rendered from RUST via the
-// `metal` crate directly (no Bevy App/bevy_render/wgpu) instead of Swift —
-// see crates/client/src/cadisplaylink/native_metal_probe.rs. Answers
-// whether the encoding-cost overhead is specific to wgpu's abstraction, or
-// something about driving Metal from Rust in general.
-let USE_RUST_METAL_DEMO = true
 // Phase 6 Step 1 feasibility spike (temporary): boots the REAL game's
 // gameplay App (physics/networking/AI/prediction) with no window/render
 // backend at all and ticks it repeatedly, printing zombie/player counts —
 // see native_game_app_create/tick in cadisplaylink/ffi.rs. No renderer
 // reads from it yet. Remove once Phase 6 Step 1 is confirmed working.
 let RUN_HEADLESS_GAME_APP_SPIKE = false
-// Phase 6 Step 4: when true (and USE_RUST_METAL_DEMO is also true), the
-// Rust+Metal probe draws the REAL game's own level (spawn_test_arena's
+// Phase 6 Step 4: when true, the Rust+Metal probe (`rustMetalProbe`,
+// always the active renderer now — see the retired USE_RUST_METAL_DEMO
+// flag's removal) draws the REAL game's own level (spawn_test_arena's
 // walls+floor, the ak47_scope gun) instead of its own Sponza/box-arena
 // demo scene, with the camera driven by the game's own FpsCamera instead
 // of touch input — see native_metal_probe_create_real_game in ffi.rs.
@@ -582,7 +577,6 @@ final class TouchHUD {
 
 class ViewController: UIViewController {
     @IBOutlet var metalV: MetalView!
-    var bevyApp: OpaquePointer?
 
     // Native Metal demo state — only used when USE_NATIVE_METAL_DEMO.
     private var metalDevice: MTLDevice?
@@ -631,8 +625,8 @@ class ViewController: UIViewController {
     private let gameOverView = GameOverView()
     private var gameOverWasVisible = false
     // Bluetooth keyboard/mouse (GameController framework) — see
-    // GameControllerInput.swift. Created after bevyApp so its "wire
-    // already-connected devices" check in init() has a real app pointer
+    // GameControllerInput.swift. Created after rustMetalProbe so its "wire
+    // already-connected devices" check in init() has a real probe pointer
     // to send the initial GCMouseDidConnect-equivalent state to. Typed
     // Any? since GameControllerInput itself is @available(iOS 14, *) and
     // this property must be declarable on iOS 13 too (deployment target).
@@ -935,36 +929,23 @@ class ViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         self.view.backgroundColor = .black
-        if USE_RUST_METAL_DEMO {
-            if rustMetalProbe == nil {
-                let viewPointer = Unmanaged.passUnretained(self.metalV).toOpaque()
-                if USE_REAL_GAME_NATIVE_RENDERER {
-                    rustMetalProbe = native_metal_probe_create_real_game(viewPointer, Float(UIScreen.main.nativeScale))
-                } else {
-                    rustMetalProbe = native_metal_probe_create(viewPointer, Float(UIScreen.main.nativeScale))
-                }
-                if #available(iOS 15.0, *) {
-                    displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
-                }
-                // Bluetooth keyboard/mouse support (GameControllerInput.swift)
-                // was previously only ever constructed in createBevyApp(),
-                // which this rustMetalProbe branch (the one actually taken by
-                // default — see USE_RUST_METAL_DEMO above) never calls, so a
-                // connected keyboard/mouse silently did nothing: keyChanged
-                // handlers were never installed. GameControllerInput's own
-                // dispatch functions already pick whichever backend
-                // (rustMetalProbe vs bevyApp) is live, so only the
-                // construction site needed to move, not the class itself.
-                if #available(iOS 14.0, *), gameControllerInput == nil {
-                    gameControllerInput = GameControllerInput(viewController: self)
-                }
-            }
-        } else if USE_NATIVE_METAL_DEMO {
+        if USE_NATIVE_METAL_DEMO {
             if metalDevice == nil {
                 self.startNativeMetalDemo()
             }
-        } else if bevyApp == nil {
-            self.createBevyApp()
+        } else if rustMetalProbe == nil {
+            let viewPointer = Unmanaged.passUnretained(self.metalV).toOpaque()
+            if USE_REAL_GAME_NATIVE_RENDERER {
+                rustMetalProbe = native_metal_probe_create_real_game(viewPointer, Float(UIScreen.main.nativeScale))
+            } else {
+                rustMetalProbe = native_metal_probe_create(viewPointer, Float(UIScreen.main.nativeScale))
+            }
+            if #available(iOS 15.0, *) {
+                displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+            }
+            if #available(iOS 14.0, *), gameControllerInput == nil {
+                gameControllerInput = GameControllerInput(viewController: self)
+            }
         }
         if RUN_HEADLESS_GAME_APP_SPIKE && headlessGameApp == nil {
             headlessGameApp = native_game_app_create()
@@ -1206,34 +1187,8 @@ class ViewController: UIViewController {
         displayLink.isPaused = true
     }
 
-    func createBevyApp() {
-        let viewPointer = Unmanaged.passUnretained(self.metalV).toOpaque()
-        // Defaults to crates/client/src/fps_probe.rs (camera + a small
-        // static room, no game logic at all) during this CPU
-        // investigation, so a plain icon-tap launch reaches it directly —
-        // icon-tap launches can't pass env vars (only `devicectl process
-        // launch -e` can). Set REAL_GAME=1 (via `devicectl device process
-        // launch -e '{"REAL_GAME":"1"}'`) to launch the actual game
-        // instead. Flip this back (default to the real game, gate the
-        // probe behind FPS_PROBE=1) once this investigation wraps up.
-        if ProcessInfo.processInfo.environment["REAL_GAME"] != nil {
-            bevyApp = cadisplaylink_create_game_app(viewPointer, Float(UIScreen.main.nativeScale))
-        } else {
-            bevyApp = cadisplaylink_create_fps_probe_app(viewPointer, Float(UIScreen.main.nativeScale))
-        }
-        if #available(iOS 15.0, *) {
-            // Explicit ProMotion opt-in, mirrors MINIMAL_MAP_PROBE's own
-            // CADisableMinimumFrameDurationOnPhone + WinitSettings::reactive
-            // 120Hz config, for an apples-to-apples comparison.
-            displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
-        }
-        if #available(iOS 14.0, *) {
-            gameControllerInput = GameControllerInput(viewController: self)
-        }
-    }
-
     @objc func enterFrame() {
-        if USE_RUST_METAL_DEMO {
+        if !USE_NATIVE_METAL_DEMO {
             guard let probe = self.rustMetalProbe else { return }
             let now = CACurrentMediaTime()
             let deltaTime = Float(now - lastFrameTime)
@@ -1264,12 +1219,7 @@ class ViewController: UIViewController {
             syncGameOver()
             return
         }
-        if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
-            self.renderNativeMetalFrame()
-            return
-        }
-        guard let bevy = self.bevyApp else { return }
-        cadisplaylink_enter_frame(bevy)
+        self.renderNativeMetalFrame()
     }
 
     // MARK: touch — every active UITouch is forwarded with its own stable
@@ -1294,42 +1244,34 @@ class ViewController: UIViewController {
                 native_metal_probe_touch_started(probe, touchId(for: touch), Float(location.x), Float(location.y))
             }
         }
-        if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
-            for touch in touches {
-                let location = touch.location(in: self.metalV)
-                // FIRE/AIM hit-test (see fireButton/aimButton's own
-                // isUserInteractionEnabled=false comments) — checked
-                // against self.view's coordinate space since that's where
-                // TouchHUD laid the buttons out. Deliberately doesn't
-                // `continue`/skip the isLeftHalf check below: a touch that
-                // starts on FIRE/AIM is *also* eligible to become
-                // lookTouch (it will, since both buttons sit in the right
-                // half), so holding down and dragging fires/aims AND
-                // rotates the camera with the same finger.
-                let viewLocation = touch.location(in: self.view)
-                if fireTouch == nil, touchHUD.fireButton.frame.contains(viewLocation) {
-                    fireTouch = touch
-                    handleFire(pressed: true)
-                } else if aimTouch == nil, touchHUD.aimButton.frame.contains(viewLocation) {
-                    aimTouch = touch
-                    handleExtraButton(.aim, pressed: true)
-                }
-                let isLeftHalf = location.x < self.metalV.bounds.width / 2.0
-                if isLeftHalf, moveTouch == nil {
-                    moveTouch = touch
-                    moveTouchStart = location
-                    moveTouchCurrent = location
-                } else if !isLeftHalf, lookTouch == nil {
-                    lookTouch = touch
-                    lookTouchLast = location
-                }
-            }
-            return
-        }
-        guard let bevy = self.bevyApp else { return }
         for touch in touches {
             let location = touch.location(in: self.metalV)
-            cadisplaylink_touch_started(bevy, touchId(for: touch), Float(location.x), Float(location.y))
+            // FIRE/AIM hit-test (see fireButton/aimButton's own
+            // isUserInteractionEnabled=false comments) — checked
+            // against self.view's coordinate space since that's where
+            // TouchHUD laid the buttons out. Deliberately doesn't
+            // `continue`/skip the isLeftHalf check below: a touch that
+            // starts on FIRE/AIM is *also* eligible to become
+            // lookTouch (it will, since both buttons sit in the right
+            // half), so holding down and dragging fires/aims AND
+            // rotates the camera with the same finger.
+            let viewLocation = touch.location(in: self.view)
+            if fireTouch == nil, touchHUD.fireButton.frame.contains(viewLocation) {
+                fireTouch = touch
+                handleFire(pressed: true)
+            } else if aimTouch == nil, touchHUD.aimButton.frame.contains(viewLocation) {
+                aimTouch = touch
+                handleExtraButton(.aim, pressed: true)
+            }
+            let isLeftHalf = location.x < self.metalV.bounds.width / 2.0
+            if isLeftHalf, moveTouch == nil {
+                moveTouch = touch
+                moveTouchStart = location
+                moveTouchCurrent = location
+            } else if !isLeftHalf, lookTouch == nil {
+                lookTouch = touch
+                lookTouchLast = location
+            }
         }
     }
 
@@ -1340,20 +1282,12 @@ class ViewController: UIViewController {
                 native_metal_probe_touch_moved(probe, touchId(for: touch), Float(location.x), Float(location.y))
             }
         }
-        if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
-            for touch in touches {
-                if touch == moveTouch {
-                    moveTouchCurrent = touch.location(in: self.metalV)
-                }
-                // lookTouchLast is updated in updateCamera() each frame
-                // from the touch's live location, not here.
-            }
-            return
-        }
-        guard let bevy = self.bevyApp else { return }
         for touch in touches {
-            let location = touch.location(in: self.metalV)
-            cadisplaylink_touch_moved(bevy, touchId(for: touch), Float(location.x), Float(location.y))
+            if touch == moveTouch {
+                moveTouchCurrent = touch.location(in: self.metalV)
+            }
+            // lookTouchLast is updated in updateCamera() each frame
+            // from the touch's live location, not here.
         }
     }
 
@@ -1384,15 +1318,7 @@ class ViewController: UIViewController {
                 native_metal_probe_touch_ended(probe, touchId(for: touch), Float(location.x), Float(location.y))
             }
         }
-        if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
-            endNativeTouch(touches)
-            return
-        }
-        guard let bevy = self.bevyApp else { return }
-        for touch in touches {
-            let location = touch.location(in: self.metalV)
-            cadisplaylink_touch_ended(bevy, touchId(for: touch), Float(location.x), Float(location.y))
-        }
+        endNativeTouch(touches)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -1402,21 +1328,10 @@ class ViewController: UIViewController {
                 native_metal_probe_touch_cancelled(probe, touchId(for: touch), Float(location.x), Float(location.y))
             }
         }
-        if USE_NATIVE_METAL_DEMO || USE_RUST_METAL_DEMO {
-            endNativeTouch(touches)
-            return
-        }
-        guard let bevy = self.bevyApp else { return }
-        for touch in touches {
-            let location = touch.location(in: self.metalV)
-            cadisplaylink_touch_cancelled(bevy, touchId(for: touch), Float(location.x), Float(location.y))
-        }
+        endNativeTouch(touches)
     }
 
     deinit {
-        if let bevy = bevyApp {
-            cadisplaylink_release_app(bevy)
-        }
         if let probe = rustMetalProbe {
             native_metal_probe_release(probe)
         }

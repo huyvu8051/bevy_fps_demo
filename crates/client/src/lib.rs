@@ -54,12 +54,6 @@ mod cadisplaylink;
 mod autopilot;
 use autopilot::Autopilot;
 
-// Standalone FPS probe (camera + a small static primitive-built room, no
-// game logic at all) — see its own module doc comment. Only reachable via
-// cadisplaylink::build_cadisplaylink_fps_probe_app.
-#[cfg(target_os = "ios")]
-mod fps_probe;
-
 // Downloaded once into assets/models/ so the app doesn't depend on a network
 // request (and a remote repo's file layout) every time it starts.
 // To load from a URL instead, add the WebAssetPlugin back (see bevy::asset::io::web)
@@ -573,7 +567,7 @@ const ZOMBIE_ATTACK_DAMAGE: f32 = 12.0;
 // ZOMBIE_SCALE itself now lives in crates/shared, not here — see its own
 // doc comment for why (the physics/hit-detection capsule is derived from
 // it, so it can't be a client-only visual constant anymore).
-const ZOMBIE_PATH: &str = "models/zombie.glb";
+const ZOMBIE_PATH: &str = "characters/zombie/mesh/zombie.glb";
 // Capsule center (the zombie's own Transform/NetTransform.translation) to
 // feet. Applied to the mesh's child Transform, in world units (the child's
 // parent — the zombie entity — is never scaled, only this child is), not
@@ -591,7 +585,7 @@ const ZOMBIE_MODEL_Y_OFFSET: f32 = -(ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0);
 // for Blender-authored rigs), so it's spawned at Bevy's default scale (1.0)
 // — not independently calibrated against anything in-game, so it may need
 // visual tuning.
-const PLAYER_MODEL_PATH: &str = "models/soldier.glb";
+const PLAYER_MODEL_PATH: &str = "characters/soldier/mesh/soldier.glb";
 
 // Damage number popup: spawned at the hit point, drifts straight up in
 // world space, and fades out over its lifetime.

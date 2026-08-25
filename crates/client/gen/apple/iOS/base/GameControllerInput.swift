@@ -82,41 +82,32 @@ final class GameControllerInput {
         }
     }
 
-    // Phase 6 Step 3: dispatch to whichever backend is actually active —
-    // `rustMetalProbe` (both the plain probe demo and, when
-    // USE_REAL_GAME_NATIVE_RENDERER is set, the real game's own headless
-    // App via native_metal_probe_*) or the legacy `bevyApp` path. Only one
-    // of the two is ever non-nil for a given ViewController, so this is
-    // just "use whichever one exists" rather than a real mode switch.
+    // Dispatch to the active native Metal probe (`rustMetalProbe` — both
+    // the plain probe demo and, when USE_REAL_GAME_NATIVE_RENDERER is set,
+    // the real game's own headless App via native_metal_probe_*). The old
+    // bevy_render-on-CADisplayLink fallback (`bevyApp`) was removed —
+    // dead code once USE_RUST_METAL_DEMO (which gated it) was always true.
     private static func keyChanged(on vc: ViewController?, _ keyId: UInt16, _ pressed: Bool) {
         if let probe = vc?.rustMetalProbe {
             native_metal_probe_key_changed(probe, keyId, pressed)
-        } else if let bevy = vc?.bevyApp {
-            cadisplaylink_key_changed(bevy, keyId, pressed)
         }
     }
 
     private static func mouseConnected(on vc: ViewController?, _ connected: Bool) {
         if let probe = vc?.rustMetalProbe {
             native_metal_probe_mouse_connected(probe, connected)
-        } else if let bevy = vc?.bevyApp {
-            cadisplaylink_mouse_connected(bevy, connected)
         }
     }
 
     private static func mouseMoved(on vc: ViewController?, _ deltaX: Float, _ deltaY: Float) {
         if let probe = vc?.rustMetalProbe {
             native_metal_probe_mouse_moved(probe, deltaX, deltaY)
-        } else if let bevy = vc?.bevyApp {
-            cadisplaylink_mouse_moved(bevy, deltaX, deltaY)
         }
     }
 
     private static func mouseButtonChanged(on vc: ViewController?, _ button: UInt8, _ pressed: Bool) {
         if let probe = vc?.rustMetalProbe {
             native_metal_probe_mouse_button_changed(probe, button, pressed)
-        } else if let bevy = vc?.bevyApp {
-            cadisplaylink_mouse_button_changed(bevy, button, pressed)
         }
     }
 

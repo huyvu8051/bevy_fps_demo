@@ -7,7 +7,6 @@
 use super::native_game_app::build_headless_game_ecs_app;
 use super::native_game_extract::extract_render_snapshot;
 use super::native_metal_probe::NativeMetalProbe;
-use super::{IosViewObj, build_cadisplaylink_fps_probe_app, build_cadisplaylink_game_app};
 use bevy::app::App;
 use bevy::ecs::{entity::Entity, system::Query, world::FromWorld};
 use bevy::input::ButtonState;
@@ -16,51 +15,6 @@ use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseMotion};
 use bevy::input::touch::{TouchInput, TouchPhase};
 use bevy::math::Vec2;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window};
-
-// Bevy UI text silently renders nothing (no error) if it's extracted for
-// the first time before its glyph atlas/layout has settled — a known Bevy
-// gap (see https://github.com/bevyengine/bevy/issues/18205 for the same
-// "invalid/not-yet-ready span renders blank" shape). Startup also kicks off
-// a bunch of async asset loads (scene gltf, textures, sounds) on background
-// task-pool threads — those need real wall-clock time to make progress, not
-// just Bevy update() ticks, so a tight loop of update() calls alone doesn't
-// reliably give them time to finish.
-//
-// warm_up_app() below runs update() repeatedly for a minimum real-time
-// window (WARMUP_MIN_DURATION), not a fixed tick count, so the background
-// loader threads get actual wall-clock time to run alongside it — before
-// Swift's CADisplayLink starts presenting real frames, so the first frame
-// the user actually sees isn't also the first frame each piece of UI text
-// was ever drawn or the first frame of a still-loading model appearing.
-const WARMUP_MIN_DURATION: std::time::Duration = std::time::Duration::from_millis(1500);
-const WARMUP_MIN_TICKS: u32 = 5;
-
-fn warm_up_app(app: &mut App) {
-    let start = std::time::Instant::now();
-    let mut ticks = 0;
-    while ticks < WARMUP_MIN_TICKS || start.elapsed() < WARMUP_MIN_DURATION {
-        app.update();
-        ticks += 1;
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_create_game_app(view: *mut objc::runtime::Object, scale_factor: f32) -> *mut std::ffi::c_void {
-    let view_obj = IosViewObj { view, scale_factor };
-    let mut app = build_cadisplaylink_game_app(view_obj);
-    warm_up_app(&mut app);
-    Box::into_raw(Box::new(app)) as *mut std::ffi::c_void
-}
-
-// crate::fps_probe's App — camera + static room, no game logic — for
-// measuring raw achievable FPS/CPU. Skips warm_up_app on purpose: there's
-// no UI/async asset loading here to warm up for.
-#[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_create_fps_probe_app(view: *mut objc::runtime::Object, scale_factor: f32) -> *mut std::ffi::c_void {
-    let view_obj = IosViewObj { view, scale_factor };
-    let app = build_cadisplaylink_fps_probe_app(view_obj);
-    Box::into_raw(Box::new(app)) as *mut std::ffi::c_void
-}
 
 // Control experiment: same 5-cuboid arena as fps_probe.rs/the Swift native
 // demo, but rendered from Rust via the `metal` crate directly — no Bevy
@@ -117,39 +71,7 @@ pub extern "C" fn native_metal_probe_release(obj: *mut std::ffi::c_void) {
     drop(probe);
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_enter_frame(obj: *mut std::ffi::c_void) {
-    let app = unsafe { &mut *(obj as *mut App) };
-    app.update();
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_touch_started(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
-    let app = unsafe { &mut *(obj as *mut App) };
-    touched(app, touch_id, TouchPhase::Started, Vec2::new(x, y));
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_touch_moved(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
-    let app = unsafe { &mut *(obj as *mut App) };
-    touched(app, touch_id, TouchPhase::Moved, Vec2::new(x, y));
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_touch_ended(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
-    let app = unsafe { &mut *(obj as *mut App) };
-    touched(app, touch_id, TouchPhase::Ended, Vec2::new(x, y));
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_touch_cancelled(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
-    let app = unsafe { &mut *(obj as *mut App) };
-    touched(app, touch_id, TouchPhase::Canceled, Vec2::new(x, y));
-}
-
-// Shared by both the toy `cadisplaylink_*` App and Phase 6 Step 3's
-// `native_metal_probe_*` real-game App (see below) — same message-writing
-// logic either way, only which `App`'s `World` it targets differs.
+// Shared with `native_metal_probe_touch_*` below (real-game App).
 pub(super) fn touched(app: &mut App, touch_id: u64, phase: TouchPhase, position: Vec2) {
     let mut windows_state: bevy::ecs::system::SystemState<Query<Entity, bevy::ecs::query::With<Window>>> =
         bevy::ecs::system::SystemState::from_world(app.world_mut());
@@ -243,18 +165,11 @@ fn map_key_id(id: u16) -> Option<KeyCode> {
     })
 }
 
-// GameControllerInput.swift calls this from GCKeyboardInput's
-// keyChangedHandler — one call per key transition, translated from Apple's
-// GCKeyCode to `key_id` via that file's own switch (see map_key_id above
-// for the shared numbering both sides agree on).
-#[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_key_changed(obj: *mut std::ffi::c_void, key_id: u16, pressed: bool) {
-    let app = unsafe { &mut *(obj as *mut App) };
-    key_changed(app, key_id, pressed);
-}
-
-// Shared by both `cadisplaylink_key_changed` and Step 3's
-// `native_metal_probe_key_changed`.
+// Shared with `native_metal_probe_key_changed` below — GameControllerInput.
+// swift calls that from GCKeyboardInput's keyChangedHandler, one call per
+// key transition, translated from Apple's GCKeyCode to `key_id` via that
+// file's own switch (see map_key_id above for the shared numbering both
+// sides agree on).
 pub(super) fn key_changed(app: &mut App, key_id: u16, pressed: bool) {
     let Some(key_code) = map_key_id(key_id) else {
         return;
@@ -272,19 +187,12 @@ pub(super) fn key_changed(app: &mut App, key_id: u16, pressed: bool) {
     });
 }
 
-// GameControllerInput.swift calls this once when a GCMouse connects/
+// Shared with `native_metal_probe_mouse_connected` below —
+// GameControllerInput.swift calls that once when a GCMouse connects/
 // disconnects — mouse_look (see crates/client/src/lib.rs) only reads
 // MouseMotion while CursorOptions.grab_mode is Locked, same gate desktop's
 // click-to-lock uses; there's no on-screen cursor to click on iOS, so a
 // connected hardware mouse just locks look immediately instead.
-#[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_mouse_connected(obj: *mut std::ffi::c_void, connected: bool) {
-    let app = unsafe { &mut *(obj as *mut App) };
-    mouse_connected(app, connected);
-}
-
-// Shared by both `cadisplaylink_mouse_connected` and Step 3's
-// `native_metal_probe_mouse_connected`.
 pub(super) fn mouse_connected(app: &mut App, connected: bool) {
     let mut cursor_state: bevy::ecs::system::SystemState<Query<&mut CursorOptions, bevy::ecs::query::With<PrimaryWindow>>> =
         bevy::ecs::system::SystemState::from_world(app.world_mut());
@@ -295,29 +203,16 @@ pub(super) fn mouse_connected(app: &mut App, connected: bool) {
     cursor.grab_mode = if connected { CursorGrabMode::Locked } else { CursorGrabMode::None };
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_mouse_moved(obj: *mut std::ffi::c_void, delta_x: f32, delta_y: f32) {
-    let app = unsafe { &mut *(obj as *mut App) };
-    mouse_moved(app, delta_x, delta_y);
-}
-
-// Shared by both `cadisplaylink_mouse_moved` and Step 3's
-// `native_metal_probe_mouse_moved`.
+// Shared with `native_metal_probe_mouse_moved` below.
 pub(super) fn mouse_moved(app: &mut App, delta_x: f32, delta_y: f32) {
     app.world_mut().write_message(MouseMotion {
         delta: Vec2::new(delta_x, delta_y),
     });
 }
 
-// button: 0 = left, 1 = right, 2 = middle — matches GameControllerInput.swift's own leftButton/rightButton/middleButton wiring.
-#[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_mouse_button_changed(obj: *mut std::ffi::c_void, button: u8, pressed: bool) {
-    let app = unsafe { &mut *(obj as *mut App) };
-    mouse_button_changed(app, button, pressed);
-}
-
-// Shared by both `cadisplaylink_mouse_button_changed` and Step 3's
-// `native_metal_probe_mouse_button_changed`.
+// Shared with `native_metal_probe_mouse_button_changed` below. button: 0 =
+// left, 1 = right, 2 = middle — matches GameControllerInput.swift's own
+// leftButton/rightButton/middleButton wiring.
 pub(super) fn mouse_button_changed(app: &mut App, button: u8, pressed: bool) {
     let button = match button {
         0 => MouseButton::Left,
@@ -335,15 +230,15 @@ pub(super) fn mouse_button_changed(app: &mut App, button: u8, pressed: bool) {
     });
 }
 
-// Phase 6 Step 3: same input plumbing as the `cadisplaylink_*` functions
+// Phase 6 Step 3: the shared `touched`/`key_changed`/`mouse_*` helpers
 // above, re-targeted at the real headless game App a `NativeMetalProbe`
 // constructed with `real_game: true` owns (see
-// `NativeMetalProbe::real_game_app_mut`) — Swift calls these instead of the
-// `cadisplaylink_*` ones when `USE_REAL_GAME_NATIVE_RENDERER` is set, for
-// BOTH touch (joystick/look-drag) and Bluetooth keyboard/mouse
-// (GameControllerInput.swift), so either input source drives the real
-// game's own `send_player_input`/`mouse_look`/`touch_look` systems
-// unmodified. No-ops if this probe isn't in real-game mode.
+// `NativeMetalProbe::real_game_app_mut`) — the only entry points Swift
+// actually calls (see ViewController.swift/GameControllerInput.swift) for
+// BOTH touch (joystick/look-drag) and Bluetooth keyboard/mouse, so either
+// input source drives the real game's own `send_player_input`/`mouse_look`/
+// `touch_look` systems unmodified. No-ops if this probe isn't in real-game
+// mode.
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_touch_started(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
     let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
@@ -753,12 +648,6 @@ pub extern "C" fn native_metal_probe_near_death_nearest_zombie(obj: *mut std::ff
     {
         let _ = probe;
     }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn cadisplaylink_release_app(obj: *mut std::ffi::c_void) {
-    let app: Box<App> = unsafe { Box::from_raw(obj as *mut App) };
-    drop(app);
 }
 
 // Phase 6 Step 1 feasibility spike: the real game's gameplay App

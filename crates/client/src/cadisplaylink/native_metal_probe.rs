@@ -1203,9 +1203,9 @@ impl NativeMetalProbe {
                 }
             };
         let resource_path = bundle_resource_path().unwrap_or_default();
-        let soldier_path = std::path::Path::new(&resource_path).join("assets/models/soldier.glb");
+        let soldier_path = std::path::Path::new(&resource_path).join("assets/characters/soldier/mesh/soldier.glb");
         let soldier_model = super::skinned_gltf::load_skinned_gltf(&device, &soldier_path);
-        let zombie_path = std::path::Path::new(&resource_path).join("assets/models/zombie.glb");
+        let zombie_path = std::path::Path::new(&resource_path).join("assets/characters/zombie/mesh/zombie.glb");
         let zombie_model = super::skinned_gltf::load_skinned_gltf(&device, &zombie_path);
 
         let ecs_app = build_entity_ecs_app();

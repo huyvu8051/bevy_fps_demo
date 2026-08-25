@@ -12,16 +12,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Opaque pointer to the Rust-side bevy::app::App.
+// Opaque pointer to the Rust-side bevy::app::App — only ever the headless
+// gameplay App from native_game_app_create below now (see its own
+// comments); the bevy_render-on-CADisplayLink App this type originally
+// also pointed to was removed once wgpu's own CPU encoding cost, not the
+// winit event loop, turned out to be the real problem.
 struct bevy_app;
-
-struct bevy_app *cadisplaylink_create_game_app(void *view, float scale_factor);
-// Camera + a small static primitive-built room, no game logic at all — see
-// crates/client/src/fps_probe.rs.
-struct bevy_app *cadisplaylink_create_fps_probe_app(void *view, float scale_factor);
-
-void cadisplaylink_enter_frame(struct bevy_app *app);
-void cadisplaylink_release_app(struct bevy_app *app);
 
 // Rust + `metal` crate control experiment (no Bevy App at all) — see
 // crates/client/src/cadisplaylink/native_metal_probe.rs.
@@ -35,11 +31,21 @@ void native_metal_probe_render_frame(struct native_metal_probe *probe);
 void native_metal_probe_update_camera(struct native_metal_probe *probe, float forward, float strafe, float look_dx, float look_dy, float delta_time);
 void native_metal_probe_release(struct native_metal_probe *probe);
 
-// Phase 6 Step 3: same input plumbing as the cadisplaylink_* functions
-// below, re-targeted at a real-game-mode probe's own headless App — call
-// these instead of the cadisplaylink_* ones when
-// USE_REAL_GAME_NATIVE_RENDERER is set, for BOTH touch and Bluetooth
-// keyboard/mouse. No-ops if the probe isn't in real-game mode.
+// Phase 6 Step 3: input plumbing re-targeted at a real-game-mode probe's
+// own headless App — the only entry points Swift actually calls (see
+// ViewController.swift/GameControllerInput.swift) for BOTH touch and
+// Bluetooth keyboard/mouse. No-ops if the probe isn't in real-game mode.
+// touch_id is a stable per-finger identifier for the duration of one touch
+// (we pass in the UITouch's own pointer address, cast to an integer) — the
+// probe needs two simultaneous touches (joystick + look-drag) to both work,
+// unlike upstream bevy-in-app's single hardcoded id=0. key_id (Bluetooth
+// keyboard) is our own small numbering (letters 0-25, digits 26-35, then a
+// handful of named keys), NOT a raw GCKeyCode, so the Rust<->Swift contract
+// doesn't depend on an Apple implementation detail (see map_key_id in
+// crates/client/src/cadisplaylink/ffi.rs for the authoritative list both
+// sides agree on). Mouse: locks mouse-look the instant a hardware mouse
+// connects/disconnects (no on-screen cursor to click-to-lock on iOS the way
+// desktop does); button: 0 = left, 1 = right, 2 = middle.
 void native_metal_probe_touch_started(struct native_metal_probe *probe, uint64_t touch_id, float x, float y);
 void native_metal_probe_touch_moved(struct native_metal_probe *probe, uint64_t touch_id, float x, float y);
 void native_metal_probe_touch_ended(struct native_metal_probe *probe, uint64_t touch_id, float x, float y);
@@ -48,29 +54,6 @@ void native_metal_probe_key_changed(struct native_metal_probe *probe, uint16_t k
 void native_metal_probe_mouse_connected(struct native_metal_probe *probe, bool connected);
 void native_metal_probe_mouse_moved(struct native_metal_probe *probe, float delta_x, float delta_y);
 void native_metal_probe_mouse_button_changed(struct native_metal_probe *probe, uint8_t button, bool pressed);
-
-// touch_id is a stable per-finger identifier for the duration of one touch
-// (we pass in the UITouch's own pointer address, cast to an integer) — the
-// probe needs two simultaneous touches (joystick + look-drag) to both work,
-// unlike upstream bevy-in-app's single hardcoded id=0.
-void cadisplaylink_touch_started(struct bevy_app *app, uint64_t touch_id, float x, float y);
-void cadisplaylink_touch_moved(struct bevy_app *app, uint64_t touch_id, float x, float y);
-void cadisplaylink_touch_ended(struct bevy_app *app, uint64_t touch_id, float x, float y);
-void cadisplaylink_touch_cancelled(struct bevy_app *app, uint64_t touch_id, float x, float y);
-
-// Bluetooth keyboard/mouse support (GameController framework, see
-// GameControllerInput.swift) — key_id is our own small numbering (letters
-// 0-25, digits 26-35, then a handful of named keys), NOT a raw GCKeyCode,
-// so the Rust<->Swift contract doesn't depend on an Apple implementation
-// detail (see map_key_id in crates/client/src/cadisplaylink/ffi.rs for the
-// authoritative list both sides agree on).
-void cadisplaylink_key_changed(struct bevy_app *app, uint16_t key_id, bool pressed);
-// Locks mouse-look the instant a hardware mouse connects/disconnects —
-// there's no on-screen cursor to click-to-lock on iOS the way desktop does.
-void cadisplaylink_mouse_connected(struct bevy_app *app, bool connected);
-void cadisplaylink_mouse_moved(struct bevy_app *app, float delta_x, float delta_y);
-// button: 0 = left, 1 = right, 2 = middle.
-void cadisplaylink_mouse_button_changed(struct bevy_app *app, uint8_t button, bool pressed);
 
 // Native Swift settings-menu overlay — our custom Metal renderer never
 // draws bevy_ui content, so the real game's own settings menu is invisible
