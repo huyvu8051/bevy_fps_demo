@@ -705,13 +705,6 @@ fn is_aiming(cursor: &CursorOptions, mouse: &ButtonInput<MouseButton>, touch_aim
     (cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Right)) || touch_aiming
 }
 
-fn is_moving(keys: &ButtonInput<KeyCode>) -> bool {
-    keys.pressed(KeyCode::KeyW)
-        || keys.pressed(KeyCode::KeyA)
-        || keys.pressed(KeyCode::KeyS)
-        || keys.pressed(KeyCode::KeyD)
-}
-
 // Shared by shoot() (to actually offset the shot) and update_crosshair (to
 // visually reflect it) so the reticle always shows the real spread the next
 // shot would use — same recoil-heat/aim/stationary formula, just factored
@@ -1109,9 +1102,10 @@ struct Gun {
     // cosmetic, same as RECOIL_TILT_UP_DEG, so the visual kick doesn't
     // always snap along dead-straight vertical line.
     recoil_roll: f32,
-    // Walk-bob: bob_phase only advances while moving (see is_moving), and
-    // bob_blend eases 0..1 toward "currently moving" so the bob fades in/out
-    // smoothly instead of snapping to zero the instant WASD is released.
+    // Walk-bob: bob_phase only advances while moving (see LocalPlayerMoving,
+    // gun_view_animation), and bob_blend eases 0..1 toward "currently
+    // moving" so the bob fades in/out smoothly instead of snapping to zero
+    // the instant WASD is released.
     bob_phase: f32,
     bob_blend: f32,
     // Inertia-style lean: eases toward a target proportional to this
@@ -4799,7 +4793,6 @@ fn spawn_crosshair(commands: &mut Commands) {
 // formula shoot() actually fires with (current_bullet_spread), so the
 // reticle always reflects real accuracy instead of just looking busy.
 fn update_crosshair(
-    keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
@@ -4807,6 +4800,8 @@ fn update_crosshair(
     player: Query<&PlayerStance, With<Player>>,
     mut root: Query<&mut Node, (With<CrosshairRoot>, Without<CrosshairLine>)>,
     mut lines: Query<(&CrosshairLine, &mut Node)>,
+    local_moving: Res<LocalPlayerMoving>,
+    local_sprinting: Res<LocalPlayerSprinting>,
 ) {
     let Ok(recoil) = camera.single() else {
         return;
@@ -4817,8 +4812,10 @@ fn update_crosshair(
     if let Ok(mut root) = root.single_mut() {
         root.display = if aiming { Display::None } else { Display::Flex };
     }
-    let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
-    let spread = current_bullet_spread(recoil.pitch_kick, aiming, is_moving(&keys), stance, sprinting);
+    // LocalPlayerMoving/LocalPlayerSprinting instead of raw key checks —
+    // see gun_view_animation's own comment on why (blind to touch input
+    // and Autopilot's synthetic movement otherwise).
+    let spread = current_bullet_spread(recoil.pitch_kick, aiming, local_moving.0, stance, local_sprinting.0);
     let gap = CROSSHAIR_BASE_GAP_PX + spread * CROSSHAIR_GAP_SPREAD_SCALE;
 
     for (line, mut node) in &mut lines {
@@ -5970,7 +5967,6 @@ fn shoot(
     mut commands: Commands,
     time: Res<Time>,
     game_over: Res<GameOver>,
-    keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
@@ -5981,8 +5977,11 @@ fn shoot(
     zombies: Query<(Entity, &Transform, &GlobalTransform), With<Zombie>>,
     touch_firing: Res<TouchFiring>,
     mut cooldown: Local<f32>,
-    autopilot: Res<Autopilot>,
-    intent: Res<AutopilotIntent>,
+    // Bundled into one nested-tuple param instead of four flat ones — this
+    // fn was already at Bevy's flat SystemParam tuple arity limit (16); see
+    // send_player_input's own comment for the same constraint and the same
+    // nesting fix.
+    (autopilot, intent, local_moving, local_sprinting): (Res<Autopilot>, Res<AutopilotIntent>, Res<LocalPlayerMoving>, Res<LocalPlayerSprinting>),
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
 
@@ -6032,13 +6031,15 @@ fn shoot(
     recoil.yaw_kick += jitter * RECOIL_YAW_JITTER;
 
     let stance = vfx_assets.stance.single().copied().unwrap_or_default();
-    let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
+    // LocalPlayerMoving/LocalPlayerSprinting instead of raw key checks —
+    // see gun_view_animation's own comment on why (blind to touch input
+    // and Autopilot's synthetic movement otherwise).
     let spread = current_bullet_spread(
         recoil.pitch_kick,
         is_aiming(cursor, &mouse, touch_aiming.0),
-        is_moving(&keys),
+        local_moving.0,
         stance,
-        sprinting,
+        local_sprinting.0,
     );
     let spread_x = ops::sin(time.elapsed_secs() * 613.0) * spread;
     let spread_y = ops::sin(time.elapsed_secs() * 811.0) * spread;
@@ -6409,6 +6410,7 @@ fn gun_view_animation(
     camera: Query<&Transform, (With<FpsCamera>, Without<Gun>)>,
     spatial_query: SpatialQuery,
     mut query: Query<(&mut Transform, &mut Gun), Without<FpsCamera>>,
+    local_moving: Res<LocalPlayerMoving>,
 ) {
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
     let shoulder_target = if !game_over.0 && keys.pressed(KeyCode::KeyQ) { 1.0 } else { 0.0 };
@@ -6449,7 +6451,16 @@ fn gun_view_animation(
         let shoulder_step = (LEAN_SPEED * time.delta_secs()).min(1.0);
         gun.shoulder_blend += (shoulder_target - gun.shoulder_blend) * shoulder_step;
 
-        let moving = is_moving(&keys);
+        // LocalPlayerMoving instead of is_moving(&keys) directly — that
+        // raw key check is blind to touch input and, more importantly, to
+        // Autopilot's synthetic movement (which never touches
+        // ButtonInput<KeyCode> at all, see crate::autopilot), so the gun
+        // wouldn't bob while Autopilot walked the player around, and would
+        // conversely bob for no reason if the player happened to still be
+        // resting fingers on WASD while Autopilot was steering. LocalPlayerMoving
+        // is already the single unified signal send_player_input sets from
+        // whichever input source actually produced this frame's move_axis.
+        let moving = local_moving.0;
         let bob_target = if moving { 1.0 } else { 0.0 };
         let bob_blend_step = (GUN_BOB_BLEND_SPEED * time.delta_secs()).min(1.0);
         gun.bob_blend += (bob_target - gun.bob_blend) * bob_blend_step;
