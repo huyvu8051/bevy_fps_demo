@@ -17,6 +17,10 @@ crates/client/target/
 crates/client/gen/apple/iOS/libs/
 crates/client/gen/apple/iOS/bevy_in_iOS.xcodeproj/project.xcworkspace/xcuserdata/
 crates/client/gen/apple/iOS/bevy_in_iOS.xcodeproj/xcuserdata/
+# xcodebuild's own DerivedData-style output dir when built with `build/`
+# as the derived-data root (e.g. `xcodebuild ... build` run directly from
+# iOS/) — same "large build artifact, not source" reasoning as libs/ above.
+crates/client/gen/apple/iOS/build/
 
 # Retired winit-driven iOS build — see crates/client/gen/apple/ (its
 # replacement) for why. Kept for reference/rollback, not actively built, so

@@ -693,6 +693,16 @@ pub extern "C" fn native_metal_probe_get_live_zombie_count(obj: *mut std::ffi::c
     probe.real_game_app_mut().map(super::native_menu::live_zombie_count).unwrap_or(0)
 }
 
+// Total zombies this local player has personally killed this session — see
+// native_menu::kill_count's own doc comment for how kills are detected.
+// Not debug-gated: like live_zombie_count, this is a normal-gameplay
+// display value (the Watch companion app's kill counter), not a cheat.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_get_kill_count(obj: *mut std::ffi::c_void) -> u32 {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    probe.real_game_app_mut().map(super::native_menu::kill_count).unwrap_or(0)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_zombie_count_dec(obj: *mut std::ffi::c_void) {
     let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };

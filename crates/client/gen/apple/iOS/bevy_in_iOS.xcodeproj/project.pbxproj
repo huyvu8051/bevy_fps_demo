@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		04633622353B6BD10C32E4C2 /* bevy_watch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 43A4592B435DC9CBCC94883B /* bevy_watch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeaderOnCopy, ); }; };
+		292C9877105CB842FAF8F772 /* WatchConnectivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06C0606E8F9B06EE30EE687B /* WatchConnectivityManager.swift */; };
+		32E6721ACFD4DE873D71391B /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F3D288F668C218B4CB209538 /* Foundation.framework */; };
+		97A162B6A7FFB88931E9BD0E /* bevy_watchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8CA3A502809B915B27CDB84 /* bevy_watchApp.swift */; };
+		A1B2C3D4E5F60708192A3B4C /* SettingsMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60708192A3B4D /* SettingsMenuView.swift */; };
+		A588795432421535AF3AB307 /* WatchSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F56E10E32988D2B7FAAEBB2B /* WatchSessionManager.swift */; };
 		AD4B1FED26EB1B90008A6AEE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD4B1FEC26EB1B90008A6AEE /* AppDelegate.swift */; };
 		AD4B1FF126EB1B90008A6AEE /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD4B1FF026EB1B90008A6AEE /* ViewController.swift */; };
 		AD4B1FF426EB1B90008A6AEE /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AD4B1FF226EB1B90008A6AEE /* Main.storyboard */; };
@@ -19,13 +25,44 @@
 		AD9EA281293B0CAF0079F1B4 /* libs in Resources */ = {isa = PBXBuildFile; fileRef = AD9EA280293B0CAF0079F1B4 /* libs */; };
 		ADC0D0F0295161DA00388970 /* libbevy_in_app.a in Frameworks */ = {isa = PBXBuildFile; fileRef = ADC0D0EF295161DA00388970 /* libbevy_in_app.a */; };
 		ADC0D0F2295172CA00388970 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ADC0D0F1295172CA00388970 /* AudioToolbox.framework */; };
-		C00BEAA0420C572A4F4C40B4 /* GameControllerInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0201D3F45F1DFD3C0056C58C /* GameControllerInput.swift */; };
-		A1B2C3D4E5F60708192A3B4C /* SettingsMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60708192A3B4D /* SettingsMenuView.swift */; };
 		B2C3D4E5F60708192A3B4C5D /* GameOverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60708192A3B4C5E /* GameOverView.swift */; };
+		C00BEAA0420C572A4F4C40B4 /* GameControllerInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0201D3F45F1DFD3C0056C58C /* GameControllerInput.swift */; };
+		CAC3D02DF6156E0CA4D89F77 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D20FB2D2624CC3AD9399E2FB /* Assets.xcassets */; };
+		D64BE10804736E8BBA11E260 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1875C9E58B7F8E0C11DE3701 /* ContentView.swift */; };
 		F5FB20BA2D235B16391FF374 /* GameController.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ABFF1EF359D90F2D357C2A71 /* GameController.framework */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		BF438A0DC389A86D1E4252A0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AD4B1FE126EB1B90008A6AEE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9264AA9B4892D50A904478CB;
+			remoteInfo = "bevy_watch Watch App";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		74AD720D51FCBE199B359656 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				04633622353B6BD10C32E4C2 /* bevy_watch Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		0201D3F45F1DFD3C0056C58C /* GameControllerInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameControllerInput.swift; sourceTree = "<group>"; };
+		06C0606E8F9B06EE30EE687B /* WatchConnectivityManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WatchConnectivityManager.swift; path = ../../../watchOS/bevy_watch_Watch_App/WatchConnectivityManager.swift; sourceTree = "<group>"; };
+		1875C9E58B7F8E0C11DE3701 /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ContentView.swift; path = ../../../watchOS/bevy_watch_Watch_App/ContentView.swift; sourceTree = "<group>"; };
+		43A4592B435DC9CBCC94883B /* bevy_watch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "bevy_watch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D4E5F60708192A3B4D /* SettingsMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsMenuView.swift; sourceTree = "<group>"; };
+		ABFF1EF359D90F2D357C2A71 /* GameController.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = GameController.framework; path = System/Library/Frameworks/GameController.framework; sourceTree = SDKROOT; };
 		AD4B1FE926EB1B90008A6AEE /* bevy_in_iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bevy_in_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AD4B1FEC26EB1B90008A6AEE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		AD4B1FF026EB1B90008A6AEE /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
@@ -42,13 +79,22 @@
 		ADA4699226EB2F9A008B1C7B /* bevy_in_iOS-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "bevy_in_iOS-Bridging-Header.h"; sourceTree = "<group>"; };
 		ADC0D0EF295161DA00388970 /* libbevy_in_app.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libbevy_in_app.a; path = libs/debug/libbevy_in_app.a; sourceTree = "<group>"; };
 		ADC0D0F1295172CA00388970 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX13.1.sdk/System/Library/Frameworks/AudioToolbox.framework; sourceTree = DEVELOPER_DIR; };
-		0201D3F45F1DFD3C0056C58C /* GameControllerInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameControllerInput.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F60708192A3B4D /* SettingsMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsMenuView.swift; sourceTree = "<group>"; };
 		B2C3D4E5F60708192A3B4C5E /* GameOverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameOverView.swift; sourceTree = "<group>"; };
-		ABFF1EF359D90F2D357C2A71 /* GameController.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = GameController.framework; path = System/Library/Frameworks/GameController.framework; sourceTree = SDKROOT; };
+		D20FB2D2624CC3AD9399E2FB /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = ../../../watchOS/bevy_watch_Watch_App/Assets.xcassets; sourceTree = "<group>"; };
+		D8CA3A502809B915B27CDB84 /* bevy_watchApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = bevy_watchApp.swift; path = ../../../watchOS/bevy_watch_Watch_App/bevy_watchApp.swift; sourceTree = "<group>"; };
+		F3D288F668C218B4CB209538 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		F56E10E32988D2B7FAAEBB2B /* WatchSessionManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WatchSessionManager.swift; path = WatchSessionManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		4162896F6847069E2C4E5C83 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				32E6721ACFD4DE873D71391B /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AD4B1FE626EB1B90008A6AEE /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -63,6 +109,18 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		3B838C239E3FA843DFFC3066 /* watchOS */ = {
+			isa = PBXGroup;
+			children = (
+				D8CA3A502809B915B27CDB84 /* bevy_watchApp.swift */,
+				1875C9E58B7F8E0C11DE3701 /* ContentView.swift */,
+				06C0606E8F9B06EE30EE687B /* WatchConnectivityManager.swift */,
+				D20FB2D2624CC3AD9399E2FB /* Assets.xcassets */,
+			);
+			name = watchOS;
+			path = watchOS/bevy_watch_Watch_App;
+			sourceTree = "<group>";
+		};
 		AD0CB7E127A4061E0041811B /* base */ = {
 			isa = PBXGroup;
 			children = (
@@ -77,6 +135,7 @@
 				AD4B1FEC26EB1B90008A6AEE /* AppDelegate.swift */,
 				AD4B1FF226EB1B90008A6AEE /* Main.storyboard */,
 				AD4B1FF526EB1B91008A6AEE /* Assets.xcassets */,
+				F56E10E32988D2B7FAAEBB2B /* WatchSessionManager.swift */,
 			);
 			path = base;
 			sourceTree = "<group>";
@@ -90,6 +149,7 @@
 				AD4B1FEB26EB1B90008A6AEE /* bevy_in_iOS */,
 				AD4B1FEA26EB1B90008A6AEE /* Products */,
 				ADA4699326EB3079008B1C7B /* Frameworks */,
+				3B838C239E3FA843DFFC3066 /* watchOS */,
 			);
 			sourceTree = "<group>";
 		};
@@ -97,6 +157,7 @@
 			isa = PBXGroup;
 			children = (
 				AD4B1FE926EB1B90008A6AEE /* bevy_in_iOS.app */,
+				43A4592B435DC9CBCC94883B /* bevy_watch Watch App.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -117,13 +178,39 @@
 				ADC0D0F1295172CA00388970 /* AudioToolbox.framework */,
 				ABFF1EF359D90F2D357C2A71 /* GameController.framework */,
 				ADC0D0EF295161DA00388970 /* libbevy_in_app.a */,
+				C850C87D347A3A60FFBEF280 /* watchOS */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		C850C87D347A3A60FFBEF280 /* watchOS */ = {
+			isa = PBXGroup;
+			children = (
+				F3D288F668C218B4CB209538 /* Foundation.framework */,
+			);
+			name = watchOS;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		9264AA9B4892D50A904478CB /* bevy_watch Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 68ECD26741730A3E5CE89555 /* Build configuration list for PBXNativeTarget "bevy_watch Watch App" */;
+			buildPhases = (
+				3582FAD8B26FC50EBA1C155A /* Sources */,
+				4162896F6847069E2C4E5C83 /* Frameworks */,
+				8FAE57544AD388103ED4D7B6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "bevy_watch Watch App";
+			productName = "bevy_watch Watch App";
+			productReference = 43A4592B435DC9CBCC94883B /* bevy_watch Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
 		AD4B1FE826EB1B90008A6AEE /* bevy_in_iOS */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = AD4B1FFD26EB1B91008A6AEE /* Build configuration list for PBXNativeTarget "bevy_in_iOS" */;
@@ -131,10 +218,12 @@
 				AD4B1FE526EB1B90008A6AEE /* Sources */,
 				AD4B1FE626EB1B90008A6AEE /* Frameworks */,
 				AD4B1FE726EB1B90008A6AEE /* Resources */,
+				74AD720D51FCBE199B359656 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				7BF2689889492BF7620BAF2E /* PBXTargetDependency */,
 			);
 			name = bevy_in_iOS;
 			productName = wgpu_test;
@@ -169,11 +258,20 @@
 			projectRoot = "";
 			targets = (
 				AD4B1FE826EB1B90008A6AEE /* bevy_in_iOS */,
+				9264AA9B4892D50A904478CB /* bevy_watch Watch App */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		8FAE57544AD388103ED4D7B6 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CAC3D02DF6156E0CA4D89F77 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AD4B1FE726EB1B90008A6AEE /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -189,6 +287,16 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		3582FAD8B26FC50EBA1C155A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				97A162B6A7FFB88931E9BD0E /* bevy_watchApp.swift in Sources */,
+				D64BE10804736E8BBA11E260 /* ContentView.swift in Sources */,
+				292C9877105CB842FAF8F772 /* WatchConnectivityManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AD4B1FE526EB1B90008A6AEE /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -200,10 +308,20 @@
 				C00BEAA0420C572A4F4C40B4 /* GameControllerInput.swift in Sources */,
 				A1B2C3D4E5F60708192A3B4C /* SettingsMenuView.swift in Sources */,
 				B2C3D4E5F60708192A3B4C5D /* GameOverView.swift in Sources */,
+				A588795432421535AF3AB307 /* WatchSessionManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		7BF2689889492BF7620BAF2E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "bevy_watch Watch App";
+			target = 9264AA9B4892D50A904478CB /* bevy_watch Watch App */;
+			targetProxy = BF438A0DC389A86D1E4252A0 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXVariantGroup section */
 		AD4B1FF226EB1B90008A6AEE /* Main.storyboard */ = {
@@ -225,6 +343,28 @@
 /* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
+		30FD4D0A378A96480DC8FF23 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1.0;
+				DEVELOPMENT_TEAM = GNNA6PH896;
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = ../watchOS/bevy_watch_Watch_App/Info.plist;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.huyvu8051.bevyfpsdemo.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
 		AD4B1FFB26EB1B91008A6AEE /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -364,7 +504,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = "$(inherited)";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.huyvu8051.bevyfpsdemo";
+				PRODUCT_BUNDLE_IDENTIFIER = com.huyvu8051.bevyfpsdemo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = YES;
@@ -399,7 +539,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = "$(inherited)";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.huyvu8051.bevyfpsdemo";
+				PRODUCT_BUNDLE_IDENTIFIER = com.huyvu8051.bevyfpsdemo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = YES;
@@ -410,9 +550,39 @@
 			};
 			name = Release;
 		};
+		F64D27D4D14C499F508D2517 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1.0;
+				DEVELOPMENT_TEAM = GNNA6PH896;
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = ../watchOS/bevy_watch_Watch_App/Info.plist;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.huyvu8051.bevyfpsdemo.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		68ECD26741730A3E5CE89555 /* Build configuration list for PBXNativeTarget "bevy_watch Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				30FD4D0A378A96480DC8FF23 /* Release */,
+				F64D27D4D14C499F508D2517 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		AD4B1FE426EB1B90008A6AEE /* Build configuration list for PBXProject "bevy_in_iOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

@@ -129,6 +129,9 @@ uint32_t native_metal_probe_get_zombie_target_count(struct native_metal_probe *p
 // Real, current headcount (not debug-gated, just a display value) — the
 // target count above never reflects Spawn +100/Kill All/natural deaths.
 uint32_t native_metal_probe_get_live_zombie_count(struct native_metal_probe *probe);
+// Total zombies this local player has personally killed this session (not
+// debug-gated — feeds the Watch companion app's kill counter/notification).
+uint32_t native_metal_probe_get_kill_count(struct native_metal_probe *probe);
 void native_metal_probe_zombie_count_dec(struct native_metal_probe *probe);
 void native_metal_probe_zombie_count_inc(struct native_metal_probe *probe);
 void native_metal_probe_heal_nearest_zombie(struct native_metal_probe *probe);

@@ -17,6 +17,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         window?.rootViewController = mainStroryBoard.instantiateInitialViewController()
 
         window?.makeKeyAndVisible()
+
+        // Activate the Watch session (and ask for notification permission)
+        // as soon as the app launches, rather than waiting for the first
+        // syncHud() call — so the Watch companion app already has fresh
+        // data the moment the game starts, matching the "always synced in
+        // the background" behavior WatchSessionManager itself provides.
+        _ = WatchSessionManager.shared
+
         return true
     }
 

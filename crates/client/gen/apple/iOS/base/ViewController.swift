@@ -803,6 +803,12 @@ class ViewController: UIViewController {
             touchHUD.health = Int(hp.rounded())
         }
         touchHUD.setPing(native_metal_probe_get_ping_ms(probe))
+
+        // Apple Watch companion app sync — see WatchSessionManager's own
+        // doc comment for why this runs every frame alongside the rest of
+        // the HUD instead of on its own timer.
+        let killCount = native_metal_probe_get_kill_count(probe)
+        WatchSessionManager.shared.update(hp: hp, killCount: killCount)
     }
 
     // Polled once per frame (see enterFrame) rather than only on the MENU
@@ -939,6 +945,18 @@ class ViewController: UIViewController {
                 }
                 if #available(iOS 15.0, *) {
                     displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+                }
+                // Bluetooth keyboard/mouse support (GameControllerInput.swift)
+                // was previously only ever constructed in createBevyApp(),
+                // which this rustMetalProbe branch (the one actually taken by
+                // default — see USE_RUST_METAL_DEMO above) never calls, so a
+                // connected keyboard/mouse silently did nothing: keyChanged
+                // handlers were never installed. GameControllerInput's own
+                // dispatch functions already pick whichever backend
+                // (rustMetalProbe vs bevyApp) is live, so only the
+                // construction site needed to move, not the class itself.
+                if #available(iOS 14.0, *), gameControllerInput == nil {
+                    gameControllerInput = GameControllerInput(viewController: self)
                 }
             }
         } else if USE_NATIVE_METAL_DEMO {
