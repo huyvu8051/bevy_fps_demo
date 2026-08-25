@@ -30,6 +30,7 @@ use shared::{
     ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot, GameOver, GameStateEvent, Health,
     HEAD_DAMAGE, HITBOX_BELLY_MIN_Y, HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN,
     KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform, Player, PlayerDied,
+    PlayerDiedFx, PlayerFiredFx,
     PlayerStance, RequestRestart, SetAutoMaintainZombies, SetZombieCount, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieMotion,
     zombie_hit_damage_geometric, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED, ZOMBIE_ATTACK_INTERVAL,
@@ -664,10 +665,22 @@ const ZOMBIE_CRAWL_HEALTH_FRACTION: f32 = 0.35;
 // noticeably-closer-than-chase-range midpoint.
 const ZOMBIE_RUN_DISTANCE: f32 = 10.0;
 // Animation clip order inside soldier.glb (24 clips total, read from the
-// file's own animations list) — only these two are used, picked to match
-// zombie's idle/walk pair: 4=Idle, 22=Walk.
-const PLAYER_MODEL_ANIM_IDLE: usize = 4;
+// file's own animations list): 0=Death, 1=Gun_Shoot, 4=Idle, 5=Idle_Gun,
+// 16=Run, 22=Walk (full list has many more not used here — kick/punch/
+// sword/wave/etc. from the same generic asset pack).
+// Idle_Gun instead of bare Idle — this game's player always holds a gun,
+// so the weapon-drawn idle pose reads correctly instead of empty-handed.
+const PLAYER_MODEL_ANIM_IDLE: usize = 5;
 const PLAYER_MODEL_ANIM_WALK: usize = 22;
+// Sprinting (NetTransform.sprinting, see its own doc comment for why this
+// wasn't replicated before) — a "closing the distance" pose distinct from
+// the ordinary Walk, mirroring ZombiePose's Run tier.
+const PLAYER_MODEL_ANIM_RUN: usize = 16;
+// One-shot poses, not part of the continuous idle/walk/run state — see
+// PlayerFiredFx/PlayerDiedFx's own doc comments in crates/shared for why
+// no equivalent signal existed before this pass.
+const PLAYER_MODEL_ANIM_SHOOT: usize = 1;
+const PLAYER_MODEL_ANIM_DEATH: usize = 0;
 
 #[derive(Component)]
 struct FpsCamera {
@@ -966,8 +979,27 @@ struct PlayerModelAnimRoot;
 #[derive(Component)]
 struct PlayerModelAnimationPlayer(Entity);
 
-#[derive(Component, Default)]
-struct PlayerModelPlayingWalk(bool);
+// Was a plain bool (Walk vs Idle only) before Run/Shoot/Death got wired up
+// — same shape/reasoning as ZombiePose. Shoot/Death aren't part of the
+// continuous state this tracks (they're one-shot, played directly by
+// on_player_fired_fx/on_player_died_fx without going through this
+// enum/comparison at all — see those systems), so this only ever holds
+// Idle/Walk/Run.
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
+enum PlayerModelPose {
+    #[default]
+    Idle,
+    Walk,
+    Run,
+}
+
+// Set by on_player_died_fx once that player's Death pose starts playing —
+// excluded from update_remote_player_model_animation's own query so the
+// next ordinary Idle/Walk/Run transition (which will keep arriving; the
+// dead player's own NetTransform doesn't stop replicating) doesn't cut the
+// Death animation short and snap back to Idle.
+#[derive(Component)]
+struct PlayerModelDead;
 
 // Only the LOCAL player's own model reads this — see send_player_input,
 // which is the one place that already knows this frame's move_axis before
@@ -975,6 +1007,12 @@ struct PlayerModelPlayingWalk(bool);
 // its own replicated NetTransform.moving the way remote models do.
 #[derive(Resource, Default)]
 struct LocalPlayerMoving(bool);
+
+// Same "this client's own best guess, no round trip needed" reasoning as
+// LocalPlayerMoving — mirrors NetTransform.sprinting for the local debug
+// model's own Run pose.
+#[derive(Resource, Default)]
+struct LocalPlayerSprinting(bool);
 
 // Which debug bot (see shared::DebugBot) the C/[/]/X/O debug panel keybinds
 // currently act on — client-only, never sent over the network.
@@ -1664,6 +1702,8 @@ fn build_game_common(app: &mut App) {
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
         .add_client_event::<FireShot>(Channel::Ordered)
         .add_server_event::<ShotFx>(Channel::Ordered)
+        .add_server_event::<PlayerFiredFx>(Channel::Unordered)
+        .add_server_event::<PlayerDiedFx>(Channel::Ordered)
         .add_client_event::<PlayerDied>(Channel::Ordered)
         .add_client_event::<RequestRestart>(Channel::Ordered)
         .add_server_event::<GameStateEvent>(Channel::Ordered)
@@ -1695,6 +1735,8 @@ fn build_game_common(app: &mut App) {
         .add_observer(on_net_transform_replicated)
         .add_observer(on_net_player_replicated)
         .add_observer(on_shot_fx)
+        .add_observer(on_player_fired_fx)
+        .add_observer(on_player_died_fx)
         .add_observer(on_game_state_event)
         .init_resource::<Noclip>()
         .init_resource::<FreezeZombies>()
@@ -1720,6 +1762,7 @@ fn build_game_common(app: &mut App) {
         .init_resource::<MapShadowsOn>()
         .init_resource::<SelectedDebugBot>()
         .init_resource::<LocalPlayerMoving>()
+.init_resource::<LocalPlayerSprinting>()
         .init_resource::<TouchControlsEnabled>()
         .init_resource::<TouchMoveState>()
         .init_resource::<TouchMoveAxis>()
@@ -1908,6 +1951,9 @@ struct PlayerModelAnim {
     graph: Handle<AnimationGraph>,
     idle: AnimationNodeIndex,
     walk: AnimationNodeIndex,
+    run: AnimationNodeIndex,
+    shoot: AnimationNodeIndex,
+    death: AnimationNodeIndex,
 }
 
 #[derive(Resource)]
@@ -2171,15 +2217,24 @@ fn setup(
     // and replicated; see the on_zombie_replicated observer.
     commands.insert_resource(zombie_anim);
 
-    let player_model_clips: Vec<Handle<AnimationClip>> = [PLAYER_MODEL_ANIM_IDLE, PLAYER_MODEL_ANIM_WALK]
-        .into_iter()
-        .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(PLAYER_MODEL_PATH)))
-        .collect();
+    let player_model_clips: Vec<Handle<AnimationClip>> = [
+        PLAYER_MODEL_ANIM_IDLE,
+        PLAYER_MODEL_ANIM_WALK,
+        PLAYER_MODEL_ANIM_RUN,
+        PLAYER_MODEL_ANIM_SHOOT,
+        PLAYER_MODEL_ANIM_DEATH,
+    ]
+    .into_iter()
+    .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(PLAYER_MODEL_PATH)))
+    .collect();
     let (player_model_graph, player_model_nodes) = AnimationGraph::from_clips(player_model_clips);
     commands.insert_resource(PlayerModelAnim {
         graph: graphs.add(player_model_graph),
         idle: player_model_nodes[0],
         walk: player_model_nodes[1],
+        run: player_model_nodes[2],
+        shoot: player_model_nodes[3],
+        death: player_model_nodes[4],
     });
 
     let camera = commands
@@ -5595,7 +5650,13 @@ fn send_player_input(
     mut player_query: Query<(&mut Transform, &mut Player, &PlayerStance), Without<NetPlayer>>,
     noclip: Res<Noclip>,
     touch_move_axis: Res<TouchMoveAxis>,
-    mut local_moving: ResMut<LocalPlayerMoving>,
+    // Bundled into one nested-tuple param instead of two flat ones — this
+    // fn was already at Bevy's flat SystemParam tuple arity limit (16);
+    // adding LocalPlayerSprinting as a 17th flat param broke `IntoSystem`
+    // for the whole Update-schedule `.chain()` tuple this fn sits in.
+    // Tuples of SystemParams are themselves valid SystemParams, so nesting
+    // sidesteps the limit without restructuring anything else.
+    (mut local_moving, mut local_sprinting): (ResMut<LocalPlayerMoving>, ResMut<LocalPlayerSprinting>),
     mover: MoveAndSlide,
     // Local prediction below still runs every single Update tick (up to
     // 120Hz on iOS via CADisplayLink) for smooth immediate feedback — only
@@ -5638,6 +5699,7 @@ fn send_player_input(
     // actively testing the touch joystick.
     move_axis = (move_axis + touch_move_axis.0).clamp_length_max(1.0);
     local_moving.0 = move_axis != Vec2::ZERO;
+    local_sprinting.0 = sprinting;
 
     *sequence += 1;
     let dt = time.delta_secs();
@@ -6439,7 +6501,7 @@ fn wire_player_model_animations(
         player.play(anim.idle).repeat();
         commands
             .entity(root)
-            .try_insert((PlayerModelAnimationPlayer(player_entity), PlayerModelPlayingWalk::default()));
+            .try_insert((PlayerModelAnimationPlayer(player_entity), PlayerModelPose::default()));
     }
 }
 
@@ -6451,21 +6513,41 @@ fn wire_player_model_animations(
 // update_local_player_model_animation instead).
 fn update_remote_player_model_animation(
     parents: Query<&NetTransform, With<NetPlayer>>,
-    mut roots: Query<(&ChildOf, &PlayerModelAnimationPlayer, &mut PlayerModelPlayingWalk), With<PlayerModelAnimRoot>>,
+    mut roots: Query<
+        (&ChildOf, &PlayerModelAnimationPlayer, &mut PlayerModelPose),
+        (With<PlayerModelAnimRoot>, Without<PlayerModelDead>),
+    >,
     anim: Res<PlayerModelAnim>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    for (child_of, link, mut playing_walk) in &mut roots {
+    for (child_of, link, mut pose) in &mut roots {
         let Ok(net_transform) = parents.get(child_of.0) else {
             continue;
         };
-        if net_transform.moving == playing_walk.0 {
+        // sprinting alone doesn't imply moving (holding Shift while stood
+        // still is a real, if unusual, input) — gate Run on both, same as
+        // the sprint boolean itself only being computed while genuinely
+        // trying to move on the sending client (send_player_input's own
+        // `sprinting` local).
+        let new_pose = if net_transform.moving && net_transform.sprinting {
+            PlayerModelPose::Run
+        } else if net_transform.moving {
+            PlayerModelPose::Walk
+        } else {
+            PlayerModelPose::Idle
+        };
+        if new_pose == *pose {
             continue;
         }
-        playing_walk.0 = net_transform.moving;
+        *pose = new_pose;
         if let Ok(mut player) = players.get_mut(link.0) {
             player.stop_all();
-            player.play(if net_transform.moving { anim.walk } else { anim.idle }).repeat();
+            let node = match new_pose {
+                PlayerModelPose::Idle => anim.idle,
+                PlayerModelPose::Walk => anim.walk,
+                PlayerModelPose::Run => anim.run,
+            };
+            player.play(node).repeat();
         }
     }
 }
@@ -6477,20 +6559,90 @@ fn update_remote_player_model_animation(
 // something only this client ever sees anyway).
 fn update_local_player_model_animation(
     moving: Res<LocalPlayerMoving>,
-    mut roots: Query<(&PlayerModelAnimationPlayer, &mut PlayerModelPlayingWalk), (With<PlayerModelAnimRoot>, With<PlayerModel>)>,
+    sprinting: Res<LocalPlayerSprinting>,
+    mut roots: Query<(&PlayerModelAnimationPlayer, &mut PlayerModelPose), (With<PlayerModelAnimRoot>, With<PlayerModel>)>,
     anim: Res<PlayerModelAnim>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    let Ok((link, mut playing_walk)) = roots.single_mut() else {
+    let Ok((link, mut pose)) = roots.single_mut() else {
         return;
     };
-    if moving.0 == playing_walk.0 {
+    let new_pose = if moving.0 && sprinting.0 {
+        PlayerModelPose::Run
+    } else if moving.0 {
+        PlayerModelPose::Walk
+    } else {
+        PlayerModelPose::Idle
+    };
+    if new_pose == *pose {
         return;
     }
-    playing_walk.0 = moving.0;
+    *pose = new_pose;
     if let Ok(mut player) = players.get_mut(link.0) {
         player.stop_all();
-        player.play(if moving.0 { anim.walk } else { anim.idle }).repeat();
+        let node = match new_pose {
+            PlayerModelPose::Idle => anim.idle,
+            PlayerModelPose::Walk => anim.walk,
+            PlayerModelPose::Run => anim.run,
+        };
+        player.play(node).repeat();
+    }
+}
+
+// Broadcast the instant ANY client fires (see PlayerFiredFx's own doc
+// comment in crate::shared for why no such signal existed before this
+// pass) — finds that specific shooter's own NetPlayer entity via its
+// replicated NetworkId and plays a brief, non-looping Gun_Shoot pose on
+// their third-person model, for every OTHER client watching (the shooter's
+// own client already knows it fired locally and has no third-person view
+// of itself in normal play). A linear scan over connected players/roots is
+// fine at this player count — same shape as the local/remote animation
+// systems above, no indexed lookup infrastructure exists for this either.
+fn on_player_fired_fx(
+    trigger: On<PlayerFiredFx>,
+    net_players: Query<(Entity, &NetworkId), With<NetPlayer>>,
+    roots: Query<(&ChildOf, &PlayerModelAnimationPlayer), (With<PlayerModelAnimRoot>, Without<PlayerModelDead>)>,
+    anim: Res<PlayerModelAnim>,
+    mut players: Query<&mut AnimationPlayer>,
+) {
+    let Some((shooter, _)) = net_players.iter().find(|(_, id)| id.get() == trigger.shooter_network_id) else {
+        return;
+    };
+    let Some((_, link)) = roots.iter().find(|(child_of, _)| child_of.0 == shooter) else {
+        return;
+    };
+    if let Ok(mut player) = players.get_mut(link.0) {
+        // Not .repeat() — a one-shot pose. update_remote_player_model_animation
+        // will naturally take back over and restart Idle/Walk/Run the next
+        // time this player's NetTransform.moving/sprinting actually changes;
+        // until then this just plays once and holds its last frame, which
+        // reads fine for a quick recoil-of-the-arms gesture.
+        player.play(anim.shoot);
+    }
+}
+
+// Same shooter-lookup shape as on_player_fired_fx above, but marks the
+// player's model PlayerModelDead first so the ordinary Idle/Walk/Run
+// system (which keeps running — NetTransform doesn't stop replicating just
+// because this player died) doesn't cut the Death pose short.
+fn on_player_died_fx(
+    trigger: On<PlayerDiedFx>,
+    mut commands: Commands,
+    net_players: Query<(Entity, &NetworkId), With<NetPlayer>>,
+    roots: Query<(Entity, &ChildOf, &PlayerModelAnimationPlayer), With<PlayerModelAnimRoot>>,
+    anim: Res<PlayerModelAnim>,
+    mut players: Query<&mut AnimationPlayer>,
+) {
+    let Some((who, _)) = net_players.iter().find(|(_, id)| id.get() == trigger.who_network_id) else {
+        return;
+    };
+    let Some((root, _, link)) = roots.iter().find(|(_, child_of, _)| child_of.0 == who) else {
+        return;
+    };
+    commands.entity(root).insert(PlayerModelDead);
+    if let Ok(mut player) = players.get_mut(link.0) {
+        player.stop_all();
+        player.play(anim.death);
     }
 }
 

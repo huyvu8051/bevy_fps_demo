@@ -46,13 +46,25 @@ Khi build cho iOS (hoặc set `TOUCH_UI_PREVIEW=1` trên desktop để xem trư�
 - **Joystick ảo** (góc dưới trái): di chuyển
 - **Kéo nửa phải màn hình**: xoay camera
 - **Nút đỏ** (góc dưới phải): bắn, **nút ADS**: ngắm
-- **Menu Cheats**: có nút riêng để mở, cuộn được nếu dài, gộp toàn bộ toggle debug của bản desktop (noclip/god/freeze/hitbox/spawn zombie/...)
+- **Menu Settings/Cheats**: nút MENU riêng để mở — UI **native Swift** (`SettingsMenuView.swift`), chia 4 trang bấm `<`/`>` để chuyển (Settings / Cheats / Zombies / Visual), không phải bevy_ui nữa (xem lý do ở mục render bên dưới). Trang Cheats/Zombies/Visual chỉ có ở debug build.
+- Chết thì hiện màn **GAME OVER** + nút Restart, cũng là UI native Swift riêng (`GameOverView.swift`), không phải bevy_ui.
 
 ## Build & chạy trên iOS
 
 Project chính thức nằm ở `crates/client/gen/apple` — Xcode project viết tay (Swift `ViewController`+`MetalView`+`CADisplayLink`, **không dùng winit trên iOS nữa**), link thẳng vào `libclient.a` build từ `crates/client`. Bản winit cũ (dùng `cargo-mobile2`/`xcodegen`) vẫn còn giữ lại ở `crates/client/gen/apple_winit_legacy` để tham khảo/rollback nếu cần, không còn build/dùng mặc định.
 
-Lý do đổi: winit trên iOS có bug đã biết (không đạt đúng tốc độ khung hình cấu hình — đo thực tế chỉ ~50fps dù set target 120fps) do cách nó điều khiển event loop trên iOS; CADisplayLink (API native của Apple cho vsync-driven rendering) điều khiển vòng lặp render trực tiếp, đạt đúng 120fps mượt trên ProMotion. Chi tiết implementation ở `crates/client/src/cadisplaylink/`.
+Lý do đổi: winit trên iOS có bug đã biết (không đạt đúng tốc độ khung hình cấu hình — đo thực tế chỉ ~50fps dù set target 120fps) do cách nó điều khiển event loop trên iOS; CADisplayLink (API native của Apple cho vsync-driven rendering) điều khiển vòng lặp render trực tiếp, đạt đúng 120fps mượt trên ProMotion.
+
+**Quan trọng hơn**: iOS **không dùng `bevy_render`/wgpu nữa** — dù CADisplayLink giải quyết được vấn đề framerate, đo thực tế cho thấy bản thân wgpu tốn CPU encode command buffer rất cao trên iOS (88-100% "encoding cost" ngay cả với scene rỗng, theo Metal HUD). Đã thay bằng renderer Metal viết tay 100% bằng Rust (crate `metal`, không qua `bevy_render`) — vẽ thẳng state ECS thật của game (camera, mesh, texture, animation zombie/soldier, scope camera...) được "extract" mỗi frame từ một `bevy::app::App` headless (không window, không renderer) chạy y hệt logic game desktop (`build_game_common`). Chi tiết implementation:
+- `crates/client/src/cadisplaylink/native_metal_probe.rs` — renderer chính (pipeline Metal, shader MSL viết tay, 2 camera FPS+scope).
+- `crates/client/src/cadisplaylink/native_game_app.rs` — App headless chạy logic game thật, không GPU/window.
+- `crates/client/src/cadisplaylink/native_game_extract.rs` — "extract" mỗi frame: đọc camera/zombie/player/mesh/texture từ World thật, không đụng bevy_render.
+- `crates/client/src/cadisplaylink/skinned_gltf.rs`, `gltf_scene.rs` — parse glTF/skin/animation trực tiếp bằng crate `gltf`, không qua `bevy_gltf`.
+- `crates/client/src/cadisplaylink/native_menu.rs` — cầu FFI đọc/ghi resource thật (SettingsMenuVisible, GodMode, GameOver...) cho 2 UI native Swift ở trên.
+
+Vì bevy_ui **không được vẽ** trong renderer Metal riêng này (chỉ vẽ `Mesh3d`/`MeshMaterial3d`), toàn bộ UI trên iOS (settings/cheats menu, màn game-over) đã được viết lại thành view Swift/UIKit native thay vì dùng bevy_ui của game gốc — xem `ViewController.swift`/`SettingsMenuView.swift`/`GameOverView.swift`. Desktop vẫn dùng bevy_ui + `bevy_render`/wgpu bình thường, không đổi gì.
+
+Cờ bật/tắt renderer mới nằm ở đầu `ViewController.swift`: `USE_RUST_METAL_DEMO`/`USE_REAL_GAME_NATIVE_RENDERER` (mặc định cả hai `true` — renderer Metal viết tay, vẽ game thật).
 
 **Build + cài lên thiết bị thật** (thay UUID bằng thiết bị của bạn, xem qua `xcrun devicectl list devices`):
 ```bash

@@ -195,6 +195,13 @@ pub struct NetTransform {
     // itself isn't replicated (its `target: Entity` would need cross-network
     // entity mapping for no real benefit), so this is the cheap stand-in.
     pub moving: bool,
+    // Only meaningful for NetPlayer entities — mirrors the shooting
+    // client's own ClientInput.sprint (already sent every input tick, just
+    // not previously copied into the replicated pose), so other clients
+    // can show a Run pose for a sprinting remote player instead of the
+    // same Walk pose regardless of speed. Always false for Zombie/DebugBot
+    // entities (they don't sprint).
+    pub sprinting: bool,
 }
 
 // Replicated marker for a connected player's entity (spawned by the server
@@ -523,6 +530,33 @@ pub fn zombie_hit_damage_geometric(hit_point: Vec3, zombie_transform: &Transform
 pub struct FireShot {
     pub origin: Vec3,
     pub direction: Vec3,
+}
+
+// Broadcast by the server alongside a FireShot's own ShotFx, so every OTHER
+// client (not just the shooter, who already knows locally) can play a
+// brief Gun_Shoot pose on that specific remote player's model — see
+// crate::client's update_remote_player_model_animation. No prior signal
+// like this existed (ShotFx itself carries only the hit point/damage, not
+// who fired). `u64` instead of `bevy_replicon`'s own `NetworkId` type
+// purely to avoid adding a `bevy_replicon` dependency to this crate just
+// for one field — convert via `NetworkId::new(id)`/`.get()` at the two
+// call sites that actually need the real type (server broadcasting,
+// client matching against a NetPlayer's own `NetworkId` component).
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub struct PlayerFiredFx {
+    pub shooter_network_id: u64,
+}
+
+// Broadcast by the server the instant a specific player's client reports
+// PlayerDied — previously the only signal was the global GameStateEvent::
+// GameOver, sent once *every* connected player is dead with no per-entity
+// distinction, so other clients had no way to tell which remote player(s)
+// had already died. Lets crate::client play a one-shot Death pose on that
+// specific player's model instead of everyone just freezing mid-animation
+// once the whole match ends.
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub struct PlayerDiedFx {
+    pub who_network_id: u64,
 }
 
 // Broadcast by the server (ServerEventAppExt, SendMode::Broadcast) after

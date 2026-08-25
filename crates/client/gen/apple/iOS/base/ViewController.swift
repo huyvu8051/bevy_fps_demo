@@ -293,6 +293,11 @@ final class TouchHUD {
     let proneButton = UIButton(type: .custom)
     let healthLabel = UILabel()
     let ammoLabel = UILabel()
+    // Same real bevy_ui PingUi readout the desktop HUD shows — invisible on
+    // iOS for the same reason HP/ammo needed native wiring (see
+    // ViewController's own syncHud). "--" until the first real reading
+    // arrives (see setPing(_:) below).
+    let pingLabel = UILabel()
     let crosshairH = UIView()
     let crosshairV = UIView()
 
@@ -303,6 +308,23 @@ final class TouchHUD {
     }
     var health = 100 {
         didSet { healthLabel.text = "HP \(health)" }
+    }
+
+    // Not a didSet-observed stored property like health/ammo above: -1
+    // ("not connected yet") should keep showing "--" rather than "-1 ms",
+    // so this needs its own formatting branch instead of a straight
+    // string interpolation.
+    func setPing(_ ms: Float) {
+        // Re-anchored to its own right edge on every call (not just at
+        // layout time, unlike health/ammo's fixed-width labels) since the
+        // digit count genuinely varies more here (single-digit LAN ping
+        // vs 3-digit ping over a Tailscale tunnel) — sizeToFit alone would
+        // otherwise grow/shrink from the LEFT and drift into the
+        // CROUCH/SPRINT/RELOAD row's own space.
+        let rightEdge = pingLabel.frame.maxX
+        pingLabel.text = ms >= 0 ? "Ping: \(Int(ms.rounded())) ms" : "Ping: -- ms"
+        pingLabel.sizeToFit()
+        pingLabel.frame.origin.x = rightEdge - pingLabel.bounds.width
     }
 
     func install(
@@ -380,6 +402,13 @@ final class TouchHUD {
         ammoLabel.textAlignment = .right
         ammoLabel.sizeToFit()
         parent.addSubview(ammoLabel)
+
+        setPing(-1)
+        pingLabel.textColor = UIColor(red: 0.7, green: 0.85, blue: 1.0, alpha: 1) // matches PingUi's own TextColor
+        pingLabel.font = .systemFont(ofSize: 14)
+        pingLabel.textAlignment = .right
+        pingLabel.sizeToFit()
+        parent.addSubview(pingLabel)
 
         // Crosshair — dead center, two thin white bars.
         crosshairH.backgroundColor = UIColor.white.withAlphaComponent(0.8)
@@ -507,6 +536,8 @@ final class TouchHUD {
         aimButton.center = CGPoint(x: fireButton.frame.minX - margin - aimButton.bounds.width / 2, y: fireButton.center.y)
         healthLabel.frame.origin = CGPoint(x: leftMargin, y: topMargin + 20)
         ammoLabel.frame.origin = CGPoint(x: bounds.width - rightMargin - ammoLabel.bounds.width, y: topMargin + 20)
+        pingLabel.sizeToFit()
+        pingLabel.frame.origin = CGPoint(x: bounds.width - rightMargin - pingLabel.bounds.width, y: ammoLabel.frame.maxY + 4)
         // CROUCH/SPRINT/RELOAD: less time-critical, tucked under the ammo
         // counter in the empty upper-right corner instead — clear of both
         // the gun model and the FIRE/JUMP/AIM cluster. Must come after
@@ -767,6 +798,7 @@ class ViewController: UIViewController {
         if hp >= 0 {
             touchHUD.health = Int(hp.rounded())
         }
+        touchHUD.setPing(native_metal_probe_get_ping_ms(probe))
     }
 
     // Polled once per frame (see enterFrame) rather than only on the MENU

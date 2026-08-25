@@ -15,7 +15,8 @@ use big_brain::prelude::*;
 use shared::{
     zombie_hit_damage_geometric, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
-    NetTransform, Player, PlayerDied, PlayerStance, RequestRestart, SetAutoMaintainZombies, SetZombieCount,
+    NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
+    SetAutoMaintainZombies, SetZombieCount,
     ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
     ZombieAttackTimer, ZombieMotion, ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
@@ -81,6 +82,8 @@ fn main() {
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
         .add_client_event::<FireShot>(Channel::Ordered)
         .add_server_event::<ShotFx>(Channel::Ordered)
+        .add_server_event::<PlayerFiredFx>(Channel::Unordered)
+        .add_server_event::<PlayerDiedFx>(Channel::Ordered)
         .add_client_event::<PlayerDied>(Channel::Ordered)
         .add_client_event::<RequestRestart>(Channel::Ordered)
         .add_server_event::<GameStateEvent>(Channel::Ordered)
@@ -210,6 +213,7 @@ fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands) {
             translation: PLAYER_SPAWN,
             yaw: 0.0,
             moving: false,
+            sprinting: false,
         },
         LastProcessedInput::default(),
         PlayerThreat::default(),
@@ -335,6 +339,7 @@ fn move_players(
         // zombies, but for players it just stayed false forever, so remote
         // player models never animated.
         net_transform.moving = input.move_axis != Vec2::ZERO;
+        net_transform.sprinting = input.sprint;
     }
 }
 
@@ -394,6 +399,7 @@ fn spawn_debug_bot(trigger: On<FromClient<SpawnDebugBot>>, mut commands: Command
             translation: at,
             yaw: 0.0,
             moving: false,
+            sprinting: false,
         },
         DebugBot(id),
         DebugBotTarget(at),
@@ -791,6 +797,7 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], director_spawned: boo
                 translation: spawn_pos,
                 yaw: 0.0,
                 moving: false,
+                sprinting: false,
             },
             Health(ZOMBIE_MAX_HEALTH),
             Replicated,
@@ -1137,6 +1144,19 @@ fn handle_fire_shot(
         if let Ok(mut threat) = threats.get_mut(shooter) {
             threat.0 += PLAYER_THREAT_PER_SHOT;
         }
+        // Broadcast regardless of hit/miss (unlike ShotFx below, which only
+        // fires once the raycast/lag-compensation result is known) — every
+        // OTHER client plays a brief Gun_Shoot pose on this shooter's own
+        // remote-player model (see crate::client's
+        // on_player_fired_fx/update_remote_player_model_animation). The
+        // shooter's own client already knows it fired locally, so this is
+        // purely for everyone else.
+        if let Ok(network_id) = network_ids.get(shooter) {
+            commands.server_trigger(ToClients {
+                mode: SendMode::Broadcast,
+                message: PlayerFiredFx { shooter_network_id: network_id.get() },
+            });
+        }
     }
 
     let shot = trigger.message;
@@ -1276,13 +1296,31 @@ fn on_player_died(
     trigger: On<FromClient<PlayerDied>>,
     mut commands: Commands,
     mut game_over: ResMut<GameOver>,
-    connected: Query<Entity, With<NetPlayer>>,
+    // Without<DebugBot>: bots are fake NetPlayer stand-ins for testing (see
+    // spawn_debug_bot) that never receive Dead — counting them here would
+    // permanently block all_dead (and therefore Restart, gated on
+    // game_over.0 below) for the lifetime of the server if even one bot was
+    // ever spawned and left connected.
+    connected: Query<Entity, (With<NetPlayer>, Without<DebugBot>)>,
     dead: Query<(), With<Dead>>,
+    network_ids: Query<&NetworkId>,
 ) {
     let Some(entity) = trigger.client_id.entity() else {
         return;
     };
     commands.entity(entity).insert(Dead);
+
+    // Previously the only broadcast on death was the global GameOver (only
+    // sent once *every* connected player is dead, below) — other clients
+    // had no per-entity signal at all, so a player who died early into a
+    // multi-player match just looked frozen mid-animation to everyone else
+    // until the whole match ended. This fires immediately, per player.
+    if let Ok(network_id) = network_ids.get(entity) {
+        commands.server_trigger(ToClients {
+            mode: SendMode::Broadcast,
+            message: PlayerDiedFx { who_network_id: network_id.get() },
+        });
+    }
 
     if game_over.0 {
         return;

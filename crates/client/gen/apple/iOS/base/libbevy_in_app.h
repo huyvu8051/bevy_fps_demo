@@ -83,6 +83,8 @@ void native_metal_probe_set_menu_visible(struct native_metal_probe *probe, bool 
 float native_metal_probe_get_sensitivity(struct native_metal_probe *probe);
 void native_metal_probe_set_sensitivity(struct native_metal_probe *probe, float value);
 float native_metal_probe_get_player_hp(struct native_metal_probe *probe);
+// Ping (ms). -1.0 = not connected yet.
+float native_metal_probe_get_ping_ms(struct native_metal_probe *probe);
 // Cheat controls — debug builds only (compiled out / no-op in release,
 // mirroring the #[cfg(debug_assertions)] gate on spawn_settings_menu's own
 // cheat buttons). Kill All / Spawn +100 need a live server connection

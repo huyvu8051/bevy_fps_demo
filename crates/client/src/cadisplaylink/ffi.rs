@@ -466,6 +466,14 @@ pub extern "C" fn native_metal_probe_get_player_hp(obj: *mut std::ffi::c_void) -
     probe.real_game_app_mut().map(super::native_menu::player_hp).unwrap_or(-1.0)
 }
 
+// Ping (ms) — same bevy_ui HUD readout that's invisible on iOS; see
+// native_menu::ping_ms's own doc comment. -1.0 = not connected yet.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_get_ping_ms(obj: *mut std::ffi::c_void) -> f32 {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    probe.real_game_app_mut().map(super::native_menu::ping_ms).unwrap_or(-1.0)
+}
+
 // Cheat controls — debug builds only, mirroring the same
 // `#[cfg(debug_assertions)]` gate just added around `spawn_settings_menu`'s
 // cheat buttons in crate::lib, so a release build's native menu can't

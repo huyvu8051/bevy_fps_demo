@@ -36,6 +36,17 @@ use shared::{Zombie, ZOMBIE_MAX_HEALTH};
 // of SystemState queries per menu-open frame, not per-render-frame) that
 // the extra FFI call overhead doesn't matter.
 
+// Ping — same real value the bevy_ui HUD's own PingUi text reads
+// (`update_ping_ui` in crate::lib), just via renet2's `RenetClient::rtt()`
+// directly instead of a resource, since there's no dedicated ping
+// resource to read (the bevy_ui system computes the formatted string
+// straight from RenetClient each tick). -1.0 sentinel for "no client yet"
+// (matches player_hp's own "-1 = no data" convention below), which
+// distinguishes "not connected" from a genuine 0ms reading.
+pub fn ping_ms(app: &mut App) -> f32 {
+    app.world().get_resource::<bevy_replicon_renet2::renet2::RenetClient>().map(|c| c.rtt() as f32 * 1000.0).unwrap_or(-1.0)
+}
+
 pub fn menu_visible(app: &mut App) -> bool {
     app.world().get_resource::<crate::SettingsMenuVisible>().map(|v| v.0).unwrap_or(false)
 }
