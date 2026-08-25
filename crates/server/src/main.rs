@@ -13,12 +13,13 @@ use bevy_replicon_renet2::{
 };
 use big_brain::prelude::*;
 use shared::{
-    zombie_hit_damage_geometric, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
+    resolve_bone_world_positions, zombie_hit_damage_bones, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetZombieCount,
     ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
-    ZombieAttackTimer, ZombieMotion, ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
+    ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, wire_zombie_hitbox_bones,
+    ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PILLAR_RADIUS,
@@ -34,6 +35,19 @@ use shared::{
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 use vleue_navigator::prelude::*;
+
+// AnimationPlayer/StandardMaterial: needed by the register_type calls below
+// (SceneSpawner's reflection-based entity cloning requires every component
+// type present in a spawned glTF scene to be registered — see the doc
+// comment on that block). AnimationGraph/AnimationGraphHandle/
+// AnimationNodeIndex/GltfAssetLabel were only needed by Phase 1's spawn
+// spike (removed once its exit criterion — head bone Y visibly changing,
+// confirmed headless — passed); Phase 2 will need them again once real
+// zombies get a live skeleton.
+use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex};
+use bevy::animation::AnimationPlayer;
+use bevy::gltf::GltfAssetLabel;
+use bevy::pbr::StandardMaterial;
 
 // Fixed debug port — the client connects here by default (see SERVER_ADDR
 // in crates/client). No auth/matchmaking: ServerAuthentication::Unsecure
@@ -61,9 +75,50 @@ fn main() {
                 1.0 / SERVER_TICK_HZ,
             ))),
             bevy::log::LogPlugin::default(),
-            bevy::asset::AssetPlugin::default(),
+            // Phase 1 spike (HITBOX_PLAN.md): the server has no assets/
+            // dir of its own (it never needed one — pure geometry/physics
+            // so far). Bevy's AssetPlugin resolves `file_path` relative to
+            // this crate's own CARGO_MANIFEST_DIR in dev builds, NOT the
+            // process's actual CWD (confirmed the hard way: "crates/client/
+            // assets" resolved to .../crates/server/crates/client/assets)
+            // — so this is relative to crates/server/, one level up then
+            // into the client crate's existing assets dir, same file/
+            // source of truth zombie.glb already has, no duplication.
+            bevy::asset::AssetPlugin {
+                file_path: "../client/assets".to_string(),
+                ..default()
+            },
             bevy::mesh::MeshPlugin,
             bevy::scene::ScenePlugin,
+            // Registers Assets<Image> — normally pulled in transitively by
+            // RenderPlugin (which this headless server never adds), but
+            // bevy_gltf's loader unconditionally tries to allocate an
+            // Image handle for every embedded texture regardless of
+            // whether anything ever renders it, and panics without this
+            // ("Cannot allocate an Asset Handle of type ... Image because
+            // the asset type has not been initialized").
+            bevy::image::ImagePlugin::default(),
+            // Same "asset type never got initialized" story as
+            // ImagePlugin above, one step further into the glTF material
+            // chain: bevy_gltf allocates a StandardMaterial handle per
+            // material regardless of rendering. Registering the asset
+            // type directly (init_asset, below) instead of the full
+            // PbrPlugin avoids pulling in PbrPlugin's actual render-world
+            // extraction/lighting systems, which this headless server has
+            // no use for and which likely assume a RenderPlugin exists.
+            // Phase 1 of the real-hitbox spike (see HITBOX_PLAN.md): loads
+            // the zombie's skeleton/animation curves so bone
+            // GlobalTransforms are available server-side, with zero
+            // rendering — no RenderPlugin/WinitPlugin/wgpu anywhere in this
+            // plugin list, confirming AnimationPlugin's only cost here is
+            // the data (scene graph + animation sampling), not a GPU.
+            // GltfPlugin is what actually registers the AssetLoader for
+            // .glb/.gltf paths — enabling the "bevy_gltf" cargo feature
+            // alone only compiles the crate in, it doesn't register
+            // anything with AssetServer (first attempt without this hit
+            // "Could not find an asset loader matching ... zombie.glb").
+            bevy::animation::AnimationPlugin,
+            bevy::gltf::GltfPlugin::default(),
             StatesPlugin,
             PhysicsPlugins::default(),
             BigBrainPlugin::new(PreUpdate),
@@ -71,6 +126,37 @@ fn main() {
             RepliconPlugins,
             RepliconRenetPlugins,
         ))
+        .init_asset::<StandardMaterial>()
+        // Phase 1 spike (HITBOX_PLAN.md): SceneSpawner clones entities from
+        // a loaded glTF Scene using reflection-based component cloning for
+        // any type without a registered ComponentCloneBehavior, so every
+        // component type a character-rig scene actually contains has to be
+        // registered even though nothing here ever serializes/reflects
+        // them for any other reason. TransformPlugin normally does the
+        // Transform/GlobalTransform half of this (not present — this
+        // server relies on avian3d's own propagation instead of the
+        // official plugin), the rest are glTF-scene-specific.
+        .register_type::<Transform>()
+        .register_type::<GlobalTransform>()
+        .register_type::<bevy::transform::components::TransformTreeChanged>()
+        .register_type::<Visibility>()
+        .register_type::<InheritedVisibility>()
+        .register_type::<ViewVisibility>()
+        .register_type::<Name>()
+        .register_type::<Mesh3d>()
+        .register_type::<MeshMaterial3d<StandardMaterial>>()
+        .register_type::<bevy::ecs::hierarchy::Children>()
+        .register_type::<bevy::ecs::hierarchy::ChildOf>()
+        .register_type::<bevy::animation::AnimatedBy>()
+        .register_type::<AnimationPlayer>()
+        .register_type::<bevy::camera::primitives::Aabb>()
+        .register_type::<bevy::gltf::GltfExtras>()
+        .register_type::<bevy::gltf::GltfSceneExtras>()
+        .register_type::<bevy::gltf::GltfMeshExtras>()
+        .register_type::<bevy::gltf::GltfMaterialExtras>()
+        .register_type::<bevy::gltf::GltfMeshName>()
+        .register_type::<bevy::gltf::GltfMaterialName>()
+        .register_type::<bevy::mesh::skinning::SkinnedMesh>()
         .replicate::<NetworkId>()
         .replicate::<NetPlayer>()
         .replicate::<NetTransform>()
@@ -100,7 +186,7 @@ fn main() {
         .init_resource::<ZombieTargetCount>()
         .init_resource::<AutoMaintainZombies>()
         .init_resource::<NextZombieSpawnIndex>()
-        .add_systems(Startup, (start_server, spawn_arena_colliders, spawn_zombie_navmesh, spawn_initial_zombies))
+        .add_systems(Startup, (start_server, spawn_arena_colliders, spawn_zombie_navmesh, spawn_initial_zombies, setup_server_zombie_anim))
         .add_systems(
             PreUpdate,
             (
@@ -121,11 +207,17 @@ fn main() {
                 // fighting with it. Re-add once ZombieTargetCount/director
                 // hordes are reconciled to coexist properly.
                 // run_ai_director,
+                // Phase 2 (HITBOX_PLAN.md): real skeleton wiring for every
+                // server zombie — see on_zombie_spawned (the observer that
+                // spawns the child scene) for the other half.
+                wire_server_zombie_animations,
+                wire_zombie_hitbox_bones,
             ),
         )
         .add_observer(spawn_player)
         .add_observer(log_client_disconnect)
         .add_observer(apply_client_input)
+        .add_observer(on_zombie_spawned)
         .add_observer(spawn_more_zombies)
         .add_observer(on_set_zombie_count)
         .add_observer(on_clear_all_zombies)
@@ -554,14 +646,15 @@ fn debug_bot_fire(
     mut commands: Commands,
     time: Res<Time>,
     mut bots: Query<(&Transform, &mut DebugBotAi), With<DebugBot>>,
-    mut zombies: Query<(Entity, &Transform, &mut Health, &mut KnockbackVelocity), (With<Zombie>, Without<DebugBot>)>,
+    mut zombies: Query<(Entity, &Transform, &mut Health, &mut KnockbackVelocity, &ZombieHitboxBones), (With<Zombie>, Without<DebugBot>)>,
+    bone_transforms: Query<&GlobalTransform>,
     mut respawns: ResMut<PendingRespawns>,
     director_spawned: Query<(), With<DirectorSpawned>>,
 ) {
     for (transform, mut ai) in &mut bots {
         ai.fire_timer -= time.delta_secs();
         let Some(target) = ai.target_zombie else { continue };
-        let Ok((entity, zombie_transform, mut health, mut knockback)) = zombies.get_mut(target) else {
+        let Ok((entity, zombie_transform, mut health, mut knockback, bones)) = zombies.get_mut(target) else {
             continue;
         };
 
@@ -593,7 +686,11 @@ fn debug_bot_fire(
         };
 
         let hit_point = origin + *direction * hit_distance;
-        let damage = zombie_hit_damage_geometric(hit_point, zombie_transform);
+        // Debug bots don't have client round-trips to rewind, so this
+        // stays on live (not history-rewound) bone positions — see this
+        // function's own doc comment above.
+        let resolved_bones = resolve_bone_world_positions(bones, |bone| bone_transforms.get(bone).ok().map(|g| g.translation()));
+        let damage = zombie_hit_damage_bones(hit_point, zombie_transform, &resolved_bones);
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {
@@ -748,18 +845,49 @@ fn spawn_more_zombies(_trigger: On<FromClient<SpawnMoreZombies>>, mut commands: 
 #[derive(Component)]
 struct DirectorSpawned;
 
-// Recent (translation, rotation) snapshots for lag-compensated hit
-// detection — see handle_fire_shot and record_zombie_history. Not
+// Per-bone offsets in the zombie ROOT's own local frame (i.e. already
+// rotation.inverse()-applied) at the moment a ZombieHistory entry was
+// recorded — HITBOX_PLAN.md Phase 3. Storing local offsets rather than raw
+// world positions is what makes rewinding correct even while the zombie
+// has since turned: reapplying a *past* rotation to a *local* offset gives
+// the bone's world position as it truly was then, whereas a stored world
+// position would silently assume the zombie's orientation never changed.
+#[derive(Clone, Default)]
+struct BoneLocalOffsets {
+    head: Option<Vec3>,
+    chest: Option<Vec3>,
+    belly: Option<Vec3>,
+    limbs: Vec<Vec3>,
+}
+
+// Recent (translation, rotation, bone offsets) snapshots for lag-compensated
+// hit detection — see handle_fire_shot and record_zombie_history. Not
 // replicated (server-only bookkeeping, like ChaseTarget/PlayerThreat).
 #[derive(Component, Default)]
-struct ZombieHistory(std::collections::VecDeque<(f32, Vec3, Quat)>);
+struct ZombieHistory(std::collections::VecDeque<(f32, Vec3, Quat, BoneLocalOffsets)>);
 
-// Runs after move_zombies each tick: records where every zombie is right
-// now, and prunes anything older than LAG_COMPENSATION_MAX_SECS needs.
-fn record_zombie_history(time: Res<Time>, mut zombies: Query<(&Transform, &mut ZombieHistory), With<Zombie>>) {
+// Runs after move_zombies each tick: records where every zombie (root AND
+// each resolved hitbox bone, relative to the root) is right now, and
+// prunes anything older than LAG_COMPENSATION_MAX_SECS needs. Bones that
+// haven't resolved yet (scene still loading) just record None/empty for
+// this tick — zombie_history_at's caller already falls back to the
+// geometric guess for anything that never resolves.
+fn record_zombie_history(
+    time: Res<Time>,
+    mut zombies: Query<(&Transform, &mut ZombieHistory, &ZombieHitboxBones), With<Zombie>>,
+    bone_transforms: Query<&GlobalTransform>,
+) {
     let now = time.elapsed_secs();
-    for (transform, mut history) in &mut zombies {
-        history.0.push_back((now, transform.translation, transform.rotation));
+    for (transform, mut history, bones) in &mut zombies {
+        let inv_rotation = transform.rotation.inverse();
+        let local_offset = |bone: Entity| bone_transforms.get(bone).ok().map(|g| inv_rotation * (g.translation() - transform.translation));
+        let offsets = BoneLocalOffsets {
+            head: bones.head.and_then(local_offset),
+            chest: bones.chest.and_then(local_offset),
+            belly: bones.belly.and_then(local_offset),
+            limbs: bones.limbs.iter().filter_map(|&e| local_offset(e)).collect(),
+        };
+        history.0.push_back((now, transform.translation, transform.rotation, offsets));
         while history.0.front().is_some_and(|&(t, ..)| now - t > LAG_COMPENSATION_MAX_SECS) {
             history.0.pop_front();
         }
@@ -769,13 +897,83 @@ fn record_zombie_history(time: Res<Time>, mut zombies: Query<(&Transform, &mut Z
 // Nearest recorded snapshot to `target_time` — history is only sampled once
 // per server tick (30Hz), so this is a "closest sample" lookup rather than
 // interpolating between two, which is plenty precise for what's ultimately
-// a cosmetic-accuracy-tolerant debug shooter.
-fn zombie_history_at(history: &ZombieHistory, target_time: f32) -> Option<(Vec3, Quat)> {
-    history
-        .0
-        .iter()
-        .min_by(|(a, ..), (b, ..)| (a - target_time).abs().total_cmp(&(b - target_time).abs()))
-        .map(|&(_, translation, rotation)| (translation, rotation))
+// a cosmetic-accuracy-tolerant debug shooter. Reconstructs bone world
+// positions from that same instant's root pose + locally-stored offsets
+// (see BoneLocalOffsets) rather than returning raw offsets, so callers
+// don't need to know this rewinding trick at all — just "where was
+// everything, back then".
+fn zombie_history_at(history: &ZombieHistory, target_time: f32) -> Option<(Vec3, Quat, BoneWorldPositions)> {
+    let &(_, translation, rotation, ref offsets) =
+        history.0.iter().min_by(|(a, ..), (b, ..)| (a - target_time).abs().total_cmp(&(b - target_time).abs()))?;
+    let to_world = |local: Vec3| translation + rotation * local;
+    Some((
+        translation,
+        rotation,
+        BoneWorldPositions {
+            head: offsets.head.map(to_world),
+            chest: offsets.chest.map(to_world),
+            belly: offsets.belly.map(to_world),
+            limbs: offsets.limbs.iter().map(|&l| to_world(l)).collect(),
+        },
+    ))
+}
+
+// Regression test for the core claim HITBOX_PLAN.md Phase 3 rests on:
+// reapplying a PAST rotation to a locally-stored offset reconstructs the
+// bone's true past world position, even after the zombie has since
+// turned to face a different way. Kept permanently (unlike Phase 1/2's
+// throwaway println-based manual checks) since this is exactly the kind
+// of subtle math bug a future refactor could silently reintroduce.
+#[cfg(test)]
+mod hitbox_phase3_tests {
+    use super::*;
+
+    #[test]
+    fn rewind_uses_the_rotation_recorded_at_that_instant_not_the_latest_one() {
+        let mut history = ZombieHistory::default();
+        // t=0: zombie faces +Z (no rotation), head bone 1.0 further along
+        // its own forward axis (local +Z) from the root.
+        history.0.push_back((
+            0.0,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            BoneLocalOffsets {
+                head: Some(Vec3::Z),
+                chest: None,
+                belly: None,
+                limbs: vec![],
+            },
+        ));
+        // t=1: zombie has since turned 90° to face +X, root hasn't moved.
+        // Same local offset recorded (rig didn't change shape, just
+        // orientation) — this is what record_zombie_history would store
+        // every tick regardless of whether the zombie turned in between.
+        let turned = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        history.0.push_back((
+            1.0,
+            Vec3::ZERO,
+            turned,
+            BoneLocalOffsets {
+                head: Some(Vec3::Z),
+                chest: None,
+                belly: None,
+                limbs: vec![],
+            },
+        ));
+
+        // Rewinding to t=0 must place the head where it was WHEN FACING
+        // +Z (world +Z), not where the local offset would land if
+        // rotated by the zombie's current (t=1) orientation.
+        let (_, _, bones_at_0) = zombie_history_at(&history, 0.0).unwrap();
+        assert!(bones_at_0.head.unwrap().distance(Vec3::Z) < 1e-5, "rewound head position: {:?}", bones_at_0.head);
+
+        // Sanity check the other direction too: "rewinding" to t=1 should
+        // place the head where +X-facing rotation puts it (world +X), not
+        // world +Z — confirms the test itself isn't just trivially always
+        // returning the same offset regardless of which entry matched.
+        let (_, _, bones_at_1) = zombie_history_at(&history, 1.0).unwrap();
+        assert!(bones_at_1.head.unwrap().distance(Vec3::X) < 1e-5, "rewound head position: {:?}", bones_at_1.head);
+    }
 }
 
 // Fractional part of entity_index * the golden ratio — a cheap
@@ -821,6 +1019,16 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], director_spawned: boo
             // spatial queries pick up a bare Collider fine.
             Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH),
             ZombieHistory::default(),
+            // Phase 2 (HITBOX_PLAN.md): populated by wire_zombie_hitbox_bones
+            // (shared, same system the client already ran) once
+            // on_zombie_spawned's child scene finishes loading — real bone
+            // entities for Phase 4's per-bone hit detection, not the
+            // Y-threshold guess zombie_hit_damage_geometric uses today.
+            ZombieHitboxBones::default(),
+            // Needed on the root too, not just the child scene entity — an
+            // InheritedVisibility child under a parent with no Visibility
+            // at all trips Bevy's own B0004 warning every tick.
+            Visibility::default(),
         ));
         if ZOMBIE_AI_ENABLED {
             zombie.insert(Thinker::build().picker(FirstToScore { threshold: 0.8 }).when(NearPlayer, ChaseAction));
@@ -828,6 +1036,70 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], director_spawned: boo
         if director_spawned {
             zombie.insert(DirectorSpawned);
         }
+    }
+}
+
+// --- Phase 2 (HITBOX_PLAN.md): real skeleton on every server zombie -------
+// Same asset the client renders — see crates/client's ZOMBIE_PATH — loaded
+// here purely for its scene graph + animation curves (no RenderPlugin ever
+// touches it, confirmed in Phase 1's spike).
+const SERVER_ZOMBIE_PATH: &str = "models/zombie.glb";
+// zombie.glb's animation order, per client::lib.rs's own ZOMBIE_ANIM_*
+// constants (BITE=0, CRAWL=1, IDLE=2, RUN=3, WALK=4) — reusing the same
+// index here rather than redefining it, since both sides load the exact
+// same file and a drift between them would silently desync which clip
+// "idle" means.
+const SERVER_ZOMBIE_ANIM_IDLE: usize = 2;
+
+// Built once at Startup (one AnimationGraph asset, shared by every
+// zombie's AnimationPlayer — same one-graph-many-players pattern as the
+// client's own ZombieAnim) rather than per-zombie, since every server
+// zombie plays from the same clip set.
+#[derive(Resource)]
+struct ServerZombieAnim {
+    graph: Handle<AnimationGraph>,
+    idle: AnimationNodeIndex,
+}
+
+fn setup_server_zombie_anim(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
+) {
+    let clip = asset_server.load(GltfAssetLabel::Animation(SERVER_ZOMBIE_ANIM_IDLE).from_asset(SERVER_ZOMBIE_PATH));
+    let (graph, nodes) = AnimationGraph::from_clips([clip]);
+    commands.insert_resource(ServerZombieAnim {
+        graph: graphs.add(graph),
+        idle: nodes[0],
+    });
+}
+
+// Every zombie gets the real skeleton as a child scene the instant it's
+// spawned — mirrors crates/client's on_zombie_replicated (Add<Zombie>
+// observer spawning the exact same SceneRoot as a cosmetic child), just
+// server-side and for hit detection instead of rendering.
+fn on_zombie_spawned(trigger: On<Add, Zombie>, mut commands: Commands, asset_server: Res<AssetServer>) {
+    let scene = asset_server.load(GltfAssetLabel::Scene(0).from_asset(SERVER_ZOMBIE_PATH));
+    commands.entity(trigger.event().entity).with_child((
+        Transform::default(),
+        Visibility::default(),
+        SceneRoot(scene),
+    ));
+}
+
+// Same "wait for the async scene load, then attach the graph and start
+// playing" shape as crates/client's wire_zombie_animations, minus that
+// version's PlayerModel-vs-Zombie ambiguity check — this server never
+// spawns any other kind of animated character, so every AnimationPlayer
+// that shows up belongs to a zombie by construction.
+fn wire_server_zombie_animations(
+    mut commands: Commands,
+    anim: Res<ServerZombieAnim>,
+    mut new_players: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
+) {
+    for (player_entity, mut player) in &mut new_players {
+        commands.entity(player_entity).try_insert(AnimationGraphHandle(anim.graph.clone()));
+        player.play(anim.idle).repeat();
     }
 }
 
@@ -1215,13 +1487,13 @@ fn handle_fire_shot(
     let rewound_hit = zombies
         .iter()
         .filter_map(|(entity, _, _, history)| {
-            let (position, rotation) = zombie_history_at(history, rewind_time)?;
+            let (position, rotation, bones) = zombie_history_at(history, rewind_time)?;
             let (distance, normal) = capsule.cast_ray(position, rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
-            Some((distance, entity, position, rotation, normal))
+            Some((distance, entity, position, rotation, bones, normal))
         })
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
 
-    if let Some((distance, entity, position, rotation, normal)) = rewound_hit {
+    if let Some((distance, entity, position, rotation, bones, normal)) = rewound_hit {
         let hit_point = shot.origin + *direction * distance;
         if let Ok((_, mut health, mut knockback, _)) = zombies.get_mut(entity) {
             let rewound_transform = Transform {
@@ -1229,7 +1501,11 @@ fn handle_fire_shot(
                 rotation,
                 scale: Vec3::ONE,
             };
-            let damage = zombie_hit_damage_geometric(hit_point, &rewound_transform);
+            // Bones ARE rewound to rewind_time here too now (Phase 3) —
+            // zombie_history_at reconstructs their world position from
+            // that same past instant's root pose + the offsets recorded
+            // at that tick, not their live position.
+            let damage = zombie_hit_damage_bones(hit_point, &rewound_transform, &bones);
             health.0 -= damage;
             let killed = health.0 <= 0.0;
             if killed {
@@ -1267,13 +1543,14 @@ fn handle_fire_shot(
     // landed directly on a zombie right now — treat that as an ordinary,
     // un-compensated hit instead of silently treating a zombie as a wall.
     if let Ok((entity, mut health, mut knockback, history)) = zombies.get_mut(hit.entity) {
-        let (position, rotation) = zombie_history_at(history, time.elapsed_secs()).unwrap_or((hit_point, Quat::IDENTITY));
+        let (position, rotation, bones) =
+            zombie_history_at(history, time.elapsed_secs()).unwrap_or((hit_point, Quat::IDENTITY, BoneWorldPositions::default()));
         let live_transform = Transform {
             translation: position,
             rotation,
             scale: Vec3::ONE,
         };
-        let damage = zombie_hit_damage_geometric(hit_point, &live_transform);
+        let damage = zombie_hit_damage_bones(hit_point, &live_transform, &bones);
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {

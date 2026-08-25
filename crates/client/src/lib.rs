@@ -32,10 +32,10 @@ use shared::{
     KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform, Player, PlayerDied,
     PlayerDiedFx, PlayerFiredFx,
     PlayerStance, RequestRestart, SetAutoMaintainZombies, SetZombieCount, ShotFx, SpawnDebugBot,
-    SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieMotion,
-    zombie_hit_damage_geometric, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_COLUMN_OBSTACLES,
-    PILLAR_RADIUS, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH, ZOMBIE_RADIUS,
-    ZOMBIE_SCALE, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
+    SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, wire_zombie_hitbox_bones,
+    resolve_bone_world_positions, zombie_hit_damage_bones, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED,
+    NAVMESH_COLUMN_OBSTACLES, PILLAR_RADIUS, ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE,
+    ZOMBIE_MAX_HEALTH, ZOMBIE_RADIUS, ZOMBIE_SCALE, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
@@ -1224,22 +1224,6 @@ enum ZombiePose {
     Bite,
 }
 
-// Bone entities used for nearest-bone hit detection (see zombie_hit_damage).
-// zombie.glb's rig (single skinned mesh, bones only for animation — see the
-// earlier comment on HITBOX_* constants) names its nodes after standard
-// humanoid bones; wire_zombie_hitbox_bones matches against those names as
-// they show up (same async-loading problem as ZombieAnimationPlayer).
-// Fields are individually optional/incrementally filled rather than an
-// all-or-nothing bundle, so a hit lands correctly even mid-load using
-// whichever bones have resolved so far.
-#[derive(Component, Default)]
-struct ZombieHitboxBones {
-    head: Option<Entity>,
-    chest: Option<Entity>,
-    belly: Option<Entity>,
-    limbs: Vec<Entity>,
-}
-
 // --- Real navmesh (vleue_navigator, vendored fork) ---
 //
 // Auto-generating obstacles from Sponza's own Collider (NavmeshUpdaterPlugin
@@ -1962,6 +1946,10 @@ struct VfxAssets<'w, 's> {
     // pushed shoot() back up to 17 params post-merge with autopilot's own
     // two — see count_local_kills' own doc comment for what this tracks.
     recently_hit: ResMut<'w, RecentlyHitZombies>,
+    // HITBOX_PLAN.md Phase 4: resolves each ZombieHitboxBones entity's live
+    // world position for zombie_hit_damage_bones — same "no room at the
+    // top level" reasoning as the two fields above.
+    bone_transforms: Query<'w, 's, &'static GlobalTransform>,
 }
 
 #[derive(Resource)]
@@ -5979,7 +5967,7 @@ fn shoot(
     mut gun: Query<&mut Gun>,
     mut vfx_assets: VfxAssets,
     spatial_query: SpatialQuery,
-    zombies: Query<(Entity, &Transform, &GlobalTransform), With<Zombie>>,
+    zombies: Query<(Entity, &Transform, &GlobalTransform, &ZombieHitboxBones), With<Zombie>>,
     touch_firing: Res<TouchFiring>,
     mut cooldown: Local<f32>,
     // Bundled into one nested-tuple param instead of four flat ones — this
@@ -6110,7 +6098,7 @@ fn shoot(
     // component to test against via SpatialQuery, unlike the server, so
     // this builds one manually — see ZOMBIE_RADIUS/ZOMBIE_LENGTH) and, on a
     // hit, predicts hitmarker/blood/damage-number immediately using the same
-    // shared zombie_hit_damage_geometric the server itself uses — same
+    // shared zombie_hit_damage_bones the server itself uses — same
     // approach Source engine's "weapon prediction" uses for L4D: the client
     // predicts its own shot's effects entirely, and the server (see
     // handle_fire_shot's BroadcastExcept) knows not to echo them back to
@@ -6122,13 +6110,13 @@ fn shoot(
     let zombie_capsule = Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH);
     let predicted_hit = zombies
         .iter()
-        .filter_map(|(entity, transform, global)| {
+        .filter_map(|(entity, transform, global, bones)| {
             zombie_capsule
                 .cast_ray(transform.translation, transform.rotation, camera_transform.translation, *direction, MAX_SHOT_DISTANCE, true)
-                .map(|(distance, normal)| (distance, entity, transform, global, normal))
+                .map(|(distance, normal)| (distance, entity, transform, global, bones, normal))
         })
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
-    if let Some((distance, entity, transform, global, normal)) = predicted_hit {
+    if let Some((distance, entity, transform, global, bones, normal)) = predicted_hit {
         let point = camera_transform.translation + *direction * distance;
         commands.spawn((
             Mesh3d(vfx_assets.hit_assets.mesh.clone()),
@@ -6138,7 +6126,13 @@ fn shoot(
                 remaining: HIT_MARKER_LIFETIME,
             },
         ));
-        spawn_floating_damage(&mut commands, point, zombie_hit_damage_geometric(point, transform));
+        // HITBOX_PLAN.md Phase 4: real per-bone hit detection — the client
+        // has always had live (not even lag-compensated, since this is the
+        // shooter's own local prediction) bones, unlike the server which
+        // needed Phase 1-2's headless-skeleton work first.
+        let resolved_bones = resolve_bone_world_positions(bones, |bone| vfx_assets.bone_transforms.get(bone).ok().map(|g| g.translation()));
+        let damage = zombie_hit_damage_bones(point, transform, &resolved_bones);
+        spawn_floating_damage(&mut commands, point, damage);
         spawn_blood_effects(&mut commands, &vfx_assets.blood, &spatial_query, &time, point, normal, Some((entity, global)));
 
         // Mark this zombie as "hit by us, watch for it dying" — see
@@ -6847,66 +6841,6 @@ fn wire_gun_mesh(
                 commands
                     .entity(mesh_entity)
                     .insert((GunMesh, RenderLayers::layer(VIEWMODEL_LAYER)));
-                break;
-            }
-            let Ok(parent) = child_of.get(current) else {
-                break;
-            };
-            current = parent.0;
-        }
-    }
-}
-
-// Matches newly-spawned bone entities (glTF nodes get a Name component from
-// their node name) against zombie.glb's known rig names, and records
-// whichever ones matter for zombie_hit_damage on the zombie root's
-// ZombieHitboxBones. Same "wait for the async scene load" pattern as
-// wire_zombie_animations, just run against every new Name instead of every
-// new AnimationPlayer.
-fn wire_zombie_hitbox_bones(
-    child_of: Query<&ChildOf>,
-    mut zombies: Query<&mut ZombieHitboxBones, With<Zombie>>,
-    new_names: Query<(Entity, &Name), Added<Name>>,
-) {
-    for (bone_entity, name) in &new_names {
-        let is_head = name.as_str() == "Head";
-        let is_chest = name.as_str() == "Spine2";
-        let is_belly = name.as_str() == "Spine";
-        // Upper arm/leg alone left forearm/hand/lower-leg/foot hits with no
-        // nearby marker of their own, misattributing to whatever tracked
-        // bone happened to be geometrically closest — covering the full
-        // chain fixes that.
-        let is_limb = matches!(
-            name.as_str(),
-            "LeftArm"
-                | "RightArm"
-                | "LeftForeArm"
-                | "RightForeArm"
-                | "LeftHand"
-                | "RightHand"
-                | "LeftUpLeg"
-                | "RightUpLeg"
-                | "LeftLeg"
-                | "RightLeg"
-                | "LeftFoot"
-                | "RightFoot"
-        );
-        if !(is_head || is_chest || is_belly || is_limb) {
-            continue;
-        }
-
-        let mut current = bone_entity;
-        for _ in 0..20 {
-            if let Ok(mut bones) = zombies.get_mut(current) {
-                if is_head {
-                    bones.head = Some(bone_entity);
-                } else if is_chest {
-                    bones.chest = Some(bone_entity);
-                } else if is_belly {
-                    bones.belly = Some(bone_entity);
-                } else {
-                    bones.limbs.push(bone_entity);
-                }
                 break;
             }
             let Ok(parent) = child_of.get(current) else {
