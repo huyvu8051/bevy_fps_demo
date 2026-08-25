@@ -52,6 +52,10 @@ impl Default for Autopilot {
 pub(crate) struct AutopilotState {
     target: Option<Entity>,
     retarget_timer: f32,
+    /// Which body region random_aim_point picked for the current target —
+    /// purely a HUD/debug label (see update_debug_panel's "Aiming: {}"
+    /// line), never read for anything gameplay-affecting.
+    pub(crate) aiming_region: Option<&'static str>,
 }
 
 /// Synthesized "virtual input" for this frame — read by send_player_input/
@@ -146,7 +150,7 @@ pub(crate) fn autopilot_pick_target(
 pub(crate) fn autopilot_think(
     time: Res<Time>,
     autopilot: Res<Autopilot>,
-    state: Res<AutopilotState>,
+    mut state: ResMut<AutopilotState>,
     mut intent: ResMut<AutopilotIntent>,
     player: Query<&Transform, (With<Player>, Without<NetPlayer>, Without<FpsCamera>)>,
     zombies: Query<(&Transform, &ZombieHitboxBones), With<Zombie>>,
@@ -177,6 +181,7 @@ pub(crate) fn autopilot_think(
         // proves insufficient.
         cam.yaw += AUTOPILOT_IDLE_SCAN_DEG_PER_SEC.to_radians() * dt;
         *intent = AutopilotIntent::default();
+        state.aiming_region = None;
         return;
     };
 
@@ -189,7 +194,9 @@ pub(crate) fn autopilot_think(
     // the zombie's root/capsule-center translation for the brief window
     // before its bones resolve.
     let resolved_bones = resolve_bone_world_positions(target_bones, |bone| globals.get(bone).ok().map(|g| g.translation()));
-    let aim_point = random_aim_point(&resolved_bones, target_entity).unwrap_or(target_transform.translation);
+    let (aim_point, aiming_region) = random_aim_point(&resolved_bones, target_entity)
+        .map_or((target_transform.translation, None), |(point, region)| (point, Some(region)));
+    state.aiming_region = aiming_region;
     let to_target = aim_point - player_transform.translation;
     let horizontal_distance = Vec2::new(to_target.x, to_target.z).length();
     let desired_yaw = (-to_target.x).atan2(-to_target.z);

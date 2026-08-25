@@ -886,24 +886,12 @@ pub const HITBOX_LIMB_LATERAL_MIN: f32 = 0.35 * ZOMBIE_SCALE_FACTOR;
 // comment) rather than fresh ZOMBIE_SCALE_FACTOR multiples, so these two
 // hitbox systems can be tuned relative to each other by eye without a unit
 // conversion.
-pub const HEAD_HITBOX_RADIUS: f32 = 0.5 * ZOMBIE_RADIUS;
-// The Head bone's own resolved position sits roughly at the neck/chin, not
-// centered in the middle of the skull — raised by one head-diameter so the
-// HEAD_HITBOX_RADIUS sphere actually centers on the head instead of
-// straddling the jaw. The old (bone-resolved) position isn't wasted: it now
-// holds a separate, smaller sphere for the neck — still HEAD_DAMAGE (a neck
-// shot reads as a headshot too), just its own hit test so a hit doesn't
-// have to fall inside the raised head sphere specifically.
-// Was a full head-diameter (2x radius) raise; lowered by 1/4 diameter
-// (0.5x radius) per request, net 1.5x radius up.
-pub const HEAD_SPHERE_Y_OFFSET: f32 = HEAD_HITBOX_RADIUS * 1.5;
-// Nudged forward (toward whichever way the zombie root is facing) by 1/2
-// diameter (= 1x radius) — see head_and_neck_positions, which needs the
-// zombie's own forward direction to apply this (unlike the pure-vertical Y
-// offset above, "forward" isn't a fixed world axis). Was 1/4 diameter,
-// increased per request.
-pub const HEAD_SPHERE_FORWARD_OFFSET: f32 = HEAD_HITBOX_RADIUS * 1.0;
-pub const NECK_HITBOX_RADIUS: f32 = HEAD_HITBOX_RADIUS / 2.0;
+// Back to a single head sphere at the Head bone's own raw resolved position
+// (no Y/forward offset, no separate neck sphere) — reverted per request.
+// Sized to match ZOMBIE_RADIUS itself (1x, up from the old 0.5x) rather than
+// a smaller fraction of it, so the sphere reads as "as big as the zombie's
+// own body radius", not a noticeably tighter headshot window.
+pub const HEAD_HITBOX_RADIUS: f32 = 1.0 * ZOMBIE_RADIUS;
 // One capsule spanning belly->chest replaces the old two separate point
 // spheres (see zombie_hit_damage_bones) — a single radius for both ends,
 // picked as the larger of the two former sphere radii so the capsule still
@@ -992,21 +980,6 @@ fn capsule_transform(a: Vec3, b: Vec3) -> Option<(Vec3, Quat, f32)> {
     Some((a.midpoint(b), Quat::from_rotation_arc(Vec3::Y, *direction), segment.length()))
 }
 
-// (head sphere center, neck sphere center) from the Head bone's own
-// resolved position — see HEAD_SPHERE_Y_OFFSET's own doc comment for why
-// these are two different points, not the same one twice.
-// `forward` is the zombie ROOT's own forward direction (e.g.
-// *transform.forward(), or `rotation * Vec3::NEG_Z` from a raw Quat) —
-// deliberately the root's facing, not any bone's own orientation, so the
-// head sphere moves a consistent way regardless of animation pose.
-// normalize_or_zero: a degenerate zero `forward` (shouldn't happen for a
-// real Transform, but cheap to guard) just skips the forward nudge instead
-// of propagating a NaN into the head sphere's position.
-pub fn head_and_neck_positions(bone_pos: Vec3, forward: Vec3) -> (Vec3, Vec3) {
-    let head_pos = bone_pos + Vec3::Y * HEAD_SPHERE_Y_OFFSET + forward.normalize_or_zero() * HEAD_SPHERE_FORWARD_OFFSET;
-    (head_pos, bone_pos)
-}
-
 // Deterministic per-entity pseudo-randomness via a golden-ratio hash (this
 // codebase avoids a `rand` dependency — same spirit as the sin-based jitter
 // used for particle directions elsewhere) — returns a value in [0, 1) that
@@ -1021,10 +994,11 @@ pub fn entity_phase(entity: Entity) -> f32 {
 }
 
 // Which body region to aim at, and by how much, for random_aim_point below
-// — deliberately weighted toward center-mass (Body highest) with headshots
-// rarest, so autopilot reads as "aiming like a person," not a perfect
-// aimbot. Playtest-tunable like every other hitbox constant in this file.
-pub const AIM_REGION_WEIGHT_HEAD: f32 = 1.0;
+// — deliberately weighted toward center-mass (Body highest), so autopilot
+// reads as "aiming like a person," not a perfect aimbot. Head is excluded
+// entirely (not just given a low weight) per request — see random_aim_point,
+// which never rolls it. Playtest-tunable like every other hitbox constant
+// in this file.
 pub const AIM_REGION_WEIGHT_FOREARM: f32 = 2.0;
 pub const AIM_REGION_WEIGHT_UPPER_ARM: f32 = 3.0;
 pub const AIM_REGION_WEIGHT_THIGH: f32 = 4.0;
@@ -1042,13 +1016,12 @@ pub const AIM_REGION_WEIGHT_BODY: f32 = 10.0;
 // window, same "eat the brief gap, don't silently substitute a different
 // method" stance zombie_hit_damage_bones takes) — callers just keep
 // whatever aim point they already had for that one frame.
-pub fn random_aim_point(bones: &BoneWorldPositions, target: Entity) -> Option<Vec3> {
-    const TOTAL_WEIGHT: f32 = AIM_REGION_WEIGHT_HEAD
-        + AIM_REGION_WEIGHT_FOREARM
-        + AIM_REGION_WEIGHT_UPPER_ARM
-        + AIM_REGION_WEIGHT_THIGH
-        + AIM_REGION_WEIGHT_SHIN
-        + AIM_REGION_WEIGHT_BODY;
+// The `&'static str` half of the return is purely a debug/HUD label (e.g.
+// "showing which body part autopilot is currently aiming at" on screen) —
+// never fed back into damage/collision math, so it's fine as a plain name.
+pub fn random_aim_point(bones: &BoneWorldPositions, target: Entity) -> Option<(Vec3, &'static str)> {
+    const TOTAL_WEIGHT: f32 =
+        AIM_REGION_WEIGHT_FOREARM + AIM_REGION_WEIGHT_UPPER_ARM + AIM_REGION_WEIGHT_THIGH + AIM_REGION_WEIGHT_SHIN + AIM_REGION_WEIGHT_BODY;
     let base = entity_phase(target);
     let mut roll = base * TOTAL_WEIGHT;
     // A second, decorrelated-enough draw off the same base for picking a
@@ -1056,33 +1029,29 @@ pub fn random_aim_point(bones: &BoneWorldPositions, target: Entity) -> Option<Ve
     // tied to the category roll (e.g. always left when category is high).
     let left = (base * 97.0).fract() < 0.5;
 
-    if roll < AIM_REGION_WEIGHT_HEAD {
-        return bones.head.map(|pos| head_and_neck_positions(pos, Vec3::ZERO).0);
-    }
-    roll -= AIM_REGION_WEIGHT_HEAD;
     if roll < AIM_REGION_WEIGHT_FOREARM {
         let chain = if left { &bones.left_arm } else { &bones.right_arm };
-        return Option::zip(chain[1], chain[2]).map(|(a, b)| a.midpoint(b));
+        return Option::zip(chain[1], chain[2]).map(|(a, b)| (a.midpoint(b), "Forearm"));
     }
     roll -= AIM_REGION_WEIGHT_FOREARM;
     if roll < AIM_REGION_WEIGHT_UPPER_ARM {
         let chain = if left { &bones.left_arm } else { &bones.right_arm };
-        return Option::zip(chain[0], chain[1]).map(|(a, b)| a.midpoint(b));
+        return Option::zip(chain[0], chain[1]).map(|(a, b)| (a.midpoint(b), "Upper arm"));
     }
     roll -= AIM_REGION_WEIGHT_UPPER_ARM;
     if roll < AIM_REGION_WEIGHT_THIGH {
         let chain = if left { &bones.left_leg } else { &bones.right_leg };
-        return Option::zip(chain[0], chain[1]).map(|(a, b)| a.midpoint(b));
+        return Option::zip(chain[0], chain[1]).map(|(a, b)| (a.midpoint(b), "Thigh"));
     }
     roll -= AIM_REGION_WEIGHT_THIGH;
     if roll < AIM_REGION_WEIGHT_SHIN {
         let chain = if left { &bones.left_leg } else { &bones.right_leg };
-        return Option::zip(chain[1], chain[2]).map(|(a, b)| a.midpoint(b));
+        return Option::zip(chain[1], chain[2]).map(|(a, b)| (a.midpoint(b), "Shin"));
     }
     // Body (the remaining/highest-weight bucket).
     match (bones.belly, bones.chest) {
-        (Some(belly), Some(chest)) => Some(belly.midpoint(chest)),
-        (Some(p), None) | (None, Some(p)) => Some(p),
+        (Some(belly), Some(chest)) => Some((belly.midpoint(chest), "Body")),
+        (Some(p), None) | (None, Some(p)) => Some((p, "Body")),
         (None, None) => None,
     }
 }
@@ -1099,21 +1068,17 @@ pub fn random_aim_point(bones: &BoneWorldPositions, target: Entity) -> Option<Ve
 // hit-detection method as a silent fallback was judged worse than just
 // eating that brief no-damage window.
 //
-// Head is two point-spheres, not one — the Head bone's own resolved
-// position sits at the neck/chin, so it's raised by HEAD_SPHERE_Y_OFFSET
-// for the actual head sphere; the neck itself gets its own (smaller)
-// sphere at the original position, still scoring HEAD_DAMAGE (see
-// HEAD_SPHERE_Y_OFFSET/head_and_neck_positions' own doc comments). Limbs
-// and torso are tested as capsule SEGMENTS between consecutive joints
+// Head is a single point-sphere at the Head bone's own raw resolved
+// position (no offset, no separate neck sphere — reverted per request).
+// Limbs and torso are tested as capsule SEGMENTS between consecutive joints
 // (shoulder->elbow->hand, hip->knee->foot, belly->chest) instead of a
 // point-sphere at each joint — a point-sphere-per-joint approach left real
 // dead zones along the visible forearm/shin/torso where a clean hit
 // partway between two joints landed outside every sphere and scored 0
 // damage even though it clearly hit the mesh.
-pub fn zombie_hit_damage_bones(hit_point: Vec3, bones: &BoneWorldPositions, forward: Vec3) -> f32 {
+pub fn zombie_hit_damage_bones(hit_point: Vec3, bones: &BoneWorldPositions, _forward: Vec3) -> f32 {
     if let Some(pos) = bones.head {
-        let (head_pos, neck_pos) = head_and_neck_positions(pos, forward);
-        if hit_point.distance(head_pos) <= HEAD_HITBOX_RADIUS || hit_point.distance(neck_pos) <= NECK_HITBOX_RADIUS {
+        if hit_point.distance(pos) <= HEAD_HITBOX_RADIUS {
             return HEAD_DAMAGE;
         }
     }
@@ -1165,7 +1130,7 @@ pub fn zombie_hit_damage_bones(hit_point: Vec3, bones: &BoneWorldPositions, forw
 // space, stale positions) from the log alone. Mirrors zombie_hit_damage_
 // bones' own region set exactly, so "which region is nearest" always means
 // the same thing in both places.
-pub fn zombie_hit_nearest_region(hit_point: Vec3, bones: &BoneWorldPositions, forward: Vec3) -> Option<(&'static str, f32, f32)> {
+pub fn zombie_hit_nearest_region(hit_point: Vec3, bones: &BoneWorldPositions, _forward: Vec3) -> Option<(&'static str, f32, f32)> {
     let mut nearest: Option<(&'static str, f32, f32)> = None;
     let mut consider = |name: &'static str, distance: f32, radius: f32| {
         if nearest.is_none_or(|(_, best, _)| distance < best) {
@@ -1173,9 +1138,7 @@ pub fn zombie_hit_nearest_region(hit_point: Vec3, bones: &BoneWorldPositions, fo
         }
     };
     if let Some(pos) = bones.head {
-        let (head_pos, neck_pos) = head_and_neck_positions(pos, forward);
-        consider("head", hit_point.distance(head_pos), HEAD_HITBOX_RADIUS);
-        consider("neck", hit_point.distance(neck_pos), NECK_HITBOX_RADIUS);
+        consider("head", hit_point.distance(pos), HEAD_HITBOX_RADIUS);
     }
     for (name, chain) in [
         ("left_arm", &bones.left_arm),
@@ -1211,7 +1174,7 @@ pub fn zombie_hit_nearest_region(hit_point: Vec3, bones: &BoneWorldPositions, fo
 // whatever's physically closest along its path, which is the correct
 // answer once every region is a real shape instead of a point-distance
 // check). Returns None if the ray misses every region entirely.
-pub fn zombie_hit_damage_ray(origin: Vec3, direction: Dir3, max_distance: f32, bones: &BoneWorldPositions, forward: Vec3) -> Option<(Vec3, Vec3, f32)> {
+pub fn zombie_hit_damage_ray(origin: Vec3, direction: Dir3, max_distance: f32, bones: &BoneWorldPositions, _forward: Vec3) -> Option<(Vec3, Vec3, f32)> {
     let mut best: Option<(f32, Vec3, f32)> = None;
     let mut consider = |hit: Option<(f32, Vec3)>, damage: f32| {
         if let Some((toi, normal)) = hit {
@@ -1222,9 +1185,7 @@ pub fn zombie_hit_damage_ray(origin: Vec3, direction: Dir3, max_distance: f32, b
     };
 
     if let Some(pos) = bones.head {
-        let (head_pos, neck_pos) = head_and_neck_positions(pos, forward);
-        consider(Collider::sphere(HEAD_HITBOX_RADIUS).cast_ray(head_pos, Quat::IDENTITY, origin, *direction, max_distance, true), HEAD_DAMAGE);
-        consider(Collider::sphere(NECK_HITBOX_RADIUS).cast_ray(neck_pos, Quat::IDENTITY, origin, *direction, max_distance, true), HEAD_DAMAGE);
+        consider(Collider::sphere(HEAD_HITBOX_RADIUS).cast_ray(pos, Quat::IDENTITY, origin, *direction, max_distance, true), HEAD_DAMAGE);
     }
     for chain in [&bones.left_arm, &bones.right_arm, &bones.left_leg, &bones.right_leg] {
         for pair in chain.windows(2) {
@@ -1413,10 +1374,15 @@ pub struct PlayerDiedFx {
 // they fired (see crate::client's shoot()), so echoing this back to them
 // too would double it up. The shooter's own floating-damage-number/blood-
 // or-spark choice instead waits on ShotConfirmed below, not this event.
+// `origin` (the shooter's own FireShot.origin, echoed back) exists purely so
+// receiving clients can draw a bullet tracer for someone ELSE'S shot —
+// there's no other way to know where a remote shot came from (ShotFx never
+// carried who fired, and NetTransform only has yaw, not the pitch/eye-height
+// a real muzzle position would need).
 #[derive(Event, Clone, Copy, Serialize, Deserialize)]
 pub enum ShotFx {
-    ZombieHit { point: Vec3, normal: Vec3, damage: f32, killed: bool },
-    SurfaceHit { point: Vec3, normal: Vec3 },
+    ZombieHit { origin: Vec3, point: Vec3, normal: Vec3, damage: f32, killed: bool },
+    SurfaceHit { origin: Vec3, point: Vec3, normal: Vec3 },
 }
 
 // Sent by the server directly to the shooter only (SendMode::Direct), right

@@ -762,7 +762,7 @@ fn debug_bot_fire(
         // BroadcastExcept.
         commands.server_trigger(ToClients {
             mode: SendMode::Broadcast,
-            message: ShotFx::ZombieHit { point: hit_point, normal, damage, killed },
+            message: ShotFx::ZombieHit { origin, point: hit_point, normal, damage, killed },
         });
     }
 }
@@ -1758,7 +1758,7 @@ fn handle_fire_shot(
             // client-side, so that one stays a full Broadcast.
             commands.server_trigger(ToClients {
                 mode: SendMode::BroadcastExcept(trigger.client_id),
-                message: ShotFx::ZombieHit { point: hit_point, normal, damage, killed },
+                message: ShotFx::ZombieHit { origin: shot.origin, point: hit_point, normal, damage, killed },
             });
             // The shooter's own floating-damage-number/blood-or-spark choice
             // deliberately does NOT come from their own local prediction
@@ -1841,7 +1841,7 @@ fn handle_fire_shot(
         }
         commands.server_trigger(ToClients {
             mode: SendMode::BroadcastExcept(trigger.client_id),
-            message: ShotFx::ZombieHit { point: hit_point, normal, damage, killed },
+            message: ShotFx::ZombieHit { origin: shot.origin, point: hit_point, normal, damage, killed },
         });
         commands.server_trigger(ToClients {
             mode: SendMode::Direct(trigger.client_id),
@@ -1853,7 +1853,7 @@ fn handle_fire_shot(
     info!("[shot] hit a surface, no zombie: point={:.2?}", outer_hit_point);
     commands.server_trigger(ToClients {
         mode: SendMode::Broadcast,
-        message: ShotFx::SurfaceHit { point: outer_hit_point, normal: hit.normal },
+        message: ShotFx::SurfaceHit { origin: shot.origin, point: outer_hit_point, normal: hit.normal },
     });
 }
 

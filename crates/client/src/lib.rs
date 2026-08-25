@@ -35,7 +35,7 @@ use shared::{
     PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, wire_zombie_hitbox_bones,
     INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED,
-    head_and_neck_positions, HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, NECK_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
+    HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
     resolve_bone_world_positions, zombie_hit_damage_ray,
     NAVMESH_COLUMN_OBSTACLES, PILLAR_RADIUS, PROTOCOL_ID, ZOMBIE_ANIM_BITE, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_WALK,
     ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_MODEL_Y_OFFSET, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_PATH,
@@ -169,6 +169,18 @@ const MUZZLE_OFFSET: Vec3 = Vec3::new(0.2, -0.005, -1.2);
 const MUZZLE_FLASH_LIFETIME: f32 = 0.05;
 const MUZZLE_LIGHT_INTENSITY: f32 = 120_000.0;
 const MUZZLE_LIGHT_RANGE: f32 = 2.0;
+
+// Bullet tracer: a thin glowing streak drawn from muzzle to impact, shown on
+// only a fraction of shots — same idea as tracer rounds loaded a few-in-ten
+// into a real magazine, not every bullet. TRACER_CHANCE is the fraction that
+// gets one (0.5 = roughly every other shot, via the same sin-based
+// deterministic "randomness" the rest of this file already uses for spread/
+// recoil jitter — see spawn_bullet_tracer's own doc comment). Kept alive
+// only a few frames (TRACER_LIFETIME) — a tracer is meant to read as a fast
+// streak, not linger like a laser beam.
+const TRACER_CHANCE: f32 = 0.5;
+const TRACER_LIFETIME: f32 = 0.045;
+const TRACER_RADIUS: f32 = 0.012;
 
 const SMOKE_LIFETIME: f32 = 0.4;
 const SMOKE_START_SCALE: f32 = 0.35;
@@ -1149,6 +1161,14 @@ struct Smoke {
     remaining: f32,
 }
 
+// A thin glowing streak from muzzle to impact — see TRACER_CHANCE's own doc
+// comment for why this doesn't spawn on every shot. Pure VFX, spawned after
+// the real hit is already resolved, so it never affects hit detection.
+#[derive(Component)]
+struct BulletTracer {
+    remaining: f32,
+}
+
 // A single flying blood droplet — spurts outward from a zombie hit, falls
 // under its own gravity (separate from GRAVITY, blood falls faster/looks
 // punchier), and despawns once its lifetime runs out.
@@ -1878,6 +1898,7 @@ fn build_game_common(app: &mut App) {
                 update_debug_panel,
                 despawn_hit_markers,
                 despawn_muzzle_flashes,
+                despawn_bullet_tracers,
                 update_smoke,
                 update_blood_particles,
                 update_spark_particles,
@@ -1919,6 +1940,7 @@ struct ReloadSound(Handle<AudioSource>);
 struct VfxAssets<'w, 's> {
     hit_assets: Res<'w, HitMarkerAssets>,
     muzzle_fx: Res<'w, MuzzleFxAssets>,
+    tracer: Res<'w, TracerAssets>,
     blood: Res<'w, BloodAssets>,
     sparks: Res<'w, SparkAssets>,
     gunshot: Res<'w, GunshotSound>,
@@ -1960,6 +1982,15 @@ struct MuzzleFxAssets {
     flash_material: Handle<StandardMaterial>,
     smoke_mesh: Handle<Mesh>,
     smoke_material: Handle<StandardMaterial>,
+}
+
+// Unit cylinder (radius 1, height 1, centered on origin) — spawn_bullet_tracer
+// scales it per-shot (X/Z = TRACER_RADIUS, Y = the shot's actual length)
+// rather than building a fresh mesh every time.
+#[derive(Resource)]
+struct TracerAssets {
+    mesh: Handle<Mesh>,
+    material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource)]
@@ -2102,6 +2133,16 @@ fn setup(
             alpha_mode: AlphaMode::Blend,
             unlit: true,
             cull_mode: None,
+            ..default()
+        }),
+    });
+
+    commands.insert_resource(TracerAssets {
+        mesh: meshes.add(Cylinder::new(1.0, 1.0)),
+        material: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.85, 0.3),
+            emissive: LinearRgba::rgb(10.0, 6.0, 1.0),
+            unlit: true,
             ..default()
         }),
     });
@@ -3991,6 +4032,37 @@ fn spawn_spark_effects(commands: &mut Commands, spark_assets: &SparkAssets, time
     }
 }
 
+// A thin glowing streak from `start` to `end` — shown on only a fraction of
+// shots (TRACER_CHANCE), same sin-based deterministic "randomness" already
+// used for spread/recoil jitter elsewhere in this file (no rand crate). The
+// seed passed in lets each call site (local shooter vs. each remote shot)
+// use its own unrelated-looking frequency, so two shots landing the same
+// frame don't roll identically. Pure VFX — called only after the real hit
+// is already resolved, so this can never affect damage.
+fn spawn_bullet_tracer(commands: &mut Commands, tracer_assets: &TracerAssets, seed: f32, start: Vec3, end: Vec3) {
+    // (sin(seed) + 1) / 2 maps to a roughly-uniform [0, 1] value — below
+    // TRACER_CHANCE means "this shot gets a tracer".
+    if (ops::sin(seed) + 1.0) * 0.5 >= TRACER_CHANCE {
+        return;
+    }
+    let delta = end - start;
+    let length = delta.length();
+    if length < f32::EPSILON {
+        return;
+    }
+    let rotation = Quat::from_rotation_arc(Vec3::Y, delta / length);
+    commands.spawn((
+        Mesh3d(tracer_assets.mesh.clone()),
+        MeshMaterial3d(tracer_assets.material.clone()),
+        Transform::from_translation(start + delta * 0.5)
+            .with_rotation(rotation)
+            .with_scale(Vec3::new(TRACER_RADIUS, length, TRACER_RADIUS)),
+        BulletTracer {
+            remaining: TRACER_LIFETIME,
+        },
+    ));
+}
+
 // `parent` is Some when this stain should be attached to (and move with)
 // that entity instead of sitting still in world space.
 fn spawn_blood_stain(
@@ -4584,6 +4656,7 @@ struct DebugPanelToggles<'w> {
     zombie_lod_disabled: Res<'w, ZombieLodDisabled>,
     player_model_visible: Res<'w, PlayerModelVisible>,
     autopilot: Res<'w, Autopilot>,
+    autopilot_state: Res<'w, AutopilotState>,
 }
 
 fn update_debug_panel(
@@ -4638,7 +4711,7 @@ fn update_debug_panel(
          J: Zombie health bars [{}]\n\
          K: Zombie LOD (distance shortcut) [{}]\n\
          T: Player model (debug visual) [{}]\n\
-         I: Autopilot [{}]\n\
+         I: Autopilot [{}] | Aiming: {}\n\
          6: Spawn debug bot at crosshair+2m | [/]: select prev/next bot\n\
          9: Move selected bot to crosshair | O: Despawn selected bot\n\
          Debug bots: {} (selected: {})\n\
@@ -4656,6 +4729,7 @@ fn update_debug_panel(
         on_off(!toggles.zombie_lod_disabled.0),
         on_off(toggles.player_model_visible.0),
         on_off(toggles.autopilot.0),
+        toggles.autopilot_state.aiming_region.unwrap_or("-"),
         debug_bots.iter().count(),
         selected_bot.0.map_or("none".to_string(), |id| id.to_string()),
         timings.move_zombies_ms,
@@ -5732,17 +5806,11 @@ fn draw_zombie_hitboxes(
 
         let mut any_bone = false;
         let bone_pos = |e: Entity| globals.get(e).ok().map(GlobalTransform::translation);
-        // Head is two spheres, not one — see HEAD_SPHERE_Y_OFFSET's own doc
-        // comment (crates/shared): the Head bone's own resolved position is
-        // raised for the actual head sphere, and the original position now
-        // holds a separate, smaller neck sphere instead (still a headshot).
-        // Neither has a second joint to span a capsule to, so both stay
-        // plain spheres — an honest match for what they actually are in the
-        // hit-test math, not leftover joint markers.
+        // Single sphere at the Head bone's own raw resolved position — no
+        // offset, no separate neck sphere (reverted per request). No second
+        // joint to span a capsule to, so it stays a plain sphere.
         if let Some(pos) = bones.head.and_then(bone_pos) {
-            let (head_pos, neck_pos) = head_and_neck_positions(pos, *transform.forward());
-            gizmos.sphere(Isometry3d::from_translation(head_pos), HEAD_HITBOX_RADIUS, Color::srgb(1.0, 0.2, 0.2));
-            gizmos.sphere(Isometry3d::from_translation(neck_pos), NECK_HITBOX_RADIUS, Color::srgb(1.0, 0.5, 0.5));
+            gizmos.sphere(Isometry3d::from_translation(pos), HEAD_HITBOX_RADIUS, Color::srgb(1.0, 0.2, 0.2));
             any_bone = true;
         }
         if let (Some(belly), Some(chest)) = (bones.belly.and_then(bone_pos), bones.chest.and_then(bone_pos)) {
@@ -6243,6 +6311,15 @@ fn shoot(
         vfx_assets.recently_hit.0.insert(entity, RECENTLY_HIT_ZOMBIE_TTL);
     }
 
+    // Tracer: from the muzzle (not the camera — the hitmarker/damage ray
+    // above deliberately uses the camera as its origin for aim accuracy, but
+    // a streak starting at eye level instead of the gun would look wrong) to
+    // wherever this shot actually ended — the real hit point on a landed
+    // shot, or all the way out to MAX_SHOT_DISTANCE on a miss (real tracers
+    // fly on past whatever they didn't hit too).
+    let tracer_end = predicted_hit.map_or(camera_transform.translation + *direction * MAX_SHOT_DISTANCE, |(_, _, point, _)| point);
+    spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 733.0, muzzle_world_pos, tracer_end);
+
     info!("[shot] fired: origin={:.2?} direction={:.2?}", camera_transform.translation, *direction);
     commands.client_trigger(FireShot {
         origin: camera_transform.translation,
@@ -6287,7 +6364,7 @@ fn on_shot_fx(
     globals: Query<&GlobalTransform>,
 ) {
     match *trigger.event() {
-        ShotFx::ZombieHit { point, normal, damage, killed } => {
+        ShotFx::ZombieHit { origin, point, normal, damage, killed } => {
             if damage > 0.0 {
                 info!("[shot] (remote player) inner bone capsule hit: damage={damage:.1} killed={killed}");
             } else {
@@ -6301,6 +6378,9 @@ fn on_shot_fx(
                     remaining: HIT_MARKER_LIFETIME,
                 },
             ));
+            // Seeded off `point` (not just time) so multiple remote shots
+            // landing the same frame don't all roll the same tracer chance.
+            spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 619.0 + point.x * 13.7 + point.z * 7.3, origin, point);
 
             // The server doesn't send which zombie entity it was (avoiding
             // cross-network entity mapping for a purely cosmetic detail) —
@@ -6321,7 +6401,7 @@ fn on_shot_fx(
             let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
             spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed);
         }
-        ShotFx::SurfaceHit { point, normal } => {
+        ShotFx::SurfaceHit { origin, point, normal } => {
             commands.spawn((
                 Mesh3d(vfx_assets.hit_assets.mesh.clone()),
                 MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
@@ -6330,6 +6410,7 @@ fn on_shot_fx(
                     remaining: HIT_MARKER_LIFETIME,
                 },
             ));
+            spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 619.0 + point.x * 13.7 + point.z * 7.3, origin, point);
             spawn_spark_effects(&mut commands, &vfx_assets.sparks, &time, point, normal);
         }
     }
@@ -6707,6 +6788,19 @@ fn despawn_muzzle_flashes(
     for (entity, mut flash) in &mut query {
         flash.remaining -= time.delta_secs();
         if flash.remaining <= 0.0 {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
+fn despawn_bullet_tracers(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut query: Query<(Entity, &mut BulletTracer)>,
+) {
+    for (entity, mut tracer) in &mut query {
+        tracer.remaining -= time.delta_secs();
+        if tracer.remaining <= 0.0 {
             commands.entity(entity).try_despawn();
         }
     }
