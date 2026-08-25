@@ -453,6 +453,23 @@ pub extern "C" fn native_metal_probe_set_autopilot(obj: *mut std::ffi::c_void, o
     }
 }
 
+// Selects which implementation Autopilot uses (client-side vs. server-side
+// — see crate::autopilot's own module doc comment); same not-debug-gated
+// treatment as the pair above, for the same reason.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_get_autopilot_server_mode(obj: *mut std::ffi::c_void) -> bool {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    probe.real_game_app_mut().map(super::native_menu::autopilot_server_mode).unwrap_or(false)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_set_autopilot_server_mode(obj: *mut std::ffi::c_void, on: bool) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::set_autopilot_server_mode(app, on);
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_trigger_kill_all_zombies(obj: *mut std::ffi::c_void) {
     let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };

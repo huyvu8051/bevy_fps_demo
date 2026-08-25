@@ -46,13 +46,13 @@ use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 #[cfg(target_os = "ios")]
 mod cadisplaylink;
 
-// AI takeover of the local player (auto-aim/move/fire) — the decision
-// logic itself now runs server-side (see server_autopilot_pick_target/
-// server_autopilot_think, crates/server, and SetAutopilot's own doc
-// comment in crates/shared for why). This module now only holds the
-// client-side toggle mirror.
+// AI takeover of the local player (auto-aim/move/fire) — two
+// implementations run side by side (this module's own client-side
+// decision loop, and crates/server's server_autopilot_pick_target/
+// server_autopilot_think), selected by AutopilotServerMode. See this
+// module's own doc comment for the full picture and why both exist.
 mod autopilot;
-use autopilot::Autopilot;
+use autopilot::{autopilot_pick_target, autopilot_think, Autopilot, AutopilotIntent, AutopilotServerMode, AutopilotState};
 
 // Downloaded once into assets/models/ so the app doesn't depend on a network
 // request (and a remote repo's file layout) every time it starts.
@@ -1728,6 +1728,9 @@ fn build_game_common(app: &mut App) {
         .add_observer(on_game_state_event)
         .init_resource::<Noclip>()
         .init_resource::<Autopilot>()
+        .init_resource::<AutopilotServerMode>()
+        .init_resource::<AutopilotState>()
+        .init_resource::<AutopilotIntent>()
         .init_resource::<FreezeZombies>()
         .init_resource::<ShowHitboxes>()
         .init_resource::<GodMode>()
@@ -1833,6 +1836,8 @@ fn build_game_common(app: &mut App) {
                     toggle_player_stance,
                     toggle_debug_flags,
                     debug_panel_actions,
+                    autopilot_pick_target,
+                    autopilot_think,
                     mouse_look,
                     shoot,
                     reload_gun,
@@ -5215,9 +5220,9 @@ fn touch_look(
     mut query: Query<&mut FpsCamera>,
     autopilot: Res<Autopilot>,
 ) {
-    // See mouse_look's own doc comment — same reasoning, autopilot moved
-    // server-side so there's no aim to hand back to this camera anymore;
-    // real touch-look input still just gets ignored while it's on.
+    // See mouse_look's own doc comment — same reasoning applies here: real
+    // touch-look input is ignored the whole time Autopilot is on, in
+    // either implementation.
     if autopilot.0 {
         return;
     }
@@ -5308,15 +5313,13 @@ fn mouse_look(
     mut query: Query<&mut FpsCamera>,
     autopilot: Res<Autopilot>,
 ) {
-    // Autopilot now runs server-side (see crates/server's
-    // server_autopilot_think — SetAutopilot's own doc comment in
-    // crates/shared explains why), which has no way to hand aim back to
-    // this client's own FpsCamera (the server tracks no pitch at all, and
-    // its own aim_yaw is server-only bookkeeping, not replicated). So
-    // while Autopilot is on, real look input is still ignored (matches
-    // the pre-move behavior) but the camera simply holds still rather
-    // than tracking anything — a known v1 limitation, same spirit as the
-    // original client-side module's own documented v1 gaps.
+    // Real look input is ignored the whole time Autopilot is on, in
+    // EITHER implementation (see autopilot's own module doc comment) — in
+    // client mode autopilot_think already wrote FpsCamera.yaw/pitch this
+    // same tick; in server mode there's simply nothing to hand aim back
+    // to (the server tracks no pitch at all, and its own aim_yaw is
+    // server-only bookkeeping, not replicated), so the camera just holds
+    // still instead — a known v1 limitation of that mode specifically.
     if autopilot.0 {
         return;
     }
@@ -5759,12 +5762,15 @@ fn send_player_input(
     // adding LocalPlayerSprinting as a 17th flat param broke `IntoSystem`
     // for the whole Update-schedule `.chain()` tuple this fn sits in.
     // Tuples of SystemParams are themselves valid SystemParams, so nesting
-    // sidesteps the limit without restructuring anything else — Autopilot
-    // is folded into the same tuple for the same reason.
-    (mut local_moving, mut local_sprinting, autopilot): (
+    // sidesteps the limit without restructuring anything else — Autopilot/
+    // AutopilotServerMode/AutopilotIntent are folded into the same tuple
+    // for the same reason.
+    (mut local_moving, mut local_sprinting, autopilot, server_mode, intent): (
         ResMut<LocalPlayerMoving>,
         ResMut<LocalPlayerSprinting>,
         Res<Autopilot>,
+        Res<AutopilotServerMode>,
+        Res<AutopilotIntent>,
     ),
     mover: MoveAndSlide,
     // Local prediction below still runs every single Update tick (up to
@@ -5789,14 +5795,15 @@ fn send_player_input(
 
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch.aiming.0));
 
-    // Autopilot moved server-side (see SetAutopilot's doc comment,
-    // crates/shared) — server_autopilot_think overwrites this player's
-    // ClientInput.move_axis/yaw/sprint every tick regardless of what's
-    // sent here, so real WASD/touch input is simply not read while it's
-    // on (matching the pre-move behavior of ignoring real input, just
-    // with nothing left client-side to substitute it with).
-    let (move_axis, sprinting) = if autopilot.0 {
+    // Three-way: real input, this module's own AutopilotIntent (client
+    // mode), or nothing at all (server mode — server_autopilot_think
+    // overwrites this player's ClientInput.move_axis/yaw/sprint every
+    // tick server-side regardless of what's sent here, so real WASD/touch
+    // input just isn't read while it's on either).
+    let (move_axis, sprinting) = if autopilot.0 && server_mode.0 {
         (Vec2::ZERO, false)
+    } else if autopilot.0 {
+        (intent.move_axis, intent.sprint)
     } else {
         let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
         let mut move_axis = Vec2::ZERO;
@@ -5851,17 +5858,20 @@ fn send_player_input(
         stance: effective_stance,
         noclip: noclip.0,
     };
-    // Skip local prediction entirely while server-driven autopilot is on:
-    // this client's own move_axis is a meaningless Vec2::ZERO (the real
-    // decision is server-side), so simulating it locally would just hold
-    // `transform` still every frame while the server actually moves the
-    // player — fighting predict_player_movement's own reconciliation
+    // Skip local prediction only in server mode: this client's own
+    // move_axis is a meaningless Vec2::ZERO there (the real decision is
+    // server-side), so simulating it locally would just hold `transform`
+    // still every frame while the server actually moves the player —
+    // fighting predict_player_movement's own reconciliation
     // snap-to-NetTransform every time it runs, and reading as constant
     // rubber-banding. Leaving `pending` empty instead makes that same
     // reconciliation step a clean "just follow the server" snap with
     // nothing local to replay on top — see predict_player_movement's own
     // doc comment; that function needed no changes at all for this.
-    if !autopilot.0 {
+    // Client mode (autopilot.0 && !server_mode.0) DOES predict locally,
+    // same as real input — intent.move_axis is this client's own
+    // decision, exactly as authoritative-ish as real WASD.
+    if !(autopilot.0 && server_mode.0) {
         shared::movement::simulate_player_step(&mover, &mut transform, &mut player, stance, &input, dt);
         pending.0.push_back((*sequence, input, dt, player.vertical_velocity, player.grounded));
     }
@@ -5996,7 +6006,13 @@ fn shoot(
     // fn was already at Bevy's flat SystemParam tuple arity limit (16); see
     // send_player_input's own comment for the same constraint and the same
     // nesting fix.
-    (autopilot, local_moving, local_sprinting): (Res<Autopilot>, Res<LocalPlayerMoving>, Res<LocalPlayerSprinting>),
+    (autopilot, server_mode, intent, local_moving, local_sprinting): (
+        Res<Autopilot>,
+        Res<AutopilotServerMode>,
+        Res<AutopilotIntent>,
+        Res<LocalPlayerMoving>,
+        Res<LocalPlayerSprinting>,
+    ),
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
 
@@ -6006,13 +6022,18 @@ fn shoot(
     let Ok(cursor) = cursor.single() else {
         return;
     };
-    // Autopilot fires (and resolves the shot) entirely server-side now —
-    // see server_autopilot_think (crates/server) — so real mouse/touch
-    // firing is disabled here while it's on too, same full-takeover
-    // treatment mouse_look/send_player_input already give it, rather than
-    // letting a stray click add an extra local shot on top of whatever
-    // the server is independently doing.
-    let firing = !autopilot.0 && ((cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Left)) || touch_firing.0);
+    // Three-way, same shape as send_player_input: real mouse/touch input,
+    // this module's own AutopilotIntent.fire (client mode), or never (in
+    // server mode the shot is decided AND resolved entirely server-side
+    // by server_autopilot_think — firing locally too would double it up).
+    // Real input is disabled in EITHER autopilot mode, not just server
+    // mode, for the same full-takeover reasoning mouse_look/
+    // send_player_input already apply.
+    let firing = if autopilot.0 {
+        !server_mode.0 && intent.fire
+    } else {
+        (cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Left)) || touch_firing.0
+    };
     if !firing || *cooldown > 0.0 {
         return;
     }

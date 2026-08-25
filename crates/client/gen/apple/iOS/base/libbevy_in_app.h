@@ -81,6 +81,8 @@ bool native_metal_probe_get_freeze_zombies(struct native_metal_probe *probe);
 void native_metal_probe_set_freeze_zombies(struct native_metal_probe *probe, bool on);
 bool native_metal_probe_get_autopilot(struct native_metal_probe *probe);
 void native_metal_probe_set_autopilot(struct native_metal_probe *probe, bool on);
+bool native_metal_probe_get_autopilot_server_mode(struct native_metal_probe *probe);
+void native_metal_probe_set_autopilot_server_mode(struct native_metal_probe *probe, bool on);
 void native_metal_probe_trigger_kill_all_zombies(struct native_metal_probe *probe);
 void native_metal_probe_trigger_spawn_more_zombies(struct native_metal_probe *probe);
 // Remaining Cheats-page toggles (page 1's Gun/MSAA/Shadow, Hitboxes/
