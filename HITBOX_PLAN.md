@@ -206,40 +206,51 @@ about the gap:
   offsets" is very likely close enough — don't build 3b until profiling/
   playtesting shows head hitboxes visibly lagging behind a fast animation.
 
-## Phase 4 — Replace the damage decision
+## Phase 4 — Replace the damage decision — ✅ DONE (skipped ahead of Phase 3)
 
-1. New function in `crates/shared/src/lib.rs`, replacing
-   `zombie_hit_damage_geometric` as the thing `handle_fire_shot` calls:
-   given the rewound bone snapshot (Phase 3's output) and the shot ray,
-   test small shapes per region instead of one Y-threshold comparison:
-   - Head: a sphere at the head bone's rewound world position, radius
-     tuned to the model (start from `HITBOX_HEAD_MIN_Y`'s existing
-     "roughly head-sized" intuition, just as a sphere radius instead of a
-     Y cutoff).
-   - Chest/belly: capsule or sphere at the corresponding bone.
-   - Limbs: small capsules/spheres at representative limb bones (elbow/
-     knee midpoints are enough — no need for one shape per finger bone).
-   - Keep it as a **prioritized raycast-vs-shapes test in a fixed order**
-     (head first, so an overlapping head+chest shape still resolves to
-     headshot, matching today's `if head else if limb else if chest...`
-     precedence) rather than "closest shape wins," to preserve the
-     existing head-priority behavior players are used to.
-2. `handle_fire_shot` (both the rewind path and the live-hit fallback
-   path) and `debug_bot_fire`: replace the
-   `zombie_hit_damage_geometric(hit_point, &rewound_transform)` call with
-   the new per-bone-shape test, passing the rewound bone snapshot instead
-   of just `rewound_transform`.
-3. Client's `shoot()` local-prediction path: same swap, but note the
-   client already has real live (non-rewound) bones via its own
-   `ZombieHitboxBones` — it doesn't need Phase 1-3's server-side skeleton
-   work at all, it just needs the new shared per-bone-shape test function
-   instead of the old geometric one. This is a smaller, independent
-   change and could ship before the server-side phases are done (client
-   prediction would then be more accurate than the server's authoritative
-   answer during the transition, which is fine — prediction has always
-   been "best effort, corrected by server" here).
-4. Delete `zombie_hit_damage_geometric` and the `HITBOX_*_MIN_Y` /
-   lateral-distance constants once nothing calls them.
+**Deliberately done before Phase 3** (pose-level rewind) at the user's
+own call: real per-bone hit detection using each bone's *current* world
+position (not yet rewound to the shot's timestamp) is still strictly
+better than the old fixed-height-band guess for the common case
+(idle/walking zombies), and ships the actually-requested improvement
+sooner. The known gap — a moving/attacking zombie's bones tested
+slightly out of sync with what the shooter's screen showed — is
+explicitly documented in `zombie_hit_damage_bones`' own doc comment and
+is exactly what Phase 3 would close later, not a surprise regression.
+
+**What landed** (`crates/shared/src/lib.rs`):
+1. `zombie_hit_damage_bones(hit_point, zombie_transform, bones:
+   &ZombieHitboxBones, bone_position: impl Fn(Entity) -> Option<Vec3>)`
+   — spheres (not capsules; simpler, and a bone is a point not a
+   segment) centered on each resolved bone's world position, tested
+   head-first then limbs then chest then belly (same precedence order
+   `zombie_hit_damage_geometric` used, preserving "head always wins if
+   it's in range" behavior), falling back to the geometric guess for any
+   region whose bone hasn't resolved AND for the case where the hit point
+   is genuinely outside every bone's sphere — never a silent 0-damage
+   miss on a raycast that already confirmed a hit.
+2. New radius constants (`HEAD_HITBOX_RADIUS` etc.) as fractions of
+   `ZOMBIE_RADIUS` rather than fresh `ZOMBIE_SCALE_FACTOR` multiples, so
+   the two hitbox systems stay tunable relative to each other.
+3. `bone_position` is a plain closure, not a `Query` type, specifically
+   so the same function is callable from both `crates/server`
+   (`handle_fire_shot`'s two paths + `debug_bot_fire`, all newly querying
+   `&ZombieHitboxBones` + a separate `Query<&GlobalTransform>`) and
+   `crates/client` (`shoot()`'s local prediction, bundled into the
+   already-overflowing `VfxAssets` param struct — same "no room at the
+   top level" pattern used for `stance`/`recently_hit` earlier).
+4. `zombie_hit_damage_geometric` and the `HITBOX_*_MIN_Y`/lateral-distance
+   constants were **kept**, not deleted — they're the fallback path, not
+   dead code, per point 1 above.
+5. Verified with 5 unit tests (`crates/shared`, `#[cfg(test)] mod
+   hitbox_phase4_tests`, temporary — see the module's own note) covering:
+   headshot on the head bone, a limb hit at head-height resolving to
+   *limb* damage (the exact case the old lateral-distance check existed
+   to catch — bone-based detection gets it for free), a chest hit, and
+   both fallback paths (unresolved bones; resolved bones but hit point
+   outside every sphere) matching `zombie_hit_damage_geometric` exactly.
+   All 5 passed. Full build (`server`+`client`+`shared`) still 0 errors;
+   server ran cleanly afterward with no panics.
 
 ## Phase 5 — Performance guardrails
 

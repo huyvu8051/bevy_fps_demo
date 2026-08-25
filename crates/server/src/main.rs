@@ -13,7 +13,7 @@ use bevy_replicon_renet2::{
 };
 use big_brain::prelude::*;
 use shared::{
-    zombie_hit_damage_geometric, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
+    zombie_hit_damage_bones, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetZombieCount,
@@ -635,14 +635,15 @@ fn debug_bot_fire(
     mut commands: Commands,
     time: Res<Time>,
     mut bots: Query<(&Transform, &mut DebugBotAi), With<DebugBot>>,
-    mut zombies: Query<(Entity, &Transform, &mut Health, &mut KnockbackVelocity), (With<Zombie>, Without<DebugBot>)>,
+    mut zombies: Query<(Entity, &Transform, &mut Health, &mut KnockbackVelocity, &ZombieHitboxBones), (With<Zombie>, Without<DebugBot>)>,
+    bone_transforms: Query<&GlobalTransform>,
     mut respawns: ResMut<PendingRespawns>,
     director_spawned: Query<(), With<DirectorSpawned>>,
 ) {
     for (transform, mut ai) in &mut bots {
         ai.fire_timer -= time.delta_secs();
         let Some(target) = ai.target_zombie else { continue };
-        let Ok((entity, zombie_transform, mut health, mut knockback)) = zombies.get_mut(target) else {
+        let Ok((entity, zombie_transform, mut health, mut knockback, bones)) = zombies.get_mut(target) else {
             continue;
         };
 
@@ -674,7 +675,9 @@ fn debug_bot_fire(
         };
 
         let hit_point = origin + *direction * hit_distance;
-        let damage = zombie_hit_damage_geometric(hit_point, zombie_transform);
+        let damage = zombie_hit_damage_bones(hit_point, zombie_transform, bones, |bone| {
+            bone_transforms.get(bone).ok().map(|g| g.translation())
+        });
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {
@@ -1299,7 +1302,8 @@ fn handle_fire_shot(
     renet_server: Res<RenetServer>,
     network_ids: Query<&NetworkId>,
     spatial_query: SpatialQuery,
-    mut zombies: Query<(Entity, &mut Health, &mut KnockbackVelocity, &ZombieHistory), With<Zombie>>,
+    mut zombies: Query<(Entity, &mut Health, &mut KnockbackVelocity, &ZombieHistory, &ZombieHitboxBones), With<Zombie>>,
+    bone_transforms: Query<&GlobalTransform>,
     mut respawns: ResMut<PendingRespawns>,
     mut threats: Query<&mut PlayerThreat>,
     director_spawned: Query<(), With<DirectorSpawned>>,
@@ -1365,7 +1369,7 @@ fn handle_fire_shot(
     let capsule = Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH);
     let rewound_hit = zombies
         .iter()
-        .filter_map(|(entity, _, _, history)| {
+        .filter_map(|(entity, _, _, history, _)| {
             let (position, rotation) = zombie_history_at(history, rewind_time)?;
             let (distance, normal) = capsule.cast_ray(position, rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
             Some((distance, entity, position, rotation, normal))
@@ -1374,13 +1378,19 @@ fn handle_fire_shot(
 
     if let Some((distance, entity, position, rotation, normal)) = rewound_hit {
         let hit_point = shot.origin + *direction * distance;
-        if let Ok((_, mut health, mut knockback, _)) = zombies.get_mut(entity) {
+        if let Ok((_, mut health, mut knockback, _, bones)) = zombies.get_mut(entity) {
             let rewound_transform = Transform {
                 translation: position,
                 rotation,
                 scale: Vec3::ONE,
             };
-            let damage = zombie_hit_damage_geometric(hit_point, &rewound_transform);
+            // Bones' CURRENT world position, not rewound to rewind_time
+            // like the capsule test above — see zombie_hit_damage_bones'
+            // own doc comment (Phase 3, not done yet) for why that's a
+            // known, accepted imprecision for now.
+            let damage = zombie_hit_damage_bones(hit_point, &rewound_transform, bones, |bone| {
+                bone_transforms.get(bone).ok().map(|g| g.translation())
+            });
             health.0 -= damage;
             let killed = health.0 <= 0.0;
             if killed {
@@ -1417,14 +1427,16 @@ fn handle_fire_shot(
     // no history yet, or a genuine miss), but the live world raycast still
     // landed directly on a zombie right now — treat that as an ordinary,
     // un-compensated hit instead of silently treating a zombie as a wall.
-    if let Ok((entity, mut health, mut knockback, history)) = zombies.get_mut(hit.entity) {
+    if let Ok((entity, mut health, mut knockback, history, bones)) = zombies.get_mut(hit.entity) {
         let (position, rotation) = zombie_history_at(history, time.elapsed_secs()).unwrap_or((hit_point, Quat::IDENTITY));
         let live_transform = Transform {
             translation: position,
             rotation,
             scale: Vec3::ONE,
         };
-        let damage = zombie_hit_damage_geometric(hit_point, &live_transform);
+        let damage = zombie_hit_damage_bones(hit_point, &live_transform, bones, |bone| {
+            bone_transforms.get(bone).ok().map(|g| g.translation())
+        });
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {

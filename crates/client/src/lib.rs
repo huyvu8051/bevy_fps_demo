@@ -33,7 +33,7 @@ use shared::{
     PlayerDiedFx, PlayerFiredFx,
     PlayerStance, RequestRestart, SetAutoMaintainZombies, SetZombieCount, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, wire_zombie_hitbox_bones,
-    zombie_hit_damage_geometric, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED, ZOMBIE_ATTACK_INTERVAL,
+    zombie_hit_damage_bones, INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED, ZOMBIE_ATTACK_INTERVAL,
     ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_MAX_HEALTH, ZOMBIE_RADIUS, ZOMBIE_SCALE, ZOMBIE_SPAWNS,
     ZOMBIE_STOP_DISTANCE,
 };
@@ -1947,6 +1947,10 @@ struct VfxAssets<'w, 's> {
     // pushed shoot() back up to 17 params post-merge with autopilot's own
     // two — see count_local_kills' own doc comment for what this tracks.
     recently_hit: ResMut<'w, RecentlyHitZombies>,
+    // HITBOX_PLAN.md Phase 4: resolves each ZombieHitboxBones entity's live
+    // world position for zombie_hit_damage_bones — same "no room at the
+    // top level" reasoning as the two fields above.
+    bone_transforms: Query<'w, 's, &'static GlobalTransform>,
 }
 
 #[derive(Resource)]
@@ -5944,7 +5948,7 @@ fn shoot(
     mut gun: Query<&mut Gun>,
     mut vfx_assets: VfxAssets,
     spatial_query: SpatialQuery,
-    zombies: Query<(Entity, &Transform, &GlobalTransform), With<Zombie>>,
+    zombies: Query<(Entity, &Transform, &GlobalTransform, &ZombieHitboxBones), With<Zombie>>,
     touch_firing: Res<TouchFiring>,
     mut cooldown: Local<f32>,
     autopilot: Res<Autopilot>,
@@ -6070,7 +6074,7 @@ fn shoot(
     // component to test against via SpatialQuery, unlike the server, so
     // this builds one manually — see ZOMBIE_RADIUS/ZOMBIE_LENGTH) and, on a
     // hit, predicts hitmarker/blood/damage-number immediately using the same
-    // shared zombie_hit_damage_geometric the server itself uses — same
+    // shared zombie_hit_damage_bones the server itself uses — same
     // approach Source engine's "weapon prediction" uses for L4D: the client
     // predicts its own shot's effects entirely, and the server (see
     // handle_fire_shot's BroadcastExcept) knows not to echo them back to
@@ -6082,13 +6086,13 @@ fn shoot(
     let zombie_capsule = Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH);
     let predicted_hit = zombies
         .iter()
-        .filter_map(|(entity, transform, global)| {
+        .filter_map(|(entity, transform, global, bones)| {
             zombie_capsule
                 .cast_ray(transform.translation, transform.rotation, camera_transform.translation, *direction, MAX_SHOT_DISTANCE, true)
-                .map(|(distance, normal)| (distance, entity, transform, global, normal))
+                .map(|(distance, normal)| (distance, entity, transform, global, bones, normal))
         })
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
-    if let Some((distance, entity, transform, global, normal)) = predicted_hit {
+    if let Some((distance, entity, transform, global, bones, normal)) = predicted_hit {
         let point = camera_transform.translation + *direction * distance;
         commands.spawn((
             Mesh3d(vfx_assets.hit_assets.mesh.clone()),
@@ -6098,7 +6102,14 @@ fn shoot(
                 remaining: HIT_MARKER_LIFETIME,
             },
         ));
-        spawn_floating_damage(&mut commands, point, zombie_hit_damage_geometric(point, transform));
+        // HITBOX_PLAN.md Phase 4: real per-bone hit detection — the client
+        // has always had live (not even lag-compensated, since this is the
+        // shooter's own local prediction) bones, unlike the server which
+        // needed Phase 1-2's headless-skeleton work first.
+        let damage = zombie_hit_damage_bones(point, transform, bones, |bone| {
+            vfx_assets.bone_transforms.get(bone).ok().map(|g| g.translation())
+        });
+        spawn_floating_damage(&mut commands, point, damage);
         spawn_blood_effects(&mut commands, &vfx_assets.blood, &spatial_query, &time, point, normal, Some((entity, global)));
 
         // Mark this zombie as "hit by us, watch for it dying" — see

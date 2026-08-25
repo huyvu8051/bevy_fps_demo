@@ -548,16 +548,16 @@ pub const MAX_SHOT_DISTANCE: f32 = 200.0;
 // (see zombie_hit_damage_geometric).
 pub const ZOMBIE_MAX_HEALTH: f32 = 8.0;
 
-// Per-region damage, picked by zombie_hit_damage_geometric from where the
-// raycast hit lands relative to the zombie's root. The zombie.glb rig has
-// no separate per-body-part meshes to hit-test against directly (single
-// "Zombie_Cylinder" mesh) — bones exist for skinning/animation only, not as
-// distinct raycast targets — so regions are approximated geometrically from
-// the hit point instead of a real hitbox lookup. This used to have a
-// nearest-bone-preferred refinement client-side, but the server (which now
-// decides damage authoritatively) has no skeleton/bone data at all — this
-// geometric approximation, previously just a fallback, is now the only
-// method.
+// Per-region damage. Historically the ONLY way to decide "head vs chest vs
+// belly vs limb" was zombie_hit_damage_geometric's fixed-height-band guess
+// (see its own doc comment below), because the server had no skeleton/bone
+// data at all. As of HITBOX_PLAN.md Phase 2, real bone entities ARE
+// available (ZombieHitboxBones, populated server-side too, not just
+// client-side) — zombie_hit_damage_bones (below) uses them directly and is
+// what handle_fire_shot/shoot() actually call now;
+// zombie_hit_damage_geometric stays only as its fallback for the brief
+// window before a freshly-spawned zombie's glTF scene finishes loading and
+// its bones resolve.
 pub const HEAD_DAMAGE: f32 = ZOMBIE_MAX_HEALTH; // always a one-shot kill
 pub const CHEST_DAMAGE: f32 = 1.5;
 pub const BELLY_DAMAGE: f32 = 1.0;
@@ -597,6 +597,159 @@ pub fn zombie_hit_damage_geometric(hit_point: Vec3, zombie_transform: &Transform
         BELLY_DAMAGE
     } else {
         LIMB_DAMAGE
+    }
+}
+
+// Sphere radii (world-space meters) tested against each resolved bone's
+// live world position — same "rough estimate, playtest-tunable" spirit as
+// HITBOX_HEAD_MIN_Y et al. above (this codebase has never had the actual
+// mesh's per-part dimensions to calibrate against), just centered on the
+// real bone instead of a fixed height band. Fractions of ZOMBIE_RADIUS
+// (itself derived from the real measured mesh height — see its own doc
+// comment) rather than fresh ZOMBIE_SCALE_FACTOR multiples, so these two
+// hitbox systems can be tuned relative to each other by eye without a unit
+// conversion.
+pub const HEAD_HITBOX_RADIUS: f32 = 0.5 * ZOMBIE_RADIUS;
+pub const CHEST_HITBOX_RADIUS: f32 = 0.85 * ZOMBIE_RADIUS;
+pub const BELLY_HITBOX_RADIUS: f32 = 0.8 * ZOMBIE_RADIUS;
+pub const LIMB_HITBOX_RADIUS: f32 = 0.4 * ZOMBIE_RADIUS;
+
+// Real per-bone hit detection (HITBOX_PLAN.md Phase 4) — tests the hit
+// point against a small sphere centered on each resolved bone's live
+// world position, checked in the same head-first priority order
+// zombie_hit_damage_geometric used (so an overlapping head+chest sphere
+// still resolves to a headshot, matching the behavior players already
+// know), falling back to the old height-band guess for any bone that
+// hasn't resolved yet (e.g. a zombie whose glTF scene is still loading —
+// see wire_zombie_hitbox_bones) rather than silently treating a genuine
+// hit as a miss.
+//
+// `bone_position` is a callback rather than a `Query` directly so this
+// stays callable from both crates/server (real per-bone hit detection)
+// and crates/client (shoot()'s local prediction, which already has live
+// bones via its own ZombieHitboxBones) without this function depending on
+// either crate's exact query-building code — the caller just answers "if
+// this bone entity resolved, where is it in world space right now?".
+//
+// Note: uses each bone's CURRENT world position, not a lag-compensated
+// rewind of it — HITBOX_PLAN.md Phase 3 (not done yet) covers rewinding
+// per-bone offsets the same way zombie_history_at already rewinds the
+// root; until then, a moving/attacking zombie's bones can be tested
+// slightly out of sync with where the shooter's screen actually showed
+// them, same class of imprecision the root-only rewind already accepted
+// for capsule tests before this.
+pub fn zombie_hit_damage_bones(
+    hit_point: Vec3,
+    zombie_transform: &Transform,
+    bones: &ZombieHitboxBones,
+    bone_position: impl Fn(Entity) -> Option<Vec3>,
+) -> f32 {
+    if let Some(pos) = bones.head.and_then(&bone_position) {
+        if hit_point.distance(pos) <= HEAD_HITBOX_RADIUS {
+            return HEAD_DAMAGE;
+        }
+    }
+    for &limb in &bones.limbs {
+        if let Some(pos) = bone_position(limb) {
+            if hit_point.distance(pos) <= LIMB_HITBOX_RADIUS {
+                return LIMB_DAMAGE;
+            }
+        }
+    }
+    if let Some(pos) = bones.chest.and_then(&bone_position) {
+        if hit_point.distance(pos) <= CHEST_HITBOX_RADIUS {
+            return CHEST_DAMAGE;
+        }
+    }
+    if let Some(pos) = bones.belly.and_then(&bone_position) {
+        if hit_point.distance(pos) <= BELLY_HITBOX_RADIUS {
+            return BELLY_DAMAGE;
+        }
+    }
+    zombie_hit_damage_geometric(hit_point, zombie_transform)
+}
+
+// TEMPORARY (HITBOX_PLAN.md Phase 4 verification) — sanity-checks
+// zombie_hit_damage_bones' priority order and fallback in isolation,
+// without needing a live client/bot to actually fire a shot. Removed
+// once confirmed.
+#[cfg(test)]
+mod hitbox_phase4_tests {
+    use super::*;
+
+    fn bones_at(head: Vec3) -> (ZombieHitboxBones, std::collections::HashMap<Entity, Vec3>) {
+        let head_entity = Entity::from_raw_u32(1).unwrap();
+        let chest_entity = Entity::from_raw_u32(2).unwrap();
+        let belly_entity = Entity::from_raw_u32(3).unwrap();
+        let limb_entity = Entity::from_raw_u32(4).unwrap();
+        let bones = ZombieHitboxBones {
+            head: Some(head_entity),
+            chest: Some(chest_entity),
+            belly: Some(belly_entity),
+            limbs: vec![limb_entity],
+        };
+        let mut positions = std::collections::HashMap::new();
+        positions.insert(head_entity, head);
+        positions.insert(chest_entity, head - Vec3::Y * 0.6);
+        positions.insert(belly_entity, head - Vec3::Y * 1.1);
+        positions.insert(limb_entity, head + Vec3::X * 0.6);
+        (bones, positions)
+    }
+
+    #[test]
+    fn hit_exactly_on_head_bone_is_a_headshot() {
+        let root = Transform::from_xyz(0.0, 1.0, 0.0);
+        let (bones, positions) = bones_at(Vec3::new(0.0, 1.9, 0.0));
+        let head_pos = positions[&bones.head.unwrap()];
+        let damage = zombie_hit_damage_bones(head_pos, &root, &bones, |e| positions.get(&e).copied());
+        assert_eq!(damage, HEAD_DAMAGE);
+    }
+
+    #[test]
+    fn hit_near_limb_bone_is_a_limb_hit_even_though_closer_to_head_height() {
+        let root = Transform::from_xyz(0.0, 1.0, 0.0);
+        let (bones, positions) = bones_at(Vec3::new(0.0, 1.9, 0.0));
+        let limb_pos = positions[&bones.limbs[0]];
+        // Same world Y as the head, but far enough laterally that only the
+        // limb sphere (not the head sphere) should contain it — this is
+        // exactly the case the old height-band guess handled via a
+        // separate lateral-distance check; bone-based detection gets it
+        // for free from the limb bone's own real position.
+        let damage = zombie_hit_damage_bones(limb_pos, &root, &bones, |e| positions.get(&e).copied());
+        assert_eq!(damage, LIMB_DAMAGE);
+    }
+
+    #[test]
+    fn hit_near_chest_bone_is_a_chest_hit() {
+        let root = Transform::from_xyz(0.0, 1.0, 0.0);
+        let (bones, positions) = bones_at(Vec3::new(0.0, 1.9, 0.0));
+        let chest_pos = positions[&bones.chest.unwrap()];
+        let damage = zombie_hit_damage_bones(chest_pos, &root, &bones, |e| positions.get(&e).copied());
+        assert_eq!(damage, CHEST_DAMAGE);
+    }
+
+    #[test]
+    fn unresolved_bones_fall_back_to_geometric_guess_instead_of_a_silent_miss() {
+        let root = Transform::from_xyz(0.0, 1.0, 0.0);
+        let empty_bones = ZombieHitboxBones::default();
+        let hit_point = Vec3::new(0.0, 1.9, 0.0);
+        let damage = zombie_hit_damage_bones(hit_point, &root, &empty_bones, |_| None);
+        // No bone resolved at all (e.g. scene still loading) — must fall
+        // back to the geometric guess rather than silently scoring a miss.
+        assert_eq!(damage, zombie_hit_damage_geometric(hit_point, &root));
+    }
+
+    #[test]
+    fn far_from_every_bone_falls_back_to_geometric_guess() {
+        let root = Transform::from_xyz(0.0, 1.0, 0.0);
+        let (bones, positions) = bones_at(Vec3::new(0.0, 1.9, 0.0));
+        // Nowhere near any bone's sphere — confirms the fallback still
+        // fires (rather than returning 0 damage) when bone spheres all
+        // miss, same as the empty-bones case above but with bones that
+        // resolved, just not close enough to this particular hit point.
+        let hit_point = Vec3::new(5.0, 1.0, 0.0);
+        let damage = zombie_hit_damage_bones(hit_point, &root, &bones, |e| positions.get(&e).copied());
+        assert_eq!(damage, zombie_hit_damage_geometric(hit_point, &root));
     }
 }
 
