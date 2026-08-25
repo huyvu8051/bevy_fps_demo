@@ -1,0 +1,35 @@
+// Metadata for the "soldier" character (PLAYER_MODEL_PATH in
+// crates/client/src/lib.rs) — the visual model for every human
+// player (local player's optional debug model + every remote NetPlayer).
+// Not yet loaded by any Rust code; see zombie/character.ron's own doc
+// comment for why this file exists ahead of an actual loader.
+(
+    id: "soldier",
+    display_name: "Soldier",
+    lore_ref: "docs/characters/soldier.md",
+
+    mesh: "characters/soldier/mesh/soldier.glb",
+    // See docs/CHARACTER_IMPORT_CHECKLIST.md before replacing this mesh.
+    scale: 1.0, // PLAYER_MODEL_SCALE, crates/client/src/lib.rs — spawned
+                // at native scale, not independently calibrated.
+
+    // soldier.glb ships a large multi-animation pack (indices aren't
+    // sequential — this asset was picked from a generic pack, not
+    // authored for this game) — see PLAYER_MODEL_ANIM_* consts
+    // (crates/client/src/lib.rs) for the source of truth; duplicated here
+    // only for readability. A replacement mesh from meshy.ai will very
+    // likely need these re-picked by hand (open the glb, find which clip
+    // index actually is idle/walk/etc.) rather than assuming they match.
+    animations: (
+        idle: 5,
+        walk: 22,
+        run: 16,
+        shoot: 1,
+        death: 0,
+    ),
+
+    // No character-specific audio yet (footsteps, voice lines) — add
+    // files under characters/soldier/audio/ and list them here once they
+    // exist.
+    audio: [],
+)

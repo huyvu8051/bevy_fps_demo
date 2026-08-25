@@ -1,0 +1,33 @@
+// Metadata for the "zombie" character — not yet loaded by any Rust code
+// (ZOMBIE_PATH in crates/client/src/lib.rs still hardcodes the mesh path
+// directly). This file exists so the mesh/audio/lore for this character
+// live next to a single source of truth for their paths, ready to wire up
+// a real loader once there's more than a couple of characters to justify
+// one. Until then, treat this as documentation kept in sync by hand.
+(
+    id: "zombie",
+    display_name: "Zombie",
+    lore_ref: "docs/characters/zombie.md",
+
+    mesh: "characters/zombie/mesh/zombie.glb",
+    // See docs/CHARACTER_IMPORT_CHECKLIST.md before replacing this mesh —
+    // the game hardcodes bone-name and animation-clip-index assumptions
+    // against it (ZombieHitboxBones, skinned_gltf::compute_joint_matrices).
+    scale: 0.25, // ZOMBIE_SCALE, crates/client/src/lib.rs
+
+    // zombie.glb's own embedded animation clip order — index, not name,
+    // is what skinned_gltf::compute_joint_matrices actually takes. See
+    // ZOMBIE_ANIM_* consts (crates/client/src/lib.rs) for the source of
+    // truth; duplicated here only for readability.
+    animations: (
+        bite: 0,
+        crawl: 1,
+        idle: 2,
+        run: 3,
+        walk: 4,
+    ),
+
+    // No character-specific audio yet (groans/attack sounds) — add files
+    // under characters/zombie/audio/ and list them here once they exist.
+    audio: [],
+)
