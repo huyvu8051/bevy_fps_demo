@@ -1,3 +1,4 @@
+use avian3d::prelude::*;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -84,12 +85,25 @@ pub struct KnockbackVelocity(pub Vec3);
 // (Phase 2) so the server's own zombie skeletons (Phase 2's real point)
 // can populate the exact same component the client already did —
 // one system, two callers, instead of two copies drifting apart.
+//
+// left_arm/right_arm/left_leg/right_leg are ordered joint chains
+// ([shoulder/hip, elbow/knee, hand/foot]) rather than an unordered bag —
+// zombie_hit_damage_bones tests each CONSECUTIVE pair as a capsule segment
+// (shoulder->elbow, elbow->hand) instead of a lone point-sphere at each
+// joint. A point-sphere-per-joint approach left real "dead zones" along
+// the visible forearm/shin — a clean hit partway between two joints landed
+// outside every sphere and scored 0 damage even though it clearly hit the
+// mesh. Capsule segments have no such gap. Same reasoning applies to
+// belly/chest below (see zombie_hit_damage_bones).
 #[derive(Component, Default)]
 pub struct ZombieHitboxBones {
     pub head: Option<Entity>,
-    pub chest: Option<Entity>,
     pub belly: Option<Entity>,
-    pub limbs: Vec<Entity>,
+    pub chest: Option<Entity>,
+    pub left_arm: [Option<Entity>; 3],
+    pub right_arm: [Option<Entity>; 3],
+    pub left_leg: [Option<Entity>; 3],
+    pub right_leg: [Option<Entity>; 3],
 }
 
 // Matches newly-spawned bone entities (glTF nodes get a Name component
@@ -104,45 +118,39 @@ pub fn wire_zombie_hitbox_bones(
     mut zombies: Query<&mut ZombieHitboxBones, With<Zombie>>,
     new_names: Query<(Entity, &Name), Added<Name>>,
 ) {
+    // Each entry is (rig node name, setter) — the setter both picks which
+    // field this bone belongs on and, for the limb chains, which position
+    // in the [shoulder/hip, elbow/knee, hand/foot] ordering, so
+    // zombie_hit_damage_bones can always build its capsule segments in the
+    // right order regardless of what order glTF nodes happen to load in.
+    type Setter = fn(&mut ZombieHitboxBones, Entity);
+    const SLOTS: &[(&str, Setter)] = &[
+        ("Head", |b, e| b.head = Some(e)),
+        ("Spine", |b, e| b.belly = Some(e)),
+        ("Spine2", |b, e| b.chest = Some(e)),
+        ("LeftArm", |b, e| b.left_arm[0] = Some(e)),
+        ("LeftForeArm", |b, e| b.left_arm[1] = Some(e)),
+        ("LeftHand", |b, e| b.left_arm[2] = Some(e)),
+        ("RightArm", |b, e| b.right_arm[0] = Some(e)),
+        ("RightForeArm", |b, e| b.right_arm[1] = Some(e)),
+        ("RightHand", |b, e| b.right_arm[2] = Some(e)),
+        ("LeftUpLeg", |b, e| b.left_leg[0] = Some(e)),
+        ("LeftLeg", |b, e| b.left_leg[1] = Some(e)),
+        ("LeftFoot", |b, e| b.left_leg[2] = Some(e)),
+        ("RightUpLeg", |b, e| b.right_leg[0] = Some(e)),
+        ("RightLeg", |b, e| b.right_leg[1] = Some(e)),
+        ("RightFoot", |b, e| b.right_leg[2] = Some(e)),
+    ];
+
     for (bone_entity, name) in &new_names {
-        let is_head = name.as_str() == "Head";
-        let is_chest = name.as_str() == "Spine2";
-        let is_belly = name.as_str() == "Spine";
-        // Upper arm/leg alone left forearm/hand/lower-leg/foot hits with no
-        // nearby marker of their own, misattributing to whatever tracked
-        // bone happened to be geometrically closest — covering the full
-        // chain fixes that.
-        let is_limb = matches!(
-            name.as_str(),
-            "LeftArm"
-                | "RightArm"
-                | "LeftForeArm"
-                | "RightForeArm"
-                | "LeftHand"
-                | "RightHand"
-                | "LeftUpLeg"
-                | "RightUpLeg"
-                | "LeftLeg"
-                | "RightLeg"
-                | "LeftFoot"
-                | "RightFoot"
-        );
-        if !(is_head || is_chest || is_belly || is_limb) {
+        let Some(&(_, set)) = SLOTS.iter().find(|&&(slot_name, _)| slot_name == name.as_str()) else {
             continue;
-        }
+        };
 
         let mut current = bone_entity;
         for _ in 0..20 {
             if let Ok(mut bones) = zombies.get_mut(current) {
-                if is_head {
-                    bones.head = Some(bone_entity);
-                } else if is_chest {
-                    bones.chest = Some(bone_entity);
-                } else if is_belly {
-                    bones.belly = Some(bone_entity);
-                } else {
-                    bones.limbs.push(bone_entity);
-                }
+                set(&mut bones, bone_entity);
                 break;
             }
             let Ok(parent) = child_of.get(current) else {
@@ -171,6 +179,14 @@ impl Default for ZombieAttackTimer {
     }
 }
 
+// Scenario::HitboxTest only — tags a zombie with its own fixed row
+// position (server-only, never replicated) so a kill respawns a fresh
+// zombie back at the same slot instead of the normal cycling-
+// ZOMBIE_SPAWNS-grid behavior. See PendingRespawn's own doc comment
+// (crates/server/src/main.rs) for how this gets read at death time.
+#[derive(Component, Clone, Copy)]
+pub struct HitboxTestSlot(pub Vec3);
+
 // Driven by big-brain's Thinker/Scorer/Action (NearPlayer scorer picks
 // ChaseAction once in range — both server-only, see crates/server).
 // ChaseAction's Requested/Cancelled handlers insert/remove this component —
@@ -195,6 +211,79 @@ pub const ARENA_WALL_THICKNESS: f32 = 1.0;
 
 pub const PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 3.0, ARENA_HALF_SIZE - 4.0);
 pub const PLAYER_MAX_HEALTH: f32 = 100.0;
+
+// --- Test scenarios (map-select menu, iOS icon-tap) -----------------------
+//
+// Each scenario is its own dedicated-server process on its own port —
+// bevy_replicon has no "rooms" concept, so this is the simplest way to get
+// genuinely separate worlds (map = port = room; connecting to the same
+// port means seeing each other, same as normal play today). The client
+// picks the port from the scenario it selected (see MAP_ID in
+// crates/client/src/lib.rs); the server picks both its bind port and its
+// spawn preset from the same MAP_ID env var it's started with. Kept in
+// `shared` so client and server can't drift on the port <-> scenario
+// mapping.
+pub const SERVER_PORT_BASE: u16 = 5031;
+
+// Was two separately-declared `const PROTOCOL_ID: u64 = 0;` (one in each of
+// crates/client and crates/server) — renet2 rejects a connection whose
+// client and server protocol_id don't match, so a drift here fails loudly
+// (connection refused) rather than silently, but there's still no reason to
+// keep it as two copies that could disagree.
+pub const PROTOCOL_ID: u64 = 0;
+
+/// Which map-select preset a server process (and the client connecting to
+/// it) is running. `Normal` is today's actual game — everything else is a
+/// fixed test rig, not part of normal play.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Scenario {
+    #[default]
+    Normal,
+    /// Map 1: 5 zombies stationary in a row (no AI — they never chase),
+    /// player spawned facing them, for testing hit registration in
+    /// isolation. A killed zombie respawns at its own row slot after
+    /// HITBOX_TEST_RESPAWN_DELAY, not the normal cycling-zombie-grid
+    /// behavior.
+    HitboxTest,
+    /// Map 2: STRESS_TEST_ZOMBIE_COUNT zombies with normal chase AI,
+    /// player spawned high above the arena (noclip auto-enabled
+    /// client-side, see crate::client's map-select handling) to observe
+    /// FPS/behavior with a full horde active without being in melee range.
+    StressTest,
+}
+
+impl Scenario {
+    pub fn from_map_id(id: u8) -> Self {
+        match id {
+            1 => Scenario::HitboxTest,
+            2 => Scenario::StressTest,
+            _ => Scenario::Normal,
+        }
+    }
+
+    pub fn map_id(self) -> u8 {
+        match self {
+            Scenario::Normal => 0,
+            Scenario::HitboxTest => 1,
+            Scenario::StressTest => 2,
+        }
+    }
+
+    pub fn port(self) -> u16 {
+        SERVER_PORT_BASE + self.map_id() as u16
+    }
+}
+
+pub const HITBOX_TEST_PLAYER_SPAWN: Vec3 = PLAYER_SPAWN;
+pub const HITBOX_TEST_RESPAWN_DELAY: f32 = 2.0;
+// A row across the arena's center (z=0, well clear of PLAYER_SPAWN's own
+// z=ARENA_HALF_SIZE-4 corner) — same grounded-height convention
+// ZOMBIE_SPAWNS itself uses (radius + length/2), computed further down
+// this file once ZOMBIE_RADIUS/ZOMBIE_LENGTH are in scope.
+pub const HITBOX_TEST_ROW_X: [f32; 5] = [-6.0, -3.0, 0.0, 3.0, 6.0];
+
+pub const STRESS_TEST_ZOMBIE_COUNT: usize = 50;
+pub const STRESS_TEST_PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 15.0, 0.0);
 
 pub const MOVE_SPEED: f32 = 4.0;
 pub const AIM_MOVE_SPEED_MULTIPLIER: f32 = 0.5;
@@ -334,20 +423,46 @@ pub const ZOMBIE_SCALE: f32 = 0.25;
 const ZOMBIE_MESH_REFERENCE_HEIGHT: f32 = 8.1468;
 const ZOMBIE_WORLD_HEIGHT: f32 = ZOMBIE_MESH_REFERENCE_HEIGHT * ZOMBIE_SCALE;
 // Relative to the original 0.1 calibration (factor 1.0 at ZOMBIE_SCALE =
-// 0.1) — everything below scales off this so the capsule and per-region
-// damage thresholds stay proportional to whatever ZOMBIE_SCALE currently
-// is, instead of separately hardcoded numbers.
+// 0.1) — KNOCKBACK_FORCE and the old debug-gizmo-only HITBOX_*_MIN_Y ring
+// constants below still scale off this so they stay proportional to
+// whatever ZOMBIE_SCALE currently is, instead of separately hardcoded
+// numbers. ZOMBIE_RADIUS itself no longer uses this — see its own doc
+// comment for why.
 const ZOMBIE_SCALE_FACTOR: f32 = ZOMBIE_SCALE / 0.1;
-// No longer aliased to the player's capsule (PLAYER_RADIUS/PLAYER_LENGTH) —
-// a zombie 2.5x the player's visual size should have a matching hitbox, not
-// a human-sized one buried inside it.
-pub const ZOMBIE_RADIUS: f32 = 0.35 * ZOMBIE_SCALE_FACTOR;
+// Raw mesh X-axis extent (torso depth) in zombie.glb's own unscaled local
+// units, measured the same way as ZOMBIE_MESH_REFERENCE_HEIGHT above: its
+// POSITION accessor's X bounding box is [-0.00656874990090728,
+// 0.0093571599572897] (extent 0.0159259099), times the same 107.006576
+// node scale baked into that accessor. Deliberately the X axis, not Z
+// (extent ~7.65 at this same scale) — Z is the mesh's T-pose left/right ARM
+// SPAN, which massively overstates how wide the character actually reads
+// standing normally; X is front-to-back torso depth, unaffected by the
+// arms being spread out in the bind pose. See ZOMBIE_RADIUS below.
+const ZOMBIE_MESH_REFERENCE_TORSO_WIDTH: f32 = 1.7042;
+// Used to be a guessed multiple of the old PLAYER_RADIUS-aliased value
+// (0.35 * ZOMBIE_SCALE_FACTOR = 0.875 at the current ZOMBIE_SCALE) — that
+// number turned out to be close to the mesh's full T-pose arm span, not its
+// actual torso width, so the raycast capsule ended up roughly 2x wider than
+// the visible character: shots that clearly missed the model still
+// registered as a capsule hit (see spawn_zombie_hit_feedback's own doc
+// comment in crates/client for the other half of that bug — those phantom
+// hits landing outside every real bone hitbox still showed blood/floating
+// damage before that fix). Now derived from the mesh's actual measured
+// torso width instead of a guess, same treatment ZOMBIE_MESH_REFERENCE_HEIGHT
+// already got. Halved for radius since TORSO_WIDTH above is a full extent.
+// This stays the ACCURATE value — HEAD_HITBOX_RADIUS/TORSO_HITBOX_RADIUS/
+// LIMB_HITBOX_RADIUS (the real per-bone damage regions) all derive from
+// this, so damage decisions keep matching the real mesh. See
+// ZOMBIE_OUTER_RADIUS below for the (deliberately wider) broad-phase
+// capsule instead.
+pub const ZOMBIE_RADIUS: f32 = ZOMBIE_MESH_REFERENCE_TORSO_WIDTH * ZOMBIE_SCALE / 2.0;
 // Capsule height (2*radius + length) is set to exactly ZOMBIE_WORLD_HEIGHT
 // so a raycast/capsule-cast covers the mesh's full height, including the
 // very top of the head — no gap left uncovered like before. ZOMBIE_RADIUS
-// isn't derived from ZOMBIE_WORLD_HEIGHT (it scales off ZOMBIE_SCALE_FACTOR
-// independently), so this can go negative if ZOMBIE_MESH_REFERENCE_HEIGHT
-// is ever set too small relative to 2*ZOMBIE_RADIUS — avian3d's capsule
+// is derived from a different axis of the same mesh (torso width vs.
+// height) rather than from ZOMBIE_WORLD_HEIGHT itself, so this can in
+// principle still go negative if ZOMBIE_MESH_REFERENCE_HEIGHT is ever set
+// too small relative to 2*ZOMBIE_RADIUS — avian3d's capsule
 // collider doesn't panic on that (SharedShape::capsule just takes two
 // endpoints, so a negative length silently flips them and produces a
 // capsule sized off |length| instead — see the client's draw_zombie_hitboxes
@@ -355,6 +470,58 @@ pub const ZOMBIE_RADIUS: f32 = 0.35 * ZOMBIE_SCALE_FACTOR;
 // hitbox size). A negative value here is always a bug, not a valid "smaller
 // zombie" — shrink ZOMBIE_SCALE instead, which scales both terms together.
 pub const ZOMBIE_LENGTH: f32 = ZOMBIE_WORLD_HEIGHT - 2.0 * ZOMBIE_RADIUS;
+
+// The broad-phase capsule ("did this shot even reach the zombie AT ALL" —
+// handle_fire_shot's first pass, debug_bot_fire, server_autopilot_think's
+// own fire, shoot()'s local prediction, and the zombie's own attached
+// physics Collider used for generic SpatialQuery casts like handle_fire_
+// shot's live_hit fallback) — deliberately WIDER than ZOMBIE_RADIUS,
+// requested to make that first pass more forgiving again. Total height
+// (2*radius + length) still equals ZOMBIE_WORLD_HEIGHT, same invariant
+// ZOMBIE_LENGTH keeps — only the radius grows, so ZOMBIE_OUTER_LENGTH
+// shrinks to compensate (a wider, squatter capsule, not a taller one).
+// Does NOT affect the real per-bone damage regions (HEAD/TORSO/
+// LIMB_HITBOX_RADIUS still derive from the accurate ZOMBIE_RADIUS above) —
+// zombie_hit_damage_bones still decides how much (if any) damage actually
+// lands from a hit_point that fell inside this wider outer shell; a hit
+// that lands in the new outer-but-not-any-inner-region gap reads as a
+// graze (see spawn_zombie_hit_feedback's own doc comment), not a real hit.
+pub const ZOMBIE_OUTER_RADIUS: f32 = ZOMBIE_RADIUS * 2.0;
+pub const ZOMBIE_OUTER_LENGTH: f32 = ZOMBIE_WORLD_HEIGHT - 2.0 * ZOMBIE_OUTER_RADIUS;
+
+// How far below the zombie root's own Transform/NetTransform.translation
+// (capsule center) the mesh's own local origin needs to sit so its feet
+// land at the capsule's bottom — capsule center to feet. Applied to the
+// mesh/skeleton CHILD's own Transform (in world units — the child's
+// parent, the zombie entity itself, is never scaled, only this child is),
+// alongside a ZOMBIE_SCALE scale-down, not baked into the scaled
+// mesh-local space. Both crates/client (the visible mesh, zombie_mesh_
+// bundle) and crates/server (the real skeleton used for hit detection,
+// on_zombie_spawned) need this exact same transform — a skeleton spawned
+// without it sits at the raw unscaled mesh size (~4x too big at the
+// current ZOMBIE_SCALE) and offset from the root, so its bones end up
+// nowhere near the outer capsule/visible mesh a shot is actually aimed at.
+pub const ZOMBIE_MODEL_Y_OFFSET: f32 = -(ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0);
+
+// Was two separately-declared consts (ZOMBIE_PATH in crates/client,
+// SERVER_ZOMBIE_PATH in crates/server) both pointing at the same file —
+// same "shouldn't silently drift" reasoning as ZOMBIE_MODEL_Y_OFFSET
+// above. "Animated Zombie" by Quaternius (poly.pizza, CC-BY 3.0) —
+// https://poly.pizza/m/jkrEvQZb8J — keep this attribution if shared/
+// published.
+pub const ZOMBIE_PATH: &str = "characters/zombie/mesh/zombie.glb";
+// zombie.glb's animation order (read from the file's own animations list):
+// 0=Bite, 1=Crawl, 2=Idle, 3=Run, 4=Walk. Was two separately-declared sets
+// of these five indices (crates/client's ZOMBIE_ANIM_*, crates/server's
+// SERVER_ZOMBIE_ANIM_* — the latter's own doc comment even called out the
+// "a drift between them would silently desync which clip each name means"
+// risk this now closes) — a single set here instead, used by both.
+pub const ZOMBIE_ANIM_BITE: usize = 0;
+pub const ZOMBIE_ANIM_CRAWL: usize = 1;
+pub const ZOMBIE_ANIM_IDLE: usize = 2;
+pub const ZOMBIE_ANIM_RUN: usize = 3;
+pub const ZOMBIE_ANIM_WALK: usize = 4;
+
 pub const ZOMBIE_PATH_RECALC_INTERVAL: f32 = 0.8;
 // How long a zombie sticks with its current chase target before re-picking
 // the nearest connected player. Without this, two players standing close
@@ -418,6 +585,92 @@ pub const DIRECTOR_CALM_DURATION_SECS: f32 = 20.0;
 pub const DIRECTOR_HORDE_SIZE: usize = 10;
 pub const DIRECTOR_HORDE_SPAWN_RADIUS: f32 = 6.0;
 pub const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
+
+// Which animation clip a zombie should be playing right now — moved here
+// (was client-only) so crates/server can drive its OWN AnimationPlayer
+// through the exact same pose transitions instead of sitting frozen on
+// Idle forever. That mismatch mattered: crates/server's zombie_hit_damage_
+// bones tests hit points against THIS skeleton's live bone positions, not
+// the client's — a server skeleton stuck in Idle meant every hit test was
+// checked against arms/legs in their idle sway, never the real Walk/Run/
+// Bite pose the shooter was actually looking at, for the entire time a
+// zombie was doing anything but standing still. zombie_pose_for below is
+// the single formula both sides now call, so there's exactly one place
+// this priority order (Bite > Crawl > Run > Walk > Idle) can drift between
+// client and server. Getting the EXACT same animation frame/phase on both
+// sides isn't the goal (and isn't achievable — network latency alone rules
+// that out); getting the same POSE CATEGORY is, since crates/server's
+// existing lag-compensated rewind (ZombieHistory/zombie_history_at) already
+// records real per-tick bone positions and reconstructs whatever the
+// shooter's own screen was likely showing at the time they fired — once
+// the server's own skeleton is actually cycling through the right poses at
+// the right (server-authoritative) moments, that existing mechanism closes
+// most of the remaining gap for free, no new sync channel needed.
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ZombiePose {
+    #[default]
+    Idle,
+    Walk,
+    Run,
+    Crawl,
+    Bite,
+}
+
+// Health fraction at/below which a zombie switches to the Crawl pose
+// (dragging itself, can't stand) instead of Walk/Run — checked before
+// Run/Walk so a badly hurt zombie always crawls even while still in chase
+// range, but after Bite so point-blank still always reads as an attack.
+pub const ZOMBIE_CRAWL_HEALTH_FRACTION: f32 = 0.35;
+// Distance (same units as ZOMBIE_STOP_DISTANCE/ZOMBIE_CHASE_RANGE) inside
+// which a moving zombie reads as sprinting toward you (Run) rather than
+// the ordinary Walk — deliberately well short of ZOMBIE_STOP_DISTANCE
+// (which gates the Bite pose/actual damage tick), so the visual "closing
+// in fast" cue reads before the attack itself lands.
+pub const ZOMBIE_RUN_DISTANCE: f32 = 10.0;
+
+// The single formula deciding ZombiePose — see its own doc comment for why
+// this lives here instead of being duplicated per-crate. `distance` is to
+// whichever player this zombie is tracking, `health_fraction` is
+// Health/ZOMBIE_MAX_HEALTH, `moving` mirrors NetTransform.moving.
+// Points a zombie's (or any animated character's) root entity at the
+// specific descendant entity that carries its AnimationPlayer, recorded
+// once wire_zombie_animations/wire_server_zombie_animations finds it (the
+// glTF scene loads asynchronously, so it doesn't exist yet at spawn time).
+// Public field so both crates' own update_*_pose systems can read link.0
+// directly.
+#[derive(Component)]
+pub struct ZombieAnimationPlayer(pub Entity);
+
+// Walks up from a newly-spawned AnimationPlayer through ChildOf looking for
+// an ancestor matching `is_root`, up to 20 hops (glTF scenes nest deeply).
+// Shared by crates/client's wire_zombie_animations/wire_player_model_animations
+// and crates/server's wire_server_zombie_animations so each only has to say
+// what root type it's looking for, not re-implement the walk.
+pub fn find_animation_root(entity: Entity, child_of: &Query<&ChildOf>, is_root: impl Fn(Entity) -> bool) -> Option<Entity> {
+    let mut current = entity;
+    for _ in 0..20 {
+        if is_root(current) {
+            return Some(current);
+        }
+        current = child_of.get(current).ok()?.0;
+    }
+    None
+}
+
+pub fn zombie_pose_for(distance: f32, health_fraction: f32, moving: bool) -> ZombiePose {
+    if distance <= ZOMBIE_STOP_DISTANCE {
+        ZombiePose::Bite
+    } else if health_fraction <= ZOMBIE_CRAWL_HEALTH_FRACTION {
+        ZombiePose::Crawl
+    } else if moving && distance <= ZOMBIE_RUN_DISTANCE {
+        ZombiePose::Run
+    } else if moving {
+        ZombiePose::Walk
+    } else {
+        ZombiePose::Idle
+    }
+}
+
 pub const ZOMBIE_LOD_DISTANCE: f32 = 15.0;
 // The Y a far (motion.far, beyond ZOMBIE_LOD_DISTANCE) zombie is pinned to
 // each frame instead of running full physics — has to match how high the
@@ -497,6 +750,18 @@ pub const fn zombie_spawn_grid(half_x: f32, half_z: f32, y: f32) -> [Vec3; 100] 
 pub const ZOMBIE_SPAWNS: [Vec3; 100] =
     zombie_spawn_grid(ARENA_HALF_SIZE - 3.0, ARENA_HALF_SIZE - 3.0, ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0);
 
+// Scenario::HitboxTest's 5-zombie row — same grounded-Y convention as
+// ZOMBIE_SPAWNS above, at z=0 (arena center), spread across
+// HITBOX_TEST_ROW_X. Defined here (not next to that const) since it needs
+// ZOMBIE_RADIUS/ZOMBIE_LENGTH, declared further down this file.
+pub const HITBOX_TEST_ZOMBIE_POSITIONS: [Vec3; 5] = [
+    Vec3::new(HITBOX_TEST_ROW_X[0], ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0, 0.0),
+    Vec3::new(HITBOX_TEST_ROW_X[1], ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0, 0.0),
+    Vec3::new(HITBOX_TEST_ROW_X[2], ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0, 0.0),
+    Vec3::new(HITBOX_TEST_ROW_X[3], ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0, 0.0),
+    Vec3::new(HITBOX_TEST_ROW_X[4], ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0, 0.0),
+];
+
 // Sent by the client's "spawn 100 more" debug button — spawning must be a
 // server decision now, since zombies are server-authoritative.
 #[derive(Event, Clone, Copy, Serialize, Deserialize, Default)]
@@ -536,6 +801,23 @@ pub struct SetAutoMaintainZombies(pub bool);
 // for its own decision loop to keep running.
 #[derive(Event, Clone, Copy, Serialize, Deserialize)]
 pub struct SetAutopilot(pub bool);
+
+// Debug-panel "Freeze zombies" (KeyF / mobile CheatFreezeButton) — unlike
+// most of the other panel toggles (ShowHitboxes, ZombieAnimDisabled, ...),
+// which are purely cosmetic client-local state, freeze needs the server to
+// actually stop moving zombies: their real position is server-authoritative
+// (see move_zombies in crates/server), so a client-only flag can pause the
+// client's own AnimationPlayer all it wants but the zombie keeps walking
+// underneath it — every frame the still-moving server position gets
+// replicated back down and re-interpolated into Transform regardless,
+// which also kept re-triggering update_zombie_animation's pose-change
+// detection and undoing the animation pause. One global bool, not per-
+// player: zombies are shared world entities (this server process is
+// already scoped to one map/room — see Scenario), so there's no
+// "freeze only for me" that would make sense here the way noclip/autopilot
+// (per-player state) do.
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub struct SetFreezeZombies(pub bool);
 
 // --- Debug bots (client debug panel, see crates/client) ---
 // Fake NetPlayer stand-ins so multi-player zombie targeting can be tested
@@ -603,18 +885,21 @@ pub const HITBOX_CHEST_MIN_Y: f32 = 0.3 * ZOMBIE_SCALE_FACTOR;
 pub const HITBOX_BELLY_MIN_Y: f32 = -0.2 * ZOMBIE_SCALE_FACTOR;
 pub const HITBOX_LIMB_LATERAL_MIN: f32 = 0.35 * ZOMBIE_SCALE_FACTOR;
 
-// Sphere radii (world-space meters) tested against each resolved bone's
-// live world position — same "rough estimate, playtest-tunable" spirit as
-// HITBOX_HEAD_MIN_Y et al. above (this codebase has never had the actual
-// mesh's per-part dimensions to calibrate against), just centered on the
-// real bone instead of a fixed height band. Fractions of ZOMBIE_RADIUS
-// (itself derived from the real measured mesh height — see its own doc
+// Sphere/capsule radii (world-space meters) tested against each resolved
+// bone's live world position — same "rough estimate, playtest-tunable"
+// spirit as HITBOX_HEAD_MIN_Y et al. above (this codebase has never had the
+// actual mesh's per-part dimensions to calibrate against), just centered on
+// the real bone instead of a fixed height band. Fractions of ZOMBIE_RADIUS
+// (itself derived from the real measured mesh width — see its own doc
 // comment) rather than fresh ZOMBIE_SCALE_FACTOR multiples, so these two
 // hitbox systems can be tuned relative to each other by eye without a unit
 // conversion.
 pub const HEAD_HITBOX_RADIUS: f32 = 0.5 * ZOMBIE_RADIUS;
-pub const CHEST_HITBOX_RADIUS: f32 = 0.85 * ZOMBIE_RADIUS;
-pub const BELLY_HITBOX_RADIUS: f32 = 0.8 * ZOMBIE_RADIUS;
+// One capsule spanning belly->chest replaces the old two separate point
+// spheres (see zombie_hit_damage_bones) — a single radius for both ends,
+// picked as the larger of the two former sphere radii so the capsule still
+// generously covers the wider (chest) end.
+pub const TORSO_HITBOX_RADIUS: f32 = 0.85 * ZOMBIE_RADIUS;
 pub const LIMB_HITBOX_RADIUS: f32 = 0.4 * ZOMBIE_RADIUS;
 
 // Already-resolved world positions for a hit test — the output of either
@@ -625,12 +910,17 @@ pub const LIMB_HITBOX_RADIUS: f32 = 0.4 * ZOMBIE_RADIUS;
 // which one produced it — decoupling the damage decision itself from
 // "how did we get these positions" is what let Phase 3 slot in without
 // changing zombie_hit_damage_bones' own logic at all, only its callers.
+// Field shape mirrors ZombieHitboxBones exactly — see its own doc comment
+// for why the limb chains are ordered arrays, not an unordered bag.
 #[derive(Default, Clone)]
 pub struct BoneWorldPositions {
     pub head: Option<Vec3>,
-    pub chest: Option<Vec3>,
     pub belly: Option<Vec3>,
-    pub limbs: Vec<Vec3>,
+    pub chest: Option<Vec3>,
+    pub left_arm: [Option<Vec3>; 3],
+    pub right_arm: [Option<Vec3>; 3],
+    pub left_leg: [Option<Vec3>; 3],
+    pub right_leg: [Option<Vec3>; 3],
 }
 
 // Resolves a live ZombieHitboxBones (real Entity references) into a
@@ -642,48 +932,213 @@ pub struct BoneWorldPositions {
 // both crates/server and crates/client without depending on either
 // crate's exact query-building code.
 pub fn resolve_bone_world_positions(bones: &ZombieHitboxBones, bone_position: impl Fn(Entity) -> Option<Vec3>) -> BoneWorldPositions {
+    let resolve_chain = |chain: &[Option<Entity>; 3]| chain.map(|joint| joint.and_then(&bone_position));
     BoneWorldPositions {
         head: bones.head.and_then(&bone_position),
-        chest: bones.chest.and_then(&bone_position),
         belly: bones.belly.and_then(&bone_position),
-        limbs: bones.limbs.iter().filter_map(|&e| bone_position(e)).collect(),
+        chest: bones.chest.and_then(&bone_position),
+        left_arm: resolve_chain(&bones.left_arm),
+        right_arm: resolve_chain(&bones.right_arm),
+        left_leg: resolve_chain(&bones.left_leg),
+        right_leg: resolve_chain(&bones.right_leg),
     }
 }
 
+// Closest distance from `point` to the line segment a->b — lets a hit test
+// against a capsule spanning two joints (shoulder->elbow, belly->chest)
+// instead of just a point-sphere at one end. Clamped to the segment (not an
+// infinite line), so a hit well past either end still measures against
+// that end, same as a capsule's rounded cap.
+fn point_segment_distance(point: Vec3, a: Vec3, b: Vec3) -> f32 {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    if len_sq <= f32::EPSILON {
+        return point.distance(a);
+    }
+    let t = ((point - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    point.distance(a + ab * t)
+}
+
+// Same t as point_segment_distance's own internal computation, exposed on
+// its own for zombie_hit_damage_ray's chest-vs-belly split (it already has
+// a real hit point on the torso capsule's surface, not just a distance, so
+// it needs to know WHERE along the segment that landed).
+fn point_segment_t(point: Vec3, a: Vec3, b: Vec3) -> f32 {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    if len_sq <= f32::EPSILON {
+        return 0.0;
+    }
+    ((point - a).dot(ab) / len_sq).clamp(0.0, 1.0)
+}
+
+// Position + rotation + full length for a capsule spanning a->b, or None
+// for a degenerate (zero-length) segment — Capsule3d/avian3d's Collider::
+// capsule are both built along the local Y axis, so this is the same
+// from_rotation_arc trick draw_bone_capsule (crates/client) uses to orient
+// one along an arbitrary segment.
+fn capsule_transform(a: Vec3, b: Vec3) -> Option<(Vec3, Quat, f32)> {
+    let segment = b - a;
+    let direction = Dir3::new(segment).ok()?;
+    Some((a.midpoint(b), Quat::from_rotation_arc(Vec3::Y, *direction), segment.length()))
+}
+
 // Real per-bone hit detection (HITBOX_PLAN.md Phase 4, positions
-// optionally lag-compensated as of Phase 3) — tests the hit point against
-// a small sphere centered on each resolved bone's world position, checked
-// in the same head-first priority order the old height-band guess used
-// (so an overlapping head+chest sphere still resolves to a headshot,
-// matching the behavior players already know). No fallback to the old
-// geometric guess anymore: a region whose bone hasn't resolved yet (or a
-// hit that lands outside every sphere) simply scores 0 damage — bones
-// resolve within a couple frames of a zombie spawning (see
-// wire_zombie_hitbox_bones), so this window is brief, and mixing in a
-// completely different hit-detection method as a silent fallback was
-// judged worse than just eating that brief no-damage window.
+// optionally lag-compensated as of Phase 3) — checked in the same
+// head-first priority order the old height-band guess used (so an
+// overlapping head+torso region still resolves to a headshot, matching the
+// behavior players already know). No fallback to the old geometric guess
+// anymore: a region whose bones haven't resolved yet (or a hit that lands
+// outside every capsule/sphere) simply scores 0 damage — bones resolve
+// within a couple frames of a zombie spawning (see wire_zombie_hitbox_bones),
+// so this window is brief, and mixing in a completely different
+// hit-detection method as a silent fallback was judged worse than just
+// eating that brief no-damage window.
+//
+// Head stays a single point-sphere (headshots are meant to read as a small
+// precise target, and there's no second head joint to span a capsule to).
+// Limbs and torso are tested as capsule SEGMENTS between consecutive
+// joints (shoulder->elbow->hand, hip->knee->foot, belly->chest) instead of
+// a point-sphere at each joint — a point-sphere-per-joint approach left
+// real dead zones along the visible forearm/shin/torso where a clean hit
+// partway between two joints landed outside every sphere and scored 0
+// damage even though it clearly hit the mesh.
 pub fn zombie_hit_damage_bones(hit_point: Vec3, bones: &BoneWorldPositions) -> f32 {
     if let Some(pos) = bones.head {
         if hit_point.distance(pos) <= HEAD_HITBOX_RADIUS {
             return HEAD_DAMAGE;
         }
     }
-    for &pos in &bones.limbs {
-        if hit_point.distance(pos) <= LIMB_HITBOX_RADIUS {
-            return LIMB_DAMAGE;
+    for chain in [&bones.left_arm, &bones.right_arm, &bones.left_leg, &bones.right_leg] {
+        for pair in chain.windows(2) {
+            if let (Some(a), Some(b)) = (pair[0], pair[1]) {
+                if point_segment_distance(hit_point, a, b) <= LIMB_HITBOX_RADIUS {
+                    return LIMB_DAMAGE;
+                }
+            }
         }
     }
+    if let (Some(belly), Some(chest)) = (bones.belly, bones.chest) {
+        let ab = chest - belly;
+        let len_sq = ab.length_squared();
+        if len_sq > f32::EPSILON {
+            let t = ((hit_point - belly).dot(ab) / len_sq).clamp(0.0, 1.0);
+            let closest = belly + ab * t;
+            if hit_point.distance(closest) <= TORSO_HITBOX_RADIUS {
+                // Which half of the capsule the hit landed closer to
+                // decides chest vs. belly damage — t=0 is belly's end,
+                // t=1 is chest's.
+                return if t >= 0.5 { CHEST_DAMAGE } else { BELLY_DAMAGE };
+            }
+        }
+    }
+    // Only one of belly/chest resolved (mid-load, see wire_zombie_hitbox_bones)
+    // — no capsule to build yet, fall back to a plain point-sphere on
+    // whichever one exists rather than scoring 0 for the whole torso.
     if let Some(pos) = bones.chest {
-        if hit_point.distance(pos) <= CHEST_HITBOX_RADIUS {
+        if hit_point.distance(pos) <= TORSO_HITBOX_RADIUS {
             return CHEST_DAMAGE;
         }
     }
     if let Some(pos) = bones.belly {
-        if hit_point.distance(pos) <= BELLY_HITBOX_RADIUS {
+        if hit_point.distance(pos) <= TORSO_HITBOX_RADIUS {
             return BELLY_DAMAGE;
         }
     }
     0.0
+}
+
+// Diagnostic only — never used by the actual damage decision. Finds
+// whichever real hit region (head/torso/each limb segment) `hit_point`
+// came CLOSEST to, along with that region's own radius, so a 0-damage hit
+// can be logged as "missed the torso capsule by 6cm" instead of just
+// "miss" — lets a near-miss (radius/timing precision issue) be told apart
+// from a wildly-off one (an actual bug: wrong bone, wrong coordinate
+// space, stale positions) from the log alone. Mirrors zombie_hit_damage_
+// bones' own region set exactly, so "which region is nearest" always means
+// the same thing in both places.
+pub fn zombie_hit_nearest_region(hit_point: Vec3, bones: &BoneWorldPositions) -> Option<(&'static str, f32, f32)> {
+    let mut nearest: Option<(&'static str, f32, f32)> = None;
+    let mut consider = |name: &'static str, distance: f32, radius: f32| {
+        if nearest.is_none_or(|(_, best, _)| distance < best) {
+            nearest = Some((name, distance, radius));
+        }
+    };
+    if let Some(pos) = bones.head {
+        consider("head", hit_point.distance(pos), HEAD_HITBOX_RADIUS);
+    }
+    for (name, chain) in [
+        ("left_arm", &bones.left_arm),
+        ("right_arm", &bones.right_arm),
+        ("left_leg", &bones.left_leg),
+        ("right_leg", &bones.right_leg),
+    ] {
+        for pair in chain.windows(2) {
+            if let (Some(a), Some(b)) = (pair[0], pair[1]) {
+                consider(name, point_segment_distance(hit_point, a, b), LIMB_HITBOX_RADIUS);
+            }
+        }
+    }
+    if let (Some(belly), Some(chest)) = (bones.belly, bones.chest) {
+        consider("torso", point_segment_distance(hit_point, belly, chest), TORSO_HITBOX_RADIUS);
+    }
+    nearest
+}
+
+// Real ray-vs-shape hit test against the ACTUAL per-bone regions (head
+// sphere, torso capsule, 4 limb capsule chains) — unlike
+// zombie_hit_damage_bones (tests one already-known point's DISTANCE to
+// each region), this casts the real ray directly into each region's own
+// capsule/sphere shape, exactly the same way the outer broad-phase capsule
+// itself is tested. Needed because a hit_point sampled from the outer
+// capsule's own surface (its entry point, facing the shooter — see
+// ZOMBIE_OUTER_RADIUS's own doc comment) can land meaningfully outside
+// every real region even on a shot dead-center on the mesh, once the outer
+// shell is wider than the real body — that surface point sits on the wide
+// shell, not the thin real bone surface, and the ray was never actually
+// tested any farther in. Whichever region the ray reaches FIRST wins (not
+// the old head>limb>torso priority order — a real ray naturally hits
+// whatever's physically closest along its path, which is the correct
+// answer once every region is a real shape instead of a point-distance
+// check). Returns None if the ray misses every region entirely.
+pub fn zombie_hit_damage_ray(origin: Vec3, direction: Dir3, max_distance: f32, bones: &BoneWorldPositions) -> Option<(Vec3, Vec3, f32)> {
+    let mut best: Option<(f32, Vec3, f32)> = None;
+    let mut consider = |hit: Option<(f32, Vec3)>, damage: f32| {
+        if let Some((toi, normal)) = hit {
+            if best.is_none_or(|(best_toi, ..)| toi < best_toi) {
+                best = Some((toi, normal, damage));
+            }
+        }
+    };
+
+    if let Some(pos) = bones.head {
+        consider(Collider::sphere(HEAD_HITBOX_RADIUS).cast_ray(pos, Quat::IDENTITY, origin, *direction, max_distance, true), HEAD_DAMAGE);
+    }
+    for chain in [&bones.left_arm, &bones.right_arm, &bones.left_leg, &bones.right_leg] {
+        for pair in chain.windows(2) {
+            if let (Some(a), Some(b)) = (pair[0], pair[1]) {
+                if let Some((position, rotation, length)) = capsule_transform(a, b) {
+                    consider(Collider::capsule(LIMB_HITBOX_RADIUS, length).cast_ray(position, rotation, origin, *direction, max_distance, true), LIMB_DAMAGE);
+                }
+            }
+        }
+    }
+    if let (Some(belly), Some(chest)) = (bones.belly, bones.chest) {
+        if let Some((position, rotation, length)) = capsule_transform(belly, chest) {
+            if let Some((toi, normal)) = Collider::capsule(TORSO_HITBOX_RADIUS, length).cast_ray(position, rotation, origin, *direction, max_distance, true) {
+                // Which half of the capsule the real hit landed closer to
+                // decides chest vs. belly damage, same split
+                // zombie_hit_damage_bones uses.
+                let t = point_segment_t(origin + *direction * toi, belly, chest);
+                let damage = if t >= 0.5 { CHEST_DAMAGE } else { BELLY_DAMAGE };
+                if best.is_none_or(|(best_toi, ..)| toi < best_toi) {
+                    best = Some((toi, normal, damage));
+                }
+            }
+        }
+    }
+
+    best.map(|(toi, normal, damage)| (origin + *direction * toi, normal, damage))
 }
 
 // Regression tests for HITBOX_PLAN.md Phase 4 — zombie_hit_damage_bones'
@@ -697,18 +1152,25 @@ mod hitbox_phase4_tests {
         let head_entity = Entity::from_raw_u32(1).unwrap();
         let chest_entity = Entity::from_raw_u32(2).unwrap();
         let belly_entity = Entity::from_raw_u32(3).unwrap();
-        let limb_entity = Entity::from_raw_u32(4).unwrap();
+        let shoulder_entity = Entity::from_raw_u32(4).unwrap();
+        let elbow_entity = Entity::from_raw_u32(5).unwrap();
+        let hand_entity = Entity::from_raw_u32(6).unwrap();
         let bones = ZombieHitboxBones {
             head: Some(head_entity),
-            chest: Some(chest_entity),
             belly: Some(belly_entity),
-            limbs: vec![limb_entity],
+            chest: Some(chest_entity),
+            left_arm: [Some(shoulder_entity), Some(elbow_entity), Some(hand_entity)],
+            right_arm: [None, None, None],
+            left_leg: [None, None, None],
+            right_leg: [None, None, None],
         };
         let mut positions = std::collections::HashMap::new();
         positions.insert(head_entity, head);
         positions.insert(chest_entity, head - Vec3::Y * 0.6);
         positions.insert(belly_entity, head - Vec3::Y * 1.1);
-        positions.insert(limb_entity, head + Vec3::X * 0.6);
+        positions.insert(shoulder_entity, head + Vec3::X * 0.6);
+        positions.insert(elbow_entity, head + Vec3::X * 1.0);
+        positions.insert(hand_entity, head + Vec3::X * 1.4);
         (bones, positions)
     }
 
@@ -722,17 +1184,32 @@ mod hitbox_phase4_tests {
     }
 
     #[test]
-    fn hit_near_limb_bone_is_a_limb_hit_even_though_closer_to_head_height() {
+    fn hit_near_limb_joint_is_a_limb_hit_even_though_closer_to_head_height() {
         let (bones, positions) = bones_at(Vec3::new(0.0, 1.9, 0.0));
         let resolved = resolve_bone_world_positions(&bones, |e| positions.get(&e).copied());
-        let limb_pos = resolved.limbs[0];
+        let shoulder_pos = resolved.left_arm[0].unwrap();
         // Same world Y as the head, but far enough laterally that only the
-        // limb sphere (not the head sphere) should contain it — this is
+        // limb capsule (not the head sphere) should contain it — this is
         // exactly the case the old height-band guess handled via a
         // separate lateral-distance check; bone-based detection gets it
-        // for free from the limb bone's own real position.
-        let damage = zombie_hit_damage_bones(limb_pos, &resolved);
+        // for free from the limb joints' own real positions.
+        let damage = zombie_hit_damage_bones(shoulder_pos, &resolved);
         assert_eq!(damage, LIMB_DAMAGE);
+    }
+
+    #[test]
+    fn hit_midway_between_limb_joints_is_still_a_limb_hit() {
+        // The actual dead-zone bug this capsule-segment approach fixes: a
+        // point-sphere-per-joint design scored 0 damage for a hit landing
+        // cleanly on the visible forearm mesh but equidistant from both the
+        // shoulder and elbow spheres. A capsule spanning the two joints has
+        // no such gap.
+        let (bones, positions) = bones_at(Vec3::new(0.0, 1.9, 0.0));
+        let resolved = resolve_bone_world_positions(&bones, |e| positions.get(&e).copied());
+        let shoulder = resolved.left_arm[0].unwrap();
+        let elbow = resolved.left_arm[1].unwrap();
+        let midpoint = shoulder.lerp(elbow, 0.5);
+        assert_eq!(zombie_hit_damage_bones(midpoint, &resolved), LIMB_DAMAGE);
     }
 
     #[test]
@@ -742,6 +1219,19 @@ mod hitbox_phase4_tests {
         let chest_pos = resolved.chest.unwrap();
         let damage = zombie_hit_damage_bones(chest_pos, &resolved);
         assert_eq!(damage, CHEST_DAMAGE);
+    }
+
+    #[test]
+    fn hit_midway_on_torso_scores_belly_or_chest_not_zero() {
+        // Same dead-zone fix as the limb test above, applied to the
+        // belly<->chest capsule.
+        let (bones, positions) = bones_at(Vec3::new(0.0, 1.9, 0.0));
+        let resolved = resolve_bone_world_positions(&bones, |e| positions.get(&e).copied());
+        let belly = resolved.belly.unwrap();
+        let chest = resolved.chest.unwrap();
+        let midpoint = belly.lerp(chest, 0.5);
+        let damage = zombie_hit_damage_bones(midpoint, &resolved);
+        assert!(damage == CHEST_DAMAGE || damage == BELLY_DAMAGE, "expected torso damage, got {damage}");
     }
 
     #[test]
@@ -757,8 +1247,8 @@ mod hitbox_phase4_tests {
     fn far_from_every_bone_scores_zero_damage() {
         let (bones, positions) = bones_at(Vec3::new(0.0, 1.9, 0.0));
         let resolved = resolve_bone_world_positions(&bones, |e| positions.get(&e).copied());
-        // Nowhere near any bone's sphere — confirms this scores 0 rather
-        // than crediting some other region by accident.
+        // Nowhere near any bone's capsule/sphere — confirms this scores 0
+        // rather than crediting some other region by accident.
         let hit_point = Vec3::new(5.0, 1.0, 0.0);
         assert_eq!(zombie_hit_damage_bones(hit_point, &resolved), 0.0);
     }
@@ -803,13 +1293,38 @@ pub struct PlayerDiedFx {
     pub who_network_id: u64,
 }
 
-// Broadcast by the server (ServerEventAppExt, SendMode::Broadcast) after
-// resolving a FireShot, so every client — not just the shooter — plays the
-// same hitmarker/blood/spark/floating-damage VFX at the same place.
+// Sent by the server after resolving a FireShot, to play hitmarker/blood/
+// spark/floating-damage VFX. SurfaceHit uses SendMode::Broadcast (every
+// client, including the shooter — nothing was predicted for it locally).
+// ZombieHit uses SendMode::BroadcastExcept(shooter) instead: the shooter
+// already predicted and showed their own hitmarker locally the instant
+// they fired (see crate::client's shoot()), so echoing this back to them
+// too would double it up. The shooter's own floating-damage-number/blood-
+// or-spark choice instead waits on ShotConfirmed below, not this event.
 #[derive(Event, Clone, Copy, Serialize, Deserialize)]
 pub enum ShotFx {
     ZombieHit { point: Vec3, normal: Vec3, damage: f32, killed: bool },
     SurfaceHit { point: Vec3, normal: Vec3 },
+}
+
+// Sent by the server directly to the shooter only (SendMode::Direct), right
+// alongside the ZombieHit broadcast everyone else gets — carries the
+// server's own authoritative point/damage for that same shot. The floating
+// damage number and the blood-vs-spark choice (both depend on knowing the
+// real damage, which a local guess could get wrong — see
+// spawn_zombie_hit_feedback's own doc comment for the bug that caused) are
+// deliberately gated on THIS arriving, not on the client's own local
+// capsule-vs-zombie prediction in shoot(). The hitmarker itself still shows
+// immediately from that local prediction (an honest "the raycast physically
+// stopped here" signal that doesn't depend on knowing damage), so firing
+// still feels responsive — only the damage-dependent half of the feedback
+// waits on the server's real answer.
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub struct ShotConfirmed {
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub damage: f32,
+    pub killed: bool,
 }
 
 // --- Game state (server-authoritative, see crates/server) ---

@@ -624,6 +624,13 @@ class ViewController: UIViewController {
     // comment for why this exists instead of relying on bevy_ui.
     private let gameOverView = GameOverView()
     private var gameOverWasVisible = false
+    // Native map-select overlay — see MapSelectView.swift's own doc
+    // comment. Only shown on a plain icon-tap launch (no MAP_ID env var
+    // already present); a `devicectl process launch -e '{"MAP_ID":"N"}'`
+    // skips it entirely, same shape as the existing REAL_GAME/
+    // MINIMAL_MAP_PROBE env-var launch overrides.
+    private let mapSelectView = MapSelectView()
+    private var mapSelectionPending = ProcessInfo.processInfo.environment["MAP_ID"] == nil
     // Bluetooth keyboard/mouse (GameController framework) — see
     // GameControllerInput.swift. Created after rustMetalProbe so its "wire
     // already-connected devices" check in init() has a real probe pointer
@@ -762,6 +769,21 @@ class ViewController: UIViewController {
             guard let self, let probe = self.rustMetalProbe else { return }
             native_metal_probe_trigger_restart(probe)
         }
+
+        self.view.addSubview(mapSelectView)
+        mapSelectView.onSelect = { [weak self] mapId in
+            guard let self else { return }
+            // setenv, not a new FFI call — Rust reads MAP_ID directly (see
+            // current_scenario() in crates/client/src/lib.rs and
+            // scenario_from_env() in crates/server/src/main.rs), the exact
+            // same env var a devicectl launch -e would already have set
+            // before this process even started.
+            setenv("MAP_ID", "\(mapId)", 1)
+            self.mapSelectionPending = false
+            self.mapSelectView.isHidden = true
+            self.createGameProbeIfNeeded()
+            self.displayLink.isPaused = false
+        }
     }
 
     override func viewDidLayoutSubviews() {
@@ -769,6 +791,7 @@ class ViewController: UIViewController {
         touchHUD.layout(in: self.view)
         settingsMenu.layout(in: self.view)
         gameOverView.layout(in: self.view)
+        mapSelectView.layout(in: self.view)
     }
 
     // Polled once per frame (see enterFrame) — mirrors syncSettingsMenu's
@@ -931,6 +954,26 @@ class ViewController: UIViewController {
         }
     }
 
+    // Extracted out of viewDidAppear so mapSelectView's tap handler can
+    // call it too, once a map has actually been picked. Safe to call more
+    // than once — the rustMetalProbe == nil guard makes every call after
+    // the first a no-op.
+    private func createGameProbeIfNeeded() {
+        guard rustMetalProbe == nil else { return }
+        let viewPointer = Unmanaged.passUnretained(self.metalV).toOpaque()
+        if USE_REAL_GAME_NATIVE_RENDERER {
+            rustMetalProbe = native_metal_probe_create_real_game(viewPointer, Float(UIScreen.main.nativeScale))
+        } else {
+            rustMetalProbe = native_metal_probe_create(viewPointer, Float(UIScreen.main.nativeScale))
+        }
+        if #available(iOS 15.0, *) {
+            displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        }
+        if #available(iOS 14.0, *), gameControllerInput == nil {
+            gameControllerInput = GameControllerInput(viewController: self)
+        }
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         self.view.backgroundColor = .black
@@ -938,19 +981,17 @@ class ViewController: UIViewController {
             if metalDevice == nil {
                 self.startNativeMetalDemo()
             }
-        } else if rustMetalProbe == nil {
-            let viewPointer = Unmanaged.passUnretained(self.metalV).toOpaque()
-            if USE_REAL_GAME_NATIVE_RENDERER {
-                rustMetalProbe = native_metal_probe_create_real_game(viewPointer, Float(UIScreen.main.nativeScale))
-            } else {
-                rustMetalProbe = native_metal_probe_create(viewPointer, Float(UIScreen.main.nativeScale))
-            }
-            if #available(iOS 15.0, *) {
-                displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
-            }
-            if #available(iOS 14.0, *), gameControllerInput == nil {
-                gameControllerInput = GameControllerInput(viewController: self)
-            }
+        } else if mapSelectionPending {
+            // Show the map-select menu instead of creating the probe —
+            // createGameProbeIfNeeded() runs from mapSelectView.onSelect
+            // (viewDidLoad) once the player actually picks one. Don't
+            // unpause the display link yet either: nothing exists to
+            // render/tick until a map's chosen.
+            mapSelectView.isHidden = false
+            mapSelectView.layout(in: self.view)
+            return
+        } else {
+            createGameProbeIfNeeded()
         }
         if RUN_HEADLESS_GAME_APP_SPIKE && headlessGameApp == nil {
             headlessGameApp = native_game_app_create()

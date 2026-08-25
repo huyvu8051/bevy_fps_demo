@@ -26,6 +26,7 @@
 		ADC0D0F0295161DA00388970 /* libbevy_in_app.a in Frameworks */ = {isa = PBXBuildFile; fileRef = ADC0D0EF295161DA00388970 /* libbevy_in_app.a */; };
 		ADC0D0F2295172CA00388970 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ADC0D0F1295172CA00388970 /* AudioToolbox.framework */; };
 		B2C3D4E5F60708192A3B4C5D /* GameOverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60708192A3B4C5E /* GameOverView.swift */; };
+		C3D4E5F60708192A3B4C5D01 /* MapSelectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D4E5F60708192A3B4C5D02 /* MapSelectView.swift */; };
 		C00BEAA0420C572A4F4C40B4 /* GameControllerInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0201D3F45F1DFD3C0056C58C /* GameControllerInput.swift */; };
 		CAC3D02DF6156E0CA4D89F77 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D20FB2D2624CC3AD9399E2FB /* Assets.xcassets */; };
 		D64BE10804736E8BBA11E260 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1875C9E58B7F8E0C11DE3701 /* ContentView.swift */; };
@@ -80,6 +81,7 @@
 		ADC0D0EF295161DA00388970 /* libbevy_in_app.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libbevy_in_app.a; path = libs/debug/libbevy_in_app.a; sourceTree = "<group>"; };
 		ADC0D0F1295172CA00388970 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX13.1.sdk/System/Library/Frameworks/AudioToolbox.framework; sourceTree = DEVELOPER_DIR; };
 		B2C3D4E5F60708192A3B4C5E /* GameOverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameOverView.swift; sourceTree = "<group>"; };
+		C3D4E5F60708192A3B4C5D02 /* MapSelectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapSelectView.swift; sourceTree = "<group>"; };
 		D20FB2D2624CC3AD9399E2FB /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = ../../../watchOS/bevy_watch_Watch_App/Assets.xcassets; sourceTree = "<group>"; };
 		D8CA3A502809B915B27CDB84 /* bevy_watchApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = bevy_watchApp.swift; path = ../../../watchOS/bevy_watch_Watch_App/bevy_watchApp.swift; sourceTree = "<group>"; };
 		F3D288F668C218B4CB209538 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
@@ -129,6 +131,7 @@
 				0201D3F45F1DFD3C0056C58C /* GameControllerInput.swift */,
 				A1B2C3D4E5F60708192A3B4D /* SettingsMenuView.swift */,
 				B2C3D4E5F60708192A3B4C5E /* GameOverView.swift */,
+				C3D4E5F60708192A3B4C5D02 /* MapSelectView.swift */,
 				ADA4699026EB27CB008B1C7B /* libbevy_in_app.h */,
 				AD4B200026EB1D31008A6AEE /* MetalView.swift */,
 				ADA4699226EB2F9A008B1C7B /* bevy_in_iOS-Bridging-Header.h */,
@@ -308,6 +311,7 @@
 				C00BEAA0420C572A4F4C40B4 /* GameControllerInput.swift in Sources */,
 				A1B2C3D4E5F60708192A3B4C /* SettingsMenuView.swift in Sources */,
 				B2C3D4E5F60708192A3B4C5D /* GameOverView.swift in Sources */,
+				C3D4E5F60708192A3B4C5D01 /* MapSelectView.swift in Sources */,
 				A588795432421535AF3AB307 /* WatchSessionManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
