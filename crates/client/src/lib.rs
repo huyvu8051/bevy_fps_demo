@@ -6113,10 +6113,10 @@ fn shoot(
         .filter_map(|(entity, transform, global, bones)| {
             zombie_capsule
                 .cast_ray(transform.translation, transform.rotation, camera_transform.translation, *direction, MAX_SHOT_DISTANCE, true)
-                .map(|(distance, normal)| (distance, entity, transform, global, bones, normal))
+                .map(|(distance, normal)| (distance, entity, global, bones, normal))
         })
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
-    if let Some((distance, entity, transform, global, bones, normal)) = predicted_hit {
+    if let Some((distance, entity, global, bones, normal)) = predicted_hit {
         let point = camera_transform.translation + *direction * distance;
         commands.spawn((
             Mesh3d(vfx_assets.hit_assets.mesh.clone()),
@@ -6131,7 +6131,7 @@ fn shoot(
         // shooter's own local prediction) bones, unlike the server which
         // needed Phase 1-2's headless-skeleton work first.
         let resolved_bones = resolve_bone_world_positions(bones, |bone| vfx_assets.bone_transforms.get(bone).ok().map(|g| g.translation()));
-        let damage = zombie_hit_damage_bones(point, transform, &resolved_bones);
+        let damage = zombie_hit_damage_bones(point, &resolved_bones);
         spawn_floating_damage(&mut commands, point, damage);
         spawn_blood_effects(&mut commands, &vfx_assets.blood, &spatial_query, &time, point, normal, Some((entity, global)));
 

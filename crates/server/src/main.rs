@@ -690,7 +690,7 @@ fn debug_bot_fire(
         // stays on live (not history-rewound) bone positions — see this
         // function's own doc comment above.
         let resolved_bones = resolve_bone_world_positions(bones, |bone| bone_transforms.get(bone).ok().map(|g| g.translation()));
-        let damage = zombie_hit_damage_bones(hit_point, zombie_transform, &resolved_bones);
+        let damage = zombie_hit_damage_bones(hit_point, &resolved_bones);
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {
@@ -1489,23 +1489,18 @@ fn handle_fire_shot(
         .filter_map(|(entity, _, _, history)| {
             let (position, rotation, bones) = zombie_history_at(history, rewind_time)?;
             let (distance, normal) = capsule.cast_ray(position, rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
-            Some((distance, entity, position, rotation, bones, normal))
+            Some((distance, entity, bones, normal))
         })
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
 
-    if let Some((distance, entity, position, rotation, bones, normal)) = rewound_hit {
+    if let Some((distance, entity, bones, normal)) = rewound_hit {
         let hit_point = shot.origin + *direction * distance;
         if let Ok((_, mut health, mut knockback, _)) = zombies.get_mut(entity) {
-            let rewound_transform = Transform {
-                translation: position,
-                rotation,
-                scale: Vec3::ONE,
-            };
             // Bones ARE rewound to rewind_time here too now (Phase 3) —
             // zombie_history_at reconstructs their world position from
             // that same past instant's root pose + the offsets recorded
             // at that tick, not their live position.
-            let damage = zombie_hit_damage_bones(hit_point, &rewound_transform, &bones);
+            let damage = zombie_hit_damage_bones(hit_point, &bones);
             health.0 -= damage;
             let killed = health.0 <= 0.0;
             if killed {
@@ -1543,14 +1538,9 @@ fn handle_fire_shot(
     // landed directly on a zombie right now — treat that as an ordinary,
     // un-compensated hit instead of silently treating a zombie as a wall.
     if let Ok((entity, mut health, mut knockback, history)) = zombies.get_mut(hit.entity) {
-        let (position, rotation, bones) =
+        let (_, _, bones) =
             zombie_history_at(history, time.elapsed_secs()).unwrap_or((hit_point, Quat::IDENTITY, BoneWorldPositions::default()));
-        let live_transform = Transform {
-            translation: position,
-            rotation,
-            scale: Vec3::ONE,
-        };
-        let damage = zombie_hit_damage_bones(hit_point, &live_transform, &bones);
+        let damage = zombie_hit_damage_bones(hit_point, &bones);
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {

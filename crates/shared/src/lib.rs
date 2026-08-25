@@ -565,60 +565,30 @@ pub const KNOCKBACK_FORCE: f32 = 3.5 * ZOMBIE_SCALE_FACTOR;
 pub const MAX_SHOT_DISTANCE: f32 = 200.0;
 
 // Body-shot kills still take this many hits; a headshot always kills in one
-// (see zombie_hit_damage_geometric).
+// (see zombie_hit_damage_bones).
 pub const ZOMBIE_MAX_HEALTH: f32 = 8.0;
 
-// Per-region damage. Historically the ONLY way to decide "head vs chest vs
-// belly vs limb" was zombie_hit_damage_geometric's fixed-height-band guess
-// (see its own doc comment below), because the server had no skeleton/bone
-// data at all. As of HITBOX_PLAN.md Phase 2, real bone entities ARE
-// available (ZombieHitboxBones, populated server-side too, not just
-// client-side) — zombie_hit_damage_bones (below) uses them directly and is
-// what handle_fire_shot/shoot() actually call now;
-// zombie_hit_damage_geometric stays only as its fallback for the brief
-// window before a freshly-spawned zombie's glTF scene finishes loading and
-// its bones resolve.
+// Per-region damage, picked by zombie_hit_damage_bones from real bone
+// hitbox spheres (HITBOX_PLAN.md Phase 4) — see that function's own doc
+// comment.
 pub const HEAD_DAMAGE: f32 = ZOMBIE_MAX_HEALTH; // always a one-shot kill
 pub const CHEST_DAMAGE: f32 = 1.5;
 pub const BELLY_DAMAGE: f32 = 1.0;
 pub const LIMB_DAMAGE: f32 = 0.5;
 
-// Height bands (world-space meters, relative to the zombie's root, which
-// sits around the physics capsule's center — roughly hip/waist height, not
-// the feet) and a lateral distance from the vertical axis through the root,
-// used to tell an out-flung arm from the torso at similar heights. Rough
-// estimates, originally tuned for the ~2m-tall zombie at ZOMBIE_SCALE = 0.1
-// — not visually calibrated. Scaled by ZOMBIE_SCALE_FACTOR (see
-// ZOMBIE_RADIUS's own comment) so a bigger/smaller zombie's head/chest/
-// belly bands grow or shrink along with it instead of staying fixed at the
-// original size while the mesh around them changes.
+// Height bands (world-space meters, relative to the zombie's root) and a
+// lateral distance from the vertical axis through the root — the ORIGINAL
+// fixed-height-band guess this project used before real bone hitboxes
+// existed (see HITBOX_PLAN.md). No damage function reads these anymore
+// (zombie_hit_damage_bones has no fallback to them — an unresolved region
+// just scores 0 rather than falling back to a completely different
+// detection method); kept only because draw_zombie_hitboxes (client-side
+// debug gizmo) still draws rings at these heights for visual comparison
+// against the real bone spheres.
 pub const HITBOX_HEAD_MIN_Y: f32 = 0.9 * ZOMBIE_SCALE_FACTOR;
 pub const HITBOX_CHEST_MIN_Y: f32 = 0.3 * ZOMBIE_SCALE_FACTOR;
 pub const HITBOX_BELLY_MIN_Y: f32 = -0.2 * ZOMBIE_SCALE_FACTOR;
 pub const HITBOX_LIMB_LATERAL_MIN: f32 = 0.35 * ZOMBIE_SCALE_FACTOR;
-
-// Approximates head/chest/belly/limb from the hit point's height and
-// lateral distance from the zombie's own vertical axis. Works in the
-// zombie's own local space (undoes its current yaw) so the lateral-distance
-// check means the same thing regardless of which way the zombie is
-// currently facing.
-pub fn zombie_hit_damage_geometric(hit_point: Vec3, zombie_transform: &Transform) -> f32 {
-    let relative = hit_point - zombie_transform.translation;
-    let local = zombie_transform.rotation.inverse() * relative;
-    let lateral = local.x.hypot(local.z);
-
-    if local.y >= HITBOX_HEAD_MIN_Y {
-        HEAD_DAMAGE
-    } else if lateral >= HITBOX_LIMB_LATERAL_MIN {
-        LIMB_DAMAGE
-    } else if local.y >= HITBOX_CHEST_MIN_Y {
-        CHEST_DAMAGE
-    } else if local.y >= HITBOX_BELLY_MIN_Y {
-        BELLY_DAMAGE
-    } else {
-        LIMB_DAMAGE
-    }
-}
 
 // Sphere radii (world-space meters) tested against each resolved bone's
 // live world position — same "rough estimate, playtest-tunable" spirit as
@@ -670,13 +640,16 @@ pub fn resolve_bone_world_positions(bones: &ZombieHitboxBones, bone_position: im
 // Real per-bone hit detection (HITBOX_PLAN.md Phase 4, positions
 // optionally lag-compensated as of Phase 3) — tests the hit point against
 // a small sphere centered on each resolved bone's world position, checked
-// in the same head-first priority order zombie_hit_damage_geometric used
+// in the same head-first priority order the old height-band guess used
 // (so an overlapping head+chest sphere still resolves to a headshot,
-// matching the behavior players already know), falling back to the old
-// height-band guess for any region whose bone hasn't resolved (e.g. a
-// zombie whose glTF scene is still loading — see wire_zombie_hitbox_bones)
-// rather than silently treating a genuine hit as a miss.
-pub fn zombie_hit_damage_bones(hit_point: Vec3, zombie_transform: &Transform, bones: &BoneWorldPositions) -> f32 {
+// matching the behavior players already know). No fallback to the old
+// geometric guess anymore: a region whose bone hasn't resolved yet (or a
+// hit that lands outside every sphere) simply scores 0 damage — bones
+// resolve within a couple frames of a zombie spawning (see
+// wire_zombie_hitbox_bones), so this window is brief, and mixing in a
+// completely different hit-detection method as a silent fallback was
+// judged worse than just eating that brief no-damage window.
+pub fn zombie_hit_damage_bones(hit_point: Vec3, bones: &BoneWorldPositions) -> f32 {
     if let Some(pos) = bones.head {
         if hit_point.distance(pos) <= HEAD_HITBOX_RADIUS {
             return HEAD_DAMAGE;
@@ -697,7 +670,7 @@ pub fn zombie_hit_damage_bones(hit_point: Vec3, zombie_transform: &Transform, bo
             return BELLY_DAMAGE;
         }
     }
-    zombie_hit_damage_geometric(hit_point, zombie_transform)
+    0.0
 }
 
 // Regression tests for HITBOX_PLAN.md Phase 4 — zombie_hit_damage_bones'
@@ -728,17 +701,15 @@ mod hitbox_phase4_tests {
 
     #[test]
     fn hit_exactly_on_head_bone_is_a_headshot() {
-        let root = Transform::from_xyz(0.0, 1.0, 0.0);
         let (bones, positions) = bones_at(Vec3::new(0.0, 1.9, 0.0));
         let resolved = resolve_bone_world_positions(&bones, |e| positions.get(&e).copied());
         let head_pos = resolved.head.unwrap();
-        let damage = zombie_hit_damage_bones(head_pos, &root, &resolved);
+        let damage = zombie_hit_damage_bones(head_pos, &resolved);
         assert_eq!(damage, HEAD_DAMAGE);
     }
 
     #[test]
     fn hit_near_limb_bone_is_a_limb_hit_even_though_closer_to_head_height() {
-        let root = Transform::from_xyz(0.0, 1.0, 0.0);
         let (bones, positions) = bones_at(Vec3::new(0.0, 1.9, 0.0));
         let resolved = resolve_bone_world_positions(&bones, |e| positions.get(&e).copied());
         let limb_pos = resolved.limbs[0];
@@ -747,43 +718,36 @@ mod hitbox_phase4_tests {
         // exactly the case the old height-band guess handled via a
         // separate lateral-distance check; bone-based detection gets it
         // for free from the limb bone's own real position.
-        let damage = zombie_hit_damage_bones(limb_pos, &root, &resolved);
+        let damage = zombie_hit_damage_bones(limb_pos, &resolved);
         assert_eq!(damage, LIMB_DAMAGE);
     }
 
     #[test]
     fn hit_near_chest_bone_is_a_chest_hit() {
-        let root = Transform::from_xyz(0.0, 1.0, 0.0);
         let (bones, positions) = bones_at(Vec3::new(0.0, 1.9, 0.0));
         let resolved = resolve_bone_world_positions(&bones, |e| positions.get(&e).copied());
         let chest_pos = resolved.chest.unwrap();
-        let damage = zombie_hit_damage_bones(chest_pos, &root, &resolved);
+        let damage = zombie_hit_damage_bones(chest_pos, &resolved);
         assert_eq!(damage, CHEST_DAMAGE);
     }
 
     #[test]
-    fn unresolved_bones_fall_back_to_geometric_guess_instead_of_a_silent_miss() {
-        let root = Transform::from_xyz(0.0, 1.0, 0.0);
+    fn unresolved_bones_score_zero_damage_not_a_fallback_guess() {
         let empty = BoneWorldPositions::default();
         let hit_point = Vec3::new(0.0, 1.9, 0.0);
-        let damage = zombie_hit_damage_bones(hit_point, &root, &empty);
-        // No bone resolved at all (e.g. scene still loading) — must fall
-        // back to the geometric guess rather than silently scoring a miss.
-        assert_eq!(damage, zombie_hit_damage_geometric(hit_point, &root));
+        // No bone resolved at all (e.g. scene still loading) — must score
+        // 0, not silently fall back to a different detection method.
+        assert_eq!(zombie_hit_damage_bones(hit_point, &empty), 0.0);
     }
 
     #[test]
-    fn far_from_every_bone_falls_back_to_geometric_guess() {
-        let root = Transform::from_xyz(0.0, 1.0, 0.0);
+    fn far_from_every_bone_scores_zero_damage() {
         let (bones, positions) = bones_at(Vec3::new(0.0, 1.9, 0.0));
         let resolved = resolve_bone_world_positions(&bones, |e| positions.get(&e).copied());
-        // Nowhere near any bone's sphere — confirms the fallback still
-        // fires (rather than returning 0 damage) when bone spheres all
-        // miss, same as the empty-bones case above but with bones that
-        // resolved, just not close enough to this particular hit point.
+        // Nowhere near any bone's sphere — confirms this scores 0 rather
+        // than crediting some other region by accident.
         let hit_point = Vec3::new(5.0, 1.0, 0.0);
-        let damage = zombie_hit_damage_bones(hit_point, &root, &resolved);
-        assert_eq!(damage, zombie_hit_damage_geometric(hit_point, &root));
+        assert_eq!(zombie_hit_damage_bones(hit_point, &resolved), 0.0);
     }
 }
 
