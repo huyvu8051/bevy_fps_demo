@@ -15,6 +15,7 @@ use bevy::ecs::query::{With, Without};
 use bevy::ecs::system::{Query, Res, SystemState};
 use bevy::image::Image;
 use bevy::mesh::skinning::SkinnedMesh;
+use bevy::light::{DirectionalLight, PointLight};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::render::render_resource::TextureFormat;
@@ -136,6 +137,43 @@ pub struct RenderSnapshot {
     pub zombies: Vec<ZombieRenderState>,
     pub remote_players: Vec<Transform>,
     pub static_meshes: Vec<ExtractedMesh>,
+    pub light: Option<LightSnapshot>,
+    pub sun: Option<SunSnapshot>,
+}
+
+/// The scene's real `DirectionalLight` ("MainSun", crate::lib — spawned
+/// unconditionally for both USE_TEST_ARENA and the Sponza scene, and per
+/// its own doc comment there ("the arena instead just gets a brighter
+/// ambient/directional light") is actually the *primary* light for the
+/// test arena, with the single `PointLight` LightSnapshot already extracts
+/// more of a secondary/fill light — missed on the first lighting-port pass,
+/// which only extracted the point light.
+pub struct SunSnapshot {
+    /// The direction the light travels *toward* (the entity's own forward
+    /// vector) — same convention native_metal_probe.rs's old hardcoded
+    /// `light_dir` constant used, so `max(dot(normal, -sunDir), 0)` matches.
+    pub direction: [f32; 3],
+    pub color: [f32; 3],
+}
+
+/// The scene's real `PointLight`, extracted so the Metal renderer can
+/// actually shade from where the light is instead of a hand-picked fixed
+/// direction — lighting was never ported when the rest of the real game
+/// moved onto this renderer (see native_metal_probe.rs's own fragment
+/// shaders, which used a constant `light_dir` unrelated to any real light
+/// in the scene). USE_TEST_ARENA (crate::lib) spawns exactly one overhead
+/// `PointLight`, so `first()` is enough for now — if a scene with more
+/// than one light ever needs supporting, this is the one place to extend
+/// into a small array instead of a single `Option`.
+pub struct LightSnapshot {
+    pub position: [f32; 3],
+    /// sRGB, 0..1 per channel — already in the same range the renderer's
+    /// existing vertex/base-color colors use, unlike `PointLight::intensity`
+    /// (lumens, can be in the millions) which this deliberately doesn't
+    /// extract: the shader uses distance/range attenuation for falloff and
+    /// this color purely as a tint, not a physically-based exposure value.
+    pub color: [f32; 3],
+    pub range: f32,
 }
 
 /// A zombie's world transform plus which of zombie.glb's 5 embedded poses
@@ -293,6 +331,28 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             None => true,
         })
         .collect();
+
+    // Light: the scene's real PointLight — see LightSnapshot's own doc
+    // comment for why only position/color/range (not raw lumen intensity)
+    // are extracted.
+    let mut light_state: SystemState<Query<(&PointLight, &GlobalTransform)>> = SystemState::new(world);
+    snapshot.light = light_state.get(world).iter().next().map(|(light, transform)| {
+        let c = light.color.to_srgba();
+        LightSnapshot {
+            position: transform.translation().to_array(),
+            color: [c.red, c.green, c.blue],
+            range: light.range,
+        }
+    });
+
+    // Sun: the always-present DirectionalLight("MainSun") — see
+    // SunSnapshot's own doc comment for why this is a separate extraction
+    // from the point light above.
+    let mut sun_state: SystemState<Query<(&DirectionalLight, &GlobalTransform)>> = SystemState::new(world);
+    snapshot.sun = sun_state.get(world).iter().next().map(|(sun, transform)| {
+        let c = sun.color.to_srgba();
+        SunSnapshot { direction: transform.forward().to_array(), color: [c.red, c.green, c.blue] }
+    });
 
     // Static meshes: arena walls/floor + gun scene meshes, both plain
     // Mesh3d/MeshMaterial3d<StandardMaterial> entities — see this module's

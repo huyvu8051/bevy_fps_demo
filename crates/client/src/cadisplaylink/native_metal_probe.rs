@@ -24,7 +24,73 @@ use objc::{runtime::Object, *};
 // native_game_app.rs (headless App) and native_game_extract.rs
 // (extraction).
 use super::native_game_app::build_headless_game_ecs_app;
-use super::native_game_extract::{extract_render_snapshot, ExtractedMesh};
+use super::native_game_extract::{extract_render_snapshot, ExtractedMesh, LightSnapshot, SunSnapshot};
+
+// Lighting was never actually ported when this renderer took over from
+// bevy_render/wgpu — every fragment shader below used a single hardcoded
+// "sun" direction unrelated to any real light in the scene (see
+// render_frame's own former `light_dir` constant). Real-game mode now
+// extracts BOTH real lights crate::lib actually spawns: the always-present
+// `DirectionalLight`/"MainSun" (per its own doc comment, the *primary*
+// light for the open USE_TEST_ARENA room) as an unattenuated directional
+// term, and the arena's overhead `PointLight` (LightSnapshot) as a
+// secondary term attenuated by real distance/range — missing the sun
+// entirely was an oversight in the first lighting-port pass, which only
+// grabbed the point light. Point-light position/color/range only (not raw
+// lumen `intensity`, which can be in the millions) — see LightSnapshot's
+// own doc comment for why; same reasoning for not extracting the sun's
+// `illuminance` (lux, also not a 0..1 scalar this non-PBR shader could use
+// directly) — it contributes at the same fixed weight the old hardcoded
+// directional term always used, just with the real direction/color now.
+#[derive(Copy, Clone)]
+struct LightUniform {
+    position: [f32; 3],
+    range: f32,
+    // [f32; 4] (not 3) with an unused trailing 0.0 — every Uniforms struct
+    // below places a float4 (base_color_factor, or sun_color right after)
+    // and MSL's float4 *always* self-aligns to a 16-byte offset inside a
+    // struct regardless of what precedes it. Padding light_pos (12) +
+    // light_range (4) = 16 exactly, then making light_color a full
+    // 16-byte float4 too, keeps every subsequent field's offset landing
+    // on a clean 16-byte boundary in both Rust's repr(C) layout and
+    // MSL's — no manual `_pad` field needed, and no repeat of the exact
+    // struct-layout mismatch bug documented on skinned_fragment below.
+    color: [f32; 4],
+    // Direction the sun's light travels *toward* (see SunSnapshot's own
+    // doc comment) — same [f32;3]+f32-pad-to-16 pairing as position/range
+    // above; the trailing f32 is unused (no per-sun range concept).
+    sun_dir: [f32; 3],
+    _sun_pad: f32,
+    sun_color: [f32; 4],
+}
+
+impl LightUniform {
+    fn from_snapshots(light: Option<&LightSnapshot>, sun: Option<&SunSnapshot>) -> Self {
+        let (position, range, color) = match light {
+            Some(l) => (l.position, l.range, [l.color[0], l.color[1], l.color[2], 0.0]),
+            None => (FALLBACK_LIGHT.position, FALLBACK_LIGHT.range, FALLBACK_LIGHT.color),
+        };
+        let (sun_dir, sun_color) = match sun {
+            Some(s) => (s.direction, [s.color[0], s.color[1], s.color[2], 0.0]),
+            None => (FALLBACK_LIGHT.sun_dir, FALLBACK_LIGHT.sun_color),
+        };
+        LightUniform { position, range, color, sun_dir, _sun_pad: 0.0, sun_color }
+    }
+}
+
+// Fallback for whenever there's no real light to extract (the toy demo/
+// patrol probe world, which has no ECS lights at all) — a distant,
+// huge-range point light plus a downward directional term approximates
+// the old fixed-direction "sun" look well enough for that non-gameplay
+// path.
+const FALLBACK_LIGHT: LightUniform = LightUniform {
+    position: [400.0, 800.0, 400.0],
+    range: 4000.0,
+    color: [1.0, 1.0, 1.0, 0.0],
+    sun_dir: [-0.33, -0.67, -0.33],
+    _sun_pad: 0.0,
+    sun_color: [1.0, 1.0, 1.0, 0.0],
+};
 
 // The real game's own Sponza asset — loaded directly via the `gltf` crate
 // (see gltf_scene.rs), no offline conversion needed. (Model I/O on iOS
@@ -69,8 +135,12 @@ struct Vertex {
 #[derive(Copy, Clone)]
 struct Uniforms {
     view_projection: [[f32; 4]; 4],
-    light_dir: [f32; 3],
-    _pad: f32,
+    light_pos: [f32; 3],
+    light_range: f32,
+    light_color: [f32; 4],
+    sun_dir: [f32; 3],
+    _sun_pad: f32,
+    sun_color: [f32; 4],
 }
 
 const SHADER_SOURCE: &str = r#"
@@ -83,7 +153,10 @@ using namespace metal;
 // are tightly packed at 12 bytes with no padding — reading a
 // device-buffer array of that layout as plain float3 fields shifts every
 // field after the first by 4 bytes per preceding vec3, which is exactly
-// what produced the garbled rainbow/spike geometry the first time.
+// what produced the garbled rainbow/spike geometry the first time. Same
+// reasoning applies to every float3 in Uniforms below (see skinned_fragment's
+// own doc comment for the exact bug this caused once a struct had fields
+// *after* a plain float3).
 // No [[attribute(N)]] annotations here — those only apply to structs read
 // via [[stage_in]]/a vertex descriptor. vertex_main below reads this
 // straight out of a raw device buffer by index instead, so plain struct
@@ -96,11 +169,17 @@ struct Vertex {
 
 struct Uniforms {
     float4x4 viewProjection;
-    packed_float3 lightDir;
+    packed_float3 lightPos;
+    float lightRange;
+    float4 lightColor;
+    packed_float3 sunDir;
+    float _sunPad;
+    float4 sunColor;
 };
 
 struct VertexOut {
     float4 position [[position]];
+    float3 worldPos;
     float3 normal;
     float3 color;
 };
@@ -111,6 +190,7 @@ vertex VertexOut vertex_main(uint vid [[vertex_id]],
     VertexOut out;
     Vertex v = verts[vid];
     out.position = uniforms.viewProjection * float4(float3(v.position), 1.0);
+    out.worldPos = float3(v.position);
     out.normal = float3(v.normal);
     out.color = float3(v.color);
     return out;
@@ -118,8 +198,18 @@ vertex VertexOut vertex_main(uint vid [[vertex_id]],
 
 fragment float4 fragment_main(VertexOut in [[stage_in]],
                                constant Uniforms &uniforms [[buffer(1)]]) {
-    float diffuse = max(dot(normalize(in.normal), -normalize(float3(uniforms.lightDir))), 0.0);
-    float3 lit = in.color * (0.35 + 0.65 * diffuse);
+    float sunDiffuse = max(dot(normalize(in.normal), -normalize(float3(uniforms.sunDir))), 0.0);
+    float3 sunTerm = uniforms.sunColor.rgb * sunDiffuse;
+
+    float3 toLight = float3(uniforms.lightPos) - in.worldPos;
+    float dist = length(toLight);
+    float atten = clamp(1.0 - dist / max(uniforms.lightRange, 0.0001), 0.0, 1.0);
+    atten *= atten;
+    float pointDiffuse = max(dot(normalize(in.normal), toLight / max(dist, 0.0001)), 0.0) * atten;
+    float3 pointTerm = uniforms.lightColor.rgb * pointDiffuse;
+
+    float3 lightTerm = clamp(sunTerm + pointTerm, 0.0, 1.0);
+    float3 lit = in.color * (0.35 + 0.65 * lightTerm);
     return float4(lit, 1.0);
 }
 "#;
@@ -232,12 +322,18 @@ struct Vertex {
 
 struct Uniforms {
     float4x4 viewProjection;
-    packed_float3 lightDir;
+    packed_float3 lightPos;
+    float lightRange;
+    float4 lightColor;
+    packed_float3 sunDir;
+    float _sunPad;
+    float4 sunColor;
     float4 baseColorFactor;
 };
 
 struct VertexOut {
     float4 position [[position]];
+    float3 worldPos;
     float3 normal;
     float2 uv;
 };
@@ -248,6 +344,7 @@ vertex VertexOut sponza_vertex(uint vid [[vertex_id]],
     VertexOut out;
     Vertex v = verts[vid];
     out.position = uniforms.viewProjection * float4(float3(v.position), 1.0);
+    out.worldPos = float3(v.position);
     out.normal = float3(v.normal);
     out.uv = float2(v.uv);
     return out;
@@ -257,10 +354,20 @@ fragment float4 sponza_fragment(VertexOut in [[stage_in]],
                                  constant Uniforms &uniforms [[buffer(1)]],
                                  texture2d<float> baseColorTexture [[texture(0)]],
                                  sampler texSampler [[sampler(0)]]) {
-    float diffuse = max(dot(normalize(in.normal), -normalize(float3(uniforms.lightDir))), 0.0);
+    float sunDiffuse = max(dot(normalize(in.normal), -normalize(float3(uniforms.sunDir))), 0.0);
+    float3 sunTerm = uniforms.sunColor.rgb * sunDiffuse;
+
+    float3 toLight = float3(uniforms.lightPos) - in.worldPos;
+    float dist = length(toLight);
+    float atten = clamp(1.0 - dist / max(uniforms.lightRange, 0.0001), 0.0, 1.0);
+    atten *= atten;
+    float pointDiffuse = max(dot(normalize(in.normal), toLight / max(dist, 0.0001)), 0.0) * atten;
+    float3 pointTerm = uniforms.lightColor.rgb * pointDiffuse;
+
+    float3 lightTerm = clamp(sunTerm + pointTerm, 0.0, 1.0);
     float4 texColor = baseColorTexture.sample(texSampler, in.uv);
     float4 baseColor = texColor * uniforms.baseColorFactor;
-    float3 lit = baseColor.rgb * (0.35 + 0.65 * diffuse);
+    float3 lit = baseColor.rgb * (0.35 + 0.65 * lightTerm);
     return float4(lit, baseColor.a);
 }
 "#;
@@ -269,8 +376,12 @@ fragment float4 sponza_fragment(VertexOut in [[stage_in]],
 #[derive(Copy, Clone)]
 struct SponzaUniforms {
     view_projection: [[f32; 4]; 4],
-    light_dir: [f32; 3],
-    _pad: f32,
+    light_pos: [f32; 3],
+    light_range: f32,
+    light_color: [f32; 4],
+    sun_dir: [f32; 3],
+    _sun_pad: f32,
+    sun_color: [f32; 4],
     base_color_factor: [f32; 4],
 }
 
@@ -296,13 +407,18 @@ struct Vertex {
 struct Uniforms {
     float4x4 viewProjection;
     float4x4 modelMatrix;
-    packed_float3 lightDir;
-    float _pad;
+    packed_float3 lightPos;
+    float lightRange;
+    float4 lightColor;
+    packed_float3 sunDir;
+    float _sunPad;
+    float4 sunColor;
     float4 baseColorFactor;
 };
 
 struct VertexOut {
     float4 position [[position]];
+    float3 worldPos;
     float3 normal;
     float2 uv;
 };
@@ -322,7 +438,9 @@ vertex VertexOut skinned_vertex(uint vid [[vertex_id]],
     float3 skinnedNormal = normalize((skin * float4(float3(v.normal), 0.0)).xyz);
 
     VertexOut out;
-    out.position = uniforms.viewProjection * uniforms.modelMatrix * skinnedPos;
+    float4 worldPos4 = uniforms.modelMatrix * skinnedPos;
+    out.position = uniforms.viewProjection * worldPos4;
+    out.worldPos = worldPos4.xyz;
     out.normal = (uniforms.modelMatrix * float4(skinnedNormal, 0.0)).xyz;
     out.uv = float2(v.uv);
     return out;
@@ -332,31 +450,36 @@ fragment float4 skinned_fragment(VertexOut in [[stage_in]],
                                   constant Uniforms &uniforms [[buffer(1)]],
                                   texture2d<float> baseColorTexture [[texture(0)]],
                                   sampler texSampler [[sampler(0)]]) {
-    // Root cause finally found via a 3-step device/Simulator console+shader
-    // bisection: (1) raw texColor sample alone → colorful — rules out
-    // texture binding/decode; (2) texColor * uniforms.baseColorFactor →
-    // solid black — isolates the bug to reading baseColorFactor itself;
-    // (3) `float3 lightDir` (MSL default alignment 16, per-member — NOT the
-    // GLSL std140 "vec3 forces the next struct member to a 16-byte
-    // boundary" rule some docs conflate this with, but the net effect
-    // here was the same: Metal placed `_pad`/`baseColorFactor` at
-    // different byte offsets than Rust's tightly-packed repr(C)
-    // `SkinnedUniforms`/`SponzaUniforms`, since a lone `float3` still
-    // consumes a rounded-up 16-byte slot when a scalar or vec4 follows —
-    // so every read of `baseColorFactor` (and anything after `lightDir`)
-    // was landing 16 bytes short, into what was actually the tail of
-    // `lightDir`+`_pad` and the START of `baseColorFactor`'s own true
-    // location, i.e. reading zeroed/undefined memory beyond the buffer's
-    // real (Rust-sized) end for this struct's last field. Switching
-    // `lightDir` to `packed_float3` (4-byte-aligned, exactly matching
-    // Rust's `[f32; 3]`) makes both sides agree on every offset after it.
-    // sponza_fragment/QUAD's demo Uniforms never surfaced this as visibly
-    // broken purely by luck of what garbage/adjacent data ended up in the
-    // misread slot for those call sites, not because they were unaffected.
-    float diffuse = max(dot(normalize(in.normal), -normalize(float3(uniforms.lightDir))), 0.0);
+    // Root cause of an earlier version of this struct (kept for the next
+    // person who hits this class of bug) found via a 3-step device/
+    // Simulator console+shader bisection: (1) raw texColor sample alone →
+    // colorful — rules out texture binding/decode; (2) texColor *
+    // uniforms.baseColorFactor → solid black — isolates the bug to reading
+    // baseColorFactor itself; (3) a lone `float3 lightDir` field (MSL
+    // default alignment 16 per-member — NOT the GLSL std140 "vec3 forces
+    // the next struct member to a 16-byte boundary" rule some docs
+    // conflate this with, but the net effect here was the same) placed
+    // whatever followed it at a different byte offset than Rust's
+    // tightly-packed repr(C) struct, since a lone `float3` still consumes
+    // a rounded-up 16-byte slot when a scalar or vec4 follows. Every
+    // `packed_float3`/plain-float4 field below is chosen specifically so
+    // each field's offset lands on the same byte in both Rust's repr(C)
+    // layout and MSL's (see LightUniform's own doc comment) instead of
+    // re-deriving this by trial and error again.
+    float sunDiffuse = max(dot(normalize(in.normal), -normalize(float3(uniforms.sunDir))), 0.0);
+    float3 sunTerm = uniforms.sunColor.rgb * sunDiffuse;
+
+    float3 toLight = float3(uniforms.lightPos) - in.worldPos;
+    float dist = length(toLight);
+    float atten = clamp(1.0 - dist / max(uniforms.lightRange, 0.0001), 0.0, 1.0);
+    atten *= atten;
+    float pointDiffuse = max(dot(normalize(in.normal), toLight / max(dist, 0.0001)), 0.0) * atten;
+    float3 pointTerm = uniforms.lightColor.rgb * pointDiffuse;
+
+    float3 lightTerm = clamp(sunTerm + pointTerm, 0.0, 1.0);
     float4 texColor = baseColorTexture.sample(texSampler, in.uv);
     float4 baseColor = texColor * uniforms.baseColorFactor;
-    float3 lit = baseColor.rgb * (0.35 + 0.65 * diffuse);
+    float3 lit = baseColor.rgb * (0.35 + 0.65 * lightTerm);
     return float4(lit, baseColor.a);
 }
 "#;
@@ -422,8 +545,12 @@ struct QuadVertex {
 struct SkinnedUniforms {
     view_projection: [[f32; 4]; 4],
     model_matrix: [[f32; 4]; 4],
-    light_dir: [f32; 3],
-    _pad: f32,
+    light_pos: [f32; 3],
+    light_range: f32,
+    light_color: [f32; 4],
+    sun_dir: [f32; 3],
+    _sun_pad: f32,
+    sun_color: [f32; 4],
     base_color_factor: [f32; 4],
 }
 
@@ -499,6 +626,11 @@ pub struct NativeMetalProbe {
     real_game_scope_rotation: [f32; 4],
     real_game_scope_active: bool,
     real_game_scope_fov: f32,
+    // The scene's real PointLight, if any — see LightSnapshot's own doc
+    // comment. `None` (falls back to FALLBACK_LIGHT) before the first
+    // extraction, or for the toy demo/patrol probe world, which has no
+    // ECS lights at all.
+    real_game_light: LightUniform,
 }
 
 #[derive(bevy::ecs::component::Component, Clone, Copy)]
@@ -875,6 +1007,7 @@ impl NativeMetalProbe {
             real_game_scope_rotation: [0.0, 0.0, 0.0, 1.0],
             real_game_scope_active: false,
             real_game_scope_fov: 12.0_f32.to_radians(),
+            real_game_light: FALLBACK_LIGHT,
         }
     }
 
@@ -966,7 +1099,7 @@ impl NativeMetalProbe {
         &self,
         encoder: &metal::RenderCommandEncoderRef,
         view_projection: [[f32; 4]; 4],
-        light_dir: [f32; 3],
+        light: LightUniform,
         // 4th field is `(clip_index, anim_time)` — an *absolute* time to
         // feed `compute_joint_matrices` directly, not an offset added to
         // `now` the way the toy demo's own AnimOffset component used to
@@ -989,8 +1122,12 @@ impl NativeMetalProbe {
             for m in meshes {
                 let sponza_uniforms = SponzaUniforms {
                     view_projection,
-                    light_dir,
-                    _pad: 0.0,
+                    light_pos: light.position,
+                    light_range: light.range,
+                    light_color: light.color,
+                    sun_dir: light.sun_dir,
+                    _sun_pad: 0.0,
+                    sun_color: light.sun_color,
                     base_color_factor: m.base_color_factor,
                 };
                 encoder.set_vertex_buffer(0, Some(&m.vertex_buffer), 0);
@@ -1014,8 +1151,12 @@ impl NativeMetalProbe {
             for mesh in &self.sponza_meshes {
                 let sponza_uniforms = SponzaUniforms {
                     view_projection,
-                    light_dir,
-                    _pad: 0.0,
+                    light_pos: light.position,
+                    light_range: light.range,
+                    light_color: light.color,
+                    sun_dir: light.sun_dir,
+                    _sun_pad: 0.0,
+                    sun_color: light.sun_color,
                     base_color_factor: mesh.base_color_factor,
                 };
                 encoder.set_vertex_buffer(0, Some(&mesh.vertex_buffer), 0);
@@ -1040,7 +1181,15 @@ impl NativeMetalProbe {
                 );
             }
         } else {
-            let uniforms = Uniforms { view_projection, light_dir, _pad: 0.0 };
+            let uniforms = Uniforms {
+                view_projection,
+                light_pos: light.position,
+                light_range: light.range,
+                light_color: light.color,
+                sun_dir: light.sun_dir,
+                _sun_pad: 0.0,
+                sun_color: light.sun_color,
+            };
             encoder.set_render_pipeline_state(&self.pipeline);
             encoder.set_vertex_buffer(0, Some(&self.vertex_buffer), 0);
             encoder.set_vertex_bytes(1, std::mem::size_of::<Uniforms>() as u64, &uniforms as *const _ as *const _);
@@ -1120,8 +1269,12 @@ impl NativeMetalProbe {
                 let skinned_uniforms = SkinnedUniforms {
                     view_projection,
                     model_matrix,
-                    light_dir,
-                    _pad: 0.0,
+                    light_pos: light.position,
+                    light_range: light.range,
+                    light_color: light.color,
+                    sun_dir: light.sun_dir,
+                    _sun_pad: 0.0,
+                    sun_color: light.sun_color,
                     base_color_factor: mesh.base_color_factor,
                 };
                 encoder.set_vertex_buffer(0, Some(&mesh.vertex_buffer), 0);
@@ -1199,6 +1352,7 @@ impl NativeMetalProbe {
             } else {
                 self.real_game_scope_active = false;
             }
+            self.real_game_light = LightUniform::from_snapshots(snapshot.light.as_ref(), snapshot.sun.as_ref());
             real_game_static_meshes = snapshot.static_meshes;
             real_game_extracted.extend(
                 snapshot
@@ -1302,11 +1456,10 @@ impl NativeMetalProbe {
             look_at([0.0, 3.0, 10.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0])
         };
         let proj = perspective(if use_camera_state { 60.0_f32 } else { 45.0 }.to_radians(), aspect, 0.05, far);
-        let light_dir = {
-            let v = [-4.0f32, -8.0, -4.0];
-            let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-            [v[0] / len, v[1] / len, v[2] / len]
-        };
+        // The scene's real PointLight (see LightUniform's own doc comment)
+        // — falls back to a fixed distant "sun" only for the toy demo/
+        // patrol probe world, which has no ECS lights at all.
+        let light = self.real_game_light;
         let view_projection = mat_mul(proj, view);
         // Scope camera: reads the REAL ScopeCamera entity's own state
         // (see ScopeCameraSnapshot's doc comment on native_game_extract.rs)
@@ -1394,7 +1547,7 @@ impl NativeMetalProbe {
             self.draw_scene(
                 scope_encoder,
                 scope_view_projection,
-                light_dir,
+                light,
                 &extracted,
                 now,
                 use_sponza,
@@ -1425,7 +1578,7 @@ impl NativeMetalProbe {
         self.draw_scene(
             encoder,
             view_projection,
-            light_dir,
+            light,
             &extracted,
             now,
             use_sponza,
