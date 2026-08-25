@@ -10,7 +10,7 @@
 //! this module compiles and is testable independent of Step 4's actual
 //! draw-call wiring.
 
-use bevy::asset::Assets;
+use bevy::asset::{AssetId, Assets};
 use bevy::camera::{Camera, Projection, RenderTargetInfo};
 use bevy::ecs::hierarchy::Children;
 use bevy::ecs::query::{With, Without};
@@ -67,6 +67,14 @@ pub fn prime_camera_viewport(world: &mut bevy::ecs::world::World, width_pts: f32
 /// textures normally load as (extraction just skips it in that case,
 /// falling back to a flat-tinted draw rather than failing).
 pub struct ExtractedTexture {
+    /// The source `Image` asset's own stable identity — used by the renderer
+    /// to cache uploaded GPU textures keyed by WHICH image this is, not by
+    /// its position in `RenderSnapshot::static_meshes` (see
+    /// `NativeMetalProbe::real_game_textures`'s own doc comment for why a
+    /// positional cache silently went stale/mismatched once transient VFX
+    /// meshes — muzzle flash, smoke — started spawning/despawning every
+    /// shot, shuffling that Vec's contents frame to frame).
+    pub id: AssetId<Image>,
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
@@ -541,6 +549,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             let data = image.data.as_ref()?;
             match image.texture_descriptor.format {
                 TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => Some(ExtractedTexture {
+                    id: handle.id(),
                     width: image.texture_descriptor.size.width,
                     height: image.texture_descriptor.size.height,
                     rgba: data.clone(),

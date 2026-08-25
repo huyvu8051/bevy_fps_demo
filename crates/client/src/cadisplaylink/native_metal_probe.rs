@@ -8,6 +8,8 @@
 //! self-contained — no Bevy App involved at all, since the question this
 //! answers doesn't need ECS.
 
+use bevy::asset::AssetId;
+use bevy::image::Image;
 use core_graphics::geometry::{CGRect, CGSize};
 use metal::foreign_types::ForeignType;
 use metal::{
@@ -789,15 +791,24 @@ pub struct NativeMetalProbe {
     // present, `render_frame` draws its static geometry (arena+gun) and
     // drives the camera from its `FpsCamera` instead of touch input.
     real_game_app: Option<bevy::app::App>,
-    // Cache of per-static-mesh textures (arena walls/floor, gun scene
-    // meshes) — GPU texture upload is far more expensive than the small
-    // per-frame vertex buffer rebuild, so unlike vertex data (which must be
-    // rebaked every frame since Transform can change — gun sway/recoil),
-    // textures are only (re)uploaded when the mesh count changes (i.e. new
-    // assets finished loading), keyed positionally by index into
-    // `RenderSnapshot::static_meshes` (stable frame-to-frame since the same
-    // entities keep existing once spawned).
-    real_game_textures: Vec<Option<metal::Texture>>,
+    // Cache of uploaded GPU textures, keyed by the source `Image` asset's
+    // own stable AssetId — GPU texture upload is far more expensive than the
+    // small per-frame vertex buffer rebuild, so unlike vertex data (which
+    // must be rebaked every frame since Transform can change — gun sway/
+    // recoil), each unique texture is uploaded once and reused after that.
+    // Used to be keyed positionally by index into
+    // `RenderSnapshot::static_meshes` instead — that relied on "the same
+    // entities keep existing once spawned", which held for arena walls/gun
+    // meshes but broke the moment transient VFX meshes (muzzle flash,
+    // smoke — both textured) started spawning/despawning on every shot: the
+    // Vec's length (and which mesh sat at which index) changed constantly,
+    // so a cached texture from index N one frame could silently end up
+    // bound to a completely different mesh at index N the next, or trigger
+    // a full re-upload of every texture on the same frame a shot fired.
+    // Identity-keyed avoids both: uploads happen exactly once per unique
+    // image regardless of entity churn, and a lookup can never bind the
+    // wrong texture to the wrong mesh.
+    real_game_textures: std::collections::HashMap<AssetId<Image>, metal::Texture>,
     // Real-game mode only: the FpsCamera entity's actual world-space
     // rotation quaternion (xyzw), straight from GlobalTransform — includes
     // ViewRecoil's kick and Lean's roll, unlike camera_yaw/camera_pitch
@@ -1388,7 +1399,7 @@ impl NativeMetalProbe {
             ecs_app,
             start_time: std::time::Instant::now(),
             real_game_app,
-            real_game_textures: Vec::new(),
+            real_game_textures: std::collections::HashMap::new(),
             real_game_camera_rotation: [0.0, 0.0, 0.0, 1.0],
             real_game_ads_blend: 0.0,
             real_game_scope_zoom: 8.0,
@@ -1851,27 +1862,19 @@ impl NativeMetalProbe {
                     .map(|t| (t, EntityKind::Soldier, (crate::PLAYER_MODEL_ANIM_WALK, now))),
             );
         }
-        // Texture cache: (re)upload when the mesh count changed OR when any
-        // mesh's texture-presence flipped since the last check (see
-        // `real_game_textures`'s own doc comment on the struct). Count
-        // alone isn't enough: the gun's own texture loads asynchronously
-        // (Bevy's asset server), so on the frame this list first stabilizes
-        // at its final length, some meshes may still legitimately have
-        // `texture: None` (still loading) rather than "no texture by
-        // design" — caching that snapshot permanently left the gun stuck
-        // rendering flat white (texture=None -> white_texture fallback)
-        // for the rest of the app's life once its real texture DID finish
-        // loading a moment later, since the count itself never changed
-        // again to re-trigger a rebuild. Comparing the has-texture pattern
-        // (not the pixels themselves — cheap) catches that transition.
-        // Building a fresh `Device` clone rather than borrowing
-        // `self.device` directly sidesteps a disjoint-field-borrow fight
-        // with the `self.real_game_textures = ...` assignment right after.
+        // Texture cache: upload once per unique `Image` asset, keyed by its
+        // own AssetId (see `real_game_textures`'s own doc comment on the
+        // struct for why identity-keyed, not positional). A texture asset
+        // never changes its own pixels after loading — the only thing that
+        // can happen is a mesh not having ITS texture ready yet (Bevy's
+        // asset server loads the gun's texture asynchronously), which just
+        // means `mesh.texture` is `None` for a frame or two and naturally
+        // resolves to `Some` once loaded, no special-casing needed here.
         // Must happen here — after msaa_enabled is set by the extraction
         // above, but before real_game_meshes below borrows
         // self.real_game_textures (immutably, for the rest of this
         // function via RealGameMeshDraw's own lifetime), which would
-        // otherwise conflict with the &mut self these need.
+        // otherwise conflict with the &mut self this needs.
         let msaa_enabled = self.msaa_enabled;
         let depth_texture =
             if msaa_enabled { self.ensure_depth_texture(width, height) } else { self.ensure_depth_texture_no_msaa(width, height) };
@@ -1879,35 +1882,29 @@ impl NativeMetalProbe {
         let Some(drawable) = self.layer.next_drawable() else { return };
         let texture = drawable.texture();
 
-        let texture_pattern_changed = self.real_game_textures.len() != real_game_static_meshes.len()
-            || self
-                .real_game_textures
-                .iter()
-                .zip(real_game_static_meshes.iter())
-                .any(|(cached, mesh)| cached.is_some() != mesh.texture.is_some());
-        if texture_pattern_changed {
-            let device = self.device.clone();
-            self.real_game_textures = real_game_static_meshes
-                .iter()
-                .map(|m| m.texture.as_ref().map(|t| super::gltf_scene::upload_texture(&device, t.width, t.height, &t.rgba)))
-                .collect();
+        for mesh in &real_game_static_meshes {
+            let Some(t) = mesh.texture.as_ref() else { continue };
+            if !self.real_game_textures.contains_key(&t.id) {
+                let uploaded = super::gltf_scene::upload_texture(&self.device, t.width, t.height, &t.rgba);
+                self.real_game_textures.insert(t.id, uploaded);
+            }
         }
         let real_game_meshes: Vec<RealGameMeshDraw> = real_game_static_meshes
             .iter()
-            .zip(self.real_game_textures.iter())
-            .map(|(mesh, texture)| {
+            .map(|mesh| {
                 let verts = bake_static_mesh_vertices(mesh);
                 let vertex_buffer = self.device.new_buffer_with_data(
                     verts.as_ptr() as *const _,
                     (verts.len() * std::mem::size_of::<super::gltf_scene::GltfVertex>()) as u64,
                     MTLResourceOptions::StorageModeShared,
                 );
+                let texture = mesh.texture.as_ref().and_then(|t| self.real_game_textures.get(&t.id));
                 RealGameMeshDraw {
                     vertex_buffer,
                     vertex_count: verts.len(),
                     base_color_factor: mesh.base_color,
                     emissive: mesh.emissive,
-                    texture: texture.as_ref(),
+                    texture,
                 }
             })
             .collect();
