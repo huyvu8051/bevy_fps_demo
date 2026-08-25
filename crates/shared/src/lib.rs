@@ -524,6 +524,19 @@ pub struct ClearAllZombies;
 #[derive(Event, Clone, Copy, Serialize, Deserialize)]
 pub struct SetAutoMaintainZombies(pub bool);
 
+// Client -> server toggle for AI takeover of THIS SENDER'S OWN player body
+// (movement + aim + fire) — unlike SetAutoMaintainZombies above (a single
+// world-wide flag), autopilot is per-player: the server observer targets
+// `trigger.client_id.entity()`, the same sending-client's-own-entity
+// pattern `apply_client_input`/`handle_fire_shot` already use. Moved fully
+// server-side (see crates/server's server_autopilot_* systems) rather than
+// the client deciding and merely sending normal input, specifically so
+// autopilot keeps working through an AFK window or even a dropped
+// connection — the server doesn't need this client to be doing anything
+// for its own decision loop to keep running.
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub struct SetAutopilot(pub bool);
+
 // --- Debug bots (client debug panel, see crates/client) ---
 // Fake NetPlayer stand-ins so multi-player zombie targeting can be tested
 // without launching a second real client. Identified by a small server-

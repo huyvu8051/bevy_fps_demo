@@ -156,10 +156,23 @@ pub fn autopilot(app: &mut App) -> bool {
     app.world().get_resource::<crate::autopilot::Autopilot>().map(|v| v.0).unwrap_or(true)
 }
 
+// Autopilot itself now runs server-side (see SetAutopilot's own doc
+// comment, crates/shared) — this both updates the local mirror (so the
+// Settings toggle reflects the new state instantly, same zero-latency
+// pattern as e.g. set_zombie_count_and_trigger below) AND sends
+// SetAutopilot so the server actually flips its own copy. Not gated on a
+// live server the way SetZombieCount etc. are (those need a live server
+// to mean anything at all): this is safe to call before a connection
+// exists too, since bevy_replicon just queues client_trigger calls until
+// there's a connection to flush them over.
 pub fn set_autopilot(app: &mut App, on: bool) {
+    use bevy_replicon::prelude::ClientTriggerExt;
     if let Some(mut v) = app.world_mut().get_resource_mut::<crate::autopilot::Autopilot>() {
         v.0 = on;
     }
+    let mut state: SystemState<Commands> = SystemState::from_world(app.world_mut());
+    state.get_mut(app.world_mut()).client_trigger(shared::SetAutopilot(on));
+    state.apply(app.world_mut());
 }
 
 // The remaining debug-panel toggles (crate::lib's Cheats page 1 second/
