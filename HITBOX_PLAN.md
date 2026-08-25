@@ -124,30 +124,52 @@ panic, not knowable up front):
 `init_asset`, `register_type` calls) are permanent — Phase 2 builds on
 top of them rather than redoing this discovery process.
 
-## Phase 2 — Real zombies carry a live skeleton + bone hitbox entities
+## Phase 2 — Real zombies carry a live skeleton + bone hitbox entities — ✅ DONE
 
-1. Move `ZombieHitboxBones` (component) and `wire_zombie_hitbox_bones`
-   (system) from `crates/client/src/lib.rs` to `crates/shared/src/lib.rs`
-   so both crates register the same component/system instead of
-   duplicating it. Re-export from client to avoid breaking existing call
-   sites.
-2. `crates/server/src/main.rs`'s `spawn_zombies`: alongside the existing
-   `Collider::capsule` (kept as-is — the broad-phase shape, see Phase 3),
-   attach `ZombieHitboxBones::default()` to the zombie root and spawn the
-   `SceneRoot` glTF as a child, exactly mirroring the client's
-   `zombie_cosmetic_bundle()`/`zombie_mesh_bundle()` split. Also spawn/
-   attach whatever `AnimationPlayer` + the zombie's current animation
-   clip (idle/walk/run — the server already tracks zombie motion state
-   for `ZombieMotion`, reuse that to pick which clip plays, matching
-   whatever the client shows for visual consistency, even though the
-   server doesn't need to *render* it — it needs its `AnimationPlayer` to
-   be actually advancing so bone transforms are correct at query time).
-3. Register `wire_zombie_hitbox_bones` in the server's `Update` schedule
-   (same system, now living in `shared`).
-4. **Exit criterion:** every server-spawned zombie has non-`None`
-   `ZombieHitboxBones.head`/`chest`/`belly`/at least one limb within a
-   couple frames of spawning, verified via a temporary debug log/assert
-   in a test build.
+**Confirmed working**: every real server-spawned zombie now carries a
+resolved `Head` bone entity — verified with a temporary per-second log
+(`[hitbox-phase2] head bone resolved: N/N zombies`, always 1:1 across
+fluctuating zombie counts as some got killed/respawned during the test),
+then removed once confirmed.
+
+What actually landed (close to the original plan, with one
+simplification):
+
+1. Moved `ZombieHitboxBones` + `wire_zombie_hitbox_bones` from
+   `crates/client/src/lib.rs` to `crates/shared/src/lib.rs` as `pub`,
+   with client re-importing both from `shared` — no call-site changes
+   needed beyond the `use` list.
+2. `crates/server/src/main.rs`: added a new `on_zombie_spawned` observer
+   (`On<Add, Zombie>`, mirroring the client's existing
+   `on_zombie_replicated`) that spawns the same `zombie.glb` `SceneRoot`
+   as a child the instant any zombie entity is created — decoupled from
+   `spawn_zombies` itself (which has 6 call sites across different
+   systems; adding the observer avoided threading `Res<AssetServer>`
+   through all of them). `spawn_zombies`'s own bundle just gained
+   `ZombieHitboxBones::default()` + `Visibility::default()` (the latter
+   not in the original plan — needed to silence Bevy's B0004 warning:
+   the child scene's `InheritedVisibility` requires the *parent* to have
+   `Visibility` too, not just itself).
+3. Animation: **simplified from the plan's "match ZombieMotion's
+   moving/sprinting state" to always Idle** for this phase — a
+   `ServerZombieAnim` resource (one shared `AnimationGraph`, built once
+   at Startup, same one-graph-many-players shape as Phase 1's spike and
+   the client's own `ZombieAnim`) plus `wire_server_zombie_animations`
+   (watches `Added<AnimationPlayer>`, attaches the graph, plays Idle on
+   loop). Real walk/run/attack-state-matched animation selection is
+   deferred to whenever Phase 3's pose-level rewind is being built —
+   there's no point picking the "correct" clip per zombie until the
+   history buffer can actually rewind to it; matching today would be
+   thrown away work.
+4. Registered `wire_zombie_hitbox_bones` (now `pub` in `shared`) in the
+   server's `Update` schedule alongside the new `wire_server_zombie_animations`.
+5. Verified no regression beyond Phase 1's own check: server starts,
+   client connects, zombies spawn/replicate/die/respawn normally.
+
+**Exit criterion met** — every real zombie resolves its hitbox bones
+within a couple frames of spawning, confirmed at fluctuating population
+sizes (6-10 in the test run), not just the single spike zombie from
+Phase 1.
 
 ## Phase 3 — Pose-level lag compensation (the Valorant/Overwatch part)
 

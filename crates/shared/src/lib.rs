@@ -73,6 +73,86 @@ pub struct ZombieMotion {
 #[derive(Component, Default)]
 pub struct KnockbackVelocity(pub Vec3);
 
+// Bone entities used for real per-bone hit detection (see HITBOX_PLAN.md
+// Phase 4 — this replaces zombie_hit_damage_geometric's fixed-Y-threshold
+// guess once wired into damage). zombie.glb's rig names its nodes after
+// standard humanoid bones; wire_zombie_hitbox_bones (below) matches
+// against those names as they show up while the glTF scene loads.
+// Fields are individually optional/incrementally filled rather than an
+// all-or-nothing bundle, so a hit lands correctly even mid-load using
+// whichever bones have resolved so far. Moved here from crates/client
+// (Phase 2) so the server's own zombie skeletons (Phase 2's real point)
+// can populate the exact same component the client already did —
+// one system, two callers, instead of two copies drifting apart.
+#[derive(Component, Default)]
+pub struct ZombieHitboxBones {
+    pub head: Option<Entity>,
+    pub chest: Option<Entity>,
+    pub belly: Option<Entity>,
+    pub limbs: Vec<Entity>,
+}
+
+// Matches newly-spawned bone entities (glTF nodes get a Name component
+// from their node name) against zombie.glb's known rig names, and
+// records whichever ones matter on the zombie root's ZombieHitboxBones.
+// Registered in both crates/client (cosmetic gizmo today) and
+// crates/server (Phase 2 onward — real hit detection) — same system,
+// same component, so there's exactly one place this bone-name mapping
+// can drift out of sync with the actual rig.
+pub fn wire_zombie_hitbox_bones(
+    child_of: Query<&ChildOf>,
+    mut zombies: Query<&mut ZombieHitboxBones, With<Zombie>>,
+    new_names: Query<(Entity, &Name), Added<Name>>,
+) {
+    for (bone_entity, name) in &new_names {
+        let is_head = name.as_str() == "Head";
+        let is_chest = name.as_str() == "Spine2";
+        let is_belly = name.as_str() == "Spine";
+        // Upper arm/leg alone left forearm/hand/lower-leg/foot hits with no
+        // nearby marker of their own, misattributing to whatever tracked
+        // bone happened to be geometrically closest — covering the full
+        // chain fixes that.
+        let is_limb = matches!(
+            name.as_str(),
+            "LeftArm"
+                | "RightArm"
+                | "LeftForeArm"
+                | "RightForeArm"
+                | "LeftHand"
+                | "RightHand"
+                | "LeftUpLeg"
+                | "RightUpLeg"
+                | "LeftLeg"
+                | "RightLeg"
+                | "LeftFoot"
+                | "RightFoot"
+        );
+        if !(is_head || is_chest || is_belly || is_limb) {
+            continue;
+        }
+
+        let mut current = bone_entity;
+        for _ in 0..20 {
+            if let Ok(mut bones) = zombies.get_mut(current) {
+                if is_head {
+                    bones.head = Some(bone_entity);
+                } else if is_chest {
+                    bones.chest = Some(bone_entity);
+                } else if is_belly {
+                    bones.belly = Some(bone_entity);
+                } else {
+                    bones.limbs.push(bone_entity);
+                }
+                break;
+            }
+            let Ok(parent) = child_of.get(current) else {
+                break;
+            };
+            current = parent.0;
+        }
+    }
+}
+
 // How often a zombie in melee range can bite — see ZombieAttackTimer.
 pub const ZOMBIE_ATTACK_INTERVAL: f32 = 1.0;
 

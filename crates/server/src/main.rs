@@ -18,7 +18,8 @@ use shared::{
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetZombieCount,
     ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
-    ZombieAttackTimer, ZombieMotion, ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
+    ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, wire_zombie_hitbox_bones,
+    ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PLAYER_LENGTH,
@@ -43,7 +44,9 @@ use vleue_navigator::prelude::*;
 // spike (removed once its exit criterion — head bone Y visibly changing,
 // confirmed headless — passed); Phase 2 will need them again once real
 // zombies get a live skeleton.
+use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex};
 use bevy::animation::AnimationPlayer;
+use bevy::gltf::GltfAssetLabel;
 use bevy::pbr::StandardMaterial;
 
 // Fixed debug port — the client connects here by default (see SERVER_ADDR
@@ -183,7 +186,7 @@ fn main() {
         .init_resource::<ZombieTargetCount>()
         .init_resource::<AutoMaintainZombies>()
         .init_resource::<NextZombieSpawnIndex>()
-        .add_systems(Startup, (start_server, spawn_arena_colliders, spawn_zombie_navmesh, spawn_initial_zombies))
+        .add_systems(Startup, (start_server, spawn_arena_colliders, spawn_zombie_navmesh, spawn_initial_zombies, setup_server_zombie_anim))
         .add_systems(
             PreUpdate,
             (
@@ -204,11 +207,17 @@ fn main() {
                 // fighting with it. Re-add once ZombieTargetCount/director
                 // hordes are reconciled to coexist properly.
                 // run_ai_director,
+                // Phase 2 (HITBOX_PLAN.md): real skeleton wiring for every
+                // server zombie — see on_zombie_spawned (the observer that
+                // spawns the child scene) for the other half.
+                wire_server_zombie_animations,
+                wire_zombie_hitbox_bones,
             ),
         )
         .add_observer(spawn_player)
         .add_observer(log_client_disconnect)
         .add_observer(apply_client_input)
+        .add_observer(on_zombie_spawned)
         .add_observer(spawn_more_zombies)
         .add_observer(on_set_zombie_count)
         .add_observer(on_clear_all_zombies)
@@ -889,6 +898,16 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], director_spawned: boo
             // spatial queries pick up a bare Collider fine.
             Collider::capsule(ZOMBIE_RADIUS, ZOMBIE_LENGTH),
             ZombieHistory::default(),
+            // Phase 2 (HITBOX_PLAN.md): populated by wire_zombie_hitbox_bones
+            // (shared, same system the client already ran) once
+            // on_zombie_spawned's child scene finishes loading — real bone
+            // entities for Phase 4's per-bone hit detection, not the
+            // Y-threshold guess zombie_hit_damage_geometric uses today.
+            ZombieHitboxBones::default(),
+            // Needed on the root too, not just the child scene entity — an
+            // InheritedVisibility child under a parent with no Visibility
+            // at all trips Bevy's own B0004 warning every tick.
+            Visibility::default(),
         ));
         if ZOMBIE_AI_ENABLED {
             zombie.insert(Thinker::build().picker(FirstToScore { threshold: 0.8 }).when(NearPlayer, ChaseAction));
@@ -896,6 +915,70 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], director_spawned: boo
         if director_spawned {
             zombie.insert(DirectorSpawned);
         }
+    }
+}
+
+// --- Phase 2 (HITBOX_PLAN.md): real skeleton on every server zombie -------
+// Same asset the client renders — see crates/client's ZOMBIE_PATH — loaded
+// here purely for its scene graph + animation curves (no RenderPlugin ever
+// touches it, confirmed in Phase 1's spike).
+const SERVER_ZOMBIE_PATH: &str = "models/zombie.glb";
+// zombie.glb's animation order, per client::lib.rs's own ZOMBIE_ANIM_*
+// constants (BITE=0, CRAWL=1, IDLE=2, RUN=3, WALK=4) — reusing the same
+// index here rather than redefining it, since both sides load the exact
+// same file and a drift between them would silently desync which clip
+// "idle" means.
+const SERVER_ZOMBIE_ANIM_IDLE: usize = 2;
+
+// Built once at Startup (one AnimationGraph asset, shared by every
+// zombie's AnimationPlayer — same one-graph-many-players pattern as the
+// client's own ZombieAnim) rather than per-zombie, since every server
+// zombie plays from the same clip set.
+#[derive(Resource)]
+struct ServerZombieAnim {
+    graph: Handle<AnimationGraph>,
+    idle: AnimationNodeIndex,
+}
+
+fn setup_server_zombie_anim(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
+) {
+    let clip = asset_server.load(GltfAssetLabel::Animation(SERVER_ZOMBIE_ANIM_IDLE).from_asset(SERVER_ZOMBIE_PATH));
+    let (graph, nodes) = AnimationGraph::from_clips([clip]);
+    commands.insert_resource(ServerZombieAnim {
+        graph: graphs.add(graph),
+        idle: nodes[0],
+    });
+}
+
+// Every zombie gets the real skeleton as a child scene the instant it's
+// spawned — mirrors crates/client's on_zombie_replicated (Add<Zombie>
+// observer spawning the exact same SceneRoot as a cosmetic child), just
+// server-side and for hit detection instead of rendering.
+fn on_zombie_spawned(trigger: On<Add, Zombie>, mut commands: Commands, asset_server: Res<AssetServer>) {
+    let scene = asset_server.load(GltfAssetLabel::Scene(0).from_asset(SERVER_ZOMBIE_PATH));
+    commands.entity(trigger.event().entity).with_child((
+        Transform::default(),
+        Visibility::default(),
+        SceneRoot(scene),
+    ));
+}
+
+// Same "wait for the async scene load, then attach the graph and start
+// playing" shape as crates/client's wire_zombie_animations, minus that
+// version's PlayerModel-vs-Zombie ambiguity check — this server never
+// spawns any other kind of animated character, so every AnimationPlayer
+// that shows up belongs to a zombie by construction.
+fn wire_server_zombie_animations(
+    mut commands: Commands,
+    anim: Res<ServerZombieAnim>,
+    mut new_players: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
+) {
+    for (player_entity, mut player) in &mut new_players {
+        commands.entity(player_entity).try_insert(AnimationGraphHandle(anim.graph.clone()));
+        player.play(anim.idle).repeat();
     }
 }
 
