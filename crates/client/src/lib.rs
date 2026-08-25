@@ -1773,6 +1773,8 @@ fn build_game_common(app: &mut App) {
         .init_resource::<NoclipFlyInput>()
         .init_resource::<TouchReload>()
         .init_resource::<SensitivityScale>()
+        .init_resource::<KillCount>()
+        .init_resource::<RecentlyHitZombies>()
         .add_systems(Startup, (setup /*, log_window_resolution */,));
     // CPU bisection (temporary, not deleted): the ENTIRE Update schedule
     // below is commented out — rock-bottom baseline with only whatever
@@ -1854,6 +1856,7 @@ fn build_game_common(app: &mut App) {
                 sync_player_model,
                 update_zombie_lod,
                 zombies_damage_player,
+                count_local_kills,
             )
                 .chain(),
             (
@@ -2808,6 +2811,32 @@ impl Default for AutoMaintainUi {
         Self(true)
     }
 }
+
+// Apple Watch companion app feature: total zombies this local player has
+// personally killed this session. Read by native_menu::kill_count via the
+// Watch's own WatchConnectivity sync loop on the Swift side (see
+// ViewController.swift's syncHud). Incremented by count_local_kills below,
+// never by on_shot_fx directly — see RecentlyHitZombies' own doc comment
+// for why a naive "ShotFx::ZombieHit{killed:true} arrived" count would
+// under-count (the shooter's own client is excluded from receiving that
+// broadcast — see on_shot_fx's doc comment — so most of this player's own
+// kills would never be seen there at all).
+#[derive(Resource, Default)]
+struct KillCount(u32);
+
+// Zombies this client's own shoot() just predicted a hit on, each paired
+// with a countdown until the entry expires. count_local_kills treats a
+// zombie's despawn (via RemovedComponents<Zombie>) as "I killed it" only
+// while it's still in this map — otherwise an unrelated despawn (server
+// respawn cycling, a teammate's kill, disconnect cleanup) would inflate
+// this player's own kill count. The TTL just needs to comfortably outlast
+// one damage-resolution round trip (FireShot -> server despawn ->
+// replicated back to us) — see shoot()'s own doc comment on why hit
+// resolution is never fully local.
+const RECENTLY_HIT_ZOMBIE_TTL: f32 = 2.0;
+
+#[derive(Resource, Default)]
+struct RecentlyHitZombies(std::collections::HashMap<Entity, f32>);
 
 // True if any entity matching `T` was tapped/clicked this frame — shared by
 // every touch/click button in this file that just needs a plain
@@ -4257,6 +4286,34 @@ fn zombies_damage_player(
         if attack_timer.0 <= 0.0 {
             health.0 -= ZOMBIE_ATTACK_DAMAGE;
             attack_timer.0 = ZOMBIE_ATTACK_INTERVAL;
+        }
+    }
+}
+
+// Apple Watch companion app's kill counter — see KillCount's own doc
+// comment for why this can't just watch ShotFx::ZombieHit{killed:true}
+// (the shooter never receives that broadcast for their own shot, only
+// everyone else does). Instead, shoot() records every zombie this client
+// predicted a local hit on into RecentlyHitZombies with a short TTL; this
+// system watches for those same entities actually leaving the world
+// (RemovedComponents<Zombie> — real replicated despawn, not just cosmetic)
+// and counts it as a kill only while the TTL hasn't expired yet, so an
+// unrelated despawn (server respawn cycling, another player's kill,
+// disconnect cleanup) long after the TTL window doesn't get miscounted.
+fn count_local_kills(
+    time: Res<Time>,
+    mut removed_zombies: RemovedComponents<Zombie>,
+    mut recently_hit: ResMut<RecentlyHitZombies>,
+    mut kill_count: ResMut<KillCount>,
+) {
+    let dt = time.delta_secs();
+    recently_hit.0.retain(|_, ttl| {
+        *ttl -= dt;
+        *ttl > 0.0
+    });
+    for entity in removed_zombies.read() {
+        if recently_hit.0.remove(&entity).is_some() {
+            kill_count.0 += 1;
         }
     }
 }
@@ -5824,6 +5881,7 @@ fn shoot(
     zombies: Query<(Entity, &Transform, &GlobalTransform), With<Zombie>>,
     touch_firing: Res<TouchFiring>,
     mut cooldown: Local<f32>,
+    mut recently_hit: ResMut<RecentlyHitZombies>,
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
 
@@ -5973,6 +6031,13 @@ fn shoot(
         ));
         spawn_floating_damage(&mut commands, point, zombie_hit_damage_geometric(point, transform));
         spawn_blood_effects(&mut commands, &vfx_assets.blood, &spatial_query, &time, point, normal, Some((entity, global)));
+
+        // Mark this zombie as "hit by us, watch for it dying" — see
+        // count_local_kills, which is the only place this entry is ever
+        // read/removed. Overwrites any still-live entry from an earlier
+        // shot with a fresh TTL, which is fine: either way a kill shortly
+        // after is this player's.
+        recently_hit.0.insert(entity, RECENTLY_HIT_ZOMBIE_TTL);
     }
 
     commands.client_trigger(FireShot {

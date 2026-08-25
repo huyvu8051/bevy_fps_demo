@@ -799,6 +799,12 @@ class ViewController: UIViewController {
             touchHUD.health = Int(hp.rounded())
         }
         touchHUD.setPing(native_metal_probe_get_ping_ms(probe))
+
+        // Apple Watch companion app sync — see WatchSessionManager's own
+        // doc comment for why this runs every frame alongside the rest of
+        // the HUD instead of on its own timer.
+        let killCount = native_metal_probe_get_kill_count(probe)
+        WatchSessionManager.shared.update(hp: hp, killCount: killCount)
     }
 
     // Polled once per frame (see enterFrame) rather than only on the MENU

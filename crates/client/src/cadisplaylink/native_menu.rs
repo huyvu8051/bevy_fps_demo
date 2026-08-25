@@ -209,6 +209,18 @@ pub fn live_zombie_count(app: &mut App) -> u32 {
     state.get(app.world()).iter().count() as u32
 }
 
+// Watch companion app's kill counter (see crate::AUTOPILOT... no, see the
+// Apple Watch feature: shows a notification + running kill count on the
+// wrist). `crate::KillCount` is incremented by `crate::count_local_kills`
+// whenever a zombie this client personally damaged (tracked via
+// `crate::RecentlyHitZombies`, populated in `shoot()`'s own local hit
+// prediction) disappears from the world shortly after — see that system's
+// doc comment for why a bare despawn alone can't be trusted as "I killed
+// it" (respawns/disconnects despawn zombies too).
+pub fn kill_count(app: &mut App) -> u32 {
+    app.world().get_resource::<crate::KillCount>().map(|v| v.0).unwrap_or(0)
+}
+
 #[cfg(debug_assertions)]
 fn set_zombie_count_and_trigger(app: &mut App, new_count: u32) {
     use bevy_replicon::prelude::ClientTriggerExt;
