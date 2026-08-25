@@ -468,6 +468,11 @@ const SCOPE_BASE_FOV: f32 = BASE_FOV;
 // closer to the camera than GUN_ADS_OFFSET.z so it renders in front of the
 // gun mesh instead of getting clipped inside it.
 const SCOPE_LENS_OFFSET: Vec3 = Vec3::new(0.0, 0.0, -0.2);
+// A forced-ADS diagnostic screenshot (bypassing the real aim input path)
+// made 0.03 look like a barely-visible speck and briefly looked like a fix
+// was needed — but confirmed correct via actually playing the desktop
+// build normally (real ADS input, not forced): 0.03 is the right size
+// after all. Left at its original value.
 const SCOPE_LENS_SIZE: f32 = 0.03;
 // How far the lens dips down below SCOPE_LENS_OFFSET.y while not aiming —
 // X/Z stay pinned at SCOPE_LENS_OFFSET the whole time, so it only ever
