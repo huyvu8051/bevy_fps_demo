@@ -35,6 +35,17 @@ use shared::{
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 use vleue_navigator::prelude::*;
 
+// AnimationPlayer/StandardMaterial: needed by the register_type calls below
+// (SceneSpawner's reflection-based entity cloning requires every component
+// type present in a spawned glTF scene to be registered — see the doc
+// comment on that block). AnimationGraph/AnimationGraphHandle/
+// AnimationNodeIndex/GltfAssetLabel were only needed by Phase 1's spawn
+// spike (removed once its exit criterion — head bone Y visibly changing,
+// confirmed headless — passed); Phase 2 will need them again once real
+// zombies get a live skeleton.
+use bevy::animation::AnimationPlayer;
+use bevy::pbr::StandardMaterial;
+
 // Fixed debug port — the client connects here by default (see SERVER_ADDR
 // in crates/client). No auth/matchmaking: ServerAuthentication::Unsecure
 // and a large max_clients stand in for "no player limit" per the plan.
@@ -61,9 +72,50 @@ fn main() {
                 1.0 / SERVER_TICK_HZ,
             ))),
             bevy::log::LogPlugin::default(),
-            bevy::asset::AssetPlugin::default(),
+            // Phase 1 spike (HITBOX_PLAN.md): the server has no assets/
+            // dir of its own (it never needed one — pure geometry/physics
+            // so far). Bevy's AssetPlugin resolves `file_path` relative to
+            // this crate's own CARGO_MANIFEST_DIR in dev builds, NOT the
+            // process's actual CWD (confirmed the hard way: "crates/client/
+            // assets" resolved to .../crates/server/crates/client/assets)
+            // — so this is relative to crates/server/, one level up then
+            // into the client crate's existing assets dir, same file/
+            // source of truth zombie.glb already has, no duplication.
+            bevy::asset::AssetPlugin {
+                file_path: "../client/assets".to_string(),
+                ..default()
+            },
             bevy::mesh::MeshPlugin,
             bevy::scene::ScenePlugin,
+            // Registers Assets<Image> — normally pulled in transitively by
+            // RenderPlugin (which this headless server never adds), but
+            // bevy_gltf's loader unconditionally tries to allocate an
+            // Image handle for every embedded texture regardless of
+            // whether anything ever renders it, and panics without this
+            // ("Cannot allocate an Asset Handle of type ... Image because
+            // the asset type has not been initialized").
+            bevy::image::ImagePlugin::default(),
+            // Same "asset type never got initialized" story as
+            // ImagePlugin above, one step further into the glTF material
+            // chain: bevy_gltf allocates a StandardMaterial handle per
+            // material regardless of rendering. Registering the asset
+            // type directly (init_asset, below) instead of the full
+            // PbrPlugin avoids pulling in PbrPlugin's actual render-world
+            // extraction/lighting systems, which this headless server has
+            // no use for and which likely assume a RenderPlugin exists.
+            // Phase 1 of the real-hitbox spike (see HITBOX_PLAN.md): loads
+            // the zombie's skeleton/animation curves so bone
+            // GlobalTransforms are available server-side, with zero
+            // rendering — no RenderPlugin/WinitPlugin/wgpu anywhere in this
+            // plugin list, confirming AnimationPlugin's only cost here is
+            // the data (scene graph + animation sampling), not a GPU.
+            // GltfPlugin is what actually registers the AssetLoader for
+            // .glb/.gltf paths — enabling the "bevy_gltf" cargo feature
+            // alone only compiles the crate in, it doesn't register
+            // anything with AssetServer (first attempt without this hit
+            // "Could not find an asset loader matching ... zombie.glb").
+            bevy::animation::AnimationPlugin,
+            bevy::gltf::GltfPlugin::default(),
             StatesPlugin,
             PhysicsPlugins::default(),
             BigBrainPlugin::new(PreUpdate),
@@ -71,6 +123,37 @@ fn main() {
             RepliconPlugins,
             RepliconRenetPlugins,
         ))
+        .init_asset::<StandardMaterial>()
+        // Phase 1 spike (HITBOX_PLAN.md): SceneSpawner clones entities from
+        // a loaded glTF Scene using reflection-based component cloning for
+        // any type without a registered ComponentCloneBehavior, so every
+        // component type a character-rig scene actually contains has to be
+        // registered even though nothing here ever serializes/reflects
+        // them for any other reason. TransformPlugin normally does the
+        // Transform/GlobalTransform half of this (not present — this
+        // server relies on avian3d's own propagation instead of the
+        // official plugin), the rest are glTF-scene-specific.
+        .register_type::<Transform>()
+        .register_type::<GlobalTransform>()
+        .register_type::<bevy::transform::components::TransformTreeChanged>()
+        .register_type::<Visibility>()
+        .register_type::<InheritedVisibility>()
+        .register_type::<ViewVisibility>()
+        .register_type::<Name>()
+        .register_type::<Mesh3d>()
+        .register_type::<MeshMaterial3d<StandardMaterial>>()
+        .register_type::<bevy::ecs::hierarchy::Children>()
+        .register_type::<bevy::ecs::hierarchy::ChildOf>()
+        .register_type::<bevy::animation::AnimatedBy>()
+        .register_type::<AnimationPlayer>()
+        .register_type::<bevy::camera::primitives::Aabb>()
+        .register_type::<bevy::gltf::GltfExtras>()
+        .register_type::<bevy::gltf::GltfSceneExtras>()
+        .register_type::<bevy::gltf::GltfMeshExtras>()
+        .register_type::<bevy::gltf::GltfMaterialExtras>()
+        .register_type::<bevy::gltf::GltfMeshName>()
+        .register_type::<bevy::gltf::GltfMaterialName>()
+        .register_type::<bevy::mesh::skinning::SkinnedMesh>()
         .replicate::<NetworkId>()
         .replicate::<NetPlayer>()
         .replicate::<NetTransform>()

@@ -31,39 +31,98 @@ side, using the same headless-animation approach Valorant/Overwatch use
   rig, referenced via `GltfAssetLabel::Scene(0)` / `GltfAssetLabel::
   Animation(n)`.
 
-## Phase 1 — Server can load and animate the skeleton (no gameplay change yet)
+## Phase 1 — Server can load and animate the skeleton (no gameplay change yet) — ✅ DONE
 
 **Goal:** prove a headless zombie skeleton can exist and animate on the
 server with zero rendering, before touching damage logic at all.
 
-1. `crates/server/Cargo.toml`: add `"bevy_gltf"` and `"bevy_animation"`
-   to the `bevy` feature list (currently `["bevy_log", "bevy_render"]`).
-   Do NOT add `bevy_pbr`/`bevy_winit`/`bevy_render`'s GPU backends — the
-   server never draws anything, it only needs the *data* (scene graph +
-   animation curves), so `AnimationPlugin` + `GltfPlugin` should attach
-   without pulling in a renderer. Verify this compiles and the server
-   still starts headless (no window, no wgpu init) — if `bevy_gltf`
-   transitively drags in image-decoding or render-target types that
-   don't build without a `RenderPlugin`, that surfaces here first.
-2. `crates/server/src/main.rs`: add `AnimationPlugin` to the plugin list
-   next to `ScenePlugin`.
-3. Spawn ONE test zombie's `SceneRoot` + `AnimationPlayer` server-side,
-   reusing the client's own asset path/label
-   (`GltfAssetLabel::Scene(0).from_asset("models/zombie.glb")`,
-   `GltfAssetLabel::Animation(n)`), gated behind a temporary debug flag or
-   just a Startup system you delete once this phase is verified.
-4. Reuse `wire_zombie_hitbox_bones` verbatim (move it to `shared` so both
-   client and server can call it — it doesn't touch anything
-   client-only) to confirm bone entities resolve and their
-   `GlobalTransform` updates as the animation plays, by logging the
-   `Head` bone's world Y once per second for a few seconds.
-5. **Exit criterion:** server-side log shows the head bone's height
-   oscillating/changing as the idle or walk animation plays, with no
-   window ever opened and no render errors.
+**Confirmed working**: spawned one zombie with a real `SceneRoot` +
+looping idle animation, headless, and logged the `Head` bone's live
+`GlobalTransform.y` once/sec — it visibly oscillated (~5.87 to ~6.55)
+purely from server-side animation sampling, no window/render ever
+created. The spike code itself was temporary and has been removed;
+everything below is the *permanent* infra it required, which stays.
 
-This phase touches nothing gameplay-visible and can be reverted/disabled
-trivially if it turns out `bevy_gltf`/`bevy_animation` pull in more than
-expected for a headless build.
+**What it actually took** (more than the original estimate — each step
+below was only discovered by running the server and reading the next
+panic, not knowable up front):
+
+1. `crates/server/Cargo.toml` — `bevy` feature list needed, in order of
+   discovery:
+   - `"bevy_gltf"`, `"bevy_animation"` — the obvious ones.
+   - `"gltf_animation"` — **distinct from `"bevy_animation"`!** Without
+     it, `zombie.glb` loaded with zero `AnimationN` labeled sub-assets
+     even though `bevy_animation` alone was already enabled — this is
+     the actual switch that makes `bevy_gltf`'s loader convert animation
+     curves into `AnimationClip` assets at all.
+   - `"png"` — `zombie.glb` embeds PNG textures; the loader tries to
+     decode every embedded image regardless of whether anything renders
+     it, and aborts the whole scene load (skeleton included) without a
+     decoder compiled in.
+   - `"bevy_pbr"` — needed for the `StandardMaterial` type to exist at
+     all (see `init_asset` below).
+   - `"debug"` — temporarily, to unmask reflection type names in panic
+     messages (normally elided as `<Enable the debug feature to see the
+     name>`); kept since it costs nothing at runtime and Phase 2's own
+     debugging will hit the same class of error again.
+2. `crates/server/src/main.rs` plugin list — added, in this order,
+   right after the existing `AssetPlugin`/`MeshPlugin`/`ScenePlugin`:
+   - `AnimationPlugin`
+   - `GltfPlugin::default()` — **required even with the `"bevy_gltf"`
+     cargo feature on**: the feature only compiles the crate in, it's
+     `GltfPlugin` that actually registers the `AssetLoader` for `.glb`/
+     `.gltf` paths with `AssetServer`. Without it: "Could not find an
+     asset loader matching ... zombie.glb".
+   - `ImagePlugin::default()` — registers `Assets<Image>`, normally
+     pulled in transitively by `RenderPlugin` (never added here).
+     Without it: `bevy_gltf`'s loader panics trying to allocate an
+     `Image` handle for every embedded texture ("Cannot allocate an
+     Asset Handle of type ... Image because the asset type has not been
+     initialized").
+   - `AssetPlugin { file_path: "../client/assets", .. }` (overriding the
+     default `AssetPlugin::default()` already there) — the server has no
+     `assets/` dir of its own; reuses the client's. **Gotcha**: this path
+     is relative to this crate's own `CARGO_MANIFEST_DIR`
+     (`crates/server/`) in dev builds, **not** the process's actual CWD
+     — confirmed by first trying `"crates/client/assets"` (assuming CWD
+     = workspace root per `cargo run -p server`'s README-documented
+     invocation) and getting `.../crates/server/crates/client/assets/...`.
+3. `.init_asset::<StandardMaterial>()` on the `App` builder — registers
+   the asset type directly rather than adding the full `PbrPlugin`
+   (which expects a `RenderPlugin`/render-world to extract into and
+   isn't meant to run without one). `bevy_gltf` allocates a
+   `StandardMaterial` handle per material regardless of rendering.
+4. A `register_type::<T>()` call **per component type actually present
+   in the spawned glTF scene hierarchy** — `bevy_scene`'s spawner clones
+   entities from a loaded `Scene` using reflection-based cloning for any
+   component without a registered `ComponentCloneBehavior`, and panics
+   ("scene contains the unregistered type ...") one type at a time,
+   discovered by iterating build→run→read-panic→register→repeat. Full
+   list that was actually needed, in the order they surfaced:
+   `Transform`, `GlobalTransform`,
+   `bevy::transform::components::TransformTreeChanged`, `Visibility`,
+   `InheritedVisibility`, `ViewVisibility`, `Name`, `Mesh3d`,
+   `MeshMaterial3d<StandardMaterial>`,
+   `bevy::ecs::hierarchy::Children`, `bevy::ecs::hierarchy::ChildOf`,
+   `bevy::animation::AnimatedBy` (**not** `AnimationTarget` — that type
+   doesn't exist by that name in Bevy 0.18; this is the actual
+   per-bone-animation-curve-target component), `AnimationPlayer`,
+   `bevy::camera::primitives::Aabb`, `bevy::gltf::GltfExtras`,
+   `GltfSceneExtras`, `GltfMeshExtras`, `GltfMaterialExtras`,
+   `GltfMeshName`, `GltfMaterialName`,
+   `bevy::mesh::skinning::SkinnedMesh`. Notably even core
+   ECS-relationship types (`Children`/`ChildOf`) needed explicit
+   registration — `MinimalPlugins` doesn't register them, only
+   `TypeRegistrationPlugin`'s own baseline set.
+5. Confirmed no regression: ran the server normally afterward (no spike
+   code) — client connects, zombies spawn/replicate as before, only a
+   benign `bevy_gltf: CompressedImageFormatSupport resource not found`
+   warning (expected — that resource is a `RenderPlugin` thing this
+   server correctly doesn't have).
+
+**Exit criterion met.** This phase's changes (Cargo features, plugins,
+`init_asset`, `register_type` calls) are permanent — Phase 2 builds on
+top of them rather than redoing this discovery process.
 
 ## Phase 2 — Real zombies carry a live skeleton + bone hitbox entities
 
