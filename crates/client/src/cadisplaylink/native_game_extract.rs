@@ -98,6 +98,15 @@ pub struct ExtractedMesh {
     /// of which are always indexed, but guard rather than assume).
     pub indices: Vec<u32>,
     pub base_color: [f32; 4],
+    /// `StandardMaterial::emissive`, straight from `LinearRgba` (already
+    /// linear, deliberately NOT `.to_srgba()`'d like `base_color` — these
+    /// values are authored well above 1.0 on purpose, e.g. muzzle flash's
+    /// `LinearRgba::rgb(6.0, 3.5, 1.0)` or the scope reticle's
+    /// `rgb(35.0, 0.0, 0.0)`, meant to overdrive Bloom — see crate::lib's
+    /// `MuzzleFxAssets`/`SparkAssets`/reticle material setup). Without this,
+    /// every one of those effects rendered as flat unlit-adjacent
+    /// `base_color` with no glow at all.
+    pub emissive: [f32; 4],
     pub texture: Option<ExtractedTexture>,
     /// World-space transform at extraction time (from `GlobalTransform`,
     /// converted to a plain `Transform` for the renderer's convenience —
@@ -548,6 +557,12 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
                 let s = material.base_color.to_srgba();
                 [s.red, s.green, s.blue, s.alpha]
             },
+            emissive: [
+                material.emissive.red,
+                material.emissive.green,
+                material.emissive.blue,
+                material.emissive.alpha,
+            ],
             texture,
             transform: transform.compute_transform(),
         });

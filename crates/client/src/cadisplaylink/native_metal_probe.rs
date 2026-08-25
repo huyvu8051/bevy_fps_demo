@@ -332,6 +332,7 @@ struct Uniforms {
     float _sunPad;
     float4 sunColor;
     float4 baseColorFactor;
+    float4 emissive;
 };
 
 struct VertexOut {
@@ -371,6 +372,14 @@ fragment float4 sponza_fragment(VertexOut in [[stage_in]],
     float4 texColor = baseColorTexture.sample(texSampler, in.uv);
     float4 baseColor = texColor * uniforms.baseColorFactor;
     float3 lit = baseColor.rgb * (0.35 + 0.65 * lightTerm);
+    // Additive — no real Bloom pass exists in this renderer (see
+    // ExtractedMesh::emissive's own doc comment for why these values are
+    // authored well above 1.0), but adding the raw emissive term straight
+    // onto the lit result at least makes muzzle flash/reticle/sparks read
+    // as bright/glowing instead of flat, matching bevy_render's own
+    // emissive-is-additive-to-lit-color behavior minus the actual bloom
+    // blur/threshold pass.
+    lit += uniforms.emissive.rgb;
     return float4(lit, baseColor.a);
 }
 "#;
@@ -386,6 +395,7 @@ struct SponzaUniforms {
     _sun_pad: f32,
     sun_color: [f32; 4],
     base_color_factor: [f32; 4],
+    emissive: [f32; 4],
 }
 
 // Phase 2 of the wgpu-replacement plan: GPU skinning for
@@ -964,6 +974,7 @@ struct RealGameMeshDraw<'a> {
     vertex_buffer: metal::Buffer,
     vertex_count: usize,
     base_color_factor: [f32; 4],
+    emissive: [f32; 4],
     texture: Option<&'a metal::Texture>,
 }
 
@@ -1373,6 +1384,7 @@ impl NativeMetalProbe {
                     _sun_pad: 0.0,
                     sun_color: light.sun_color,
                     base_color_factor: m.base_color_factor,
+                    emissive: m.emissive,
                 };
                 encoder.set_vertex_buffer(0, Some(&m.vertex_buffer), 0);
                 encoder.set_vertex_bytes(
@@ -1402,6 +1414,12 @@ impl NativeMetalProbe {
                     _sun_pad: 0.0,
                     sun_color: light.sun_color,
                     base_color_factor: mesh.base_color_factor,
+                    // Sponza's own static demo scene has no emissive
+                    // materials worth carrying — see ExtractedMesh::
+                    // emissive's own doc comment for where this field
+                    // actually matters (real-game muzzle flash/reticle/
+                    // spark quads, the `real_game_meshes` branch above).
+                    emissive: [0.0, 0.0, 0.0, 0.0],
                 };
                 encoder.set_vertex_buffer(0, Some(&mesh.vertex_buffer), 0);
                 encoder.set_vertex_bytes(
@@ -1663,6 +1681,7 @@ impl NativeMetalProbe {
                     vertex_buffer,
                     vertex_count: verts.len(),
                     base_color_factor: mesh.base_color,
+                    emissive: mesh.emissive,
                     texture: texture.as_ref(),
                 }
             })
