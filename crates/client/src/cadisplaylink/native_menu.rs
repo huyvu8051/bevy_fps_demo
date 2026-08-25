@@ -147,6 +147,21 @@ pub fn set_freeze_zombies(app: &mut App, on: bool) {
     }
 }
 
+// Deliberately NOT behind #[cfg(debug_assertions)] and NOT using the
+// bool_toggle! macro below — unlike every other toggle on this page,
+// Autopilot is a real player-facing feature (see crate::autopilot's own
+// module doc comment), not a debug cheat, so it must work in release
+// builds too. Default matches Autopilot's own `impl Default` (true).
+pub fn autopilot(app: &mut App) -> bool {
+    app.world().get_resource::<crate::autopilot::Autopilot>().map(|v| v.0).unwrap_or(true)
+}
+
+pub fn set_autopilot(app: &mut App, on: bool) {
+    if let Some(mut v) = app.world_mut().get_resource_mut::<crate::autopilot::Autopilot>() {
+        v.0 = on;
+    }
+}
+
 // The remaining debug-panel toggles (crate::lib's Cheats page 1 second/
 // third/fourth rows: Gun/MSAA/Shadow, Hitboxes/AimBlur/PlayerMdl, NoZAnim/
 // NoHPBar/FullLOD) are all the exact same "read/write a local bool

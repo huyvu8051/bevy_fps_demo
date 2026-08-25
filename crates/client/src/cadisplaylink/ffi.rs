@@ -541,6 +541,23 @@ pub extern "C" fn native_metal_probe_set_freeze_zombies(obj: *mut std::ffi::c_vo
     { let _ = (probe, on); }
 }
 
+// Unlike every other toggle pair on this page, not debug-gated — Autopilot
+// is a real player-facing feature (see crate::autopilot's own module doc
+// comment), not a cheat, so it must work in release builds too.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_get_autopilot(obj: *mut std::ffi::c_void) -> bool {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    probe.real_game_app_mut().map(super::native_menu::autopilot).unwrap_or(true)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_set_autopilot(obj: *mut std::ffi::c_void, on: bool) {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    if let Some(app) = probe.real_game_app_mut() {
+        super::native_menu::set_autopilot(app, on);
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_trigger_kill_all_zombies(obj: *mut std::ffi::c_void) {
     let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };

@@ -46,6 +46,12 @@ use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 #[cfg(target_os = "ios")]
 mod cadisplaylink;
 
+// AI takeover of the local player (auto-aim/move/fire) — see its own
+// module doc comment. Platform-independent (not iOS-only): its systems are
+// wired into the same Update chain as the rest of real gameplay below.
+mod autopilot;
+use autopilot::{autopilot_pick_target, autopilot_think, Autopilot, AutopilotIntent, AutopilotState};
+
 // Standalone FPS probe (camera + a small static primitive-built room, no
 // game logic at all) — see its own module doc comment. Only reachable via
 // cadisplaylink::build_cadisplaylink_fps_probe_app.
@@ -1407,7 +1413,9 @@ fn on_net_player_replicated(
     commands.entity(entity).with_children(|parent| {
         parent.spawn((
             SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(PLAYER_MODEL_PATH))),
-            Transform::from_xyz(0.0, PLAYER_MODEL_Y_OFFSET, 0.0),
+            Transform::from_xyz(0.0, PLAYER_MODEL_Y_OFFSET, 0.0)
+                .with_rotation(Quat::from_rotation_y(PLAYER_MODEL_FACING_CORRECTION))
+                .with_scale(Vec3::splat(PLAYER_MODEL_SCALE)),
             PlayerModelAnimRoot,
         ));
     });
@@ -1739,6 +1747,9 @@ fn build_game_common(app: &mut App) {
         .add_observer(on_player_died_fx)
         .add_observer(on_game_state_event)
         .init_resource::<Noclip>()
+        .init_resource::<Autopilot>()
+        .init_resource::<AutopilotState>()
+        .init_resource::<AutopilotIntent>()
         .init_resource::<FreezeZombies>()
         .init_resource::<ShowHitboxes>()
         .init_resource::<GodMode>()
@@ -1841,6 +1852,8 @@ fn build_game_common(app: &mut App) {
                 toggle_player_stance,
                 toggle_debug_flags,
                 debug_panel_actions,
+                autopilot_pick_target,
+                autopilot_think,
                 mouse_look,
                 shoot,
                 reload_gun,
@@ -2192,7 +2205,7 @@ fn setup(
     // Transform or its avian3d collider.
     commands.spawn((
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(PLAYER_MODEL_PATH))),
-        Transform::from_translation(PLAYER_SPAWN),
+        Transform::from_translation(PLAYER_SPAWN).with_scale(Vec3::splat(PLAYER_MODEL_SCALE)),
         Visibility::Hidden,
         PlayerModel,
         PlayerModelAnimRoot,
@@ -5129,7 +5142,14 @@ fn touch_look(
     mut look_delta: ResMut<MouseLookDelta>,
     sensitivity_scale: Res<SensitivityScale>,
     mut query: Query<&mut FpsCamera>,
+    autopilot: Res<Autopilot>,
 ) {
+    // Autopilot drives FpsCamera.yaw/pitch itself (see autopilot_think,
+    // which already ran earlier this same Update tick) — real touch-look
+    // input is ignored entirely while it's on, same as mouse_look below.
+    if autopilot.0 {
+        return;
+    }
     // See touch_move_axis's own comment on MouseUiLocked/AssistiveTouch —
     // same reasoning here so a mouse click on the right half doesn't also
     // yank the camera via the touch look-drag zone while GCMouse deltas
@@ -5215,7 +5235,13 @@ fn mouse_look(
     mut look_delta: ResMut<MouseLookDelta>,
     sensitivity_scale: Res<SensitivityScale>,
     mut query: Query<&mut FpsCamera>,
+    autopilot: Res<Autopilot>,
 ) {
+    // Autopilot drives FpsCamera.yaw/pitch itself — see autopilot_think,
+    // which already ran earlier this same Update tick.
+    if autopilot.0 {
+        return;
+    }
     let Ok(cursor) = cursor.single() else {
         look_delta.0 = Vec2::ZERO;
         return;
@@ -5650,13 +5676,19 @@ fn send_player_input(
     mut player_query: Query<(&mut Transform, &mut Player, &PlayerStance), Without<NetPlayer>>,
     noclip: Res<Noclip>,
     touch_move_axis: Res<TouchMoveAxis>,
-    // Bundled into one nested-tuple param instead of two flat ones — this
-    // fn was already at Bevy's flat SystemParam tuple arity limit (16);
+    // Bundled into one nested-tuple param instead of flat ones — this fn
+    // was already at Bevy's flat SystemParam tuple arity limit (16);
     // adding LocalPlayerSprinting as a 17th flat param broke `IntoSystem`
     // for the whole Update-schedule `.chain()` tuple this fn sits in.
     // Tuples of SystemParams are themselves valid SystemParams, so nesting
-    // sidesteps the limit without restructuring anything else.
-    (mut local_moving, mut local_sprinting): (ResMut<LocalPlayerMoving>, ResMut<LocalPlayerSprinting>),
+    // sidesteps the limit without restructuring anything else — Autopilot/
+    // AutopilotIntent are folded into the same tuple for the same reason.
+    (mut local_moving, mut local_sprinting, autopilot, intent): (
+        ResMut<LocalPlayerMoving>,
+        ResMut<LocalPlayerSprinting>,
+        Res<Autopilot>,
+        Res<AutopilotIntent>,
+    ),
     mover: MoveAndSlide,
     // Local prediction below still runs every single Update tick (up to
     // 120Hz on iOS via CADisplayLink) for smooth immediate feedback — only
@@ -5679,25 +5711,32 @@ fn send_player_input(
     let stance = *stance;
 
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch.aiming.0));
-    let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
 
-    let mut move_axis = Vec2::ZERO;
-    if keys.pressed(KeyCode::KeyW) {
-        move_axis.y += 1.0;
-    }
-    if keys.pressed(KeyCode::KeyS) {
-        move_axis.y -= 1.0;
-    }
-    if keys.pressed(KeyCode::KeyD) {
-        move_axis.x += 1.0;
-    }
-    if keys.pressed(KeyCode::KeyA) {
-        move_axis.x -= 1.0;
-    }
-    // Harmless to add unconditionally: on real mobile there's no keyboard,
-    // and on desktop (only reachable via TOUCH_UI_PREVIEW) this is 0 unless
-    // actively testing the touch joystick.
-    move_axis = (move_axis + touch_move_axis.0).clamp_length_max(1.0);
+    let (move_axis, sprinting) = if autopilot.0 {
+        (intent.move_axis, intent.sprint)
+    } else {
+        let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
+        let mut move_axis = Vec2::ZERO;
+        if keys.pressed(KeyCode::KeyW) {
+            move_axis.y += 1.0;
+        }
+        if keys.pressed(KeyCode::KeyS) {
+            move_axis.y -= 1.0;
+        }
+        if keys.pressed(KeyCode::KeyD) {
+            move_axis.x += 1.0;
+        }
+        if keys.pressed(KeyCode::KeyA) {
+            move_axis.x -= 1.0;
+        }
+        // Harmless to add unconditionally: on real mobile there's no
+        // keyboard, and on desktop (only reachable via TOUCH_UI_PREVIEW)
+        // this is 0 unless actively testing the touch joystick.
+        (
+            (move_axis + touch_move_axis.0).clamp_length_max(1.0),
+            sprinting,
+        )
+    };
     local_moving.0 = move_axis != Vec2::ZERO;
     local_sprinting.0 = sprinting;
 
@@ -5770,13 +5809,38 @@ fn sync_camera_to_player(
     camera_transform.translation = eye + side_offset;
 }
 
-// Best-guess vertical offset from the player capsule's center (Transform.
-// translation — see PLAYER_RADIUS/PLAYER_LENGTH in shared: capsule radius
-// 0.35 + half its 0.9 length) down to ground level, for whenever
-// PLAYER_MODEL_PATH's own rig root turns out to sit at its feet like most
-// humanoid exports. Unverified — nudge after actually looking at it in-game
-// (KeyT).
-const PLAYER_MODEL_Y_OFFSET: f32 = -0.8;
+// -0.8 (capsule half-height: PLAYER_RADIUS 0.35 + half PLAYER_LENGTH 0.9)
+// assumed PLAYER_MODEL_PATH's rig root sits at its own feet, like
+// ZOMBIE_PATH's does — measured (via a temporary per-frame log comparing
+// this model's world Y against a zombie's own proven-correct ground-contact
+// Y) to land EXACTLY on the floor at -0.8, yet still visibly floats.
+// Inspecting soldier.glb's raw joint hierarchy directly (its "Root" bone
+// sits close to "Hips", well above "Foot.L"/"Foot.R") confirms this rig's
+// root is NOT at its feet, unlike the zombie's — it needs an *additional*
+// drop for the hip-to-ground distance the zombie's rig doesn't have. No
+// exact figure available without decoding the full skinned bind pose
+// (bone rotations, not just translations, position the legs), so this is
+// a reasoned estimate (typical hip height ≈ half standing height, scaled
+// by PLAYER_MODEL_SCALE) rather than a measured one — confirm in-game and
+// nudge further if the feet still don't sit exactly on the floor.
+const PLAYER_MODEL_Y_OFFSET: f32 = -1.3;
+
+// PLAYER_MODEL_PATH (soldier.glb, a different generic asset pack than
+// ZOMBIE_PATH) had never actually been looked at in-game before — spawned
+// at native scale with no facing correction, unlike ZOMBIE_PATH's own
+// ZOMBIE_SCALE. Reported: at scale 1.0 the model rendered visibly taller
+// than a zombie standing next to it, and walked backward relative to its
+// own facing (this asset's rig faces +Z, the opposite of Bevy's
+// -Z-forward convention that NetTransform.yaw/FpsCamera assume everywhere
+// else). ZOMBIE_SCALE itself (0.25) turned out too small once actually
+// checked (the local debug model — the only self-check available, since
+// this is a first-person game with no real third-person camera — read as
+// tiny/crumpled at extreme close range); this halves the gap between
+// "native size" and ZOMBIE_SCALE as a best-effort middle value. Only a
+// second client actually looking at this player's remote model from a
+// normal distance can judge the exact number properly — nudge after that.
+const PLAYER_MODEL_SCALE: f32 = 0.5;
+const PLAYER_MODEL_FACING_CORRECTION: f32 = std::f32::consts::PI;
 
 // Keeps PlayerModel (see its own doc comment) glued to the local player's
 // position and look yaw every frame — not parented, so this is the
@@ -5800,7 +5864,12 @@ fn sync_player_model(
     };
     let yaw = camera.single().map(|cam| cam.yaw).unwrap_or(0.0);
     transform.translation = player_transform.translation + Vec3::Y * PLAYER_MODEL_Y_OFFSET;
-    transform.rotation = Quat::from_rotation_y(yaw);
+    // + PLAYER_MODEL_FACING_CORRECTION: see PLAYER_MODEL_SCALE's own doc
+    // comment — this asset's rig faces +Z, not Bevy's -Z-forward
+    // convention, so a bare `Quat::from_rotation_y(yaw)` (matching every
+    // other yaw-driven rotation in this file) rendered the model walking
+    // backward relative to where it was actually headed.
+    transform.rotation = Quat::from_rotation_y(yaw + PLAYER_MODEL_FACING_CORRECTION);
 }
 
 
@@ -5824,6 +5893,8 @@ fn shoot(
     zombies: Query<(Entity, &Transform, &GlobalTransform), With<Zombie>>,
     touch_firing: Res<TouchFiring>,
     mut cooldown: Local<f32>,
+    autopilot: Res<Autopilot>,
+    intent: Res<AutopilotIntent>,
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
 
@@ -5833,7 +5904,9 @@ fn shoot(
     let Ok(cursor) = cursor.single() else {
         return;
     };
-    let firing = (cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Left)) || touch_firing.0;
+    let firing = (cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Left))
+        || touch_firing.0
+        || (autopilot.0 && intent.fire);
     if !firing || *cooldown > 0.0 {
         return;
     }

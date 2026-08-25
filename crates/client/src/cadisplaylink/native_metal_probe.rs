@@ -1067,19 +1067,32 @@ impl NativeMetalProbe {
             // `zombie_mesh_bundle` in crate::lib). Omitting both here drew
             // zombie.glb at its raw, unscaled size — ~4x too big — floating
             // at the capsule's center instead of standing on its feet.
-            // PLAYER_MODEL_PATH (soldier.glb) needs neither correction: its
-            // own node hierarchy already bakes in a correcting scale (see
-            // that constant's own doc comment in crate::lib), so it's
-            // spawned at Bevy's default 1.0 scale with no offset — matches
-            // `mesh_scale`/`y_offset` both defaulting to identity for it.
+            //
+            // PLAYER_MODEL_PATH (soldier.glb) was previously assumed to
+            // need neither correction (spawned here at scale 1.0/offset
+            // 0.0) — WRONG, confirmed by direct in-game report: the remote
+            // player model rendered floating above the ground and facing
+            // backward relative to its own travel direction. This is the
+            // ONLY place that actually determines what's drawn on screen
+            // for USE_REAL_GAME_NATIVE_RENDERER — the parallel Bevy-side
+            // fix (on_net_player_replicated's child SceneRoot transform in
+            // crate::lib, PLAYER_MODEL_SCALE/Y_OFFSET/FACING_CORRECTION)
+            // only affects the desktop/non-native-renderer path, since this
+            // custom Metal renderer never queries Bevy's own scene graph
+            // for PlayerModel/PlayerModelAnimRoot at all. Reusing the same
+            // constants here so both paths stay in sync.
             let (mesh_scale, y_offset) = match kind {
                 EntityKind::Zombie => {
                     (shared::ZOMBIE_SCALE, -(shared::ZOMBIE_RADIUS + shared::ZOMBIE_LENGTH / 2.0))
                 }
-                EntityKind::Soldier => (1.0, 0.0),
+                EntityKind::Soldier => (crate::PLAYER_MODEL_SCALE, crate::PLAYER_MODEL_Y_OFFSET),
+            };
+            let rotation = match kind {
+                EntityKind::Soldier => transform.rotation * bevy::math::Quat::from_rotation_y(crate::PLAYER_MODEL_FACING_CORRECTION),
+                EntityKind::Zombie => transform.rotation,
             };
 
-            let [qx, qy, qz, qw] = transform.rotation.to_array();
+            let [qx, qy, qz, qw] = rotation.to_array();
             let (x2, y2, z2) = (qx + qx, qy + qy, qz + qz);
             let (xx, xy, xz) = (qx * x2, qx * y2, qx * z2);
             let (yy, yz, zz) = (qy * y2, qy * z2, qz * z2);
