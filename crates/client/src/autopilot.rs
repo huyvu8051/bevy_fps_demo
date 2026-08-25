@@ -7,25 +7,13 @@
 // bool_toggle_ffi! macros, since this is a real player-facing feature, not
 // a debug cheat).
 //
-// Two IMPLEMENTATIONS run side by side, selected by AutopilotServerMode
-// (also a Settings-menu toggle, default OFF — see its own doc comment):
+// Client-only: this module's own autopilot_pick_target/autopilot_think
+// decide everything locally. (A server-side implementation — driving this
+// same player's entity authoritatively, so it kept working through an AFK
+// window or a dropped connection — existed at one point and was removed;
+// see git history if that's ever worth resurrecting.)
 //
-// - Client mode (default): this module's own autopilot_pick_target/
-//   autopilot_think decide everything locally, exactly as this module has
-//   always worked — see the rest of this comment.
-// - Server mode: crates/server's server_autopilot_pick_target/
-//   server_autopilot_think decide instead, driving this same player's
-//   entity server-side (see SetAutopilot's own doc comment in
-//   crates/shared for why that version exists at all — it keeps working
-//   through an AFK window or a dropped connection, which client mode
-//   fundamentally can't). This module's own decision systems just skip
-//   themselves entirely while server mode is active (see their own
-//   `if server_mode.0 { return; }` guards) — mouse_look/send_player_input/
-//   shoot still need to know "is ANY autopilot active" (to keep ignoring
-//   real input) vs. "which implementation" (to know whose intent to
-//   apply), so both resources get read at each of those call sites.
-//
-// Design (client mode): this module NEVER duplicates gameplay logic
+// Design: this module NEVER duplicates gameplay logic
 // (movement prediction, ammo/reload, spread/hitscan, animation) — it only
 // computes a small AutopilotIntent each frame, and the systems that
 // already read real input (mouse_look/touch_look, send_player_input,
@@ -47,31 +35,14 @@ use bevy::math::ops;
 use bevy::prelude::*;
 
 use crate::{FpsCamera, Player};
-use shared::{Health, NetPlayer, Zombie, PLAYER_MAX_HEALTH};
+use shared::{random_aim_point, resolve_bone_world_positions, Health, NetPlayer, Zombie, ZombieHitboxBones, PLAYER_MAX_HEALTH};
 
 /// Master on/off switch — ON by default, see the module doc comment.
-/// Governs BOTH implementations: while false, neither this module's own
-/// decision systems nor the server's run for this player (see
-/// cadisplaylink::native_menu::set_autopilot, which sends the server the
-/// AND of this and AutopilotServerMode).
 #[derive(Resource)]
 pub(crate) struct Autopilot(pub(crate) bool);
 impl Default for Autopilot {
     fn default() -> Self {
         Autopilot(true)
-    }
-}
-
-/// Which implementation is active while Autopilot is on. false (default,
-/// per the "default client, opt into server via Settings" ask this was
-/// built for) = this module's own autopilot_pick_target/autopilot_think.
-/// true = crates/server's server_autopilot_* systems instead — see the
-/// module doc comment for the full picture.
-#[derive(Resource)]
-pub(crate) struct AutopilotServerMode(pub(crate) bool);
-impl Default for AutopilotServerMode {
-    fn default() -> Self {
-        AutopilotServerMode(false)
     }
 }
 
@@ -84,8 +55,7 @@ pub(crate) struct AutopilotState {
 }
 
 /// Synthesized "virtual input" for this frame — read by send_player_input/
-/// shoot in place of real touch/keyboard/mouse state when Autopilot is on
-/// in client mode (AutopilotServerMode false).
+/// shoot in place of real touch/keyboard/mouse state while Autopilot is on.
 #[derive(Resource, Default)]
 pub(crate) struct AutopilotIntent {
     pub(crate) move_axis: Vec2,
@@ -110,6 +80,12 @@ const AUTOPILOT_RETARGET_INTERVAL: f32 = 1.2;
 const AUTOPILOT_TURN_RATE_DEG: f32 = 360.0;
 // Don't fire until aim has actually caught up to the target.
 const AUTOPILOT_FIRE_AIM_TOLERANCE_DEG: f32 = 12.0;
+// Radians subtracted from the computed aim pitch — see autopilot_think's
+// own comment on why (apply_view_recoil kicks the actual fired direction
+// up during a sustained spray; aiming a bit low to begin with keeps shots
+// landing closer to center over a spray instead of climbing off-target).
+// ~4.3 degrees, playtest-tunable.
+const AUTOPILOT_AIM_PITCH_LOWER: f32 = 0.075;
 const AUTOPILOT_SPRINT_APPROACH_DISTANCE: f32 = 22.0;
 const AUTOPILOT_LOW_HEALTH_FRACTION: f32 = 0.3;
 const AUTOPILOT_LOW_HEALTH_RETREAT_BONUS: f32 = 4.0;
@@ -136,17 +112,14 @@ const AUTOPILOT_DECISION_HZ: f32 = 20.0;
 // bot_pick_target, adapted to run purely client-side against zombies'
 // already-replicated Transform (confirmed present client-side: shoot()
 // builds its own predictive hitscan against this exact query shape).
-// Skips itself while AutopilotServerMode is on (crates/server's own
-// server_autopilot_pick_target owns targeting for this player instead).
 pub(crate) fn autopilot_pick_target(
     time: Res<Time>,
     autopilot: Res<Autopilot>,
-    server_mode: Res<AutopilotServerMode>,
     mut state: ResMut<AutopilotState>,
     player: Query<&Transform, (With<Player>, Without<NetPlayer>)>,
     zombies: Query<(Entity, &Transform), With<Zombie>>,
 ) {
-    if !autopilot.0 || server_mode.0 {
+    if !autopilot.0 {
         return;
     }
     let Ok(player_transform) = player.single() else {
@@ -170,21 +143,19 @@ pub(crate) fn autopilot_pick_target(
 // touch_look would otherwise write — this module runs in their place while
 // on, see their own `if autopilot.0 { return; }` guards) and
 // AutopilotIntent (read by send_player_input/shoot in place of real input).
-// Skips itself while AutopilotServerMode is on, same reasoning as
-// autopilot_pick_target above.
 pub(crate) fn autopilot_think(
     time: Res<Time>,
     autopilot: Res<Autopilot>,
-    server_mode: Res<AutopilotServerMode>,
     state: Res<AutopilotState>,
     mut intent: ResMut<AutopilotIntent>,
     player: Query<&Transform, (With<Player>, Without<NetPlayer>, Without<FpsCamera>)>,
-    zombies: Query<&Transform, With<Zombie>>,
+    zombies: Query<(&Transform, &ZombieHitboxBones), With<Zombie>>,
+    globals: Query<&GlobalTransform>,
     health: Query<&Health, With<Player>>,
     mut camera: Query<&mut FpsCamera>,
     mut decision_timer: Local<f32>,
 ) {
-    if !autopilot.0 || server_mode.0 {
+    if !autopilot.0 {
         return;
     }
     let Ok(player_transform) = player.single() else {
@@ -196,7 +167,9 @@ pub(crate) fn autopilot_think(
     let dt = time.delta_secs();
     let turn_step = AUTOPILOT_TURN_RATE_DEG.to_radians() * dt;
 
-    let Some(target_transform) = state.target.and_then(|target| zombies.get(target).ok()) else {
+    let Some((target_entity, target_transform, target_bones)) =
+        state.target.and_then(|target| zombies.get(target).ok().map(|(t, b)| (target, t, b)))
+    else {
         // Nothing in range — hold position, slowly scan for something to
         // find. Zombies already actively chase within their own
         // ZOMBIE_CHASE_RANGE, so a stationary scan is enough for v1; a
@@ -209,11 +182,25 @@ pub(crate) fn autopilot_think(
 
     // Aim tracking and the fire gate are both O(1) (the single already-
     // committed target's position, nothing to scan) and stay smooth/
-    // responsive every frame regardless of the decision throttle below.
-    let to_target = target_transform.translation - player_transform.translation;
+    // responsive every frame regardless of the decision throttle below. See
+    // random_aim_point's own doc comment (crates/shared) — biased toward
+    // center-mass, headshots rarest, committed per-target via
+    // entity_phase(target_entity), not re-rolled every frame. Falls back to
+    // the zombie's root/capsule-center translation for the brief window
+    // before its bones resolve.
+    let resolved_bones = resolve_bone_world_positions(target_bones, |bone| globals.get(bone).ok().map(|g| g.translation()));
+    let aim_point = random_aim_point(&resolved_bones, target_entity).unwrap_or(target_transform.translation);
+    let to_target = aim_point - player_transform.translation;
     let horizontal_distance = Vec2::new(to_target.x, to_target.z).length();
     let desired_yaw = (-to_target.x).atan2(-to_target.z);
-    let desired_pitch = to_target.y.atan2(horizontal_distance.max(0.01)).clamp(-1.5, 1.5);
+    // Nudged down a fixed amount (AUTOPILOT_AIM_PITCH_LOWER) rather than
+    // dynamically compensating for apply_view_recoil's own pitch_kick —
+    // recoil kicks the actual fired direction up during a sustained spray,
+    // so aiming a bit lower than dead-on-target to begin with keeps shots
+    // landing closer to center over a spray instead of climbing off the
+    // top of the target. Simple and good enough; not trying to track the
+    // exact live kick value.
+    let desired_pitch = (to_target.y.atan2(horizontal_distance.max(0.01)) - AUTOPILOT_AIM_PITCH_LOWER).clamp(-1.5, 1.5);
     cam.yaw = turn_towards_angle(cam.yaw, desired_yaw, turn_step);
     cam.pitch = turn_towards_angle(cam.pitch, desired_pitch, turn_step);
 
@@ -249,7 +236,7 @@ pub(crate) fn autopilot_think(
     // doc comment.
     let nearby: Vec<Vec3> = zombies
         .iter()
-        .map(|t| t.translation)
+        .map(|(t, _)| t.translation)
         .filter(|p| player_transform.translation.distance(*p) <= retreat_range)
         .collect();
 

@@ -13,10 +13,10 @@ use bevy_replicon_renet2::{
 };
 use big_brain::prelude::*;
 use shared::{
-    resolve_bone_world_positions, zombie_hit_damage_bones, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
+    entity_phase, resolve_bone_world_positions, zombie_hit_damage_bones, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
-    SetAutoMaintainZombies, SetAutopilot, SetFreezeZombies, SetZombieCount,
+    SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount,
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
     ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for,
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
@@ -32,7 +32,7 @@ use shared::{
     DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, INTERP_DELAY_SECS,
     LAG_COMPENSATION_MAX_SECS, PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
     PROTOCOL_ID, ZOMBIE_ANIM_BITE, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_WALK, ZOMBIE_PATH,
-    ZOMBIE_MODEL_Y_OFFSET, ZOMBIE_OUTER_LENGTH, ZOMBIE_OUTER_RADIUS, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SCALE, ZOMBIE_SEPARATION_RADIUS,
+    ZOMBIE_MODEL_Y_OFFSET, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SCALE, ZOMBIE_SEPARATION_RADIUS,
     ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS, ZOMBIE_SPEED, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
     ZOMBIE_TURN_RATE_DEG,
 };
@@ -200,7 +200,6 @@ fn main() {
         .add_client_event::<SetZombieCount>(Channel::Ordered)
         .add_client_event::<ClearAllZombies>(Channel::Ordered)
         .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
-        .add_client_event::<SetAutopilot>(Channel::Ordered)
         .add_client_event::<SetFreezeZombies>(Channel::Ordered)
         .init_resource::<FreezeZombiesServer>()
         .init_resource::<PendingRespawns>()
@@ -235,15 +234,7 @@ fn main() {
         .add_systems(
             Update,
             (
-                // Overwrites this tick's ClientInput.move_axis/yaw/sprint
-                // for any player with ServerAutopilot(true) BEFORE
-                // move_players consumes it — see server_autopilot_think's
-                // own doc comment. Explicitly chained (not just listed
-                // alongside move_players) since both write the same
-                // ClientInput component and Bevy doesn't guarantee an
-                // order between non-conflicting-looking systems in a
-                // plain tuple.
-                (server_autopilot_pick_target, server_autopilot_think, move_players).chain(),
+                move_players,
                 (move_zombies, update_server_zombie_pose, record_zombie_history).chain(),
                 (bot_pick_target, move_debug_bots, debug_bot_fire).chain(),
                 tick_respawns,
@@ -268,7 +259,6 @@ fn main() {
         .add_observer(on_set_zombie_count)
         .add_observer(on_clear_all_zombies)
         .add_observer(on_set_auto_maintain_zombies)
-        .add_observer(on_set_autopilot)
         .add_observer(on_set_freeze_zombies)
         .add_observer(on_player_died)
         .add_observer(on_request_restart)
@@ -374,34 +364,7 @@ fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands, scena
         LastProcessedInput::default(),
         PlayerThreat::default(),
         Replicated,
-        // Server-side autopilot (see server_autopilot_pick_target/
-        // server_autopilot_think below) — ON by default, matching the
-        // client-side predecessor's own Default. Not replicated: it's
-        // server bookkeeping the client only ever talks to through the
-        // SetAutopilot event, same as e.g. PlayerThreat.
-        ServerAutopilot::default(),
-        ServerAutopilotState::default(),
     ));
-}
-
-// Per-player AI takeover switch — see SetAutopilot's own doc comment
-// (crates/shared) for why this is per-entity rather than a world resource
-// like AutoMaintainZombies.
-#[derive(Component)]
-struct ServerAutopilot(bool);
-impl Default for ServerAutopilot {
-    fn default() -> Self {
-        ServerAutopilot(true)
-    }
-}
-
-fn on_set_autopilot(trigger: On<FromClient<SetAutopilot>>, mut players: Query<&mut ServerAutopilot>) {
-    let Some(entity) = trigger.client_id.entity() else {
-        return;
-    };
-    if let Ok(mut autopilot) = players.get_mut(entity) {
-        autopilot.0 = trigger.message.0;
-    }
 }
 
 // See SetFreezeZombies' own doc comment for why this is one global
@@ -762,8 +725,8 @@ fn debug_bot_fire(
         let Ok(direction) = Dir3::new(zombie_transform.translation - origin) else {
             continue;
         };
-        let capsule = Collider::capsule(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_LENGTH);
-        let Some((hit_distance, normal)) = capsule.cast_ray(
+        let cylinder = Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT);
+        let Some((hit_distance, normal)) = cylinder.cast_ray(
             zombie_transform.translation,
             zombie_transform.rotation,
             origin,
@@ -779,7 +742,7 @@ fn debug_bot_fire(
         // stays on live (not history-rewound) bone positions — see this
         // function's own doc comment above.
         let resolved_bones = resolve_bone_world_positions(bones, |bone| bone_transforms.get(bone).ok().map(|g| g.translation()));
-        let damage = zombie_hit_damage_bones(hit_point, &resolved_bones);
+        let damage = zombie_hit_damage_bones(hit_point, &resolved_bones, *zombie_transform.forward());
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {
@@ -802,273 +765,6 @@ fn debug_bot_fire(
             message: ShotFx::ZombieHit { point: hit_point, normal, damage, killed },
         });
     }
-}
-
-// --- Server-side player autopilot -----------------------------------------
-// Ported from the client's own crates/client/src/autopilot.rs (now removed
-// there — see SetAutopilot's doc comment in crates/shared for why this
-// moved server-side): same nearest-zombie targeting, rate-limited aim
-// tracking, and swarm-aware retreat/approach/dodge decision, just driving
-// this Player entity's own ClientInput component directly instead of a
-// client-local AutopilotIntent resource, and resolving shots itself
-// (mirroring debug_bot_fire) instead of going through the FireShot event —
-// there's no clientside "camera" here to compute a ray from, and no
-// round-trip to wait on since this runs authoritatively already.
-//
-// Values mirror the removed client module's own constants exactly (same
-// tuning, just relocated) — see that module's own doc comment (now only in
-// git history) for the "why 14m, why 12 degrees" reasoning behind each.
-const SERVER_AUTOPILOT_DETECT_RANGE: f32 = 35.0;
-const SERVER_AUTOPILOT_ENGAGE_RANGE: f32 = 14.0;
-const SERVER_AUTOPILOT_RETREAT_RANGE: f32 = 5.0;
-const SERVER_AUTOPILOT_RETARGET_INTERVAL: f32 = 1.2;
-const SERVER_AUTOPILOT_TURN_RATE_DEG: f32 = 360.0;
-const SERVER_AUTOPILOT_FIRE_AIM_TOLERANCE_DEG: f32 = 12.0;
-const SERVER_AUTOPILOT_SPRINT_APPROACH_DISTANCE: f32 = 22.0;
-const SERVER_AUTOPILOT_IDLE_SCAN_DEG_PER_SEC: f32 = 20.0;
-const SERVER_AUTOPILOT_DODGE_CYCLE_HZ: f32 = 0.4;
-const SERVER_AUTOPILOT_DODGE_DUTY_CYCLE: f32 = 0.35;
-// Movement/aim decisions (the O(zombie count) nearby-scan for swarm
-// retreat) are throttled to this rate, same "don't recompute faster than
-// the result can even be acted on" reasoning as the removed client
-// module's own AUTOPILOT_DECISION_HZ — aim tracking and the fire gate
-// still run every server tick (30Hz, there's no 120Hz ProMotion concern
-// here) since both are O(1) against the single already-committed target.
-const SERVER_AUTOPILOT_DECISION_HZ: f32 = 20.0;
-// The real gun's own FIRE_RATE (crates/client/src/lib.rs) is a private
-// client-only constant (ammo/reload is purely cosmetic, never sent to or
-// checked by the server — see handle_fire_shot's own "no anti-cheat goals"
-// stance), so this is a same-value server-local mirror rather than an
-// import, to make autopilot's fire rate match what firing the real gun
-// manually would feel like.
-const SERVER_AUTOPILOT_FIRE_INTERVAL_SECS: f32 = 0.1;
-
-// Server-only (not replicated) per-player AI state — mirrors the removed
-// client module's AutopilotState (target/retarget_timer) plus its own
-// FpsCamera.yaw/pitch fields (the server has no camera component at all
-// for real players, only NetTransform.yaw for movement facing — see
-// SetAutopilot's own doc comment on why pitch isn't replicated back to the
-// owning client's view).
-#[derive(Component, Default)]
-struct ServerAutopilotState {
-    target: Option<Entity>,
-    retarget_timer: f32,
-    aim_yaw: f32,
-    aim_pitch: f32,
-    fire_timer: f32,
-    decision_timer: f32,
-    dodge_step_parity: bool,
-}
-
-// Nearest-zombie-in-range targeting, commit-and-periodically-reevaluate —
-// identical shape to bot_pick_target above, just gated on ServerAutopilot
-// and running against real Player entities instead of DebugBot ones.
-fn server_autopilot_pick_target(
-    time: Res<Time>,
-    mut players: Query<(&Transform, &ServerAutopilot, &mut ServerAutopilotState), With<Player>>,
-    zombies: Query<(Entity, &Transform), With<Zombie>>,
-) {
-    for (transform, autopilot, mut state) in &mut players {
-        if !autopilot.0 {
-            continue;
-        }
-        state.retarget_timer -= time.delta_secs();
-        let target_alive = state.target.is_some_and(|target| zombies.contains(target));
-        if !target_alive || state.retarget_timer <= 0.0 {
-            state.target = zombies
-                .iter()
-                .map(|(zombie, zombie_transform)| (zombie, transform.translation.distance(zombie_transform.translation)))
-                .filter(|&(_, distance)| distance <= SERVER_AUTOPILOT_DETECT_RANGE)
-                .min_by(|(_, a), (_, b)| a.total_cmp(b))
-                .map(|(zombie, _)| zombie);
-            state.retarget_timer = SERVER_AUTOPILOT_RETARGET_INTERVAL;
-        }
-    }
-}
-
-// The actual "AI": aims (rate-limited, writing this player's own aim_yaw/
-// aim_pitch rather than a shared camera), decides whether to fire (and
-// resolves the shot itself, mirroring debug_bot_fire — real per-bone hit
-// detection, no lag comp needed since this has no network round-trip of
-// its own to compensate for), and decides movement (swarm-aware retreat/
-// approach/dodge, written into this same tick's ClientInput component so
-// move_players — which runs right after this in the same .chain() —
-// applies it through the exact same simulate_player_step path a real
-// player's input would take).
-fn server_autopilot_think(
-    time: Res<Time>,
-    mut commands: Commands,
-    mut players: Query<(Entity, &Transform, &ServerAutopilot, &mut ServerAutopilotState, &mut ClientInput)>,
-    mut zombies: Query<(Entity, &Transform, &mut Health, &mut KnockbackVelocity, &ZombieHitboxBones), (With<Zombie>, Without<Player>)>,
-    bone_transforms: Query<&GlobalTransform>,
-    network_ids: Query<&NetworkId>,
-    mut threats: Query<&mut PlayerThreat>,
-    mut respawns: ResMut<PendingRespawns>,
-    director_spawned: Query<(), With<DirectorSpawned>>,
-) {
-    let dt = time.delta_secs();
-    let turn_step = SERVER_AUTOPILOT_TURN_RATE_DEG.to_radians() * dt;
-
-    for (entity, transform, autopilot, mut state, mut input) in &mut players {
-        if !autopilot.0 {
-            continue;
-        }
-        state.fire_timer -= dt;
-
-        let Some(target) = state.target else {
-            // Nothing in range — hold position, slowly scan for something
-            // to find, same as the removed client module's own idle case.
-            state.aim_yaw += SERVER_AUTOPILOT_IDLE_SCAN_DEG_PER_SEC.to_radians() * dt;
-            input.move_axis = Vec2::ZERO;
-            input.yaw = state.aim_yaw;
-            input.sprint = false;
-            input.jump = false;
-            continue;
-        };
-        let Ok((zombie_entity, zombie_transform, ..)) = zombies.get(target) else {
-            continue;
-        };
-
-        // Aim tracking and the fire gate: O(1), every tick.
-        let origin = transform.translation + Vec3::Y * DEBUG_BOT_EYE_HEIGHT;
-        let to_target = zombie_transform.translation - origin;
-        let horizontal_distance = Vec2::new(to_target.x, to_target.z).length();
-        let desired_yaw = (-to_target.x).atan2(-to_target.z);
-        let desired_pitch = to_target.y.atan2(horizontal_distance.max(0.01)).clamp(-1.5, 1.5);
-        state.aim_yaw = turn_towards_angle(state.aim_yaw, desired_yaw, turn_step);
-        state.aim_pitch = turn_towards_angle(state.aim_pitch, desired_pitch, turn_step);
-
-        let raw_aim_error = (state.aim_yaw - desired_yaw).rem_euclid(std::f32::consts::TAU);
-        let aim_error = raw_aim_error.min(std::f32::consts::TAU - raw_aim_error);
-        let in_range = horizontal_distance <= SERVER_AUTOPILOT_ENGAGE_RANGE + 1.0;
-        let aimed = aim_error < SERVER_AUTOPILOT_FIRE_AIM_TOLERANCE_DEG.to_radians();
-
-        if in_range && aimed && state.fire_timer <= 0.0 {
-            state.fire_timer = SERVER_AUTOPILOT_FIRE_INTERVAL_SECS;
-            if let Ok(mut threat) = threats.get_mut(entity) {
-                threat.0 += PLAYER_THREAT_PER_SHOT;
-            }
-            if let Ok(network_id) = network_ids.get(entity) {
-                commands.server_trigger(ToClients {
-                    mode: SendMode::Broadcast,
-                    message: PlayerFiredFx { shooter_network_id: network_id.get() },
-                });
-            }
-            let aim_direction = Vec3::new(
-                -state.aim_pitch.cos() * state.aim_yaw.sin(),
-                state.aim_pitch.sin(),
-                -state.aim_pitch.cos() * state.aim_yaw.cos(),
-            );
-            if let Ok(direction) = Dir3::new(aim_direction) {
-                let capsule = Collider::capsule(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_LENGTH);
-                if let Some((hit_distance, normal)) =
-                    capsule.cast_ray(zombie_transform.translation, zombie_transform.rotation, origin, *direction, MAX_SHOT_DISTANCE, true)
-                {
-                    let hit_point = origin + *direction * hit_distance;
-                    if let Ok((_, _, mut zombie_health, mut knockback, bones)) = zombies.get_mut(zombie_entity) {
-                        let resolved_bones = resolve_bone_world_positions(bones, |bone| bone_transforms.get(bone).ok().map(|g| g.translation()));
-                        let damage = zombie_hit_damage_bones(hit_point, &resolved_bones);
-                        zombie_health.0 -= damage;
-                        let killed = zombie_health.0 <= 0.0;
-                        if killed {
-                            let was_director_spawn = director_spawned.contains(zombie_entity);
-                            commands.entity(zombie_entity).despawn();
-                            if !was_director_spawn {
-                                respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY, fixed_position: None });
-                            }
-                        } else {
-                            let push = Vec3::new(aim_direction.x, 0.0, aim_direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
-                            knockback.0 += push;
-                        }
-                        // Full Broadcast, not BroadcastExcept: unlike a real
-                        // player firing, there's no client-side prediction
-                        // of this shot to avoid double-showing — same
-                        // reasoning as debug_bot_fire's own Broadcast.
-                        commands.server_trigger(ToClients {
-                            mode: SendMode::Broadcast,
-                            message: ShotFx::ZombieHit { point: hit_point, normal, damage, killed },
-                        });
-                    }
-                }
-            }
-        }
-
-        input.yaw = state.aim_yaw;
-        input.jump = false;
-
-        // Movement decision — throttled; keeps last decided move_axis/
-        // sprint on skipped ticks (already held in the ClientInput
-        // component from the previous tick this ran).
-        state.decision_timer -= dt;
-        if state.decision_timer > 0.0 {
-            continue;
-        }
-        state.decision_timer = 1.0 / SERVER_AUTOPILOT_DECISION_HZ;
-
-        // No low-health retreat bonus here (unlike the removed client
-        // module, which read the player's own Health directly): the
-        // server has no Health component on Player entities at all —
-        // damage from zombies is computed purely client-side (see
-        // Director's own doc comment above on why DIRECTOR_MELEE_RANGE
-        // measures pressure a different way for the same reason). A
-        // straightforward v2 add if this is worth doing would be
-        // replicating Health server-side for real players too.
-        let retreat_range = SERVER_AUTOPILOT_RETREAT_RANGE;
-
-        let nearby: Vec<Vec3> = zombies
-            .iter()
-            .map(|(_, t, ..)| t.translation)
-            .filter(|p| transform.translation.distance(*p) <= retreat_range)
-            .collect();
-
-        let move_axis = if !nearby.is_empty() {
-            let average = nearby.iter().copied().sum::<Vec3>() / nearby.len() as f32;
-            let away = transform.translation - average;
-            yaw_relative_axis(state.aim_yaw, away)
-        } else if horizontal_distance > SERVER_AUTOPILOT_ENGAGE_RANGE {
-            Vec2::new(0.0, 1.0) // approach — forward is toward-target since yaw tracks it
-        } else {
-            // Comfortable band: brief side-step dodges rather than a
-            // continuous sway — see the removed client module's own doc
-            // comment on why (a nonstop nonzero move_axis would drive the
-            // Walk animation/NetTransform.moving nonstop even though net
-            // displacement is ~0).
-            let phase = (time.elapsed_secs() * SERVER_AUTOPILOT_DODGE_CYCLE_HZ).rem_euclid(1.0);
-            if phase < SERVER_AUTOPILOT_DODGE_DUTY_CYCLE {
-                let direction = if state.dodge_step_parity { 1.0 } else { -1.0 };
-                state.dodge_step_parity = !state.dodge_step_parity;
-                Vec2::new(direction, 0.0)
-            } else {
-                Vec2::ZERO
-            }
-        };
-
-        input.move_axis = move_axis;
-        input.sprint = nearby.is_empty() && horizontal_distance > SERVER_AUTOPILOT_SPRINT_APPROACH_DISTANCE;
-    }
-}
-
-// Shortest-path angle interpolation, rate-limited — same as the removed
-// client module's own turn_towards_angle (and this file's own
-// turn_towards, the Quat version zombies/debug bots use for facing).
-fn turn_towards_angle(current: f32, target: f32, max_step: f32) -> f32 {
-    let mut delta = (target - current) % std::f32::consts::TAU;
-    if delta > std::f32::consts::PI {
-        delta -= std::f32::consts::TAU;
-    } else if delta < -std::f32::consts::PI {
-        delta += std::f32::consts::TAU;
-    }
-    current + delta.clamp(-max_step, max_step)
-}
-
-// Converts a world-space direction into the yaw-relative (x=right,
-// y=forward) axis space ClientInput.move_axis already uses — same as the
-// removed client module's own yaw_relative_axis.
-fn yaw_relative_axis(yaw: f32, world_dir: Vec3) -> Vec2 {
-    let forward = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
-    let right = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
-    let flat = Vec3::new(world_dir.x, 0.0, world_dir.z).normalize_or_zero();
-    Vec2::new(flat.dot(right), flat.dot(forward))
 }
 
 fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<NavMesh>>) {
@@ -1349,22 +1045,8 @@ mod hitbox_phase3_tests {
     }
 }
 
-// Fractional part of entity_index * the golden ratio — a cheap
-// low-discrepancy sequence that spreads out well across however many
-// zombies exist, regardless of spawn order or position. Used to stagger
-// per-zombie timers (path_recalc_timer here, ChaseTarget's
-// reevaluate_timer in move_zombies) so 100 zombies spawned in the same
-// frame don't all recompute on the exact same later frame forever after.
-// The previous approach hashed spawn_pos itself (sin(x*12.9898+z*78.233)),
-// but ZOMBIE_SPAWNS is a regular 10x10 grid — only 10 distinct x/z values —
-// and that specific hash constant is known to alias badly on grid-aligned
-// input, so many zombies ended up with near-identical phase anyway
-// (visible as the whole horde recalculating, and re-steering, in
-// lockstep). Keying off entity index instead has no such structure to
-// alias against.
-fn entity_phase(entity: Entity) -> f32 {
-    (entity.index().index() as f32 * 0.618_034).fract()
-}
+// entity_phase now lives in crates/shared — random_aim_point (server_
+// autopilot_think) needs the exact same per-entity hash, not a second copy.
 
 // `ai_enabled` used to be the global ZOMBIE_AI_ENABLED const unconditionally
 // — now a per-call flag so Scenario::HitboxTest's row can spawn with no
@@ -1396,7 +1078,7 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], ai_enabled: bool, dir
             // Raycast-only: no RigidBody, matching how this worked
             // client-side before zombies moved server-side — avian3d's
             // spatial queries pick up a bare Collider fine.
-            Collider::capsule(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_LENGTH),
+            Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
             ZombieHistory::default(),
             // Phase 2 (HITBOX_PLAN.md): populated by wire_zombie_hitbox_bones
             // (shared, same system the client already ran) once
@@ -1820,7 +1502,7 @@ fn move_zombies(
         knockback.0 *= 1.0 - decay;
 
         let velocity = horizontal_velocity + knockback.0 + Vec3::Y * motion.vertical_velocity;
-        let shape = Collider::capsule(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_LENGTH);
+        let shape = Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT);
         let config = MoveAndSlideConfig::default();
 
         let mut grounded_this_frame = false;
@@ -1868,9 +1550,8 @@ struct PendingRespawns(Vec<PendingRespawn>);
 // cycling-ZOMBIE_SPAWNS-grid population. `None` is the original/normal
 // behavior. Only handle_fire_shot's two hit-resolution branches (the real
 // player-shot path — what actually matters for hitbox testing) populate
-// `fixed_position`; debug_bot_fire/server_autopilot_think's own fire
-// branches always push `None`, since bots/autopilot aren't expected to be
-// active during a HitboxTest session.
+// `fixed_position`; debug_bot_fire's own fire branch always pushes `None`,
+// since bots aren't expected to be active during a HitboxTest session.
 struct PendingRespawn {
     timer: f32,
     fixed_position: Option<Vec3>,
@@ -1989,50 +1670,65 @@ fn handle_fire_shot(
     // closing distance fast enough to offset it. That's what was showing
     // up as "damage applies rarely, knockback only when walking into the
     // zombie while firing".
-    let capsule = Collider::capsule(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_LENGTH);
-    let rewound_hit = zombies
+    let cylinder = Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT);
+    // EVERY zombie whose (rewound) outer capsule the ray touches, nearest
+    // first — not just the single nearest one. The outer capsule is a
+    // broad-phase filter, not a solid wall: two zombies standing in a row
+    // means the ray's own outer-capsule test can find both, and the front
+    // one's inner bones all missing (a clean graze past its broad-phase
+    // shell) must not stop the same ray from still being tested against the
+    // one behind it. Collecting the whole list is what makes "keep trying
+    // the next candidate on an inner-bone miss" possible below — the
+    // earlier one-shot `.min_by` (just the nearest) had no next candidate
+    // to fall back to, so a miss on the front zombie always ate the whole
+    // shot right there, indistinguishable from actually blocking it.
+    let mut rewound_candidates: Vec<(f32, Entity, BoneWorldPositions, Vec3)> = zombies
         .iter()
         .filter_map(|(entity, _, _, history, _)| {
             let (position, rotation, bones) = zombie_history_at(history, rewind_time)?;
-            let (distance, normal) = capsule.cast_ray(position, rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
-            Some((distance, entity, bones, normal))
+            let (distance, _outer_normal) = cylinder.cast_ray(position, rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
+            // See head_and_neck_positions' own doc comment — needs the
+            // zombie's own (rewound) forward direction, not any bone's.
+            Some((distance, entity, bones, rotation * Vec3::NEG_Z))
         })
-        .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
+        .collect();
+    rewound_candidates.sort_by(|(a, ..), (b, ..)| a.total_cmp(b));
 
-    if let Some((distance, entity, bones, outer_normal)) = rewound_hit {
+    for (distance, entity, bones, forward) in &rewound_candidates {
+        let (entity, forward) = (*entity, *forward);
         info!("[shot] outer capsule hit (rewound): zombie={entity} distance={distance:.2}");
-        let outer_hit_point = shot.origin + *direction * distance;
+        // Bones ARE rewound to rewind_time here too now (Phase 3) —
+        // zombie_history_at reconstructs their world position from that
+        // same past instant's root pose + the offsets recorded at that
+        // tick, not their live position.
+        //
+        // zombie_hit_damage_ray, not zombie_hit_damage_bones(hit_point,
+        // ...) on a point sampled off the outer capsule's own surface —
+        // that surface point can sit well outside every real bone region
+        // once ZOMBIE_OUTER_RADIUS is wider than the body (see
+        // zombie_hit_damage_ray's own doc comment), so this casts the real
+        // ray into each region directly instead.
+        let Some((hit_point, normal, damage)) = zombie_hit_damage_ray(shot.origin, direction, MAX_SHOT_DISTANCE, bones, forward) else {
+            // A genuine miss of this zombie's real body — no fallback to
+            // the outer capsule's surface point, no graze/spark VFX, no
+            // damage/knockback for THIS zombie. Continues the loop (next
+            // candidate, if any) instead of returning, so a shot that
+            // grazed past this one's broad-phase shell can still reach
+            // whichever real zombie/wall is behind it.
+            let outer_hit_point = shot.origin + *direction * distance;
+            if let Some((region, nearest_distance, radius)) = zombie_hit_nearest_region(outer_hit_point, bones, forward) {
+                info!(
+                    "[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} — nearest was {region}, \
+                     distance={nearest_distance:.3} radius={radius:.3} (missed by {:.3}) — trying the next zombie behind it, if any",
+                    nearest_distance - radius
+                );
+            } else {
+                info!("[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} (no bones resolved yet) — trying the next zombie behind it, if any");
+            }
+            continue;
+        };
+        info!("[shot] inner bone capsule hit: zombie={entity} damage={damage:.1}");
         if let Ok((_, mut health, mut knockback, _, hitbox_slot)) = zombies.get_mut(entity) {
-            // Bones ARE rewound to rewind_time here too now (Phase 3) —
-            // zombie_history_at reconstructs their world position from
-            // that same past instant's root pose + the offsets recorded
-            // at that tick, not their live position.
-            //
-            // zombie_hit_damage_ray, not zombie_hit_damage_bones(
-            // outer_hit_point, ...) — the outer capsule's own surface entry
-            // point can sit well outside every real bone region once
-            // ZOMBIE_OUTER_RADIUS is wider than the body (see
-            // zombie_hit_damage_ray's own doc comment), so this casts the
-            // real ray into each region directly instead of testing that
-            // one outer-surface point's distance to them.
-            let (hit_point, normal, damage) = match zombie_hit_damage_ray(shot.origin, direction, MAX_SHOT_DISTANCE, &bones) {
-                Some((point, ray_normal, dmg)) => {
-                    info!("[shot] inner bone capsule hit: zombie={entity} damage={dmg:.1}");
-                    (point, ray_normal, dmg)
-                }
-                None => {
-                    if let Some((region, nearest_distance, radius)) = zombie_hit_nearest_region(outer_hit_point, &bones) {
-                        info!(
-                            "[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} — nearest was {region}, \
-                             distance={nearest_distance:.3} radius={radius:.3} (missed by {:.3})",
-                            nearest_distance - radius
-                        );
-                    } else {
-                        info!("[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} (0 damage, no bones resolved yet)");
-                    }
-                    (outer_hit_point, outer_normal, 0.0)
-                }
-            };
             health.0 -= damage;
             let killed = health.0 <= 0.0;
             if killed {
@@ -2087,30 +1783,46 @@ fn handle_fire_shot(
     // no history yet, or a genuine miss), but the live world raycast still
     // landed directly on a zombie right now — treat that as an ordinary,
     // un-compensated hit instead of silently treating a zombie as a wall.
+    //
+    // TODO: unlike the rewound branch above (which tries every zombie
+    // candidate in order, nearest first), this only ever considers
+    // `hit.entity` — the ONE zombie spatial_query.cast_ray happened to
+    // return. If that zombie's outer capsule is hit but its inner bones
+    // miss, this branch just falls through to the plain SurfaceHit check
+    // below, same "front zombie blocks the shot" bug the rewound branch
+    // was just fixed for — a real avian3d physics raycast genuinely stops
+    // at the first solid collider it touches, so there's no zombie behind
+    // it to fall through to here the way there was in the rewound branch's
+    // own (non-physics, manually-iterated) candidate list. Only matters in
+    // the brief window before a zombie has ZombieHistory yet (right after
+    // spawn) — low priority, fix later if it turns out to matter: re-cast
+    // spatial_query with a growing SpatialQueryFilter exclusion set (one
+    // more excluded entity per miss) instead of a single cast_ray call.
     if let Ok((entity, mut health, mut knockback, history, hitbox_slot)) = zombies.get_mut(hit.entity) {
         info!("[shot] outer capsule hit (live, no rewind match): zombie={entity} distance={:.2}", hit.distance);
-        let (_, _, bones) = zombie_history_at(history, time.elapsed_secs())
+        let (_, rotation, bones) = zombie_history_at(history, time.elapsed_secs())
             .unwrap_or((outer_hit_point, Quat::IDENTITY, BoneWorldPositions::default()));
+        // See head_and_neck_positions' own doc comment.
+        let forward = rotation * Vec3::NEG_Z;
         // See the rewound branch above's own comment on why this is
-        // zombie_hit_damage_ray, not zombie_hit_damage_bones(outer_hit_point, ...).
-        let (hit_point, normal, damage) = match zombie_hit_damage_ray(shot.origin, direction, MAX_SHOT_DISTANCE, &bones) {
-            Some((point, ray_normal, dmg)) => {
-                info!("[shot] inner bone capsule hit: zombie={entity} damage={dmg:.1}");
-                (point, ray_normal, dmg)
+        // zombie_hit_damage_ray, not zombie_hit_damage_bones(outer_hit_point,
+        // ...), and on why a None here is a genuine miss — no fallback VFX,
+        // no damage/knockback. This is the last fallback (unlike the
+        // rewound branch, nothing meaningful to fall through to further),
+        // so this just returns with no effect at all.
+        let Some((hit_point, normal, damage)) = zombie_hit_damage_ray(shot.origin, direction, MAX_SHOT_DISTANCE, &bones, forward) else {
+            if let Some((region, nearest_distance, radius)) = zombie_hit_nearest_region(outer_hit_point, &bones, forward) {
+                info!(
+                    "[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} — nearest was {region}, \
+                     distance={nearest_distance:.3} radius={radius:.3} (missed by {:.3}) — treating as a genuine miss, no VFX",
+                    nearest_distance - radius
+                );
+            } else {
+                info!("[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} (no bones resolved yet) — treating as a genuine miss, no VFX");
             }
-            None => {
-                if let Some((region, nearest_distance, radius)) = zombie_hit_nearest_region(outer_hit_point, &bones) {
-                    info!(
-                        "[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} — nearest was {region}, \
-                         distance={nearest_distance:.3} radius={radius:.3} (missed by {:.3})",
-                        nearest_distance - radius
-                    );
-                } else {
-                    info!("[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} (0 damage, no bones resolved yet)");
-                }
-                (outer_hit_point, hit.normal, 0.0)
-            }
+            return;
         };
+        info!("[shot] inner bone capsule hit: zombie={entity} damage={damage:.1}");
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {

@@ -48,12 +48,6 @@ final class SettingsMenuView: UIView {
     // comment), not a debug cheat — deliberately outside every #if DEBUG
     // block on this page, unlike God Mode/Noclip/Freeze below.
     private let autopilotButton = ToggleRow(title: "Autopilot")
-    // Selects which implementation Autopilot uses — also a real
-    // player-facing switch (see crate::autopilot's own module doc comment
-    // for why: it's "which AI drives", not a debug cheat), so it lives
-    // next to autopilotButton outside the DEBUG pages too. OFF = client
-    // decides (default); ON = server decides.
-    private let autopilotServerModeButton = ToggleRow(title: "Server AI")
 
     #if DEBUG
     // Page 2: God Mode/Noclip/Freeze + Kill All/Spawn +100.
@@ -96,7 +90,6 @@ final class SettingsMenuView: UIView {
     var onSensitivityDec: (() -> Void)?
     var onSensitivityInc: (() -> Void)?
     var onToggleAutopilot: (() -> Void)?
-    var onToggleAutopilotServerMode: (() -> Void)?
     #if DEBUG
     var onToggleGodMode: (() -> Void)?
     var onToggleNoclip: (() -> Void)?
@@ -181,9 +174,6 @@ final class SettingsMenuView: UIView {
 
         autopilotButton.addTarget(self, action: #selector(tapAutopilot))
         settingsPage.addSubview(autopilotButton)
-
-        autopilotServerModeButton.addTarget(self, action: #selector(tapAutopilotServerMode))
-        settingsPage.addSubview(autopilotServerModeButton)
 
         #if DEBUG
         card.addSubview(cheatsPage)
@@ -304,8 +294,6 @@ final class SettingsMenuView: UIView {
         sensitivityLabel.frame = CGRect(x: pad + 52, y: sy, width: contentWidth - pad * 2 - 104, height: 40)
         sy += 48
         autopilotButton.frame = CGRect(x: pad, y: sy, width: contentWidth - pad * 2, height: 36)
-        sy += 42
-        autopilotServerModeButton.frame = CGRect(x: pad, y: sy, width: contentWidth - pad * 2, height: 36)
 
         #if DEBUG
         cheatsPage.frame = CGRect(x: 0, y: contentTop, width: contentWidth, height: contentHeight)
@@ -354,7 +342,7 @@ final class SettingsMenuView: UIView {
     // MARK: state refresh — called by ViewController once per frame while
     // visible (cheap: a handful of FFI getter calls, not a full re-layout).
     func refresh(
-        sensitivity: Float, playerHp: Float, autopilot: Bool, autopilotServerMode: Bool,
+        sensitivity: Float, playerHp: Float, autopilot: Bool,
         godMode: Bool, noclip: Bool, freezeZombies: Bool,
         zombieLiveCount: UInt32, zombieTargetCount: UInt32,
         gunVisible: Bool, mapMsaa: Bool, mapShadows: Bool,
@@ -368,7 +356,6 @@ final class SettingsMenuView: UIView {
             hpLabel.text = "HP: —"
         }
         autopilotButton.setOn(autopilot)
-        autopilotServerModeButton.setOn(autopilotServerMode)
         #if DEBUG
         godModeButton.setOn(godMode)
         noclipButton.setOn(noclip)
@@ -410,7 +397,6 @@ final class SettingsMenuView: UIView {
     @objc private func tapSensitivityDec() { onSensitivityDec?() }
     @objc private func tapSensitivityInc() { onSensitivityInc?() }
     @objc private func tapAutopilot() { onToggleAutopilot?() }
-    @objc private func tapAutopilotServerMode() { onToggleAutopilotServerMode?() }
     #if DEBUG
     @objc private func tapGodMode() { onToggleGodMode?() }
     @objc private func tapNoclip() { onToggleNoclip?() }

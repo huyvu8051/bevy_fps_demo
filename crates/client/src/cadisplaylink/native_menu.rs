@@ -156,53 +156,10 @@ pub fn autopilot(app: &mut App) -> bool {
     app.world().get_resource::<crate::autopilot::Autopilot>().map(|v| v.0).unwrap_or(true)
 }
 
-// Two implementations run side by side now (see crate::autopilot's own
-// module doc comment) — this updates the local master-switch mirror (so
-// the Settings toggle reflects the new state instantly, same zero-latency
-// pattern as e.g. set_zombie_count_and_trigger below) AND tells the server
-// whether IT should be autopiloting this player, which is only true when
-// BOTH this switch is on AND AutopilotServerMode is on (send_combined_
-// autopilot_state below computes that AND). Not gated on a live server the
-// way SetZombieCount etc. are (those need a live server to mean anything
-// at all): this is safe to call before a connection exists too, since
-// bevy_replicon just queues client_trigger calls until there's a
-// connection to flush them over.
 pub fn set_autopilot(app: &mut App, on: bool) {
     if let Some(mut v) = app.world_mut().get_resource_mut::<crate::autopilot::Autopilot>() {
         v.0 = on;
     }
-    send_combined_autopilot_state(app);
-}
-
-// Selects which implementation runs while the master Autopilot switch is
-// on — false (default) = crate::autopilot's own client-side decision loop,
-// true = the server's server_autopilot_* systems instead. See
-// crate::autopilot's module doc comment for the full picture.
-pub fn autopilot_server_mode(app: &mut App) -> bool {
-    app.world().get_resource::<crate::autopilot::AutopilotServerMode>().map(|v| v.0).unwrap_or(false)
-}
-
-pub fn set_autopilot_server_mode(app: &mut App, on: bool) {
-    if let Some(mut v) = app.world_mut().get_resource_mut::<crate::autopilot::AutopilotServerMode>() {
-        v.0 = on;
-    }
-    send_combined_autopilot_state(app);
-}
-
-// Shared by both setters above: the server should only run its own
-// server_autopilot_* systems for this player when the master switch AND
-// the mode switch are both on — sending the bare master-switch value (the
-// old single-implementation behavior) would make the server autopilot
-// whenever Autopilot was on regardless of which implementation the user
-// picked. Safe to call before a connection exists — see set_autopilot's
-// own comment on client_trigger queuing.
-fn send_combined_autopilot_state(app: &mut App) {
-    use bevy_replicon::prelude::ClientTriggerExt;
-    let on = app.world().get_resource::<crate::autopilot::Autopilot>().map(|v| v.0).unwrap_or(true);
-    let server_mode = app.world().get_resource::<crate::autopilot::AutopilotServerMode>().map(|v| v.0).unwrap_or(false);
-    let mut state: SystemState<Commands> = SystemState::from_world(app.world_mut());
-    state.get_mut(app.world_mut()).client_trigger(shared::SetAutopilot(on && server_mode));
-    state.apply(app.world_mut());
 }
 
 // The remaining debug-panel toggles (crate::lib's Cheats page 1 second/
