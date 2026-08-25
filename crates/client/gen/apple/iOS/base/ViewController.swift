@@ -684,6 +684,10 @@ class ViewController: UIViewController {
             guard let self, let probe = self.rustMetalProbe else { return }
             native_metal_probe_set_autopilot(probe, !native_metal_probe_get_autopilot(probe))
         }
+        settingsMenu.onToggleAutopilotServerMode = { [weak self] in
+            guard let self, let probe = self.rustMetalProbe else { return }
+            native_metal_probe_set_autopilot_server_mode(probe, !native_metal_probe_get_autopilot_server_mode(probe))
+        }
         #if DEBUG
         settingsMenu.onToggleGodMode = { [weak self] in
             guard let self, let probe = self.rustMetalProbe else { return }
@@ -824,6 +828,7 @@ class ViewController: UIViewController {
             let hp = native_metal_probe_get_player_hp(probe)
             let zombieLiveCount = native_metal_probe_get_live_zombie_count(probe)
             let autopilot = native_metal_probe_get_autopilot(probe)
+            let autopilotServerMode = native_metal_probe_get_autopilot_server_mode(probe)
             #if DEBUG
             let godMode = native_metal_probe_get_god_mode(probe)
             let noclip = native_metal_probe_get_noclip(probe)
@@ -857,7 +862,7 @@ class ViewController: UIViewController {
                 settingsMenu.layout(in: self.view)
             }
             settingsMenu.refresh(
-                sensitivity: sensitivity, playerHp: hp, autopilot: autopilot,
+                sensitivity: sensitivity, playerHp: hp, autopilot: autopilot, autopilotServerMode: autopilotServerMode,
                 godMode: godMode, noclip: noclip, freezeZombies: freeze,
                 zombieLiveCount: zombieLiveCount, zombieTargetCount: zombieTargetCount,
                 gunVisible: gunVisible, mapMsaa: mapMsaa, mapShadows: mapShadows,
