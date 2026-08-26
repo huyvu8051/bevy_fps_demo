@@ -712,6 +712,7 @@ pub struct NativeMetalProbe {
     ui_crosshair_lines: Vec<super::native_game_extract::CrosshairLineSnapshot>,
     // Settings menu — see SettingsMenuButtonSnapshot's own doc comment
     // (native_game_extract.rs).
+    ui_settings_menu_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_settings_menu_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_settings_menu_texts: Vec<super::native_game_extract::HudTextSnapshot>,
 }
@@ -1259,6 +1260,7 @@ impl NativeMetalProbe {
             ui_touch_joystick: None,
             ui_hud_texts: Vec::new(),
             ui_crosshair_lines: Vec::new(),
+            ui_settings_menu_panel: None,
             ui_settings_menu_buttons: Vec::new(),
             ui_settings_menu_texts: Vec::new(),
         }
@@ -1551,6 +1553,7 @@ impl NativeMetalProbe {
             self.ui_touch_joystick = snapshot.touch_joystick;
             self.ui_hud_texts = snapshot.hud_texts;
             self.ui_crosshair_lines = snapshot.crosshair_lines;
+            self.ui_settings_menu_panel = snapshot.settings_menu_panel;
             self.ui_settings_menu_buttons = snapshot.settings_menu_buttons;
             self.ui_settings_menu_texts = snapshot.settings_menu_texts;
             self.msaa_enabled = snapshot.map_msaa_on;
@@ -1845,6 +1848,7 @@ impl NativeMetalProbe {
                 || self.ui_touch_joystick.is_some()
                 || !self.ui_hud_texts.is_empty()
                 || !self.ui_crosshair_lines.is_empty()
+                || self.ui_settings_menu_panel.is_some()
                 || !self.ui_settings_menu_buttons.is_empty()
                 || !self.ui_settings_menu_texts.is_empty()
             {
@@ -1953,10 +1957,20 @@ impl NativeMetalProbe {
                 // text — see draw_hud_text_list's own doc comment.
                 draw_hud_text_list(encoder, &self.ui_hud_texts, view_w, view_h, &self.font_atlas_texture);
 
-                // Settings menu: plain rects for every button (see
-                // SettingsMenuButtonSnapshot's own doc comment — no label
-                // here, labels are settings_menu_texts' own Text children,
-                // drawn as ordinary text right after) plus its own text.
+                // Settings menu: the panel's own dark backdrop first (drawn
+                // under everything else spawned inside it — see
+                // settings_menu_panel's own doc comment in
+                // native_game_extract.rs for why it needs its own separate
+                // extraction/draw, not just "another button"), then plain
+                // rects for every button (no label here, labels are
+                // settings_menu_texts' own Text children, drawn as ordinary
+                // text right after) plus its own text.
+                if let Some(panel) = &self.ui_settings_menu_panel {
+                    let [x, y] = panel.top_left;
+                    let [w, h] = panel.size;
+                    let quad = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
+                    draw_ui_quad(encoder, &quad, panel.color, &self.white_texture);
+                }
                 for button in &self.ui_settings_menu_buttons {
                     let [x, y] = button.top_left;
                     let [w, h] = button.size;

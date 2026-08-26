@@ -236,6 +236,7 @@ pub struct RenderSnapshot {
     pub touch_joystick: Option<TouchJoystickSnapshot>,
     pub hud_texts: Vec<HudTextSnapshot>,
     pub crosshair_lines: Vec<CrosshairLineSnapshot>,
+    pub settings_menu_panel: Option<SettingsMenuButtonSnapshot>,
     pub settings_menu_buttons: Vec<SettingsMenuButtonSnapshot>,
     pub settings_menu_texts: Vec<HudTextSnapshot>,
     /// The `MapMsaaOn` cheat-menu toggle (crate::lib) — previously only
@@ -818,8 +819,19 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // generically instead of a per-button-type marker. Skips entirely
     // (leaving both Vecs empty, same as `Display::None`-collapsed content
     // elsewhere in this file) if the menu was never spawned yet.
-    let mut settings_root_state: SystemState<Query<bevy::ecs::entity::Entity, With<crate::SettingsMenuRoot>>> = SystemState::new(world);
-    if let Some(root) = settings_root_state.get(world).iter().next() {
+    let mut settings_root_state: SystemState<
+        Query<(bevy::ecs::entity::Entity, &ComputedNode, &UiGlobalTransform, &BackgroundColor), With<crate::SettingsMenuRoot>>,
+    > = SystemState::new(world);
+    if let Some((root, root_node, root_transform, root_bg)) = settings_root_state.get(world).iter().next() {
+        // The root panel itself (crate::lib's dark translucent backdrop
+        // behind every row/button) isn't a Button, so it never shows up in
+        // the descendant walk below — extracted separately here, same
+        // logical_rect technique, and drawn FIRST (see render_frame) so
+        // the real buttons/text still land on top of it.
+        let (top_left, size) = logical_rect(root_node, root_transform);
+        let c = root_bg.0.to_srgba();
+        snapshot.settings_menu_panel = Some(SettingsMenuButtonSnapshot { top_left, size, color: [c.red, c.green, c.blue, c.alpha] });
+
         let mut children_state: SystemState<Query<&Children>> = SystemState::new(world);
         let children_query = children_state.get(world);
         let mut descendants = Vec::new();
