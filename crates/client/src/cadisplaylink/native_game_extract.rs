@@ -178,6 +178,14 @@ pub struct ExtractedMesh {
     /// converted to a plain `Transform` for the renderer's convenience —
     /// see `bake_static_meshes` in native_metal_probe.rs).
     pub transform: Transform,
+    /// Whether this mesh is a descendant of the `Gun` entity (its glTF
+    /// scene's own meshes — receiver, scope lens, red-dot sight, etc.),
+    /// as opposed to arena wall/floor geometry. native_metal_probe.rs's
+    /// draw_scene draws gun meshes in a separate late pass (after
+    /// zombies) regardless of their own alpha, so a translucent gun part
+    /// never depth-occludes a zombie standing behind it — see that pass's
+    /// own doc comment.
+    pub is_gun: bool,
 }
 
 /// Camera pose. `eye` is the `FpsCamera` entity's own world-space
@@ -958,22 +966,24 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // "garbled giant mesh" failure mode as the gun's own GlobalTransform-
     // propagation bug noted above, just from skipping skinning instead of
     // skipping GlobalTransform.
-    // Gun visibility: the mesh_query below has no notion of Bevy
-    // `Visibility` at all — this headless App never runs the render
+    // Gun visibility + identity: the mesh_query below has no notion of
+    // Bevy `Visibility` at all — this headless App never runs the render
     // crate's visibility-propagation systems (no `InheritedVisibility`/
     // `ViewVisibility` to read even if it did), so without this the gun's
     // meshes always got baked into static_meshes regardless of the
     // `GunVisible` cheat toggle (crate::lib's `apply_map_render_toggles`
     // only ever updates the real `Gun` entity's `Visibility` component,
     // which only the desktop/wgpu render path actually reads) — same class
-    // of bug `map_msaa_on` above was added to fix for MSAA. Collect every
-    // descendant of the `Gun` entity (its glTF scene's own meshes) so they
-    // can be skipped below when the toggle is off.
+    // of bug `map_msaa_on` above was added to fix for MSAA. Collected
+    // unconditionally now (not just when hidden) — also used to tag
+    // `ExtractedMesh::is_gun` below, which native_metal_probe.rs needs to
+    // draw the viewmodel in its own late pass (after zombies) regardless
+    // of the mesh's own alpha, so a translucent gun part (scope lens, the
+    // red-dot sight's own lens glass, ...) never depth-occludes a zombie
+    // standing behind it — see draw_scene's own doc comment on that pass.
     let mut gun_visible_state: SystemState<Res<crate::GunVisible>> = SystemState::new(world);
     let gun_visible = gun_visible_state.get(world).0;
-    let gun_hidden_meshes: std::collections::HashSet<bevy::ecs::entity::Entity> = if gun_visible {
-        Default::default()
-    } else {
+    let gun_mesh_entities: std::collections::HashSet<bevy::ecs::entity::Entity> = {
         let mut gun_state: SystemState<(Query<bevy::ecs::entity::Entity, With<crate::Gun>>, Query<&Children>)> = SystemState::new(world);
         let (gun_query, children_query) = gun_state.get(world);
         let mut out = Vec::new();
@@ -992,7 +1002,8 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     )> = SystemState::new(world);
     let (mesh_query, meshes, materials, images) = mesh_state.get(world);
     for (entity, mesh3d, material3d, transform) in mesh_query.iter() {
-        if gun_hidden_meshes.contains(&entity) {
+        let is_gun = gun_mesh_entities.contains(&entity);
+        if is_gun && !gun_visible {
             continue;
         }
         let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
@@ -1089,6 +1100,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             tangents,
             normal_texture,
             transform: transform.compute_transform(),
+            is_gun,
         });
     }
 

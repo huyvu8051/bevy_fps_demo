@@ -617,13 +617,22 @@ fragment float4 quad_fragment(QuadVertexOut in [[stage_in]],
     // tube opening — see update_scope_lens/SCOPE_LENS_SIZE in
     // crates/client/src/lib.rs) instead of a square PIP box. Discarding
     // outside the inscribed circle just leaves whatever the main camera
-    // already drew showing through — no blending needed for the cutout
-    // itself.
+    // already drew showing through.
     float2 centered = in.uv - float2(0.5, 0.5);
     if (length(centered) > 0.5) {
         discard_fragment();
     }
-    return tex.sample(texSampler, in.uv);
+    float4 color = tex.sample(texSampler, in.uv);
+    // Real game's ScopeLens is AlphaMode::Blend glass (see
+    // build_sponza_descriptor's own comment) — the world behind the gun
+    // still shows through it faintly, unlike a fully opaque disk. This
+    // quad is drawn last, straight over the already-finished main-camera
+    // frame (see render_frame), so blending it at less than full alpha
+    // here lets that same "world already drawn underneath" bleed through
+    // the scope picture the same way, instead of painting over it
+    // completely opaque like before.
+    color.a = 0.88;
+    return color;
 }
 "#;
 
@@ -1230,6 +1239,8 @@ struct RealGameMeshDraw<'a> {
     emissive: [f32; 4],
     texture: Option<&'a metal::Texture>,
     normal_texture: Option<&'a metal::Texture>,
+    // See ExtractedMesh::is_gun's own doc comment.
+    is_gun: bool,
 }
 
 impl NativeMetalProbe {
@@ -1559,7 +1570,21 @@ impl NativeMetalProbe {
             let descriptor = RenderPipelineDescriptor::new();
             descriptor.set_vertex_function(Some(vertex_fn));
             descriptor.set_fragment_function(Some(fragment_fn));
-            descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+            let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+            color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+            // Was opaque (no blending) — the scope PIP painted fully solid
+            // over whatever the main camera already drew there, unlike the
+            // real game's translucent ScopeLens glass (see
+            // build_sponza_descriptor's comment). quad_fragment now returns
+            // alpha < 1, so this needs the same standard "source over"
+            // blend setup as that pipeline to actually show through.
+            color_attachment.set_blending_enabled(true);
+            color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+            color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
+            color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+            color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+            color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+            color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
             descriptor.set_raster_sample_count(sample_count);
             descriptor
         }
@@ -1608,8 +1633,8 @@ impl NativeMetalProbe {
             color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
             // Health bar backgrounds are translucent black and glyph quads
             // carry a coverage-shaped alpha (see build_font_atlas) — both
-            // need real alpha blending, unlike quad_pipeline's opaque scope
-            // PIP above.
+            // need real alpha blending, same as quad_pipeline's own scope
+            // PIP above (also blended now, see build_quad_descriptor).
             color_attachment.set_blending_enabled(true);
             color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
             color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
@@ -1846,45 +1871,57 @@ impl NativeMetalProbe {
         // true, USE_NATIVE_METAL_DEMO = false) — removed rather than kept
         // as dead weight; see git history if either is ever worth
         // resurrecting for a standalone demo/probe build again.
+        // Draws one static mesh (arena wall/floor or a gun/lens child mesh)
+        // — factored out so opaque and blended meshes can be drawn as two
+        // separate passes below (see their own call sites' doc comment for
+        // why order matters) without duplicating the uniform-building.
+        let draw_static_mesh = |m: &RealGameMeshDraw| {
+            let sponza_uniforms = SponzaUniforms {
+                view_projection,
+                light_pos: light.position,
+                light_range: light.range,
+                light_color: light.color,
+                sun_dir: light.sun_dir,
+                _sun_pad: 0.0,
+                sun_color: light.sun_color,
+                base_color_factor: m.base_color_factor,
+                emissive: m.emissive,
+                light_view_projection,
+                point_light_view_projection,
+                camera_pos,
+                _camera_pad: 0.0,
+            };
+            encoder.set_vertex_buffer(0, Some(&m.vertex_buffer), 0);
+            encoder.set_vertex_bytes(
+                1,
+                std::mem::size_of::<SponzaUniforms>() as u64,
+                &sponza_uniforms as *const _ as *const _,
+            );
+            encoder.set_fragment_bytes(
+                1,
+                std::mem::size_of::<SponzaUniforms>() as u64,
+                &sponza_uniforms as *const _ as *const _,
+            );
+            let texture = m.texture.unwrap_or(&self.white_texture);
+            encoder.set_fragment_texture(0, Some(texture));
+            let normal_texture = m.normal_texture.unwrap_or(&self.flat_normal_texture);
+            encoder.set_fragment_texture(3, Some(normal_texture));
+            encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, m.vertex_count as u64);
+        };
+
         if let Some(meshes) = real_game_meshes {
             // Reuses Sponza's own pipeline/shader (position+normal+uv,
             // textured) unchanged — arena/gun geometry is textured exactly
             // like Sponza's, just rebaked into world space fresh each frame
             // (see bake_static_mesh_vertices) instead of once at load time.
+            // Arena only here — gun/viewmodel meshes (is_gun) are drawn in
+            // a second pass below, AFTER the skinned zombies/remote
+            // players, regardless of their own alpha — see that pass's
+            // own comment for why.
             encoder.set_render_pipeline_state(sponza_pipeline.unwrap());
             encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
-            for m in meshes {
-                let sponza_uniforms = SponzaUniforms {
-                    view_projection,
-                    light_pos: light.position,
-                    light_range: light.range,
-                    light_color: light.color,
-                    sun_dir: light.sun_dir,
-                    _sun_pad: 0.0,
-                    sun_color: light.sun_color,
-                    base_color_factor: m.base_color_factor,
-                    emissive: m.emissive,
-                    light_view_projection,
-                    point_light_view_projection,
-                    camera_pos,
-                    _camera_pad: 0.0,
-                };
-                encoder.set_vertex_buffer(0, Some(&m.vertex_buffer), 0);
-                encoder.set_vertex_bytes(
-                    1,
-                    std::mem::size_of::<SponzaUniforms>() as u64,
-                    &sponza_uniforms as *const _ as *const _,
-                );
-                encoder.set_fragment_bytes(
-                    1,
-                    std::mem::size_of::<SponzaUniforms>() as u64,
-                    &sponza_uniforms as *const _ as *const _,
-                );
-                let texture = m.texture.unwrap_or(&self.white_texture);
-                encoder.set_fragment_texture(0, Some(texture));
-                let normal_texture = m.normal_texture.unwrap_or(&self.flat_normal_texture);
-                encoder.set_fragment_texture(3, Some(normal_texture));
-                encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, m.vertex_count as u64);
+            for m in meshes.iter().filter(|m| !m.is_gun) {
+                draw_static_mesh(m);
             }
         }
 
@@ -1987,6 +2024,38 @@ impl NativeMetalProbe {
                     &mesh.index_buffer,
                     0,
                 );
+            }
+        }
+
+        if let Some(meshes) = real_game_meshes {
+            // Gun/viewmodel meshes (is_gun — receiver, scope lens, red-dot
+            // sight, ...) drawn LAST, after both the arena pass above and
+            // the skinned zombies/remote players just above this, and
+            // regardless of the mesh's own alpha (not just the ones with
+            // alpha < 1 — see ExtractedMesh::is_gun's own doc comment for
+            // why alpha alone wasn't a reliable enough signal: the red-dot
+            // sight's own lens glass still showed this bug despite reading
+            // as fully opaque). Order matters here because self.depth_
+            // state (see its own construction comment) writes depth for
+            // every draw regardless of blending — drawing any gun mesh
+            // before a zombie standing behind/through it wrote the gun's
+            // own (much nearer) depth into the buffer first, so the zombie
+            // drawn afterward failed the depth test against it and got
+            // silently culled: invisible through the gun's own glass bits
+            // despite blending being enabled on this pipeline, while the
+            // shadow map (a wholly separate pass/depth buffer — see
+            // draw_shadow_casters) kept showing the zombie's shadow fine.
+            // Opaque geometry renders identically regardless of draw order
+            // (see build_sponza_descriptor's own "safe for opaque geometry
+            // too" comment) — a genuinely solid gun part (the receiver,
+            // say) still correctly occludes whatever's directly behind it
+            // even drawn this late, so moving the whole gun here doesn't
+            // change anything for its opaque parts, only lets its
+            // translucent ones actually show through like the real game.
+            encoder.set_render_pipeline_state(sponza_pipeline.unwrap());
+            encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
+            for m in meshes.iter().filter(|m| m.is_gun) {
+                draw_static_mesh(m);
             }
         }
     }
@@ -2203,6 +2272,7 @@ impl NativeMetalProbe {
                     emissive: mesh.emissive,
                     texture,
                     normal_texture,
+                    is_gun: mesh.is_gun,
                 }
             })
             .collect();
