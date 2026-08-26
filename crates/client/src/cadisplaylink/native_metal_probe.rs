@@ -549,8 +549,10 @@ pub struct NativeMetalProbe {
     camera_pitch: f32,
     skinned_pipeline: Option<RenderPipelineState>,
     skinned_pipeline_no_msaa: Option<RenderPipelineState>,
-    soldier_model: Option<super::skinned_gltf::SkinnedModel>,
-    zombie_model: Option<super::skinned_gltf::SkinnedModel>,
+    // See skinned_actor.rs's own doc comment — this project's zombie/soldier
+    // models are just two entries registered here, not a special case the
+    // renderer core knows about.
+    skinned_models: super::skinned_actor::SkinnedModelRegistry,
     scope_color_texture: metal::Texture,
     // Multisampled scope-pass render target, resolved into
     // scope_color_texture above — see its own doc comment at construction.
@@ -626,12 +628,6 @@ pub struct NativeMetalProbe {
     font_atlas_texture: metal::Texture,
     ui_floating_damage: Vec<FloatingDamageSnapshot>,
     ui_health_bars: Vec<HealthBarSnapshot>,
-}
-
-#[derive(bevy::ecs::component::Component, Clone, Copy)]
-enum EntityKind {
-    Soldier,
-    Zombie,
 }
 
 // Flattens ONE of the real game's extracted static meshes (arena
@@ -887,11 +883,40 @@ impl NativeMetalProbe {
                     (None, None)
                 }
             };
+        // Registers this project's two skinned actor types under the names
+        // native_game_extract.rs's zombie/remote-player extraction tags its
+        // SkinnedActorDraws with (see skinned_actor.rs's own doc comment) —
+        // the renderer core itself has no idea these are "zombies" or
+        // "soldiers", only that something registered these names.
         let resource_path = bundle_resource_path().unwrap_or_default();
+        let mut skinned_models = super::skinned_actor::SkinnedModelRegistry::default();
         let soldier_path = std::path::Path::new(&resource_path).join("assets/characters/soldier/mesh/soldier.glb");
-        let soldier_model = super::skinned_gltf::load_skinned_gltf(&device, &soldier_path);
+        if let Some(soldier_model) = super::skinned_gltf::load_skinned_gltf(&device, &soldier_path) {
+            // See the old per-EntityKind match this replaced (git history)
+            // for why these specific correction values are needed: the
+            // real game never scales the player entity's own Transform
+            // (PLAYER_MODEL_SCALE/_Y_OFFSET/_FACING_CORRECTION only apply
+            // to the mesh's own child entity on the desktop/wgpu path,
+            // which this custom Metal renderer doesn't query at all — this
+            // is the only place actually determining what's drawn here).
+            skinned_models.register(
+                "soldier",
+                soldier_model,
+                crate::PLAYER_MODEL_SCALE,
+                crate::PLAYER_MODEL_Y_OFFSET,
+                crate::PLAYER_MODEL_FACING_CORRECTION,
+            );
+        }
         let zombie_path = std::path::Path::new(&resource_path).join("assets/characters/zombie/mesh/zombie.glb");
-        let zombie_model = super::skinned_gltf::load_skinned_gltf(&device, &zombie_path);
+        if let Some(zombie_model) = super::skinned_gltf::load_skinned_gltf(&device, &zombie_path) {
+            skinned_models.register(
+                "zombie",
+                zombie_model,
+                shared::ZOMBIE_SCALE,
+                -(shared::ZOMBIE_RADIUS + shared::ZOMBIE_LENGTH / 2.0),
+                0.0,
+            );
+        }
 
         let real_game_app = Some(build_headless_game_ecs_app());
 
@@ -1053,8 +1078,7 @@ impl NativeMetalProbe {
             camera_pitch: -0.25,
             skinned_pipeline,
             skinned_pipeline_no_msaa,
-            soldier_model,
-            zombie_model,
+            skinned_models,
             scope_color_texture,
             scope_color_texture_msaa,
             scope_depth_texture,
@@ -1169,14 +1193,16 @@ impl NativeMetalProbe {
         encoder: &metal::RenderCommandEncoderRef,
         view_projection: [[f32; 4]; 4],
         light: LightUniform,
-        // 4th field is `(clip_index, anim_time)` — an *absolute* time to
-        // feed `compute_joint_matrices` directly, not an offset added to
-        // `now` the way the toy demo's own AnimOffset component used to
-        // work (that math now happens once at the call site instead, see
-        // both places this is built below, so this fn doesn't need `now`
-        // for animation at all anymore — real-game zombies use their
-        // actual AnimationPlayer's seek_time, not wall-clock time).
-        extracted: &[(bevy::transform::components::Transform, EntityKind, (usize, f32))],
+        // anim_time is an *absolute* time to feed `compute_joint_matrices`
+        // directly, not an offset added to `now` the way the toy demo's own
+        // AnimOffset component used to work (that math now happens once at
+        // the call site instead, see both places this is built below, so
+        // this fn doesn't need `now` for animation at all anymore —
+        // real-game zombies use their actual AnimationPlayer's seek_time,
+        // not wall-clock time). `model` looks up self.skinned_models — see
+        // skinned_actor.rs's own doc comment for why this is a name, not a
+        // gameplay-type enum.
+        extracted: &[super::skinned_actor::SkinnedActorDraw],
         _now: f32,
         real_game_meshes: Option<&[RealGameMeshDraw]>,
         // Selects which of each shader's two compiled pipelines (see
@@ -1239,45 +1265,25 @@ impl NativeMetalProbe {
         encoder.set_render_pipeline_state(pipeline);
         encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
 
-        for (transform, kind, (anim_clip_index, anim_time)) in extracted {
-            let model = match kind {
-                EntityKind::Soldier => self.soldier_model.as_ref(),
-                EntityKind::Zombie => self.zombie_model.as_ref(),
+        for actor in extracted {
+            let Some(slot) = self.skinned_models.get(actor.model) else { continue };
+            let (model, mesh_scale, y_offset) = (&slot.model, slot.scale, slot.y_offset);
+            // This is the ONLY place that actually determines what's drawn
+            // on screen for USE_REAL_GAME_NATIVE_RENDERER — this custom
+            // Metal renderer never queries Bevy's own scene graph (the
+            // mesh-child-entity scale/offset/facing corrections the
+            // desktop/wgpu path applies there, e.g. PLAYER_MODEL_SCALE/
+            // _Y_OFFSET/_FACING_CORRECTION on the child SceneRoot in
+            // crate::lib) at all — see skinned_actor.rs's own doc comment
+            // for why each registered model instead carries its own
+            // scale/y_offset/facing_correction as plain data.
+            let rotation = if slot.facing_correction != 0.0 {
+                actor.transform.rotation * bevy::math::Quat::from_rotation_y(slot.facing_correction)
+            } else {
+                actor.transform.rotation
             };
-            let Some(model) = model else { continue };
-
-            // The real game never scales the Zombie entity's own Transform
-            // (that's what native_game_extract.rs's GlobalTransform query
-            // reads) — ZOMBIE_SCALE (0.25×) and ZOMBIE_MODEL_Y_OFFSET (feet-
-            // to-capsule-center) are both applied only to the mesh's own
-            // *child* entity, parented under the zombie (see
-            // `zombie_mesh_bundle` in crate::lib). Omitting both here drew
-            // zombie.glb at its raw, unscaled size — ~4x too big — floating
-            // at the capsule's center instead of standing on its feet.
-            //
-            // PLAYER_MODEL_PATH (soldier.glb) was previously assumed to
-            // need neither correction (spawned here at scale 1.0/offset
-            // 0.0) — WRONG, confirmed by direct in-game report: the remote
-            // player model rendered floating above the ground and facing
-            // backward relative to its own travel direction. This is the
-            // ONLY place that actually determines what's drawn on screen
-            // for USE_REAL_GAME_NATIVE_RENDERER — the parallel Bevy-side
-            // fix (on_net_player_replicated's child SceneRoot transform in
-            // crate::lib, PLAYER_MODEL_SCALE/Y_OFFSET/FACING_CORRECTION)
-            // only affects the desktop/non-native-renderer path, since this
-            // custom Metal renderer never queries Bevy's own scene graph
-            // for PlayerModel/PlayerModelAnimRoot at all. Reusing the same
-            // constants here so both paths stay in sync.
-            let (mesh_scale, y_offset) = match kind {
-                EntityKind::Zombie => {
-                    (shared::ZOMBIE_SCALE, -(shared::ZOMBIE_RADIUS + shared::ZOMBIE_LENGTH / 2.0))
-                }
-                EntityKind::Soldier => (crate::PLAYER_MODEL_SCALE, crate::PLAYER_MODEL_Y_OFFSET),
-            };
-            let rotation = match kind {
-                EntityKind::Soldier => transform.rotation * bevy::math::Quat::from_rotation_y(crate::PLAYER_MODEL_FACING_CORRECTION),
-                EntityKind::Zombie => transform.rotation,
-            };
+            let transform = &actor.transform;
+            let (anim_clip_index, anim_time) = (&actor.anim_clip_index, &actor.anim_time);
 
             let [qx, qy, qz, qw] = rotation.to_array();
             let (x2, y2, z2) = (qx + qx, qy + qy, qz + qz);
@@ -1356,15 +1362,13 @@ impl NativeMetalProbe {
         // input, and the arena+gun geometry gets rebaked into a plain
         // vertex buffer each frame (see bake_static_meshes).
         let mut real_game_static_meshes: Vec<super::native_game_extract::ExtractedMesh> = Vec::new();
-        // Real zombies/remote players, reusing the toy patrol World's own
-        // `(Transform, EntityKind, (clip_index, anim_time))` shape so
-        // draw_scene's existing skinned-mesh loop draws them unchanged —
-        // zombies now carry their REAL AnimationPlayer's clip+seek_time
+        // Real zombies/remote players, tagged with the same "zombie"/
+        // "soldier" names registered in `new()` (see skinned_actor.rs) so
+        // draw_scene's skinned-mesh loop draws them via that generic
+        // lookup. Zombies carry their REAL AnimationPlayer's clip+seek_time
         // (see ZombieRenderState's own doc comment: the same "extract the
-        // real thing" principle already applied to camera/scope camera),
-        // not a hand-placed patrol dummy's phase offset.
-        let mut real_game_extracted: Vec<(bevy::transform::components::Transform, EntityKind, (usize, f32))> =
-            Vec::new();
+        // real thing" principle already applied to camera/scope camera).
+        let mut real_game_extracted: Vec<super::skinned_actor::SkinnedActorDraw> = Vec::new();
         let (view_width_pts, view_height_pts) = self.view_size_points();
         if let Some(app) = &mut self.real_game_app {
             prime_camera_viewport(app.world_mut(), view_width_pts, view_height_pts);
@@ -1392,23 +1396,23 @@ impl NativeMetalProbe {
             }
             self.real_game_light = LightUniform::from_snapshots(snapshot.light.as_ref(), snapshot.sun.as_ref());
             real_game_static_meshes = snapshot.static_meshes;
-            real_game_extracted.extend(
-                snapshot
-                    .zombies
-                    .into_iter()
-                    .map(|z| (z.transform, EntityKind::Zombie, (z.anim_clip_index, z.anim_time))),
-            );
+            real_game_extracted.extend(snapshot.zombies.into_iter().map(|z| super::skinned_actor::SkinnedActorDraw {
+                transform: z.transform,
+                model: "zombie",
+                anim_clip_index: z.anim_clip_index,
+                anim_time: z.anim_time,
+            }));
             // Remote players: no per-entity pose extraction wired up yet
             // (out of scope for this pass, which was specifically about
             // zombie.glb's 5 poses — see update_zombie_animation) — keep
             // playing PLAYER_MODEL_ANIM_WALK statically rather than the
             // previous hardcoded clip 0, which was correct for neither.
-            real_game_extracted.extend(
-                snapshot
-                    .remote_players
-                    .into_iter()
-                    .map(|t| (t, EntityKind::Soldier, (crate::PLAYER_MODEL_ANIM_WALK, now))),
-            );
+            real_game_extracted.extend(snapshot.remote_players.into_iter().map(|t| super::skinned_actor::SkinnedActorDraw {
+                transform: t,
+                model: "soldier",
+                anim_clip_index: crate::PLAYER_MODEL_ANIM_WALK,
+                anim_time: now,
+            }));
         }
         // Texture cache: upload once per unique `Image` asset, keyed by its
         // own AssetId (see `real_game_textures`'s own doc comment on the
@@ -1537,7 +1541,7 @@ impl NativeMetalProbe {
         // NOT in real-game mode) — removed once real_game=false was
         // confirmed unreachable in the shipped app; see git history if it's
         // ever worth resurrecting for a standalone demo/probe build again.
-        let extracted: Vec<(bevy::transform::components::Transform, EntityKind, (usize, f32))> = real_game_extracted;
+        let extracted: Vec<super::skinned_actor::SkinnedActorDraw> = real_game_extracted;
 
         // Pass 1: scope camera into the offscreen texture — skipped
         // entirely in real-game mode while not aiming (see `show_scope`),
