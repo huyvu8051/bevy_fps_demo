@@ -835,6 +835,25 @@ impl Default for ShowAutopilotTarget {
     }
 }
 
+// Debug/dev: toggled by settings/cheats or env SHOW_WALL_HITS. Spawns persistent red spheres on wall bullet hits.
+#[derive(Resource)]
+struct ShowWallHits(bool);
+
+impl Default for ShowWallHits {
+    fn default() -> Self {
+        Self(std::env::var("SHOW_WALL_HITS").is_ok_and(|v| v == "1" || v.to_lowercase() == "true"))
+    }
+}
+
+#[derive(Component)]
+struct WallHitSphere;
+
+#[derive(Resource)]
+struct WallHitAssets {
+    mesh: Handle<Mesh>,
+    material: Handle<StandardMaterial>,
+}
+
 // Debug/dev: toggled by KeyG. Player takes no damage while true — see
 // zombies_damage_player.
 #[derive(Resource, Default)]
@@ -1365,7 +1384,7 @@ fn auto_reconnect(
 // Player puppet, which isn't replicated — clears them out; things that
 // reference a zombie by Entity (health bars) already self-heal once their
 // target is gone (see update_zombie_health_bars).
-fn despawn_replicated_on_disconnect(mut commands: Commands, entities: Query<Entity, Or<(With<Zombie>, With<NetPlayer>)>>) {
+fn despawn_replicated_on_disconnect(mut commands: Commands, entities: Query<Entity, Or<(With<Zombie>, With<NetPlayer>, With<WallHitSphere>)>>) {
     for entity in &entities {
         commands.entity(entity).despawn();
     }
@@ -1840,6 +1859,8 @@ fn build_game_common(app: &mut App) {
         .init_resource::<ShowHitboxes>()
         .init_resource::<GodMode>()
         .init_resource::<ShowAutopilotTarget>()
+        .init_resource::<ShowWallHits>()
+        .add_systems(Update, clean_wall_hits_on_toggle)
         .init_resource::<DebugPanelVisible>()
         .init_resource::<SettingsMenuVisible>()
         .init_resource::<SettingsMenuScrollState>()
@@ -2219,6 +2240,14 @@ fn setup(
         material: materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.15, 0.1),
             emissive: LinearRgba::rgb(4.0, 0.3, 0.2),
+            unlit: true,
+            ..default()
+        }),
+    });
+    commands.insert_resource(WallHitAssets {
+        mesh: meshes.add(Sphere::new(0.05)),
+        material: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.0, 0.0),
             unlit: true,
             ..default()
         }),
@@ -2803,6 +2832,7 @@ fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "DofAlt", CheatDofAltButton);
                         spawn_cheat_toggle_button(row, "LookAt", CheatLookAtTargetButton);
                         spawn_cheat_toggle_button(row, "TraceAim", CheatShowAutopilotTargetButton);
+                        spawn_cheat_toggle_button(row, "WallHits", CheatShowWallHitsButton);
                     });
                 }
             });
@@ -3138,6 +3168,8 @@ struct CheatDespawnBotButton;
 struct CheatLookAtTargetButton;
 #[derive(Component)]
 struct CheatShowAutopilotTargetButton;
+#[derive(Component)]
+struct CheatShowWallHitsButton;
 
 // Changed<Interaction>-gated like every other touch button in this file —
 // each tap flips the same resource the matching desktop key
@@ -3256,9 +3288,11 @@ fn cheat_toggle_buttons_3(
     mut dof_alt: ResMut<AimDofFocalDistanceAlt>,
     mut look_only: ResMut<AutopilotLookOnly>,
     mut show_aim: ResMut<ShowAutopilotTarget>,
+    mut show_wall: ResMut<ShowWallHits>,
     dof_alt_btn: Query<&Interaction, (With<CheatDofAltButton>, Changed<Interaction>)>,
     look_at_btn: Query<&Interaction, (With<CheatLookAtTargetButton>, Changed<Interaction>)>,
     show_aim_btn: Query<&Interaction, (With<CheatShowAutopilotTargetButton>, Changed<Interaction>)>,
+    show_wall_btn: Query<&Interaction, (With<CheatShowWallHitsButton>, Changed<Interaction>)>,
 ) {
     if tapped(&dof_alt_btn) {
         dof_alt.0 = !dof_alt.0;
@@ -3268,6 +3302,9 @@ fn cheat_toggle_buttons_3(
     }
     if tapped(&show_aim_btn) {
         show_aim.0 = !show_aim.0;
+    }
+    if tapped(&show_wall_btn) {
+        show_wall.0 = !show_wall.0;
     }
 }
 
@@ -3379,6 +3416,7 @@ fn update_extra_toggle_colors(
     dof_alt: Res<AimDofFocalDistanceAlt>,
     look_only: Res<AutopilotLookOnly>,
     show_aim: Res<ShowAutopilotTarget>,
+    show_wall: Res<ShowWallHits>,
     mut buttons: Query<
         (
             &mut BackgroundColor,
@@ -3386,27 +3424,43 @@ fn update_extra_toggle_colors(
             Option<&CheatDofAltButton>,
             Option<&CheatLookAtTargetButton>,
             Option<&CheatShowAutopilotTargetButton>,
+            Option<&CheatShowWallHitsButton>,
         ),
         Or<(
             With<AutopilotButton>,
             With<CheatDofAltButton>,
             With<CheatLookAtTargetButton>,
             With<CheatShowAutopilotTargetButton>,
+            With<CheatShowWallHitsButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, auto_m, dof_m, look_m, show_aim_m) in &mut buttons {
+    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_wall_m) in &mut buttons {
         let on = if auto_m.is_some() {
             autopilot.0
         } else if dof_m.is_some() {
             dof_alt.0
         } else if look_m.is_some() {
             look_only.0
+        } else if show_aim_m.is_some() {
+            show_aim.0
         } else {
-            show_aim_m.is_some() && show_aim.0
+            show_wall_m.is_some() && show_wall.0
         };
         *bg = BackgroundColor(color_for(on));
+    }
+}
+
+fn clean_wall_hits_on_toggle(
+    show_wall_hits: Res<ShowWallHits>,
+    mut commands: Commands,
+    entities: Query<Entity, With<WallHitSphere>>,
+) {
+    if show_wall_hits.is_changed() && !show_wall_hits.0 {
+        for entity in &entities {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -7051,6 +7105,8 @@ fn on_shot_fx(
     spatial_query: SpatialQuery,
     zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
+    show_wall_hits: Res<ShowWallHits>,
+    wall_hit_assets: Res<WallHitAssets>,
 ) {
     match *trigger.event() {
         ShotFx::ZombieHit { origin, point, normal, damage, killed } => {
@@ -7099,6 +7155,14 @@ fn on_shot_fx(
                     remaining: HIT_MARKER_LIFETIME,
                 },
             ));
+            if show_wall_hits.0 {
+                commands.spawn((
+                    Mesh3d(wall_hit_assets.mesh.clone()),
+                    MeshMaterial3d(wall_hit_assets.material.clone()),
+                    Transform::from_translation(point),
+                    WallHitSphere,
+                ));
+            }
             spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 619.0 + point.x * 13.7 + point.z * 7.3, origin, point);
             spawn_spark_effects(&mut commands, &vfx_assets.sparks, &time, point, normal);
         }

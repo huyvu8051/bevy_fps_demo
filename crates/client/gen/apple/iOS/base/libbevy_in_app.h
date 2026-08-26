@@ -95,6 +95,8 @@ bool native_metal_probe_get_show_hitboxes(struct native_metal_probe *probe);
 void native_metal_probe_set_show_hitboxes(struct native_metal_probe *probe, bool on);
 bool native_metal_probe_get_show_autopilot_target(struct native_metal_probe *probe);
 void native_metal_probe_set_show_autopilot_target(struct native_metal_probe *probe, bool on);
+bool native_metal_probe_get_show_wall_hits(struct native_metal_probe *probe);
+void native_metal_probe_set_show_wall_hits(struct native_metal_probe *probe, bool on);
 bool native_metal_probe_get_aim_blur_enabled(struct native_metal_probe *probe);
 void native_metal_probe_set_aim_blur_enabled(struct native_metal_probe *probe, bool on);
 bool native_metal_probe_get_zombie_anim_disabled(struct native_metal_probe *probe);
