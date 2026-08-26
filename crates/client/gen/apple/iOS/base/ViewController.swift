@@ -956,10 +956,13 @@ class ViewController: UIViewController {
     private func createGameProbeIfNeeded() {
         guard rustMetalProbe == nil else { return }
         let viewPointer = Unmanaged.passUnretained(self.metalV).toOpaque()
+        // The probe's own standalone Sponza/box-arena/patrol demo World
+        // (native_metal_probe_create, real_game=false) was removed from the
+        // Rust side once confirmed unreachable here — USE_REAL_GAME_NATIVE_RENDERER
+        // is always true in this build; see git history if a standalone
+        // demo/probe entry point is ever worth resurrecting.
         if USE_REAL_GAME_NATIVE_RENDERER {
             rustMetalProbe = native_metal_probe_create_real_game(viewPointer, Float(UIScreen.main.nativeScale))
-        } else {
-            rustMetalProbe = native_metal_probe_create(viewPointer, Float(UIScreen.main.nativeScale))
         }
         if #available(iOS 15.0, *) {
             displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)

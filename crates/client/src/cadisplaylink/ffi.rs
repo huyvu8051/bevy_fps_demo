@@ -16,30 +16,22 @@ use bevy::input::touch::{TouchInput, TouchPhase};
 use bevy::math::Vec2;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window};
 
-// Control experiment: same 5-cuboid arena as fps_probe.rs/the Swift native
-// demo, but rendered from Rust via the `metal` crate directly — no Bevy
-// App, no bevy_render, no wgpu at all — to check whether wgpu's "high CPU
-// encoding cost" overhead is specific to wgpu's abstraction layer or
-// something about doing this from Rust in general. See
-// native_metal_probe.rs's own doc comment.
-#[unsafe(no_mangle)]
-pub extern "C" fn native_metal_probe_create(view: *mut objc::runtime::Object, _scale_factor: f32) -> *mut std::ffi::c_void {
-    let probe = unsafe { NativeMetalProbe::new(view, false) };
-    Box::into_raw(Box::new(probe)) as *mut std::ffi::c_void
-}
-
-// Phase 6 Step 4: same probe/renderer, but drawing the REAL game's own
-// level (spawn_test_arena's walls+floor, the ak47_scope gun) instead of
-// the probe's own Sponza/box-arena/patrol World, with the camera driven by
-// the real game's FpsCamera instead of touch input. See
-// native_metal_probe.rs's `real_game_app` field and native_game_app.rs/
-// native_game_extract.rs for the headless App + extraction it reads from.
+// Draws the REAL game's own level (spawn_test_arena's walls+floor, the
+// ak47_scope gun), camera driven by the real game's FpsCamera instead of
+// touch input — see native_metal_probe.rs's `real_game_app` field and
+// native_game_app.rs/native_game_extract.rs for the headless App +
+// extraction it reads from. Used to have a sibling `native_metal_probe_
+// create` (real_game=false) drawing this probe's own standalone Sponza/
+// box-arena/patrol demo World instead — removed once that path was
+// confirmed unreachable in the shipped app (ViewController.swift hardcodes
+// USE_REAL_GAME_NATIVE_RENDERER = true); see git history if a standalone
+// demo/probe entry point is ever worth resurrecting.
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_create_real_game(
     view: *mut objc::runtime::Object,
     _scale_factor: f32,
 ) -> *mut std::ffi::c_void {
-    let probe = unsafe { NativeMetalProbe::new(view, true) };
+    let probe = unsafe { NativeMetalProbe::new(view) };
     Box::into_raw(Box::new(probe)) as *mut std::ffi::c_void
 }
 

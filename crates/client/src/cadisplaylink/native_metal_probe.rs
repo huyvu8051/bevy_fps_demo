@@ -530,17 +530,11 @@ pub struct NativeMetalProbe {
     layer: MetalLayer,
     queue: CommandQueue,
     depth_state: metal::DepthStencilState,
-    depth_texture: Option<metal::Texture>,
-    // Sample-count-1 twin of depth_texture, used when MapMsaaOn is off —
-    // then the main pass renders straight into the drawable with no
-    // resolve step at all, same as before MSAA existed in this renderer.
-    depth_texture_no_msaa: Option<metal::Texture>,
-    // The main pass's actual multisampled render target — see
-    // MSAA_SAMPLE_COUNT's own doc comment. Recreated (ensure_msaa_color_
-    // texture) whenever the drawable resizes, same caching pattern as
-    // depth_texture. Resolved into the real drawable texture each frame
-    // (MTLStoreAction::MultisampleResolve), never sampled directly.
-    msaa_color_texture: Option<metal::Texture>,
+    // Main pass's depth/color render targets — see metal_msaa.rs's own doc
+    // comment. The color one is resolved into the real drawable texture
+    // each frame (MTLStoreAction::MultisampleResolve), never sampled
+    // directly.
+    msaa_targets: super::metal_msaa::MsaaTargets,
     // This frame's MapMsaaOn value (native_game_extract.rs), read each
     // frame the real game App ticks — decides which pipeline/texture twin
     // above render_frame binds. Defaults matching MapMsaaOn's own Default
@@ -756,12 +750,7 @@ impl NativeMetalProbe {
     // as the existing cadisplaylink module (see ios_view.rs). We reach
     // into it via objc msg_send! to grab its CAMetalLayer, exactly what
     // MetalView.swift's `layerClass` override already made it.
-    // `real_game` selects Phase 6 Step 4's mode: draw the real game's own
-    // level (arena+gun, camera driven by FpsCamera) instead of this
-    // probe's own toy Sponza/box-arena/patrol World. Every pipeline/shader
-    // below is still built either way — only which World gets ticked and
-    // which vertex data feeds `self.pipeline` differs, in `render_frame`.
-    pub unsafe fn new(view: *mut Object, real_game: bool) -> Self {
+    pub unsafe fn new(view: *mut Object) -> Self {
         let device = Device::system_default().expect("no Metal device");
         let raw_layer: *mut Object = msg_send![view, layer];
         // MetalLayer wraps a CAMetalLayer* Objective-C object the same way
@@ -904,7 +893,7 @@ impl NativeMetalProbe {
         let zombie_path = std::path::Path::new(&resource_path).join("assets/characters/zombie/mesh/zombie.glb");
         let zombie_model = super::skinned_gltf::load_skinned_gltf(&device, &zombie_path);
 
-        let real_game_app = if real_game { Some(build_headless_game_ecs_app()) } else { None };
+        let real_game_app = Some(build_headless_game_ecs_app());
 
         // Resolve target — single-sample, still what quad_fragment (the PIP
         // composite) actually samples from; MSAA never touches this one
@@ -1057,9 +1046,7 @@ impl NativeMetalProbe {
             sponza_sampler,
             white_texture,
             depth_state,
-            depth_texture: None,
-            depth_texture_no_msaa: None,
-            msaa_color_texture: None,
+            msaa_targets: super::metal_msaa::MsaaTargets::new(MSAA_SAMPLE_COUNT),
             msaa_enabled: false,
             camera_position: [0.0, 2.5, 2.0],
             camera_yaw: 0.0,
@@ -1101,8 +1088,9 @@ impl NativeMetalProbe {
     // can write real Bevy input messages (`TouchInput`/`KeyboardInput`/
     // `MouseMotion`/`MouseButtonInput`) straight into it — the exact same
     // message-writing helpers `cadisplaylink_*` already uses against the
-    // toy/real `cadisplaylink_create_game_app`, just re-targeted. `None`
-    // when this probe wasn't constructed with `real_game: true`.
+    // toy/real `cadisplaylink_create_game_app`, just re-targeted. Always
+    // `Some` in practice (every `NativeMetalProbe` builds one) — `Option`
+    // mainly so callers don't need a separate liveness check.
     pub fn real_game_app_mut(&mut self) -> Option<&mut bevy::app::App> {
         self.real_game_app.as_mut()
     }
@@ -1128,75 +1116,6 @@ impl NativeMetalProbe {
         }
     }
 
-    // Multisampled — must match the main pass's color attachment sample
-    // count (MSAA_SAMPLE_COUNT) exactly, or Metal rejects the pass.
-    fn ensure_depth_texture(&mut self, width: u64, height: u64) -> metal::Texture {
-        let device = self.device.clone();
-        let device = &device;
-        if let Some(tex) = &self.depth_texture {
-            if tex.width() == width && tex.height() == height {
-                return tex.clone();
-            }
-        }
-        let descriptor = metal::TextureDescriptor::new();
-        descriptor.set_texture_type(metal::MTLTextureType::D2Multisample);
-        descriptor.set_pixel_format(MTLPixelFormat::Depth32Float);
-        descriptor.set_width(width);
-        descriptor.set_height(height);
-        descriptor.set_sample_count(MSAA_SAMPLE_COUNT);
-        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
-        descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
-        let tex = device.new_texture(&descriptor);
-        self.depth_texture = Some(tex.clone());
-        tex
-    }
-
-    // The main pass's real render target — multisampled, resolved into the
-    // drawable's own (single-sample) texture at the end of the pass. Same
-    // resize-on-demand caching as ensure_depth_texture, since the drawable
-    // size can change (device rotation, window resize on macOS Catalyst).
-    fn ensure_msaa_color_texture(&mut self, width: u64, height: u64) -> metal::Texture {
-        let device = self.device.clone();
-        let device = &device;
-        if let Some(tex) = &self.msaa_color_texture {
-            if tex.width() == width && tex.height() == height {
-                return tex.clone();
-            }
-        }
-        let descriptor = metal::TextureDescriptor::new();
-        descriptor.set_texture_type(metal::MTLTextureType::D2Multisample);
-        descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-        descriptor.set_width(width);
-        descriptor.set_height(height);
-        descriptor.set_sample_count(MSAA_SAMPLE_COUNT);
-        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
-        descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
-        let tex = device.new_texture(&descriptor);
-        self.msaa_color_texture = Some(tex.clone());
-        tex
-    }
-
-    // Sample-count-1 twin of ensure_depth_texture, used when MapMsaaOn is
-    // off (the main pass then renders straight into the drawable, no
-    // msaa_color_texture/resolve step at all).
-    fn ensure_depth_texture_no_msaa(&mut self, width: u64, height: u64) -> metal::Texture {
-        let device = self.device.clone();
-        let device = &device;
-        if let Some(tex) = &self.depth_texture_no_msaa {
-            if tex.width() == width && tex.height() == height {
-                return tex.clone();
-            }
-        }
-        let descriptor = metal::TextureDescriptor::new();
-        descriptor.set_pixel_format(MTLPixelFormat::Depth32Float);
-        descriptor.set_width(width);
-        descriptor.set_height(height);
-        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
-        descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
-        let tex = device.new_texture(&descriptor);
-        self.depth_texture_no_msaa = Some(tex.clone());
-        tex
-    }
 
     // Same per-frame work as the Swift demo: one render pass, one draw
     // call per mesh, camera fixed (no touch/camera movement in this Rust
@@ -1432,11 +1351,10 @@ impl NativeMetalProbe {
         // now needs it too, for its static PLAYER_MODEL_ANIM_WALK pose.
         let now = self.start_time.elapsed().as_secs_f32();
 
-        // Phase 6 Step 4: tick the real headless game App (if this probe
-        // was constructed with `real_game: true`) and extract a fresh
-        // snapshot — camera pose comes from the game's own FpsCamera
-        // instead of touch input, and the arena+gun geometry gets rebaked
-        // into a plain vertex buffer each frame (see bake_static_meshes).
+        // Tick the real headless game App and extract a fresh snapshot —
+        // camera pose comes from the game's own FpsCamera instead of touch
+        // input, and the arena+gun geometry gets rebaked into a plain
+        // vertex buffer each frame (see bake_static_meshes).
         let mut real_game_static_meshes: Vec<super::native_game_extract::ExtractedMesh> = Vec::new();
         // Real zombies/remote players, reusing the toy patrol World's own
         // `(Transform, EntityKind, (clip_index, anim_time))` shape so
@@ -1506,9 +1424,13 @@ impl NativeMetalProbe {
         // function via RealGameMeshDraw's own lifetime), which would
         // otherwise conflict with the &mut self this needs.
         let msaa_enabled = self.msaa_enabled;
-        let depth_texture =
-            if msaa_enabled { self.ensure_depth_texture(width, height) } else { self.ensure_depth_texture_no_msaa(width, height) };
-        let msaa_color_texture = msaa_enabled.then(|| self.ensure_msaa_color_texture(width, height));
+        let device = self.device.clone();
+        let depth_texture = if msaa_enabled {
+            self.msaa_targets.ensure_depth(&device, width, height)
+        } else {
+            self.msaa_targets.ensure_depth_no_msaa(&device, width, height)
+        };
+        let msaa_color_texture = msaa_enabled.then(|| self.msaa_targets.ensure_color(&device, width, height));
         let Some(drawable) = self.layer.next_drawable() else { return };
         let texture = drawable.texture();
 

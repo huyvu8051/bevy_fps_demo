@@ -19,13 +19,12 @@
 // winit event loop, turned out to be the real problem.
 struct bevy_app;
 
-// Rust + `metal` crate control experiment (no Bevy App at all) — see
-// crates/client/src/cadisplaylink/native_metal_probe.rs.
+// Rust + `metal` crate renderer (no Bevy App/bevy_render/wgpu at all) — see
+// crates/client/src/cadisplaylink/native_metal_probe.rs. Draws the REAL
+// game's own level (arena+gun) with the camera driven by the real
+// FpsCamera instead of touch input — see native_metal_probe.rs's
+// `real_game_app` field.
 struct native_metal_probe;
-struct native_metal_probe *native_metal_probe_create(void *view, float scale_factor);
-// Phase 6 Step 4: same probe, but draws the REAL game's own level
-// (arena+gun) with the camera driven by the real FpsCamera instead of
-// touch input — see native_metal_probe.rs's `real_game_app` field.
 struct native_metal_probe *native_metal_probe_create_real_game(void *view, float scale_factor);
 void native_metal_probe_render_frame(struct native_metal_probe *probe);
 void native_metal_probe_update_camera(struct native_metal_probe *probe, float forward, float strafe, float look_dx, float look_dy, float delta_time);
