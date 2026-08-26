@@ -234,6 +234,8 @@ pub struct RenderSnapshot {
     pub health_bars: Vec<HealthBarSnapshot>,
     pub touch_buttons: Vec<TouchButtonSnapshot>,
     pub touch_joystick: Option<TouchJoystickSnapshot>,
+    pub hud_texts: Vec<HudTextSnapshot>,
+    pub crosshair_lines: Vec<CrosshairLineSnapshot>,
     /// The `MapMsaaOn` cheat-menu toggle (crate::lib) — previously only
     /// ever read by `apply_map_render_toggles` to sync bevy_render's own
     /// `Msaa` component (the desktop/winit build's render path), which
@@ -308,6 +310,51 @@ pub struct TouchJoystickSnapshot {
     pub base_size: [f32; 2],
     pub knob_top_left: [f32; 2],
     pub knob_size: [f32; 2],
+}
+
+/// One always-on HUD text readout (HP, ammo, or ping — crate::lib's
+/// `HealthUi`/`AmmoUi`/`PingUi`) — generic over which one via the same
+/// "read the real ComputedNode/UiGlobalTransform, not Node.left/.top"
+/// technique `TouchButtonSnapshot` already uses, for the same reason: these
+/// are anchored via a mix of `left`/`right`/`top`/`bottom` (HP is
+/// left+top, ammo is right+bottom, ping is right+top), so there's no
+/// single field that always holds "the" position. `text`/`color`/
+/// `font_size` are read straight off the real `Text`/`TextColor`/
+/// `TextFont` components each already carries — same values the desktop/
+/// wgpu path renders, just re-drawn here with the bitmap font instead of
+/// Bevy's own text pipeline (which this headless app never runs any text
+/// layout/glyph-atlas machinery for — see UI_SHADER_SOURCE's own doc
+/// comment on why a dedicated bitmap font exists in the first place).
+/// `top_left`/`size` are the real node's own computed rect — the renderer
+/// does NOT just draw at `top_left` directly, though: real Bevy text
+/// (proportional font) and this bitmap font (fixed 5px-wide glyphs)
+/// measure the same string to different widths, so whichever edge is the
+/// text's real fixed anchor (left for HP, right for ammo/ping — see
+/// spawn_health_ui/spawn_ammo_ui/spawn_ping_ui, crate::lib) needs to stay
+/// fixed while the OTHER edge grows/shrinks to fit our font's own measured
+/// width — the renderer infers which edge that is by checking which one
+/// sits closer to its own screen edge (same idea as "nearest edge wins",
+/// no extra data needed beyond this rect).
+pub struct HudTextSnapshot {
+    pub top_left: [f32; 2],
+    pub size: [f32; 2],
+    pub text: String,
+    pub color: [f32; 4],
+    pub font_size: f32,
+}
+
+/// One arm of the crosshair "+" (crate::lib's `CrosshairLine`) —
+/// `update_crosshair` (crate::lib) repositions/resizes these 4 nodes every
+/// frame (widening the gap with bullet spread, same real accuracy the next
+/// shot will actually fire with), so reading their real computed layout
+/// captures that math for free instead of re-deriving spread-to-gap
+/// ourselves. Plain rects, same technique/limitation as everything else in
+/// this file drawn via `ndc_ui_rect`/`draw_ui_quad` — see
+/// `TouchButtonSnapshot`'s own doc comment.
+pub struct CrosshairLineSnapshot {
+    pub top_left: [f32; 2],
+    pub size: [f32; 2],
+    pub color: [f32; 4],
 }
 
 /// Converts a node's real computed layout to a logical-points (matching
@@ -686,6 +733,42 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             TouchJoystickSnapshot { base_top_left, base_size, knob_top_left, knob_size }
         },
     );
+
+    // HUD text readouts (HP/ammo/ping): see HudTextSnapshot's own doc
+    // comment for why ComputedNode/UiGlobalTransform (not Node.left/.top)
+    // is what's read here.
+    let mut hud_text_state: SystemState<
+        Query<
+            (&ComputedNode, &UiGlobalTransform, &Text, &TextColor, &TextFont),
+            bevy::ecs::query::Or<(With<crate::HealthUi>, With<crate::AmmoUi>, With<crate::PingUi>)>,
+        >,
+    > = SystemState::new(world);
+    snapshot.hud_texts = hud_text_state
+        .get(world)
+        .iter()
+        .map(|(node, transform, text, color, font)| {
+            let (top_left, size) = logical_rect(node, transform);
+            let c = color.0.to_srgba();
+            HudTextSnapshot { top_left, size, text: text.0.clone(), color: [c.red, c.green, c.blue, c.alpha], font_size: font.font_size }
+        })
+        .collect();
+
+    // Crosshair lines: see CrosshairLineSnapshot's own doc comment. A
+    // Display::None CrosshairRoot (while ADS'd — see update_crosshair,
+    // crate::lib) collapses its whole subtree out of layout, so its
+    // CrosshairLine children naturally come back zero-sized here too — no
+    // extra ADS check needed, same as touch controls' own idle-hide.
+    let mut crosshair_state: SystemState<Query<(&ComputedNode, &UiGlobalTransform, &BackgroundColor), With<crate::CrosshairLine>>> =
+        SystemState::new(world);
+    snapshot.crosshair_lines = crosshair_state
+        .get(world)
+        .iter()
+        .map(|(node, transform, bg)| {
+            let (top_left, size) = logical_rect(node, transform);
+            let c = bg.0.to_srgba();
+            CrosshairLineSnapshot { top_left, size, color: [c.red, c.green, c.blue, c.alpha] }
+        })
+        .collect();
 
     // Static meshes: arena walls/floor + gun scene meshes, both plain
     // Mesh3d/MeshMaterial3d<StandardMaterial> entities — see this module's

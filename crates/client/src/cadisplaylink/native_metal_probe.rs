@@ -444,7 +444,7 @@ struct UiUniforms {
 // character -> cell mapping and glyph_uv_rect for the per-glyph UV rect.
 const GLYPH_W: usize = 5;
 const GLYPH_H: usize = 7;
-const GLYPH_COUNT: usize = 32;
+const GLYPH_COUNT: usize = 34;
 // Row-major bits, MSB (bit 4) = leftmost pixel, 7 rows per glyph, in
 // glyph_index order: '0'..'9', '.', '/', then the uppercase-subset +
 // symbols needed for touch-control button labels (ADS/RELOAD/JUMP/CROUCH/
@@ -484,6 +484,8 @@ const GLYPH_BITMAPS: [[u8; GLYPH_H]; GLYPH_COUNT] = [
     [0b10000, 0b01000, 0b00100, 0b00010, 0b00100, 0b01000, 0b10000], // >
     [0b00000, 0b00000, 0b11111, 0b00000, 0b11111, 0b00000, 0b00000], // =
     [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000], // space
+    [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111], // G
+    [0b00000, 0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100], // :
 ];
 
 fn glyph_index(c: char) -> Option<usize> {
@@ -511,6 +513,8 @@ fn glyph_index(c: char) -> Option<usize> {
         '>' => Some(29),
         '=' => Some(30),
         ' ' => Some(31),
+        'G' => Some(32),
+        ':' => Some(33),
         _ => None,
     }
 }
@@ -683,6 +687,10 @@ pub struct NativeMetalProbe {
     // so this frame's set replaces last frame's wholesale like those do.
     ui_touch_buttons: Vec<super::native_game_extract::TouchButtonSnapshot>,
     ui_touch_joystick: Option<super::native_game_extract::TouchJoystickSnapshot>,
+    // HP/ammo/ping readouts + crosshair — see HudTextSnapshot/
+    // CrosshairLineSnapshot's own doc comments (native_game_extract.rs).
+    ui_hud_texts: Vec<super::native_game_extract::HudTextSnapshot>,
+    ui_crosshair_lines: Vec<super::native_game_extract::CrosshairLineSnapshot>,
 }
 
 // Flattens ONE of the real game's extracted static meshes (arena
@@ -1185,6 +1193,8 @@ impl NativeMetalProbe {
             ui_health_bars: Vec::new(),
             ui_touch_buttons: Vec::new(),
             ui_touch_joystick: None,
+            ui_hud_texts: Vec::new(),
+            ui_crosshair_lines: Vec::new(),
         }
     }
 
@@ -1473,6 +1483,8 @@ impl NativeMetalProbe {
             self.ui_health_bars = snapshot.health_bars;
             self.ui_touch_buttons = snapshot.touch_buttons;
             self.ui_touch_joystick = snapshot.touch_joystick;
+            self.ui_hud_texts = snapshot.hud_texts;
+            self.ui_crosshair_lines = snapshot.crosshair_lines;
             self.msaa_enabled = snapshot.map_msaa_on;
             if let Some(cam) = &snapshot.camera {
                 self.camera_position = cam.eye;
@@ -1763,6 +1775,8 @@ impl NativeMetalProbe {
                 || !self.ui_floating_damage.is_empty()
                 || !self.ui_touch_buttons.is_empty()
                 || self.ui_touch_joystick.is_some()
+                || !self.ui_hud_texts.is_empty()
+                || !self.ui_crosshair_lines.is_empty()
             {
                 let (view_w, view_h) = self.view_size_points();
                 encoder.set_render_pipeline_state(ui_pipeline);
@@ -1851,6 +1865,52 @@ impl NativeMetalProbe {
                             draw_ui_quad(encoder, &glyph_quad, [1.0, 1.0, 1.0, 1.0], &self.font_atlas_texture);
                             cursor_x += glyph_w + scale;
                         }
+                    }
+                }
+
+                // Crosshair — 4 plain rects, no label. Same "collapses to a
+                // zero-size quad when its real Node is Display::None"
+                // free ride touch controls' idle-hide gets — see
+                // CrosshairLineSnapshot's own doc comment.
+                for line in &self.ui_crosshair_lines {
+                    let [x, y] = line.top_left;
+                    let [w, h] = line.size;
+                    let quad = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
+                    draw_ui_quad(encoder, &quad, line.color, &self.white_texture);
+                }
+
+                // HP/ammo/ping readouts. The bitmap font only has uppercase
+                // letters (see glyph_index's own doc comment) — the real
+                // Text these come from is mixed-case ("Ping: 34 ms"), so
+                // this uppercases before drawing rather than extending the
+                // atlas with a full lowercase alphabet just for casing.
+                for hud in &self.ui_hud_texts {
+                    let [left, top] = hud.top_left;
+                    let [w, h] = hud.size;
+                    let (right, bottom) = (left + w, top + h);
+                    let scale = hud.font_size / GLYPH_H as f32;
+                    let upper = hud.text.to_ascii_uppercase();
+                    let text_w: f32 = upper.chars().map(|_| GLYPH_W as f32 * scale + scale).sum();
+                    let text_h = GLYPH_H as f32 * scale;
+                    // Anchor to whichever edge sits closer to ITS OWN
+                    // screen edge (see HudTextSnapshot's own doc comment)
+                    // instead of the real layout's top_left directly — our
+                    // bitmap font measures the same string to a different
+                    // width/height than Bevy's real proportional font, so
+                    // only the truly-fixed edge (left for HP, right for
+                    // ammo/ping) should stay put; the other one has to grow
+                    // by our own measurement or the text drifts off-screen.
+                    let mut cursor_x = if left < view_w - right { left } else { right - text_w };
+                    let y = if top < view_h - bottom { top } else { bottom - text_h };
+                    for ch in upper.chars() {
+                        let Some(index) = glyph_index(ch) else { continue };
+                        let (u0, u1) = glyph_uv_rect(index);
+                        let uv = [[u0, 1.0], [u1, 1.0], [u1, 0.0], [u0, 0.0]];
+                        let glyph_w = GLYPH_W as f32 * scale;
+                        let glyph_h = GLYPH_H as f32 * scale;
+                        let quad = ndc_ui_rect(cursor_x, y, glyph_w, glyph_h, view_w, view_h, uv);
+                        draw_ui_quad(encoder, &quad, hud.color, &self.font_atlas_texture);
+                        cursor_x += glyph_w + scale;
                     }
                 }
             }

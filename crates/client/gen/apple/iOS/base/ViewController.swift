@@ -263,97 +263,12 @@ private extension Comparable {
 // native half is what actually achieves one consistent control path across
 // desktop and iOS, not just a second copy of the same buttons.
 //
-// What's LEFT here has no bevy_ui/Metal-renderer equivalent yet, so it
-// stays native for now: the HP/ammo/ping text readouts and the crosshair.
-final class TouchHUD {
-    let healthLabel = UILabel()
-    let ammoLabel = UILabel()
-    // Same real bevy_ui PingUi readout the desktop HUD shows — invisible on
-    // iOS for the same reason HP/ammo needed native wiring (see
-    // ViewController's own syncHud). "--" until the first real reading
-    // arrives (see setPing(_:) below).
-    let pingLabel = UILabel()
-    let crosshairH = UIView()
-    let crosshairV = UIView()
-
-    var health = 100 {
-        didSet { healthLabel.text = "HP \(health)" }
-    }
-
-    // Not a didSet-observed stored property like health above: -1
-    // ("not connected yet") should keep showing "--" rather than "-1 ms",
-    // so this needs its own formatting branch instead of a straight
-    // string interpolation.
-    func setPing(_ ms: Float) {
-        // Re-anchored to its own right edge on every call (not just at
-        // layout time, unlike health's fixed-width label) since the digit
-        // count genuinely varies more here (single-digit LAN ping vs
-        // 3-digit ping over a Tailscale tunnel) — sizeToFit alone would
-        // otherwise grow/shrink from the LEFT and drift out of its corner.
-        let rightEdge = pingLabel.frame.maxX
-        pingLabel.text = ms >= 0 ? "Ping: \(Int(ms.rounded())) ms" : "Ping: -- ms"
-        pingLabel.sizeToFit()
-        pingLabel.frame.origin.x = rightEdge - pingLabel.bounds.width
-    }
-
-    func install(in parent: UIView) {
-        // Health/ammo HUD — top corners. `ammoLabel` is decorative/static
-        // (was already never synced to the real `Gun` ammo — only ever
-        // decremented by the now-removed native FIRE button's own tap
-        // handler, itself just a cosmetic flash — see git history) so it
-        // just shows its initial text and never changes.
-        healthLabel.text = "HP \(health)"
-        healthLabel.textColor = .white
-        healthLabel.font = .boldSystemFont(ofSize: 18)
-        healthLabel.sizeToFit()
-        parent.addSubview(healthLabel)
-
-        ammoLabel.text = "30 / 90"
-        ammoLabel.textColor = .white
-        ammoLabel.font = .boldSystemFont(ofSize: 18)
-        ammoLabel.textAlignment = .right
-        ammoLabel.sizeToFit()
-        parent.addSubview(ammoLabel)
-
-        setPing(-1)
-        pingLabel.textColor = UIColor(red: 0.7, green: 0.85, blue: 1.0, alpha: 1) // matches PingUi's own TextColor
-        pingLabel.font = .systemFont(ofSize: 14)
-        pingLabel.textAlignment = .right
-        pingLabel.sizeToFit()
-        parent.addSubview(pingLabel)
-
-        // Crosshair — dead center, two thin white bars.
-        crosshairH.backgroundColor = UIColor.white.withAlphaComponent(0.8)
-        crosshairV.backgroundColor = UIColor.white.withAlphaComponent(0.8)
-        parent.addSubview(crosshairH)
-        parent.addSubview(crosshairV)
-
-        layout(in: parent)
-    }
-
-    func layout(in parent: UIView) {
-        let bounds = parent.bounds
-        let margin: CGFloat = 24
-        // iOS safe area (notch/Dynamic Island/home-indicator/rounded
-        // corners) — in this landscape-only app the meaningful insets are
-        // .left/.right (whichever side the sensor housing rotates to) and
-        // .bottom (home indicator strip); pull every edge-hugging control
-        // in from the raw view bounds by margin + the matching inset
-        // instead of a flat margin, so nothing sits under those system
-        // areas or gets clipped by the display's rounded corners.
-        let safeArea = parent.safeAreaInsets
-        let leftMargin = margin + safeArea.left
-        let rightMargin = margin + safeArea.right
-        let topMargin = margin + safeArea.top
-        healthLabel.frame.origin = CGPoint(x: leftMargin, y: topMargin + 20)
-        ammoLabel.frame.origin = CGPoint(x: bounds.width - rightMargin - ammoLabel.bounds.width, y: topMargin + 20)
-        pingLabel.sizeToFit()
-        pingLabel.frame.origin = CGPoint(x: bounds.width - rightMargin - pingLabel.bounds.width, y: ammoLabel.frame.maxY + 4)
-        crosshairH.frame = CGRect(x: bounds.midX - 10, y: bounds.midY - 1, width: 20, height: 2)
-        crosshairV.frame = CGRect(x: bounds.midX - 1, y: bounds.midY - 10, width: 2, height: 20)
-    }
-}
-
+// HP/ammo/ping text readouts + crosshair used to stay native here (no
+// bevy_ui/Metal-renderer equivalent yet) — now that native_metal_probe.rs
+// draws HealthUi/AmmoUi/PingUi/CrosshairLine directly (same real ECS state
+// the desktop/wgpu path renders, see HudTextSnapshot/CrosshairLineSnapshot
+// in native_game_extract.rs), the `TouchHUD` class that used to hold this
+// is gone entirely — nothing native-only is left in this file.
 class ViewController: UIViewController {
     @IBOutlet var metalV: MetalView!
 
@@ -386,7 +301,6 @@ class ViewController: UIViewController {
     private var lookTouch: UITouch?
     private var lookTouchLast: CGPoint = .zero
     private var lastFrameTime: CFTimeInterval = CACurrentMediaTime()
-    private let touchHUD = TouchHUD()
     // Native settings-menu overlay — see SettingsMenuView.swift's own doc
     // comment for why this exists instead of relying on bevy_ui.
     private let settingsMenu = SettingsMenuView()
@@ -427,8 +341,6 @@ class ViewController: UIViewController {
         if #available(iOS 13.4, *) {
             self.metalV.addInteraction(UIPointerInteraction(delegate: self))
         }
-        touchHUD.install(in: self.view)
-
         self.view.addSubview(settingsMenu)
         settingsMenu.onClose = { [weak self] in
             guard let self, let probe = self.rustMetalProbe else { return }
@@ -547,7 +459,6 @@ class ViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        touchHUD.layout(in: self.view)
         settingsMenu.layout(in: self.view)
         gameOverView.layout(in: self.view)
         mapSelectView.layout(in: self.view)
@@ -567,22 +478,13 @@ class ViewController: UIViewController {
         gameOverWasVisible = visible
     }
 
-    // Polled once per frame (see enterFrame) — the HUD's own `health`
-    // property (TouchHUD.swift) previously never got written to at all
-    // (only used to build the initial "HP 100" label text), so it silently
-    // stayed at its hardcoded default forever regardless of real damage.
-    // native_metal_probe_get_player_hp reads the same real Health
-    // component the settings menu's own HP row already reads (see
-    // syncSettingsMenu below) — -1 before the local player has spawned
-    // yet, in which case the HUD just keeps showing its last known value
-    // rather than flashing to a wrong number.
+    // Polled once per frame (see enterFrame) — HP/ammo/ping/crosshair are
+    // now drawn straight off real ECS state by native_metal_probe.rs (see
+    // ViewController's own class-level doc comment), so this only still
+    // exists for the Apple Watch companion sync below.
     private func syncHud() {
         guard USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe else { return }
         let hp = native_metal_probe_get_player_hp(probe)
-        if hp >= 0 {
-            touchHUD.health = Int(hp.rounded())
-        }
-        touchHUD.setPing(native_metal_probe_get_ping_ms(probe))
 
         // Apple Watch companion app sync — see WatchSessionManager's own
         // doc comment for why this runs every frame alongside the rest of
