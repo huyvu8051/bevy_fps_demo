@@ -500,6 +500,26 @@ pub const fn zombie_spawn_grid(half_x: f32, half_z: f32, y: f32) -> [Vec3; 100] 
 pub const ZOMBIE_SPAWNS: [Vec3; 100] =
     zombie_spawn_grid(ARENA_HALF_SIZE - 3.0, ARENA_HALF_SIZE - 3.0, ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0);
 
+// Scatters zombie fill-spawns (spawn_initial_zombies/on_set_zombie_count/
+// tick_respawns, crates/server) across the whole arena instead of always
+// walking ZOMBIE_SPAWNS' fixed grid in the same row-major order — same
+// "no rand crate, deterministic per-index hash" approach entity_phase
+// (crates/shared/src/hitbox.rs) already uses for per-entity staggering,
+// extended to 2D via the R2 low-discrepancy sequence (successive `seed`s
+// land at well-spread, non-repeating points instead of clumping the way a
+// naive single-multiplier hash would for two correlated axes). `seed` is
+// just NextZombieSpawnIndex's own ever-incrementing counter — same role
+// it already played indexing into ZOMBIE_SPAWNS, just no longer tied to
+// that grid's cell order.
+pub fn random_zombie_spawn_pos(seed: usize) -> Vec3 {
+    const INV_G: f32 = 0.754_877_7; // 1/g, g = plastic number (R2 sequence)
+    const INV_G2: f32 = 0.569_840_3; // 1/g^2
+    let half = ARENA_HALF_SIZE - 3.0;
+    let x = (-1.0 + 2.0 * (seed as f32 * INV_G).fract()) * half;
+    let z = (-1.0 + 2.0 * (seed as f32 * INV_G2).fract()) * half;
+    Vec3::new(x, ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0, z)
+}
+
 // Scenario::HitboxTest's 5-zombie row — same grounded-Y convention as
 // ZOMBIE_SPAWNS above, at z=0 (arena center), spread across
 // HITBOX_TEST_ROW_X (crate::network).

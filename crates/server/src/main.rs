@@ -18,7 +18,7 @@ use shared::{
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount,
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
-    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for,
+    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos,
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
@@ -834,7 +834,8 @@ struct NextZombieSpawnIndex(usize);
 
 fn spawn_initial_zombies(mut commands: Commands, target: Res<ZombieTargetCount>, mut next_spawn_index: ResMut<NextZombieSpawnIndex>) {
     let count = (target.0 as usize).min(ZOMBIE_SPAWNS.len());
-    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS[..count], ZOMBIE_AI_ENABLED, false, false);
+    let positions: Vec<Vec3> = (0..count).map(random_zombie_spawn_pos).collect();
+    spawn_zombies(&mut commands, &positions, ZOMBIE_AI_ENABLED, false, false);
     next_spawn_index.0 = count;
 }
 
@@ -856,7 +857,7 @@ fn on_set_zombie_count(
     if current < target.0 {
         let to_spawn: Vec<Vec3> = (0..target.0 - current)
             .map(|_| {
-                let pos = ZOMBIE_SPAWNS[next_spawn_index.0 % ZOMBIE_SPAWNS.len()];
+                let pos = random_zombie_spawn_pos(next_spawn_index.0);
                 next_spawn_index.0 += 1;
                 pos
             })
@@ -1668,7 +1669,7 @@ fn tick_respawns(
                 // whether it actually results in a new zombie depends on the
                 // toggle, so flipping auto-maintain back on later doesn't
                 // suddenly spawn a backlog of everything killed while it was off.
-                to_spawn.push(ZOMBIE_SPAWNS[next_spawn_index.0 % ZOMBIE_SPAWNS.len()]);
+                to_spawn.push(random_zombie_spawn_pos(next_spawn_index.0));
                 next_spawn_index.0 += 1;
             }
         } else {

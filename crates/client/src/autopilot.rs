@@ -275,7 +275,14 @@ pub(crate) fn autopilot_think(
     mut touch_aiming: ResMut<TouchAiming>,
 ) {
     if !autopilot.0 {
-        if touch_aiming.0 {
+        // Only clear on the frame autopilot actually turns off (not every
+        // frame it stays off) — this used to unconditionally stomp
+        // touch_aiming.0 to false every single frame while off, which
+        // fought the real touch ADS button and made it look broken (it
+        // never got to stay true past the next frame). is_changed() is
+        // only true on the transition, so a genuine player-driven ADS
+        // tap afterward is left alone.
+        if autopilot.is_changed() && touch_aiming.0 {
             touch_aiming.0 = false;
         }
         if !look_only.0 {

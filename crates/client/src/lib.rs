@@ -1071,6 +1071,21 @@ impl Default for MapShadowsOn {
     }
 }
 
+// Debug/dev toggle for the Cheats panel's "Scope" button — disables the
+// secondary ScopeCamera (the AK47 scope's own render-to-texture camera,
+// see setup()) and its lens quad entirely while ADS'd, instead of just
+// hiding the gun/map render toggles' own targets. When off, ADS still
+// narrows FOV the normal way (AIM_FOV_MULTIPLIER) but shows no scope
+// picture-in-picture — useful to cut the extra camera pass on weaker
+// devices, or just to compare with/without it. See update_scope_lens.
+#[derive(Resource)]
+struct ScopeCameraEnabled(bool);
+impl Default for ScopeCameraEnabled {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
 // Marks the main game's sun DirectionalLight (setup()'s own, not the
 // per-hall accent lights from spawn_hall_lights) so apply_map_render_toggles
 // can find it unambiguously.
@@ -1888,6 +1903,7 @@ fn build_game_common(app: &mut App) {
         .init_resource::<GunVisible>()
         .init_resource::<MapMsaaOn>()
         .init_resource::<MapShadowsOn>()
+        .init_resource::<ScopeCameraEnabled>()
         .init_resource::<SelectedDebugBot>()
         .init_resource::<LocalPlayerMoving>()
 .init_resource::<LocalPlayerSprinting>()
@@ -2820,6 +2836,7 @@ fn spawn_settings_menu(commands: &mut Commands) {
                     .with_children(|row| {
                         spawn_cheat_toggle_button(row, "MSAA", CheatMsaaButton);
                         spawn_cheat_toggle_button(row, "Shadow", CheatShadowButton);
+                        spawn_cheat_toggle_button(row, "Scope", CheatScopeCameraButton);
                     });
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
@@ -3015,6 +3032,8 @@ struct CheatGunButton;
 struct CheatMsaaButton;
 #[derive(Component)]
 struct CheatShadowButton;
+#[derive(Component)]
+struct CheatScopeCameraButton;
 #[derive(Component)]
 struct CheatKillAllButton;
 #[derive(Component)]
@@ -3307,10 +3326,12 @@ fn cheat_toggle_buttons_3(
     mut look_only: ResMut<AutopilotLookOnly>,
     mut show_aim: ResMut<ShowAutopilotTarget>,
     mut show_markers: ResMut<ShowHitMarkers>,
+    mut scope_camera: ResMut<ScopeCameraEnabled>,
     dof_alt_btn: Query<&Interaction, (With<CheatDofAltButton>, Changed<Interaction>)>,
     look_at_btn: Query<&Interaction, (With<CheatLookAtTargetButton>, Changed<Interaction>)>,
     show_aim_btn: Query<&Interaction, (With<CheatShowAutopilotTargetButton>, Changed<Interaction>)>,
     show_markers_btn: Query<&Interaction, (With<CheatShowHitMarkersButton>, Changed<Interaction>)>,
+    scope_camera_btn: Query<&Interaction, (With<CheatScopeCameraButton>, Changed<Interaction>)>,
 ) {
     if tapped(&dof_alt_btn) {
         dof_alt.0 = !dof_alt.0;
@@ -3323,6 +3344,9 @@ fn cheat_toggle_buttons_3(
     }
     if tapped(&show_markers_btn) {
         show_markers.0 = !show_markers.0;
+    }
+    if tapped(&scope_camera_btn) {
+        scope_camera.0 = !scope_camera.0;
     }
 }
 
@@ -3435,6 +3459,7 @@ fn update_extra_toggle_colors(
     look_only: Res<AutopilotLookOnly>,
     show_aim: Res<ShowAutopilotTarget>,
     show_markers: Res<ShowHitMarkers>,
+    scope_camera: Res<ScopeCameraEnabled>,
     mut buttons: Query<
         (
             &mut BackgroundColor,
@@ -3443,6 +3468,7 @@ fn update_extra_toggle_colors(
             Option<&CheatLookAtTargetButton>,
             Option<&CheatShowAutopilotTargetButton>,
             Option<&CheatShowHitMarkersButton>,
+            Option<&CheatScopeCameraButton>,
         ),
         Or<(
             With<AutopilotButton>,
@@ -3450,11 +3476,12 @@ fn update_extra_toggle_colors(
             With<CheatLookAtTargetButton>,
             With<CheatShowAutopilotTargetButton>,
             With<CheatShowHitMarkersButton>,
+            With<CheatScopeCameraButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m) in &mut buttons {
+    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, scope_camera_m) in &mut buttons {
         let on = if auto_m.is_some() {
             autopilot.0
         } else if dof_m.is_some() {
@@ -3463,8 +3490,10 @@ fn update_extra_toggle_colors(
             look_only.0
         } else if show_aim_m.is_some() {
             show_aim.0
+        } else if show_markers_m.is_some() {
+            show_markers.0
         } else {
-            show_markers_m.is_some() && show_markers.0
+            scope_camera_m.is_some() && scope_camera.0
         };
         *bg = BackgroundColor(color_for(on));
     }
@@ -7051,7 +7080,11 @@ fn shoot(
             ));
         }
 
-        if is_aiming(cursor, &mouse, touch_aiming.0) {
+        // Autopilot-only: real players keep the flat FIRE_RATE cooldown at
+        // any range/ADS state — see autopilot.rs's own AUTOPILOT_TAP_FIRE_
+        // DISTANCE/_INTERVAL for the (separate, distance-gated) mechanism
+        // that already slows autopilot's own fire down at range.
+        if autopilot.0 && is_aiming(cursor, &mouse, touch_aiming.0) {
             *cooldown = FIRE_RATE * (1.0 + (distance / 10.0).min(4.0));
         }
 
@@ -7315,6 +7348,7 @@ fn adjust_scope_zoom(
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut zoom: ResMut<ScopeZoom>,
     camera: Query<&GlobalTransform, With<FpsCamera>>,
+    autopilot: Res<Autopilot>,
     autopilot_state: Res<AutopilotState>,
     zombies: Query<&Transform, With<Zombie>>,
 ) {
@@ -7325,17 +7359,24 @@ fn adjust_scope_zoom(
         wheel.clear();
         return;
     }
-    if let Some(target_entity) = autopilot_state.target {
-        if let (Ok(camera_global), Ok(zombie_transform)) =
-            (camera.single(), zombies.get(target_entity))
-        {
-            let distance = camera_global.translation().distance(zombie_transform.translation);
-            let t = ((distance - AUTO_ZOOM_NEAR_DISTANCE)
-                / (AUTO_ZOOM_FAR_DISTANCE - AUTO_ZOOM_NEAR_DISTANCE))
-                .clamp(0.0, 1.0);
-            zoom.0 = SCOPE_MIN_ZOOM + (SCOPE_MAX_ZOOM - SCOPE_MIN_ZOOM) * t;
-            wheel.clear();
-            return;
+    // Auto-zoom only while Autopilot is actually driving — AutopilotState.
+    // target lingers (last-locked entity) even after autopilot is turned
+    // back off, since autopilot_pick_target stops updating it rather than
+    // clearing it; without this check that stale target kept overriding
+    // real scroll-wheel zoom for a manually-aiming player indefinitely.
+    if autopilot.0 {
+        if let Some(target_entity) = autopilot_state.target {
+            if let (Ok(camera_global), Ok(zombie_transform)) =
+                (camera.single(), zombies.get(target_entity))
+            {
+                let distance = camera_global.translation().distance(zombie_transform.translation);
+                let t = ((distance - AUTO_ZOOM_NEAR_DISTANCE)
+                    / (AUTO_ZOOM_FAR_DISTANCE - AUTO_ZOOM_NEAR_DISTANCE))
+                    .clamp(0.0, 1.0);
+                zoom.0 = SCOPE_MIN_ZOOM + (SCOPE_MAX_ZOOM - SCOPE_MIN_ZOOM) * t;
+                wheel.clear();
+                return;
+            }
         }
     }
     for event in wheel.read() {
@@ -7355,6 +7396,7 @@ fn adjust_scope_zoom(
 fn update_scope_lens(
     gun: Query<&Gun>,
     zoom: Res<ScopeZoom>,
+    scope_camera_enabled: Res<ScopeCameraEnabled>,
     mut scope_camera: Query<(&mut Camera, &mut Projection), With<ScopeCamera>>,
     mut lens: Query<(&mut Transform, &mut Visibility), (With<ScopeLens>, Without<ScopeReticle>)>,
     mut reticle: Query<&mut Transform, (With<ScopeReticle>, Without<ScopeLens>)>,
@@ -7362,7 +7404,8 @@ fn update_scope_lens(
     let Ok(gun) = gun.single() else {
         return;
     };
-    let visible = gun.ads_blend > SCOPE_ACTIVE_ADS_THRESHOLD
+    let visible = scope_camera_enabled.0
+        && gun.ads_blend > SCOPE_ACTIVE_ADS_THRESHOLD
         && gun.wall_raise < SCOPE_HIDDEN_WALL_RAISE_THRESHOLD;
 
     if let Ok((mut camera, mut projection)) = scope_camera.single_mut() {
