@@ -120,7 +120,7 @@ const AUTOPILOT_TARGET_SWITCH_HOLD_MAX: f32 = 0.3;
 // Rate-limited aim tracking, mirroring ZOMBIE_TURN_RATE_DEG (180.0,
 // shared/src/lib.rs) used everywhere else in this codebase for the same
 // "looks like tracking, not an instant aimbot snap" reasoning.
-const AUTOPILOT_TURN_RATE_DEG: f32 = 360.0;
+const AUTOPILOT_TURN_RATE_DEG: f32 = 180.0;
 // Don't fire until aim has actually caught up to the target.
 const AUTOPILOT_FIRE_AIM_TOLERANCE_DEG: f32 = 12.0;
 const AUTOPILOT_SPRINT_APPROACH_DISTANCE: f32 = 22.0;
