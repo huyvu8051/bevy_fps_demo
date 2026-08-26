@@ -123,22 +123,6 @@ const AUTOPILOT_TARGET_SWITCH_HOLD_MAX: f32 = 0.3;
 const AUTOPILOT_TURN_RATE_DEG: f32 = 360.0;
 // Don't fire until aim has actually caught up to the target.
 const AUTOPILOT_FIRE_AIM_TOLERANCE_DEG: f32 = 12.0;
-// Radians subtracted from the computed aim pitch — see autopilot_think's
-// own comment on why (apply_view_recoil kicks the actual fired direction
-// up during a sustained spray; aiming a bit low to begin with keeps shots
-// landing closer to center over a spray instead of climbing off-target).
-// ~4.3 degrees, playtest-tunable.
-const AUTOPILOT_AIM_PITCH_LOWER: f32 = 0.0;
-// Smooth continuous aim sway around the committed aim point, so autopilot
-// doesn't lock dead-still on target — reads as natural human aim, not a
-// robot. Driven by two continuous sin(time * freq) waves (not a per-frame
-// reseeded random jump — that would look like a jitter/snap, not a sway) on
-// distinct-enough frequencies so the path traces an organic loop instead of
-// a perfect circle. Kept slow per request — a fast wobble reads as
-// twitching, not aiming.
-const _AUTOPILOT_AIM_WOBBLE_RADIUS: f32 = 0.24;
-const _AUTOPILOT_AIM_WOBBLE_FREQ_X: f32 = 0.55;
-const _AUTOPILOT_AIM_WOBBLE_FREQ_Y: f32 = 0.7;
 const AUTOPILOT_SPRINT_APPROACH_DISTANCE: f32 = 22.0;
 const AUTOPILOT_LOW_HEALTH_FRACTION: f32 = 0.3;
 const AUTOPILOT_LOW_HEALTH_RETREAT_BONUS: f32 = 4.0;
@@ -270,14 +254,7 @@ pub(crate) fn autopilot_think(
     let wobbled_target = to_target;
 
     let desired_yaw = (-wobbled_target.x).atan2(-wobbled_target.z);
-    // Nudged down a fixed amount (AUTOPILOT_AIM_PITCH_LOWER) rather than
-    // dynamically compensating for apply_view_recoil's own pitch_kick —
-    // recoil kicks the actual fired direction up during a sustained spray,
-    // so aiming a bit lower than dead-on-target to begin with keeps shots
-    // landing closer to center over a spray instead of climbing off the
-    // top of the target. Simple and good enough; not trying to track the
-    // exact live kick value.
-    let desired_pitch = (wobbled_target.y.atan2(horizontal_distance.max(0.01)) - AUTOPILOT_AIM_PITCH_LOWER).clamp(-1.5, 1.5);
+    let desired_pitch = wobbled_target.y.atan2(horizontal_distance.max(0.01)).clamp(-1.5, 1.5);
     cam.yaw = turn_towards_angle(cam.yaw, desired_yaw, turn_step);
     cam.pitch = turn_towards_angle(cam.pitch, desired_pitch, turn_step);
 
