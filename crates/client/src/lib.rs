@@ -1322,7 +1322,12 @@ fn auto_reconnect(
     state: Res<State<ClientState>>,
     channels: Res<RepliconChannels>,
     mut disconnected_for: Local<f32>,
+    pending: Res<MapSelectionPending>,
 ) {
+    if pending.0 {
+        *disconnected_for = 0.0;
+        return;
+    }
     if *state.get() != ClientState::Disconnected {
         *disconnected_for = 0.0;
         return;
