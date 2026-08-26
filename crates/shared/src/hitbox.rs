@@ -165,12 +165,32 @@ pub fn entity_phase(entity: Entity) -> f32 {
 // The `&'static str` half of the return is purely a debug/HUD label (e.g.
 // "showing which body part autopilot is currently aiming at" on screen) —
 // never fed back into damage/collision math, so it's fine as a plain name.
-pub fn random_aim_point(bones: &BoneWorldPositions, _target: Entity) -> Option<(Vec3, &'static str)> {
-    match (bones.belly, bones.chest) {
-        (Some(belly), Some(chest)) => Some((belly.midpoint(chest), "Body")),
-        (Some(p), None) | (None, Some(p)) => Some((p, "Body")),
-        (None, None) => None,
+pub fn random_aim_point(bones: &BoneWorldPositions, target: Entity) -> Option<(Vec3, &'static str)> {
+    let mut joints = Vec::new();
+    if let Some(p) = bones.head {
+        joints.push((p, "Head"));
     }
+    if let Some(p) = bones.belly {
+        joints.push((p, "Belly"));
+    }
+    if let Some(p) = bones.chest {
+        joints.push((p, "Chest"));
+    }
+    for chain in [&bones.left_arm, &bones.right_arm, &bones.left_leg, &bones.right_leg] {
+        for joint in chain.iter().flatten() {
+            joints.push((*joint, "Limb"));
+        }
+    }
+
+    if joints.is_empty() {
+        return None;
+    }
+
+    // Mix the target entity index using a multiplicative hash to get a pseudo-random seed
+    let mut seed = target.index_u32() as usize;
+    seed = seed.wrapping_mul(2654435761);
+    let idx = seed % joints.len();
+    Some(joints[idx])
 }
 
 // Real per-bone hit detection (HITBOX_PLAN.md Phase 4, positions

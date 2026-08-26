@@ -6534,11 +6534,11 @@ fn draw_zombie_hitboxes(
             gizmos.sphere(Isometry3d::from_translation(*joint_pos), 0.04, joint_color);
         }
 
-        // Highlight the targeted zombie's aim point (between belly and chest) with a red sphere (if target trace is enabled)
+        // Highlight the targeted zombie's aim point with a red sphere (if target trace is enabled)
         if is_autopilot_target && show_aim.0 {
-            if let (Some(belly), Some(chest)) = (bones.belly.and_then(bone_pos), bones.chest.and_then(bone_pos)) {
-                let target_aim_point = belly.midpoint(chest);
-                gizmos.sphere(Isometry3d::from_translation(target_aim_point), 0.08, Color::srgb(1.0, 0.0, 0.0));
+            let resolved_bones = resolve_bone_world_positions(bones, |bone| globals.get(bone).ok().map(|g| g.translation()));
+            if let Some((aim_point, _)) = shared::random_aim_point(&resolved_bones, zombie_entity) {
+                gizmos.sphere(Isometry3d::from_translation(aim_point), 0.08, Color::srgb(1.0, 0.0, 0.0));
             }
         }
 
