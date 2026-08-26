@@ -47,16 +47,31 @@ impl SkinnedModelRegistry {
     }
 }
 
+/// How to get this frame's per-joint skinning matrices for one actor.
+/// `JointMatrices` is preferred — already-animated matrices read straight
+/// out of a real ECS skeleton (see native_game_extract.rs's
+/// `joint_matrices_for`), so there's only ever one implementation of
+/// keyframe sampling/hierarchy math in play (whatever `bevy_animation`
+/// itself does), matching the desktop/wgpu path exactly by construction.
+/// `Clip` is the fallback for an actor with no live ECS skeleton wired up
+/// to extract from yet — `SkinnedModel::compute_joint_matrices` samples
+/// its own hand-parsed copy of the glTF's animation data instead, which
+/// can in principle drift from `bevy_animation`'s own sampling over time.
+/// Currently only this project's remote-player/soldier extraction uses
+/// this fallback (zombies use `JointMatrices`) — see native_metal_probe.rs's
+/// own draw_scene doc comment for the plan to close this gap too.
+pub enum SkinnedActorPose {
+    JointMatrices(Vec<[[f32; 4]; 4]>),
+    Clip { clip_index: usize, time: f32 },
+}
+
 /// One skinned actor to draw this frame, exactly as extracted from the
 /// host app's own ECS/game state — this project's implementation is
 /// native_game_extract.rs's zombie/remote-player queries, mapped to this
 /// shape in native_metal_probe.rs's render_frame. `model` is a
-/// `SkinnedModelRegistry` key, not a gameplay type. `anim_clip_index`/
-/// `anim_time` feed `SkinnedModel::compute_joint_matrices` directly.
-#[derive(Clone, Copy)]
+/// `SkinnedModelRegistry` key, not a gameplay type.
 pub struct SkinnedActorDraw {
     pub transform: Transform,
     pub model: &'static str,
-    pub anim_clip_index: usize,
-    pub anim_time: f32,
+    pub pose: SkinnedActorPose,
 }

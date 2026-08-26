@@ -267,24 +267,77 @@ pub struct LightSnapshot {
     pub range: f32,
 }
 
-/// A zombie's world transform plus which of zombie.glb's 5 embedded poses
-/// (Idle/Walk/Run/Crawl/Bite — see `crate::ZombiePose`/
-/// `update_zombie_animation`) its real `AnimationPlayer` is actually
-/// playing right now, and how far into that clip. Extracting this instead
-/// of hardcoding a clip index is the same "extract the real thing, don't
-/// reimplement it" principle this module already applies to the camera/
-/// scope camera — the pose decision (distance/Health thresholds) already
-/// lives in `update_zombie_animation`; duplicating that logic here would
-/// just be a second place for the two to drift apart.
+/// A zombie's world transform plus its already-animated skinning matrices
+/// — one per joint, ready to upload straight into the renderer's joint
+/// buffer. Read directly from the real `bevy_animation`/`TransformPlugin`
+/// state this headless App already computes every tick (see
+/// `joint_matrices_for`'s own doc comment) instead of re-sampling the
+/// zombie's animation clip by hand a second time — the same "extract the
+/// real thing, don't reimplement it" principle this module already applies
+/// to the camera/scope camera, now covering skinning too: the previous
+/// version extracted a raw clip index + seek time and made the RENDERER
+/// (skinned_gltf.rs's own hand-parsed copy of zombie.glb) re-sample the
+/// clip independently — two separate implementations of the same keyframe
+/// math that could silently drift apart from the desktop/wgpu path's own
+/// `bevy_animation`. This extracts the actual per-joint result instead, so
+/// both paths share the exact same animation computation.
 pub struct ZombieRenderState {
     pub transform: Transform,
-    /// Matches zombie.glb's own animation list order (0=Bite, 1=Crawl,
-    /// 2=Idle, 3=Run, 4=Walk) — what `skinned_gltf::SkinnedModel::
-    /// compute_joint_matrices`'s `clip_index` parameter expects. Falls
-    /// back to 2 (Idle) if no `AnimationPlayer` is found/playing yet (e.g.
-    /// the zombie's glTF scene is still loading asynchronously).
-    pub anim_clip_index: usize,
-    pub anim_time: f32,
+    pub joint_matrices: Vec<[[f32; 4]; 4]>,
+}
+
+/// Walks down from `root` (breadth-first, following `Children`) for the
+/// first descendant carrying a `SkinnedMesh` — the mesh entity glTF's skin
+/// import attaches it to, not necessarily `root` itself (which for a
+/// zombie/soldier is the replicated/NetPlayer entity, several hierarchy
+/// levels above the actual skinned glTF node). Mirrors the same
+/// "walk the hierarchy looking for X" shape `find_animation_root`
+/// (crates/shared) already uses, just top-down instead of bottom-up.
+fn find_first_skinned_mesh(
+    root: bevy::ecs::entity::Entity,
+    children_query: &Query<&Children>,
+    skinned_query: &Query<&SkinnedMesh>,
+) -> Option<bevy::ecs::entity::Entity> {
+    let mut queue = std::collections::VecDeque::from([root]);
+    while let Some(entity) = queue.pop_front() {
+        if skinned_query.contains(entity) {
+            return Some(entity);
+        }
+        if let Ok(children) = children_query.get(entity) {
+            queue.extend(children.iter());
+        }
+    }
+    None
+}
+
+/// One already-animated skinning matrix per joint — `joint_matrix[i] =
+/// worldTransform(joints[i]) * inverseBindMatrix[i]`, the standard GPU
+/// skinning formula, computed here from data this headless App's own
+/// `GltfPlugin`/`AnimationPlugin`/`TransformPlugin` already produce for
+/// every real joint entity (not just the handful this codebase happens to
+/// track by name for hit detection — see `SkinnedMesh.joints`'s own doc
+/// comment for why this is fully generic across the whole skin, unlike
+/// `ZombieHitboxBones`' 15 named bones). `inverse_bindposes_assets` comes
+/// from the same glTF import as `skinned.joints` itself, so the two stay
+/// index-aligned by construction — no separate file parse needed for
+/// either half.
+fn joint_matrices_for(
+    skinned: &SkinnedMesh,
+    globals: &Query<&GlobalTransform>,
+    inverse_bindposes_assets: &Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>,
+) -> Vec<[[f32; 4]; 4]> {
+    let Some(inverse_bindposes) = inverse_bindposes_assets.get(&skinned.inverse_bindposes) else {
+        return Vec::new();
+    };
+    skinned
+        .joints
+        .iter()
+        .zip(inverse_bindposes.iter())
+        .map(|(&joint, inverse_bind)| {
+            let world = globals.get(joint).map(GlobalTransform::to_matrix).unwrap_or_default();
+            (world * *inverse_bind).to_cols_array_2d()
+        })
+        .collect()
 }
 
 impl Default for CameraSnapshot {
@@ -351,44 +404,30 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         });
     }
 
-    // Zombies: world-space transform plus real animation-pose state — see
-    // ZombieRenderState's own doc comment. `ZombieAnimationPlayer(Entity)`
-    // (crate::lib) links each zombie root to the descendant entity that
-    // actually carries the `AnimationPlayer` (the glTF scene loads
-    // asynchronously, so it isn't the same entity and may not exist yet).
+    // Zombies: world-space transform plus real per-joint skinning matrices
+    // — see ZombieRenderState's own doc comment for why this reads the
+    // already-animated skeleton instead of extracting a clip index/seek
+    // time for the renderer to re-sample by hand. `entity` (the zombie
+    // root) is where `find_first_skinned_mesh` starts walking down to find
+    // the actual skinned glTF node — the zombie root itself is never the
+    // skinned mesh entity (that's several hierarchy levels down, inside
+    // the asynchronously-loaded glTF scene).
     let mut zombie_state: SystemState<(
-        Query<(&GlobalTransform, Option<&crate::ZombieAnimationPlayer>), With<Zombie>>,
-        Query<&bevy::animation::AnimationPlayer>,
-        bevy::ecs::system::Res<crate::ZombieAnim>,
+        Query<(bevy::ecs::entity::Entity, &GlobalTransform), With<Zombie>>,
+        Query<&Children>,
+        Query<&SkinnedMesh>,
+        Query<&GlobalTransform>,
+        Res<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
     )> = SystemState::new(world);
-    let (zombie_query, anim_players, zombie_anim) = zombie_state.get(world);
+    let (zombie_query, children_query, skinned_mesh_query, joint_globals, inverse_bindposes_assets) = zombie_state.get(world);
     snapshot.zombies = zombie_query
         .iter()
-        .map(|(transform, link)| {
-            // Look up which of the 5 AnimationNodeIndex handles ZombieAnim
-            // hands out is actually playing, then map it back to zombie.glb's
-            // own raw clip index (skinned_gltf's compute_joint_matrices takes
-            // a clip index, not a graph node) — see ZombiePose's priority
-            // order in update_zombie_animation for how that pose was picked.
-            let (anim_clip_index, anim_time) = link
-                .and_then(|link| anim_players.get(link.0).ok())
-                .and_then(|player| player.playing_animations().next())
-                .map(|(node, active)| {
-                    let clip_index = if *node == zombie_anim.bite {
-                        0
-                    } else if *node == zombie_anim.crawl {
-                        1
-                    } else if *node == zombie_anim.run {
-                        3
-                    } else if *node == zombie_anim.walk {
-                        4
-                    } else {
-                        2 // idle, and the fallback for any unrecognized node
-                    };
-                    (clip_index, active.seek_time())
-                })
-                .unwrap_or((2, 0.0));
-            ZombieRenderState { transform: transform.compute_transform(), anim_clip_index, anim_time }
+        .map(|(entity, transform)| {
+            let joint_matrices = find_first_skinned_mesh(entity, &children_query, &skinned_mesh_query)
+                .and_then(|mesh_entity| skinned_mesh_query.get(mesh_entity).ok())
+                .map(|skinned| joint_matrices_for(skinned, &joint_globals, &inverse_bindposes_assets))
+                .unwrap_or_default();
+            ZombieRenderState { transform: transform.compute_transform(), joint_matrices }
         })
         .collect();
 

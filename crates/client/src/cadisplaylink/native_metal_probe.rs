@@ -1277,32 +1277,46 @@ impl NativeMetalProbe {
             // crate::lib) at all — see skinned_actor.rs's own doc comment
             // for why each registered model instead carries its own
             // scale/y_offset/facing_correction as plain data.
-            let rotation = if slot.facing_correction != 0.0 {
-                actor.transform.rotation * bevy::math::Quat::from_rotation_y(slot.facing_correction)
-            } else {
-                actor.transform.rotation
+            // See SkinnedActorPose's own doc comment: JointMatrices (the
+            // real-ECS-skeleton path) is used as-is; Clip is the fallback
+            // for actors with no live skeleton wired up to extract from yet.
+            //
+            // model_matrix is IDENTITY for JointMatrices — those already
+            // came out of the real ECS's own GlobalTransform, which already
+            // includes the mesh child entity's own scale/y-offset (the same
+            // `zombie_mesh_bundle`/ZOMBIE_SCALE transform the desktop path
+            // applies) baked in. Applying mesh_scale/y_offset/facing AGAIN
+            // here double-transformed it — scaled twice (ZOMBIE_SCALE² ≈
+            // 1/16 size) and offset twice, which is exactly what shipped
+            // briefly as "zombies render ant-sized" before this fix. Clip
+            // still needs the old scale/offset/facing model_matrix, since
+            // `compute_joint_matrices` samples the glTF's own raw
+            // bind-pose-relative hierarchy — never placed into world space
+            // by anything else.
+            let (model_matrix, joint_matrices) = match &actor.pose {
+                super::skinned_actor::SkinnedActorPose::JointMatrices(matrices) => {
+                    ([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], matrices.clone())
+                }
+                super::skinned_actor::SkinnedActorPose::Clip { clip_index, time } => {
+                    let rotation = if slot.facing_correction != 0.0 {
+                        actor.transform.rotation * bevy::math::Quat::from_rotation_y(slot.facing_correction)
+                    } else {
+                        actor.transform.rotation
+                    };
+                    let [qx, qy, qz, qw] = rotation.to_array();
+                    let (x2, y2, z2) = (qx + qx, qy + qy, qz + qz);
+                    let (xx, xy, xz) = (qx * x2, qx * y2, qx * z2);
+                    let (yy, yz, zz) = (qy * y2, qy * z2, qz * z2);
+                    let (wx, wy, wz) = (qw * x2, qw * y2, qw * z2);
+                    let matrix = [
+                        [(1.0 - (yy + zz)) * mesh_scale, (xy + wz) * mesh_scale, (xz - wy) * mesh_scale, 0.0],
+                        [(xy - wz) * mesh_scale, (1.0 - (xx + zz)) * mesh_scale, (yz + wx) * mesh_scale, 0.0],
+                        [(xz + wy) * mesh_scale, (yz - wx) * mesh_scale, (1.0 - (xx + yy)) * mesh_scale, 0.0],
+                        [actor.transform.translation.x, actor.transform.translation.y + y_offset, actor.transform.translation.z, 1.0],
+                    ];
+                    (matrix, model.compute_joint_matrices(*clip_index, *time))
+                }
             };
-            let transform = &actor.transform;
-            let (anim_clip_index, anim_time) = (&actor.anim_clip_index, &actor.anim_time);
-
-            let [qx, qy, qz, qw] = rotation.to_array();
-            let (x2, y2, z2) = (qx + qx, qy + qy, qz + qz);
-            let (xx, xy, xz) = (qx * x2, qx * y2, qx * z2);
-            let (yy, yz, zz) = (qy * y2, qy * z2, qz * z2);
-            let (wx, wy, wz) = (qw * x2, qw * y2, qw * z2);
-            let model_matrix = [
-                [(1.0 - (yy + zz)) * mesh_scale, (xy + wz) * mesh_scale, (xz - wy) * mesh_scale, 0.0],
-                [(xy - wz) * mesh_scale, (1.0 - (xx + zz)) * mesh_scale, (yz + wx) * mesh_scale, 0.0],
-                [(xz + wy) * mesh_scale, (yz - wx) * mesh_scale, (1.0 - (xx + yy)) * mesh_scale, 0.0],
-                [
-                    transform.translation.x,
-                    transform.translation.y + y_offset,
-                    transform.translation.z,
-                    1.0,
-                ],
-            ];
-
-            let joint_matrices = model.compute_joint_matrices(*anim_clip_index, *anim_time);
             let joint_buffer = self.device.new_buffer_with_data(
                 joint_matrices.as_ptr() as *const _,
                 (joint_matrices.len() * std::mem::size_of::<[[f32; 4]; 4]>()) as u64,
@@ -1399,19 +1413,23 @@ impl NativeMetalProbe {
             real_game_extracted.extend(snapshot.zombies.into_iter().map(|z| super::skinned_actor::SkinnedActorDraw {
                 transform: z.transform,
                 model: "zombie",
-                anim_clip_index: z.anim_clip_index,
-                anim_time: z.anim_time,
+                pose: super::skinned_actor::SkinnedActorPose::JointMatrices(z.joint_matrices),
             }));
             // Remote players: no per-entity pose extraction wired up yet
             // (out of scope for this pass, which was specifically about
             // zombie.glb's 5 poses — see update_zombie_animation) — keep
             // playing PLAYER_MODEL_ANIM_WALK statically rather than the
             // previous hardcoded clip 0, which was correct for neither.
+            // TODO: give remote players the same real-skeleton extraction
+            // zombies just got (see native_game_extract.rs's
+            // joint_matrices_for/find_first_skinned_mesh — both are already
+            // generic over any root entity, not zombie-specific) instead of
+            // this Clip fallback, once per-entity NetPlayer animation state
+            // is worth wiring up.
             real_game_extracted.extend(snapshot.remote_players.into_iter().map(|t| super::skinned_actor::SkinnedActorDraw {
                 transform: t,
                 model: "soldier",
-                anim_clip_index: crate::PLAYER_MODEL_ANIM_WALK,
-                anim_time: now,
+                pose: super::skinned_actor::SkinnedActorPose::Clip { clip_index: crate::PLAYER_MODEL_ANIM_WALK, time: now },
             }));
         }
         // Texture cache: upload once per unique `Image` asset, keyed by its
