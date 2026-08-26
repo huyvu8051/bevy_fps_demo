@@ -958,14 +958,43 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // "garbled giant mesh" failure mode as the gun's own GlobalTransform-
     // propagation bug noted above, just from skipping skinning instead of
     // skipping GlobalTransform.
+    // Gun visibility: the mesh_query below has no notion of Bevy
+    // `Visibility` at all — this headless App never runs the render
+    // crate's visibility-propagation systems (no `InheritedVisibility`/
+    // `ViewVisibility` to read even if it did), so without this the gun's
+    // meshes always got baked into static_meshes regardless of the
+    // `GunVisible` cheat toggle (crate::lib's `apply_map_render_toggles`
+    // only ever updates the real `Gun` entity's `Visibility` component,
+    // which only the desktop/wgpu render path actually reads) — same class
+    // of bug `map_msaa_on` above was added to fix for MSAA. Collect every
+    // descendant of the `Gun` entity (its glTF scene's own meshes) so they
+    // can be skipped below when the toggle is off.
+    let mut gun_visible_state: SystemState<Res<crate::GunVisible>> = SystemState::new(world);
+    let gun_visible = gun_visible_state.get(world).0;
+    let gun_hidden_meshes: std::collections::HashSet<bevy::ecs::entity::Entity> = if gun_visible {
+        Default::default()
+    } else {
+        let mut gun_state: SystemState<(Query<bevy::ecs::entity::Entity, With<crate::Gun>>, Query<&Children>)> = SystemState::new(world);
+        let (gun_query, children_query) = gun_state.get(world);
+        let mut out = Vec::new();
+        if let Some(gun_entity) = gun_query.iter().next() {
+            out.push(gun_entity);
+            collect_descendants(gun_entity, &children_query, &mut out);
+        }
+        out.into_iter().collect()
+    };
+
     let mut mesh_state: SystemState<(
-        Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>, &GlobalTransform), Without<SkinnedMesh>>,
+        Query<(bevy::ecs::entity::Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>, &GlobalTransform), Without<SkinnedMesh>>,
         Res<Assets<Mesh>>,
         Res<Assets<StandardMaterial>>,
         Res<Assets<Image>>,
     )> = SystemState::new(world);
     let (mesh_query, meshes, materials, images) = mesh_state.get(world);
-    for (mesh3d, material3d, transform) in mesh_query.iter() {
+    for (entity, mesh3d, material3d, transform) in mesh_query.iter() {
+        if gun_hidden_meshes.contains(&entity) {
+            continue;
+        }
         let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
         let Some(material) = materials.get(&material3d.0) else { continue };
 

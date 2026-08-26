@@ -3,8 +3,6 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::arena::ARENA_HALF_SIZE;
-
 // The physics body: a capsule moved each frame via avian3d's MoveAndSlide.
 // Separate from the camera entity (which just gets its translation copied
 // from this each frame) so look rotation and physics movement don't fight
@@ -34,7 +32,11 @@ pub struct Health(pub f32);
 #[derive(Resource, Default)]
 pub struct GameOver(pub bool);
 
-pub const PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 3.0, ARENA_HALF_SIZE - 4.0);
+// Was Vec3::new(0.0, 3.0, ARENA_HALF_SIZE - 4.0) — spawned off near one
+// edge, so zombies spread across the whole ZOMBIE_SPAWNS grid ended up
+// closer on that side than the other. Arena center instead, so zombie
+// distance is roughly symmetric in every direction.
+pub const PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 3.0, 0.0);
 pub const PLAYER_MAX_HEALTH: f32 = 100.0;
 
 pub const MOVE_SPEED: f32 = 4.0;

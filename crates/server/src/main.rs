@@ -18,7 +18,7 @@ use shared::{
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount,
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
-    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for,
+    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for,
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
@@ -35,7 +35,7 @@ use shared::{
     LAG_COMPENSATION_MAX_SECS, PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
     PROTOCOL_ID, ZOMBIE_ANIM_BITE, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_WALK, ZOMBIE_PATH,
     ZOMBIE_MODEL_Y_OFFSET, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SCALE, ZOMBIE_SEPARATION_RADIUS,
-    ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS, ZOMBIE_SPEED, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
+    ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
     ZOMBIE_TURN_RATE_DEG,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
@@ -1394,7 +1394,7 @@ fn chase_action_system(mut commands: Commands, mut query: Query<(&Actor, &mut Ac
             // the time this command actually applies — same benign race the
             // single-player version worked around.
             ActionState::Requested => {
-                commands.entity(*actor).try_insert((Chase { speed: ZOMBIE_SPEED }, ChaseTarget::default()));
+                commands.entity(*actor).try_insert((Chase, ChaseTarget::default()));
                 *state = ActionState::Executing;
             }
             ActionState::Cancelled => {
@@ -1448,8 +1448,8 @@ fn move_zombies(
     time: Res<Time>,
     freeze: Res<FreezeZombiesServer>,
     mut zombies: Query<
-        (Entity, &mut Transform, &mut ZombieMotion, &Chase, &mut ChaseTarget, &mut KnockbackVelocity, &mut NetTransform),
-        With<Zombie>,
+        (Entity, &mut Transform, &mut ZombieMotion, &mut ChaseTarget, &mut KnockbackVelocity, &mut NetTransform),
+        (With<Zombie>, With<Chase>),
     >,
     players: Query<(Entity, &Transform, &PlayerThreat), (With<NetPlayer>, Without<Zombie>)>,
     navmesh: Query<&ManagedNavMesh>,
@@ -1465,7 +1465,7 @@ fn move_zombies(
     // thrashing between poses while frozen, instead of being left however
     // it happened to be the instant this engaged.
     if freeze.0 {
-        for (_, _, _, _, _, _, mut net_transform) in &mut zombies {
+        for (_, _, _, _, _, mut net_transform) in &mut zombies {
             net_transform.moving = false;
         }
         return;
@@ -1487,7 +1487,7 @@ fn move_zombies(
         }
     }
 
-    for (entity, mut transform, mut motion, chase, mut chase_target, mut knockback, mut net_transform) in &mut zombies {
+    for (entity, mut transform, mut motion, mut chase_target, mut knockback, mut net_transform) in &mut zombies {
         // Commit to the current target until it disconnects or the
         // re-evaluate timer runs out — see ZOMBIE_RETARGET_INTERVAL's doc
         // comment on why "nearest every frame" flickers with close players.
@@ -1529,7 +1529,7 @@ fn move_zombies(
         if distance > ZOMBIE_LOD_DISTANCE {
             if distance > ZOMBIE_STOP_DISTANCE {
                 let direction = horizontal / distance;
-                transform.translation += direction * chase.speed * time.delta_secs();
+                transform.translation += direction * zombie_speed_for(distance) * time.delta_secs();
                 let target_rotation = Transform::default().looking_to(-direction, Vec3::Y).rotation;
                 turn_towards(&mut transform.rotation, target_rotation, ZOMBIE_TURN_RATE_DEG.to_radians() * time.delta_secs());
             }
@@ -1577,7 +1577,7 @@ fn move_zombies(
 
                 motion.cached_path_dir = steer_around_obstacles(&mover.spatial_query, transform.translation, desired_direction, distance, &filter);
             }
-            motion.cached_path_dir * chase.speed
+            motion.cached_path_dir * zombie_speed_for(distance)
         } else {
             Vec3::ZERO
         };

@@ -40,6 +40,7 @@ use shared::{
     NAVMESH_COLUMN_OBSTACLES, PILLAR_RADIUS, PROTOCOL_ID, ZOMBIE_ANIM_BITE, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_WALK,
     ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_MODEL_Y_OFFSET, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_PATH,
     zombie_pose_for, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_SCALE, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
+    ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
@@ -70,11 +71,16 @@ const SCENE_PATH: &str = "models/Sponza/Sponza.gltf";
 // back to false to use Sponza again; PLAYER_SPAWN/ZOMBIE_SPAWNS/
 // NAVMESH_BOUNDS below all branch on it too.
 const USE_TEST_ARENA: bool = true;
-// Half the arena's side length (so it spans -ARENA_HALF_SIZE..ARENA_HALF_SIZE
-// on both X and Z) — see spawn_test_arena.
-const ARENA_HALF_SIZE: f32 = 36.0;
-const ARENA_WALL_HEIGHT: f32 = 5.0;
-const ARENA_WALL_THICKNESS: f32 = 1.0;
+// ARENA_HALF_SIZE/ARENA_WALL_HEIGHT/ARENA_WALL_THICKNESS now imported from
+// shared::arena (see spawn_test_arena) — this used to be its own local,
+// never-synced copy that silently drifted from the server's authoritative
+// arena size (crates/server's spawn_arena_colliders, which always used the
+// shared constant), so the client's own rendered/collidable floor+walls
+// stayed frozen at the old size while the server's real world — and the
+// player's own authoritative spawn point — moved to the new one. That's
+// what "spawning outside the map" was: PLAYER_SPAWN below (this crate)
+// used to compute off the stale local value while the server placed the
+// player using the correct, larger one.
 
 // "AK47 with Scope" by Wolf Schevelenbos (Sketchfab, CC-BY 4.0) —
 // https://sketchfab.com/3d-models/ak47-with-scope-d4d9720f3677485b958ceecc02f7965c
@@ -613,7 +619,12 @@ const PRONE_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.15;
 // well above y=0 and lets gravity fall it onto whatever the real floor turns
 // out to be, rather than guessing a spawn height that might be inside a wall.
 const PLAYER_SPAWN: Vec3 = if USE_TEST_ARENA {
-    Vec3::new(0.0, 3.0, ARENA_HALF_SIZE - 4.0)
+    // Arena center — matches shared::player::PLAYER_SPAWN (used by the
+    // server, the actual authority on where the player really is), so
+    // zombie distance (ZOMBIE_SPAWNS, spread across the whole arena) ends
+    // up roughly symmetric in every direction instead of closer on
+    // whichever edge the player used to spawn near.
+    Vec3::new(0.0, 3.0, 0.0)
 } else {
     Vec3::new(0.0, 3.0, 4.0)
 };
@@ -2749,6 +2760,24 @@ fn spawn_settings_menu(commands: &mut Commands) {
                     spawn_cheat_toggle_button(row, "Autopilot", AutopilotButton);
                 });
 
+                // Gun visibility — also a real player-facing feature (hide
+                // the viewmodel for screenshots/clean framing), not a cheat,
+                // so pulled out of the debug-only "Cheats" section below:
+                // that gate meant this button silently didn't exist on any
+                // release/mobile build, the only place touch players could
+                // reach it at all (desktop has no keybinding for it either
+                // — see native_menu's gun_visible for the one other place
+                // this resource is toggled, a macOS/iOS app-menu item).
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|row| {
+                    spawn_cheat_toggle_button(row, "Gun", CheatGunButton);
+                });
+
                 // Touch equivalent of the desktop debug panel's keyboard-only
                 // cheats (KeyN/KeyG/KeyF/Digit1/Digit2) — that panel is
                 // unreachable on mobile (no keyboard), so none of it existed
@@ -2789,7 +2818,6 @@ fn spawn_settings_menu(commands: &mut Commands) {
                         ..default()
                     })
                     .with_children(|row| {
-                        spawn_cheat_toggle_button(row, "Gun", CheatGunButton);
                         spawn_cheat_toggle_button(row, "MSAA", CheatMsaaButton);
                         spawn_cheat_toggle_button(row, "Shadow", CheatShadowButton);
                     });

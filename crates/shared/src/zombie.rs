@@ -163,15 +163,29 @@ pub struct HitboxTestSlot(pub Vec3);
 // whichever one happened to be nearest when this was first inserted.
 #[derive(Component, Clone)]
 #[component(storage = "SparseSet")]
-pub struct Chase {
-    pub speed: f32,
-}
+pub struct Chase;
 
 pub const ZOMBIE_AI_ENABLED: bool = true;
 // Large enough that zombies start chasing basically as soon as they spawn —
 // this is meant as target practice, not a stealth encounter.
 pub const ZOMBIE_CHASE_RANGE: f32 = 60.0;
-pub const ZOMBIE_SPEED: f32 = 1.0;
+// Was a single ZOMBIE_SPEED (1.0) regardless of pose — split so the Run
+// pose (see ZOMBIE_RUN_DISTANCE/zombie_pose_for) actually moves faster
+// than Walk instead of just looking like it does. 1.5x/3x the old value.
+pub const ZOMBIE_WALK_SPEED: f32 = 1.5;
+pub const ZOMBIE_RUN_SPEED: f32 = 3.0;
+
+// Single formula for "how fast is a zombie moving at this distance",
+// mirroring zombie_pose_for's own ZOMBIE_RUN_DISTANCE threshold so the
+// Run pose and the actual speed boost always kick in at the same range —
+// see move_zombies (crates/server) for the caller.
+pub fn zombie_speed_for(distance: f32) -> f32 {
+    if distance <= ZOMBIE_RUN_DISTANCE {
+        ZOMBIE_RUN_SPEED
+    } else {
+        ZOMBIE_WALK_SPEED
+    }
+}
 
 // Visual mesh scale multiplier for zombie.glb (crates/client's ZOMBIE_PATH)
 // — lives here rather than client-only because the physics/hit-detection
@@ -390,8 +404,8 @@ pub const ZOMBIE_CRAWL_HEALTH_FRACTION: f32 = 0.35;
 // which a moving zombie reads as sprinting toward you (Run) rather than
 // the ordinary Walk — deliberately well short of ZOMBIE_STOP_DISTANCE
 // (which gates the Bite pose/actual damage tick), so the visual "closing
-// in fast" cue reads before the attack itself lands.
-pub const ZOMBIE_RUN_DISTANCE: f32 = 10.0;
+// in fast" cue reads before the attack itself lands. Was 10.0.
+pub const ZOMBIE_RUN_DISTANCE: f32 = 20.0;
 
 // The single formula deciding ZombiePose — see its own doc comment for why
 // this lives here instead of being duplicated per-crate. `distance` is to

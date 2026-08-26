@@ -111,17 +111,14 @@ pub(crate) struct AutopilotIntent {
 // just approach.
 const AUTOPILOT_DETECT_RANGE: f32 = 80.0;
 // The "comfortable shooting distance" — a bit past DEBUG_BOT_ENGAGE_RANGE
-// (10.0) since the player should shoot at range, not melee.
-const AUTOPILOT_ENGAGE_RANGE: f32 = 28.0;
+// (10.0) since the player should shoot at range, not melee. Was 28.0.
+const AUTOPILOT_ENGAGE_RANGE: f32 = 40.0;
 // New: debug bots have no equivalent of this — below this distance,
 // autopilot backs away instead of just stopping.
 const AUTOPILOT_RETREAT_RANGE: f32 = 5.0;
 const AUTOPILOT_RETARGET_INTERVAL: f32 = 1.2;
 // Below this distance autopilot doesn't bother raising ADS — target's
-// close enough hip-fire is fine. Was an inline 10.0, then 15.0; bumped
-// again so ADS only kicks in once the target is farther out. Only a
-// narrow band under AUTOPILOT_ENGAGE_RANGE (+1.0) now actually triggers
-// ADS since engage range itself is 28.0.
+// close enough hip-fire is fine.
 const AUTOPILOT_ADS_MIN_DISTANCE: f32 = 25.0;
 // A random pause (rolled once per target switch — see AutopilotState's own
 // hold_fire_timer doc comment) before firing resumes on the new target, so
@@ -136,12 +133,16 @@ const AUTOPILOT_TARGET_SWITCH_HOLD_MAX: f32 = 0.3;
 // shots keep missing wider. Autopilot instead taps single shots at this
 // range — see AUTOPILOT_TAP_FIRE_INTERVAL below — giving pitch_kick time to
 // decay (RECOIL_RECOVERY_SPEED, lib.rs) between each one.
-const AUTOPILOT_TAP_FIRE_DISTANCE: f32 = 18.0;
+// Was 18.0 — raised so only genuinely far shots (30m+, out of
+// AUTOPILOT_ENGAGE_RANGE's 40.0 comfortable-range) get tapped; closer
+// shots stay full-auto spray.
+const AUTOPILOT_TAP_FIRE_DISTANCE: f32 = 20.0;
 // Gap enforced between taps at long range. RECOIL_RECOVERY_SPEED (5.0/sec)
 // decays pitch_kick exponentially, so this gap lets most of a shot's kick
 // bleed off before the next one instead of stacking on top of it. Was
-// 0.35, then 0.22 — tightened further for an even faster tap rate.
-const AUTOPILOT_TAP_FIRE_INTERVAL: f32 = 0.14;
+// 0.35, then 0.22, then 0.14, then widened to 0.4 — tightened back down
+// for a faster tap rate again.
+const AUTOPILOT_TAP_FIRE_INTERVAL: f32 = 0.15;
 // Rate-limited aim tracking — was 180.0, matching ZOMBIE_TURN_RATE_DEG
 // (shared/src/lib.rs), but bumped faster for snappier target acquisition;
 // the fade-in/distance easing below still keeps it from reading as an
@@ -181,6 +182,13 @@ const AUTOPILOT_DODGE_DUTY_CYCLE: f32 = 0.35;
 // same "don't recompute faster than the result can even be acted on"
 // reasoning as send_player_input's own INPUT_SEND_HZ.
 const AUTOPILOT_DECISION_HZ: f32 = 20.0;
+// Target selection weights raw distance by how far off-camera-forward a
+// zombie is, so a slightly-farther zombie already in front of the camera
+// beats a slightly-closer one behind — without this, two similarly-close
+// zombies on opposite sides flip the target (and the camera) 180 degrees
+// back and forth every retarget. 0.0 = pure nearest-distance (no bias),
+// 1.0 = a directly-behind zombie's effective distance is doubled.
+const AUTOPILOT_TARGET_BEHIND_PENALTY: f32 = 0.6;
 
 // Nearest-in-range, commit-and-reevaluate — same shape as the server's
 // bot_pick_target, adapted to run purely client-side against zombies'
@@ -192,6 +200,7 @@ pub(crate) fn autopilot_pick_target(
     look_only: Res<AutopilotLookOnly>,
     mut state: ResMut<AutopilotState>,
     player: Query<&Transform, (With<Player>, Without<NetPlayer>)>,
+    camera: Query<&GlobalTransform, With<FpsCamera>>,
     zombies: Query<(Entity, &Transform), With<Zombie>>,
 ) {
     if !autopilot.0 && !look_only.0 {
@@ -203,10 +212,32 @@ pub(crate) fn autopilot_pick_target(
     state.retarget_timer -= time.delta_secs();
     let target_alive = state.target.is_some_and(|target| zombies.contains(target));
     if !target_alive || state.retarget_timer <= 0.0 {
+        // Horizontal-only (yaw plane) — pitch doesn't matter for "is this
+        // behind the camera", and matches how turn_step/desired_yaw below
+        // treat direction elsewhere in this module.
+        let forward_xz = camera
+            .single()
+            .map(|g| {
+                let f = g.forward();
+                Vec2::new(f.x, f.z).normalize_or_zero()
+            })
+            .unwrap_or(Vec2::Y);
         let new_target = zombies
             .iter()
-            .map(|(zombie, transform)| (zombie, player_transform.translation.distance(transform.translation)))
-            .filter(|&(_, distance)| distance <= AUTOPILOT_DETECT_RANGE)
+            .filter_map(|(zombie, transform)| {
+                let offset = transform.translation - player_transform.translation;
+                let distance = offset.length();
+                if distance > AUTOPILOT_DETECT_RANGE {
+                    return None;
+                }
+                let to_zombie_xz = Vec2::new(offset.x, offset.z).normalize_or_zero();
+                // 1.0 directly in front, -1.0 directly behind.
+                let facing = forward_xz.dot(to_zombie_xz).clamp(-1.0, 1.0);
+                // 0.0 in front .. 1.0 behind.
+                let behind = (1.0 - facing) * 0.5;
+                let weighted_distance = distance * (1.0 + behind * AUTOPILOT_TARGET_BEHIND_PENALTY);
+                Some((zombie, weighted_distance))
+            })
             .min_by(|(_, a), (_, b)| a.total_cmp(b))
             .map(|(zombie, _)| zombie);
         if new_target != state.target {
