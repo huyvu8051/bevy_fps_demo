@@ -825,6 +825,16 @@ struct FreezeZombies(bool);
 #[derive(Resource, Default)]
 struct ShowHitboxes(bool);
 
+// Debug/dev: toggled by settings/cheats or env SHOW_AUTOPILOT_TARGET. Shows the autopilot's red target aim sphere.
+#[derive(Resource)]
+struct ShowAutopilotTarget(bool);
+
+impl Default for ShowAutopilotTarget {
+    fn default() -> Self {
+        Self(std::env::var("SHOW_AUTOPILOT_TARGET").is_ok_and(|v| v == "1" || v.to_lowercase() == "true"))
+    }
+}
+
 // Debug/dev: toggled by KeyG. Player takes no damage while true — see
 // zombies_damage_player.
 #[derive(Resource, Default)]
@@ -1829,6 +1839,7 @@ fn build_game_common(app: &mut App) {
         .init_resource::<FreezeZombies>()
         .init_resource::<ShowHitboxes>()
         .init_resource::<GodMode>()
+        .init_resource::<ShowAutopilotTarget>()
         .init_resource::<DebugPanelVisible>()
         .init_resource::<SettingsMenuVisible>()
         .init_resource::<SettingsMenuScrollState>()
@@ -2791,6 +2802,7 @@ fn spawn_settings_menu(commands: &mut Commands) {
                     .with_children(|row| {
                         spawn_cheat_toggle_button(row, "DofAlt", CheatDofAltButton);
                         spawn_cheat_toggle_button(row, "LookAt", CheatLookAtTargetButton);
+                        spawn_cheat_toggle_button(row, "TraceAim", CheatShowAutopilotTargetButton);
                     });
                 }
             });
@@ -3124,6 +3136,8 @@ struct CheatDespawnBotButton;
 // AutopilotButton above.
 #[derive(Component)]
 struct CheatLookAtTargetButton;
+#[derive(Component)]
+struct CheatShowAutopilotTargetButton;
 
 // Changed<Interaction>-gated like every other touch button in this file —
 // each tap flips the same resource the matching desktop key
@@ -3241,14 +3255,19 @@ fn cheat_toggle_buttons_2(
 fn cheat_toggle_buttons_3(
     mut dof_alt: ResMut<AimDofFocalDistanceAlt>,
     mut look_only: ResMut<AutopilotLookOnly>,
+    mut show_aim: ResMut<ShowAutopilotTarget>,
     dof_alt_btn: Query<&Interaction, (With<CheatDofAltButton>, Changed<Interaction>)>,
     look_at_btn: Query<&Interaction, (With<CheatLookAtTargetButton>, Changed<Interaction>)>,
+    show_aim_btn: Query<&Interaction, (With<CheatShowAutopilotTargetButton>, Changed<Interaction>)>,
 ) {
     if tapped(&dof_alt_btn) {
         dof_alt.0 = !dof_alt.0;
     }
     if tapped(&look_at_btn) {
         look_only.0 = !look_only.0;
+    }
+    if tapped(&show_aim_btn) {
+        show_aim.0 = !show_aim.0;
     }
 }
 
@@ -3359,19 +3378,33 @@ fn update_extra_toggle_colors(
     autopilot: Res<Autopilot>,
     dof_alt: Res<AimDofFocalDistanceAlt>,
     look_only: Res<AutopilotLookOnly>,
+    show_aim: Res<ShowAutopilotTarget>,
     mut buttons: Query<
-        (&mut BackgroundColor, Option<&AutopilotButton>, Option<&CheatDofAltButton>, Option<&CheatLookAtTargetButton>),
-        Or<(With<AutopilotButton>, With<CheatDofAltButton>, With<CheatLookAtTargetButton>)>,
+        (
+            &mut BackgroundColor,
+            Option<&AutopilotButton>,
+            Option<&CheatDofAltButton>,
+            Option<&CheatLookAtTargetButton>,
+            Option<&CheatShowAutopilotTargetButton>,
+        ),
+        Or<(
+            With<AutopilotButton>,
+            With<CheatDofAltButton>,
+            With<CheatLookAtTargetButton>,
+            With<CheatShowAutopilotTargetButton>,
+        )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, auto_m, dof_m, look_m) in &mut buttons {
+    for (mut bg, auto_m, dof_m, look_m, show_aim_m) in &mut buttons {
         let on = if auto_m.is_some() {
             autopilot.0
         } else if dof_m.is_some() {
             dof_alt.0
+        } else if look_m.is_some() {
+            look_only.0
         } else {
-            look_m.is_some() && look_only.0
+            show_aim_m.is_some() && show_aim.0
         };
         *bg = BackgroundColor(color_for(on));
     }
@@ -3782,10 +3815,21 @@ fn update_touch_controls_idle_hidden(
 // (idle_only marker components toggling Display::None for other reasons —
 // none currently apply to Button/joystick nodes — would otherwise get
 // incorrectly forced back to Flex on unlock).
+//
+// Scoped to `TouchControlButton` (the Sprint/Jump/Crouch/Lean/... cluster
+// this system actually exists for), NOT the bare `Button` marker — a plain
+// `With<Button>` filter here used to also match Settings/GameOver/
+// MapSelect buttons, which all use the same generic `Button` component.
+// Harmless as long as those screens only stayed open for a few seconds
+// (idle_elapsed never crossed TOUCH_CONTROLS_IDLE_HIDE_SECS), but became a
+// real lockout once Map Select started waiting indefinitely for a tap
+// before connecting: with no touches registered yet, the idle timer ran
+// out and Display::None'd every Map Select button too — no touch reaches
+// them once hidden, so there was no way back in.
 fn hide_ui_when_locked(
     locked: Res<MouseUiLocked>,
     idle_hidden: Res<TouchControlsIdleHidden>,
-    mut buttons: Query<&mut Node, (With<Button>, Without<TouchJoystickBase>)>,
+    mut buttons: Query<&mut Node, (With<TouchControlButton>, Without<TouchJoystickBase>)>,
     mut joystick: Query<&mut Node, With<TouchJoystickBase>>,
 ) {
     if !locked.is_changed() && !idle_hidden.is_changed() {
@@ -6376,6 +6420,7 @@ fn draw_zombie_hitboxes(
     globals: Query<&GlobalTransform>,
     mut gizmos: Gizmos,
     autopilot_state: Res<AutopilotState>,
+    show_aim: Res<ShowAutopilotTarget>,
 ) {
     if !show.0 {
         return;
@@ -6431,8 +6476,8 @@ fn draw_zombie_hitboxes(
             }
         }
 
-        // Draw the joint positions as small distinct spheres (green, or cyan if targeted by autopilot)
-        let joint_color = if is_autopilot_target {
+        // Draw the joint positions as small distinct spheres (green, or cyan if targeted by autopilot and target trace is enabled)
+        let joint_color = if is_autopilot_target && show_aim.0 {
             Color::srgb(0.0, 1.0, 1.0) // Cyan
         } else {
             Color::srgb(0.0, 1.0, 0.0) // Green
@@ -6441,11 +6486,11 @@ fn draw_zombie_hitboxes(
             gizmos.sphere(Isometry3d::from_translation(*joint_pos), 0.04, joint_color);
         }
 
-        // Highlight the targeted zombie's aim point (between belly and chest) with a magenta sphere
-        if is_autopilot_target {
+        // Highlight the targeted zombie's aim point (between belly and chest) with a red sphere (if target trace is enabled)
+        if is_autopilot_target && show_aim.0 {
             if let (Some(belly), Some(chest)) = (bones.belly.and_then(bone_pos), bones.chest.and_then(bone_pos)) {
                 let target_aim_point = belly.midpoint(chest);
-                gizmos.sphere(Isometry3d::from_translation(target_aim_point), 0.08, Color::srgb(1.0, 0.0, 1.0));
+                gizmos.sphere(Isometry3d::from_translation(target_aim_point), 0.08, Color::srgb(1.0, 0.0, 0.0));
             }
         }
 
