@@ -444,13 +444,14 @@ struct UiUniforms {
 // character -> cell mapping and glyph_uv_rect for the per-glyph UV rect.
 const GLYPH_W: usize = 5;
 const GLYPH_H: usize = 7;
-const GLYPH_COUNT: usize = 34;
+const GLYPH_COUNT: usize = 43;
 // Row-major bits, MSB (bit 4) = leftmost pixel, 7 rows per glyph, in
-// glyph_index order: '0'..'9', '.', '/', then the uppercase-subset +
-// symbols needed for touch-control button labels (ADS/RELOAD/JUMP/CROUCH/
-// PRONE/SPRINT/"LEAN <"/"LEAN >"/"=="). Only the 16 letters those labels
-// actually use, not the full alphabet — extend here if a future label
-// needs one this doesn't cover yet.
+// glyph_index order: '0'..'9', '.', '/', then the full A-Z uppercase
+// alphabet (added incrementally as touch-control/HUD/settings-menu labels
+// needed more of it — G/':' for HP/ammo/ping, then B/F/K/Q/V/W/X/Y/Z once
+// the settings menu's own labels — HITBOXES, FREEZE, SHADOW, ... — showed
+// missing letters simply get skipped by glyph_index, silently compacting
+// the text instead of erroring), plus a handful of symbols (<, >, =).
 const GLYPH_BITMAPS: [[u8; GLYPH_H]; GLYPH_COUNT] = [
     [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110], // 0
     [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110], // 1
@@ -486,6 +487,15 @@ const GLYPH_BITMAPS: [[u8; GLYPH_H]; GLYPH_COUNT] = [
     [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000], // space
     [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111], // G
     [0b00000, 0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100], // :
+    [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110], // B
+    [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000], // F
+    [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001], // K
+    [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101], // Q
+    [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100], // V
+    [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010], // W
+    [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001], // X
+    [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100], // Y
+    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111], // Z
 ];
 
 fn glyph_index(c: char) -> Option<usize> {
@@ -515,6 +525,15 @@ fn glyph_index(c: char) -> Option<usize> {
         ' ' => Some(31),
         'G' => Some(32),
         ':' => Some(33),
+        'B' => Some(34),
+        'F' => Some(35),
+        'K' => Some(36),
+        'Q' => Some(37),
+        'V' => Some(38),
+        'W' => Some(39),
+        'X' => Some(40),
+        'Y' => Some(41),
+        'Z' => Some(42),
         _ => None,
     }
 }
@@ -691,6 +710,10 @@ pub struct NativeMetalProbe {
     // CrosshairLineSnapshot's own doc comments (native_game_extract.rs).
     ui_hud_texts: Vec<super::native_game_extract::HudTextSnapshot>,
     ui_crosshair_lines: Vec<super::native_game_extract::CrosshairLineSnapshot>,
+    // Settings menu — see SettingsMenuButtonSnapshot's own doc comment
+    // (native_game_extract.rs).
+    ui_settings_menu_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
+    ui_settings_menu_texts: Vec<super::native_game_extract::HudTextSnapshot>,
 }
 
 // Flattens ONE of the real game's extracted static meshes (arena
@@ -794,6 +817,47 @@ fn draw_ui_quad(encoder: &metal::RenderCommandEncoderRef, verts: &[UiVertex; 6],
     encoder.set_fragment_bytes(1, std::mem::size_of::<UiUniforms>() as u64, &uniforms as *const _ as *const _);
     encoder.set_fragment_texture(0, Some(texture));
     encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+}
+
+// Draws a list of HudTextSnapshot-shaped text entries (HP/ammo/ping
+// readouts, and the settings menu's own text — see HudTextSnapshot's own
+// doc comment in native_game_extract.rs) with nearest-edge anchoring: the
+// bitmap font (fixed 5px-wide glyphs) measures the same string to a
+// different width/height than Bevy's real proportional font, so only
+// whichever edge sits closer to its own screen edge — the text's real
+// fixed anchor — stays put; the far edge grows/shrinks by our own
+// measurement instead of the real layout's, or it'd drift off-screen.
+// Uppercases before drawing — the bitmap atlas only has uppercase letters
+// (see glyph_index's own doc comment), while the real Text these come
+// from is mixed-case ("Ping: 34 ms").
+fn draw_hud_text_list(
+    encoder: &metal::RenderCommandEncoderRef,
+    texts: &[super::native_game_extract::HudTextSnapshot],
+    view_w: f32,
+    view_h: f32,
+    font_atlas_texture: &metal::Texture,
+) {
+    for hud in texts {
+        let [left, top] = hud.top_left;
+        let [w, h] = hud.size;
+        let (right, bottom) = (left + w, top + h);
+        let scale = hud.font_size / GLYPH_H as f32;
+        let upper = hud.text.to_ascii_uppercase();
+        let text_w: f32 = upper.chars().map(|_| GLYPH_W as f32 * scale + scale).sum();
+        let text_h = GLYPH_H as f32 * scale;
+        let mut cursor_x = if left < view_w - right { left } else { right - text_w };
+        let y = if top < view_h - bottom { top } else { bottom - text_h };
+        for ch in upper.chars() {
+            let Some(index) = glyph_index(ch) else { continue };
+            let (u0, u1) = glyph_uv_rect(index);
+            let uv = [[u0, 1.0], [u1, 1.0], [u1, 0.0], [u0, 0.0]];
+            let glyph_w = GLYPH_W as f32 * scale;
+            let glyph_h = GLYPH_H as f32 * scale;
+            let quad = ndc_ui_rect(cursor_x, y, glyph_w, glyph_h, view_w, view_h, uv);
+            draw_ui_quad(encoder, &quad, hud.color, font_atlas_texture);
+            cursor_x += glyph_w + scale;
+        }
+    }
 }
 
 struct RealGameMeshDraw<'a> {
@@ -1195,6 +1259,8 @@ impl NativeMetalProbe {
             ui_touch_joystick: None,
             ui_hud_texts: Vec::new(),
             ui_crosshair_lines: Vec::new(),
+            ui_settings_menu_buttons: Vec::new(),
+            ui_settings_menu_texts: Vec::new(),
         }
     }
 
@@ -1485,6 +1551,8 @@ impl NativeMetalProbe {
             self.ui_touch_joystick = snapshot.touch_joystick;
             self.ui_hud_texts = snapshot.hud_texts;
             self.ui_crosshair_lines = snapshot.crosshair_lines;
+            self.ui_settings_menu_buttons = snapshot.settings_menu_buttons;
+            self.ui_settings_menu_texts = snapshot.settings_menu_texts;
             self.msaa_enabled = snapshot.map_msaa_on;
             if let Some(cam) = &snapshot.camera {
                 self.camera_position = cam.eye;
@@ -1777,6 +1845,8 @@ impl NativeMetalProbe {
                 || self.ui_touch_joystick.is_some()
                 || !self.ui_hud_texts.is_empty()
                 || !self.ui_crosshair_lines.is_empty()
+                || !self.ui_settings_menu_buttons.is_empty()
+                || !self.ui_settings_menu_texts.is_empty()
             {
                 let (view_w, view_h) = self.view_size_points();
                 encoder.set_render_pipeline_state(ui_pipeline);
@@ -1879,40 +1949,21 @@ impl NativeMetalProbe {
                     draw_ui_quad(encoder, &quad, line.color, &self.white_texture);
                 }
 
-                // HP/ammo/ping readouts. The bitmap font only has uppercase
-                // letters (see glyph_index's own doc comment) — the real
-                // Text these come from is mixed-case ("Ping: 34 ms"), so
-                // this uppercases before drawing rather than extending the
-                // atlas with a full lowercase alphabet just for casing.
-                for hud in &self.ui_hud_texts {
-                    let [left, top] = hud.top_left;
-                    let [w, h] = hud.size;
-                    let (right, bottom) = (left + w, top + h);
-                    let scale = hud.font_size / GLYPH_H as f32;
-                    let upper = hud.text.to_ascii_uppercase();
-                    let text_w: f32 = upper.chars().map(|_| GLYPH_W as f32 * scale + scale).sum();
-                    let text_h = GLYPH_H as f32 * scale;
-                    // Anchor to whichever edge sits closer to ITS OWN
-                    // screen edge (see HudTextSnapshot's own doc comment)
-                    // instead of the real layout's top_left directly — our
-                    // bitmap font measures the same string to a different
-                    // width/height than Bevy's real proportional font, so
-                    // only the truly-fixed edge (left for HP, right for
-                    // ammo/ping) should stay put; the other one has to grow
-                    // by our own measurement or the text drifts off-screen.
-                    let mut cursor_x = if left < view_w - right { left } else { right - text_w };
-                    let y = if top < view_h - bottom { top } else { bottom - text_h };
-                    for ch in upper.chars() {
-                        let Some(index) = glyph_index(ch) else { continue };
-                        let (u0, u1) = glyph_uv_rect(index);
-                        let uv = [[u0, 1.0], [u1, 1.0], [u1, 0.0], [u0, 0.0]];
-                        let glyph_w = GLYPH_W as f32 * scale;
-                        let glyph_h = GLYPH_H as f32 * scale;
-                        let quad = ndc_ui_rect(cursor_x, y, glyph_w, glyph_h, view_w, view_h, uv);
-                        draw_ui_quad(encoder, &quad, hud.color, &self.font_atlas_texture);
-                        cursor_x += glyph_w + scale;
-                    }
+                // HP/ammo/ping readouts + (below) the settings menu's own
+                // text — see draw_hud_text_list's own doc comment.
+                draw_hud_text_list(encoder, &self.ui_hud_texts, view_w, view_h, &self.font_atlas_texture);
+
+                // Settings menu: plain rects for every button (see
+                // SettingsMenuButtonSnapshot's own doc comment — no label
+                // here, labels are settings_menu_texts' own Text children,
+                // drawn as ordinary text right after) plus its own text.
+                for button in &self.ui_settings_menu_buttons {
+                    let [x, y] = button.top_left;
+                    let [w, h] = button.size;
+                    let quad = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
+                    draw_ui_quad(encoder, &quad, button.color, &self.white_texture);
                 }
+                draw_hud_text_list(encoder, &self.ui_settings_menu_texts, view_w, view_h, &self.font_atlas_texture);
             }
         }
 

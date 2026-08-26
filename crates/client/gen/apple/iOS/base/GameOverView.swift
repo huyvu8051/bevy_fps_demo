@@ -4,9 +4,11 @@
 //
 //  Native "GAME OVER" / restart overlay. The real game's own death screen
 //  (`check_game_over`'s GameOverUi spawn in crates/client/src/lib.rs) is a
-//  bevy_ui Node hierarchy, invisible under our custom Metal renderer for
-//  the same reason the settings menu was — see SettingsMenuView.swift's
-//  own doc comment. ViewController polls `native_metal_probe_game_over`
+//  bevy_ui Node hierarchy, not yet drawn by the custom Metal renderer (the
+//  touch controls, HP/ammo/ping/crosshair, and settings menu all went
+//  through this same native-then-Metal-drawn transition already — see
+//  native_metal_probe.rs's touch-control/HUD/settings-menu draw loops).
+//  ViewController polls `native_metal_probe_game_over`
 //  once per frame (see `syncGameOver`) and shows/hides this view;
 //  `Restart` fires `native_metal_probe_trigger_restart`, the same
 //  server-authoritative `RequestRestart` client event the real desktop

@@ -23,7 +23,7 @@ use bevy::mesh::{Mesh, Mesh3d};
 use bevy::render::render_resource::TextureFormat;
 use bevy::text::{TextColor, TextFont};
 use bevy::transform::components::{GlobalTransform, Transform};
-use bevy::ui::widget::Text;
+use bevy::ui::widget::{Button, Text};
 use bevy::ui::{BackgroundColor, ComputedNode, Display, Interaction, Node, UiGlobalTransform, Val};
 
 use shared::{NetPlayer, Zombie};
@@ -236,6 +236,8 @@ pub struct RenderSnapshot {
     pub touch_joystick: Option<TouchJoystickSnapshot>,
     pub hud_texts: Vec<HudTextSnapshot>,
     pub crosshair_lines: Vec<CrosshairLineSnapshot>,
+    pub settings_menu_buttons: Vec<SettingsMenuButtonSnapshot>,
+    pub settings_menu_texts: Vec<HudTextSnapshot>,
     /// The `MapMsaaOn` cheat-menu toggle (crate::lib) — previously only
     /// ever read by `apply_map_render_toggles` to sync bevy_render's own
     /// `Msaa` component (the desktop/winit build's render path), which
@@ -334,7 +336,10 @@ pub struct TouchJoystickSnapshot {
 /// fixed while the OTHER edge grows/shrinks to fit our font's own measured
 /// width — the renderer infers which edge that is by checking which one
 /// sits closer to its own screen edge (same idea as "nearest edge wins",
-/// no extra data needed beyond this rect).
+/// no extra data needed beyond this rect). Reused as-is for the settings
+/// menu's own text (`settings_menu_texts` on `RenderSnapshot`) — same
+/// shape, same reasoning, just a different source query (see
+/// `collect_descendants`).
 pub struct HudTextSnapshot {
     pub top_left: [f32; 2],
     pub size: [f32; 2],
@@ -355,6 +360,44 @@ pub struct CrosshairLineSnapshot {
     pub top_left: [f32; 2],
     pub size: [f32; 2],
     pub color: [f32; 4],
+}
+
+/// One button inside the settings menu (crate::lib's `SettingsMenuRoot`
+/// subtree — page-nav `<`/`>`, resolution-scale presets, every cheat
+/// toggle/action button, zombie-count +/-, sensitivity +/-, ...). Unlike
+/// `TouchButtonSnapshot`, this is deliberately NOT keyed off a dedicated
+/// marker component — the settings menu has dozens of distinct button
+/// marker types (`CheatNoclipButton`, `ResolutionScaleButton`,
+/// `SensitivityIncButton`, ...) and tagging every one individually the way
+/// `TouchControlButton` does for the 10 touch-control buttons would mean a
+/// new marker every time a settings row gets added. Instead
+/// `collect_descendants` walks the real `Children` hierarchy from
+/// `SettingsMenuRoot` once and this (plus `settings_menu_texts`, reusing
+/// `HudTextSnapshot`) just asks "is this descendant a `Button`?"/"does it
+/// carry `Text`?" — generic over content, the same way the settings menu
+/// itself is generic over what page/row is spawned. No label field: labels
+/// come from `settings_menu_texts`' own Text children, drawn as separate
+/// quads exactly like every other text in this file.
+pub struct SettingsMenuButtonSnapshot {
+    pub top_left: [f32; 2],
+    pub size: [f32; 2],
+    pub color: [f32; 4],
+}
+
+/// Depth-first walk of the real `Children` hierarchy starting at (but not
+/// including) `root`, collecting every descendant entity — used to scope
+/// the settings-menu button/text extraction to "whatever is actually
+/// inside `SettingsMenuRoot` this frame" without needing a dedicated
+/// marker component on each one (see `SettingsMenuButtonSnapshot`'s own
+/// doc comment). Small tree (a couple dozen nodes even with every cheat
+/// row spawned), so plain recursion is fine — no need for
+/// `find_first_skinned_mesh`'s iterative BFS queue.
+fn collect_descendants(root: bevy::ecs::entity::Entity, children_query: &Query<&Children>, out: &mut Vec<bevy::ecs::entity::Entity>) {
+    let Ok(children) = children_query.get(root) else { return };
+    for &child in children.iter() {
+        out.push(child);
+        collect_descendants(child, children_query, out);
+    }
 }
 
 /// Converts a node's real computed layout to a logical-points (matching
@@ -769,6 +812,43 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             CrosshairLineSnapshot { top_left, size, color: [c.red, c.green, c.blue, c.alpha] }
         })
         .collect();
+
+    // Settings menu: see SettingsMenuButtonSnapshot/collect_descendants'
+    // own doc comments for why this walks the real Children hierarchy
+    // generically instead of a per-button-type marker. Skips entirely
+    // (leaving both Vecs empty, same as `Display::None`-collapsed content
+    // elsewhere in this file) if the menu was never spawned yet.
+    let mut settings_root_state: SystemState<Query<bevy::ecs::entity::Entity, With<crate::SettingsMenuRoot>>> = SystemState::new(world);
+    if let Some(root) = settings_root_state.get(world).iter().next() {
+        let mut children_state: SystemState<Query<&Children>> = SystemState::new(world);
+        let children_query = children_state.get(world);
+        let mut descendants = Vec::new();
+        collect_descendants(root, &children_query, &mut descendants);
+
+        let mut button_state: SystemState<Query<(&ComputedNode, &UiGlobalTransform, &BackgroundColor), With<Button>>> = SystemState::new(world);
+        let button_query = button_state.get(world);
+        snapshot.settings_menu_buttons = descendants
+            .iter()
+            .filter_map(|&e| button_query.get(e).ok())
+            .map(|(node, transform, bg)| {
+                let (top_left, size) = logical_rect(node, transform);
+                let c = bg.0.to_srgba();
+                SettingsMenuButtonSnapshot { top_left, size, color: [c.red, c.green, c.blue, c.alpha] }
+            })
+            .collect();
+
+        let mut text_state: SystemState<Query<(&ComputedNode, &UiGlobalTransform, &Text, &TextColor, &TextFont)>> = SystemState::new(world);
+        let text_query = text_state.get(world);
+        snapshot.settings_menu_texts = descendants
+            .iter()
+            .filter_map(|&e| text_query.get(e).ok())
+            .map(|(node, transform, text, color, font)| {
+                let (top_left, size) = logical_rect(node, transform);
+                let c = color.0.to_srgba();
+                HudTextSnapshot { top_left, size, text: text.0.clone(), color: [c.red, c.green, c.blue, c.alpha], font_size: font.font_size }
+            })
+            .collect();
+    }
 
     // Static meshes: arena walls/floor + gun scene meshes, both plain
     // Mesh3d/MeshMaterial3d<StandardMaterial> entities — see this module's

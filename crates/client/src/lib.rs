@@ -855,8 +855,18 @@ struct SceneRenderTarget(Handle<Image>);
 // since this is a real user-facing menu, unlike the debug panel above which
 // is keyboard-only). Drives the settings panel's Node.display in
 // update_settings_menu, same show/hide pattern as DebugPanelVisible.
-#[derive(Resource, Default)]
+// OPEN_SETTINGS_MENU=1 starts the game with it already open — same idea as
+// TOUCH_UI_PREVIEW/MAP_ID: a launch-time override so this (and, on iOS, the
+// cadisplaylink Metal renderer's own draw of it) can be visually verified
+// without having to tap/press F1 through every redeploy first.
+#[derive(Resource)]
 struct SettingsMenuVisible(bool);
+
+impl Default for SettingsMenuVisible {
+    fn default() -> Self {
+        Self(std::env::var("OPEN_SETTINGS_MENU").is_ok())
+    }
+}
 
 // Toggled by Tab (desktop/hardware keyboard only — no touch button, since
 // this exists specifically to stop a Bluetooth mouse's clicks from hitting

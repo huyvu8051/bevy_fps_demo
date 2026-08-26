@@ -11,7 +11,6 @@
 		292C9877105CB842FAF8F772 /* WatchConnectivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06C0606E8F9B06EE30EE687B /* WatchConnectivityManager.swift */; };
 		32E6721ACFD4DE873D71391B /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F3D288F668C218B4CB209538 /* Foundation.framework */; };
 		97A162B6A7FFB88931E9BD0E /* bevy_watchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8CA3A502809B915B27CDB84 /* bevy_watchApp.swift */; };
-		A1B2C3D4E5F60708192A3B4C /* SettingsMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60708192A3B4D /* SettingsMenuView.swift */; };
 		A588795432421535AF3AB307 /* WatchSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F56E10E32988D2B7FAAEBB2B /* WatchSessionManager.swift */; };
 		AD4B1FED26EB1B90008A6AEE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD4B1FEC26EB1B90008A6AEE /* AppDelegate.swift */; };
 		AD4B1FF126EB1B90008A6AEE /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD4B1FF026EB1B90008A6AEE /* ViewController.swift */; };
@@ -62,7 +61,6 @@
 		06C0606E8F9B06EE30EE687B /* WatchConnectivityManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WatchConnectivityManager.swift; path = ../../../watchOS/bevy_watch_Watch_App/WatchConnectivityManager.swift; sourceTree = "<group>"; };
 		1875C9E58B7F8E0C11DE3701 /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ContentView.swift; path = ../../../watchOS/bevy_watch_Watch_App/ContentView.swift; sourceTree = "<group>"; };
 		43A4592B435DC9CBCC94883B /* bevy_watch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "bevy_watch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		A1B2C3D4E5F60708192A3B4D /* SettingsMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsMenuView.swift; sourceTree = "<group>"; };
 		ABFF1EF359D90F2D357C2A71 /* GameController.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = GameController.framework; path = System/Library/Frameworks/GameController.framework; sourceTree = SDKROOT; };
 		AD4B1FE926EB1B90008A6AEE /* bevy_in_iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bevy_in_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AD4B1FEC26EB1B90008A6AEE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -129,7 +127,6 @@
 				AD4B1FF026EB1B90008A6AEE /* ViewController.swift */,
 				AD6C6A83295401050079516D /* ViewController+CoreMotion.swift */,
 				0201D3F45F1DFD3C0056C58C /* GameControllerInput.swift */,
-				A1B2C3D4E5F60708192A3B4D /* SettingsMenuView.swift */,
 				B2C3D4E5F60708192A3B4C5E /* GameOverView.swift */,
 				C3D4E5F60708192A3B4C5D02 /* MapSelectView.swift */,
 				ADA4699026EB27CB008B1C7B /* libbevy_in_app.h */,
@@ -309,7 +306,6 @@
 				AD4B1FED26EB1B90008A6AEE /* AppDelegate.swift in Sources */,
 				AD6C6A84295401050079516D /* ViewController+CoreMotion.swift in Sources */,
 				C00BEAA0420C572A4F4C40B4 /* GameControllerInput.swift in Sources */,
-				A1B2C3D4E5F60708192A3B4C /* SettingsMenuView.swift in Sources */,
 				B2C3D4E5F60708192A3B4C5D /* GameOverView.swift in Sources */,
 				C3D4E5F60708192A3B4C5D01 /* MapSelectView.swift in Sources */,
 				A588795432421535AF3AB307 /* WatchSessionManager.swift in Sources */,
