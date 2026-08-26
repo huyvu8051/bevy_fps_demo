@@ -868,6 +868,24 @@ impl Default for SettingsMenuVisible {
     }
 }
 
+// True until a map's been picked (see spawn_map_select_ui/map_select_button)
+// — mirrors what used to be entirely native-Swift-side state
+// (ViewController's own `mapSelectionPending`, set from the exact same
+// `ProcessInfo.environment["MAP_ID"] == nil` check): a plain icon-tap
+// launch has no MAP_ID yet, so this stays true and connect_to_server (see
+// its own `.run_if`) holds off connecting until map_select_button sets
+// MAP_ID and flips this false. A `MAP_ID` env var already present (e.g. a
+// devicectl/xcrun launch with `-e MAP_ID=1`) skips the menu entirely, same
+// as the old Swift behavior.
+#[derive(Resource)]
+struct MapSelectionPending(bool);
+
+impl Default for MapSelectionPending {
+    fn default() -> Self {
+        Self(std::env::var("MAP_ID").is_err())
+    }
+}
+
 // Toggled by Tab (desktop/hardware keyboard only — no touch button, since
 // this exists specifically to stop a Bluetooth mouse's clicks from hitting
 // touch UI buttons; a touchscreen player has no such problem). While
@@ -1768,7 +1786,10 @@ fn build_game_common(app: &mut App) {
         // disabled in the same CPU-investigation commit (80de58d), not
         // pre-existing/intentional; Phase 6 needs real networking/
         // replication actually wired up for anything to spawn.
-        .add_systems(Startup, connect_to_server)
+        // Held off until a map's actually been picked — see
+        // MapSelectionPending's own doc comment and map_select_button,
+        // which calls spawn_client_connection directly once one is.
+        .add_systems(Startup, connect_to_server.run_if(|pending: Res<MapSelectionPending>| !pending.0))
         .add_systems(
             Update,
             (
@@ -1833,8 +1854,9 @@ fn build_game_common(app: &mut App) {
         .init_resource::<TouchLeanHeld>()
         .init_resource::<SensitivityScale>()
         .init_resource::<KillCount>()
+        .init_resource::<MapSelectionPending>()
         .init_resource::<RecentlyHitZombies>()
-        .add_systems(Startup, (setup, force_game_over_on_start /*, log_window_resolution */).chain());
+        .add_systems(Startup, (setup, force_game_over_on_start, spawn_map_select_ui_if_pending /*, log_window_resolution */).chain());
     // CPU bisection (temporary, not deleted): the ENTIRE Update schedule
     // below is commented out — rock-bottom baseline with only whatever
     // Bevy/wgpu itself does every frame (extraction/prepare/render graph)
@@ -1935,6 +1957,7 @@ fn build_game_common(app: &mut App) {
                 check_game_over,
                 restart_game,
                 restart_button,
+                map_select_button,
                 wire_zombie_animations,
                 wire_zombie_hitbox_bones,
                 wire_gun_mesh,
@@ -4637,6 +4660,150 @@ fn force_game_over_on_start(mut commands: Commands, mut game_over: ResMut<GameOv
     }
     game_over.0 = true;
     spawn_game_over_ui(&mut commands);
+}
+
+// Marks the map-select overlay so map_select_button can find and despawn
+// it — was MapSelectView.swift's whole reason to exist (the one native-
+// only piece left after touch controls/HUD/settings menu/game over all
+// moved to bevy_ui) before that file was deleted in favor of this.
+#[derive(Component)]
+struct MapSelectRoot;
+
+// `.0` is the MAP_ID this button picks — see MAP_SELECT_ENTRIES.
+#[derive(Component)]
+struct MapSelectButton(u8);
+
+// (MAP_ID, button title, one-line description) — keep in sync with
+// Scenario::from_map_id (crates/shared/src/network.rs). ASCII/English only
+// (not the original Swift menu's Vietnamese text) since this renders
+// through native_metal_probe.rs's bitmap font on iOS too, which only has
+// uppercase A-Z/digits/a handful of symbols — see glyph_index's own doc
+// comment.
+const MAP_SELECT_ENTRIES: [(u8, &str, &str); 3] = [
+    (0, "MAP 0", "NORMAL"),
+    (1, "MAP 1", "HITBOX TEST - 5 STATIONARY ZOMBIES"),
+    (2, "MAP 2", "STRESS TEST - 50 ZOMBIES, NOCLIP"),
+];
+
+fn spawn_map_select_ui(commands: &mut Commands) {
+    commands
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(16.0),
+                ..default()
+            },
+            BackgroundColor(Color::BLACK),
+            GlobalZIndex(STATIC_UI_Z_INDEX),
+            MapSelectRoot,
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Text::new("SELECT MAP"),
+                TextFont {
+                    font_size: 40.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+            for &(id, title, subtitle) in &MAP_SELECT_ENTRIES {
+                root.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(4.0),
+                    margin: UiRect::top(Val::Px(8.0)),
+                    ..default()
+                })
+                .with_children(|group| {
+                    group
+                        .spawn((
+                            Node {
+                                width: Val::Px(300.0),
+                                height: Val::Px(56.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border: UiRect::all(Val::Px(2.0)),
+                                border_radius: BorderRadius::all(Val::Px(8.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.2, 0.3, 0.45, 1.0)),
+                            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+                            Button,
+                            Interaction::default(),
+                            MapSelectButton(id),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new(title),
+                                TextFont {
+                                    font_size: 20.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    group.spawn((
+                        Text::new(subtitle),
+                        TextFont {
+                            font_size: 13.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgba(0.8, 0.8, 0.8, 1.0)),
+                    ));
+                });
+            }
+        });
+}
+
+fn spawn_map_select_ui_if_pending(mut commands: Commands, pending: Res<MapSelectionPending>) {
+    if pending.0 {
+        spawn_map_select_ui(&mut commands);
+    }
+}
+
+// Touch/click handler for the map-select buttons — sets MAP_ID (the exact
+// same env var the old Swift `setenv()` flow used, and current_scenario()
+// still reads every time it's called), flips MapSelectionPending so
+// connect_to_server's own `.run_if` would let it through on a future
+// Startup, and connects right away via the same spawn_client_connection
+// auto_reconnect already calls to recover from a dropped connection — no
+// separate "first connect" code path needed.
+fn map_select_button(
+    mut commands: Commands,
+    buttons: Query<(&Interaction, &MapSelectButton), Changed<Interaction>>,
+    root: Query<Entity, With<MapSelectRoot>>,
+    mut pending: ResMut<MapSelectionPending>,
+    mut noclip: ResMut<Noclip>,
+    channels: Res<RepliconChannels>,
+) {
+    for (interaction, button) in &buttons {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        // SAFETY: called from this one Bevy system, on the main thread, in
+        // response to a UI tap — not concurrently with any other env var
+        // read/write, same assumption current_scenario()'s own callers
+        // already rely on.
+        unsafe {
+            std::env::set_var("MAP_ID", button.0.to_string());
+        }
+        if let Ok(root) = root.single() {
+            commands.entity(root).despawn();
+        }
+        pending.0 = false;
+        // Mirrors the App-build-time `Noclip(current_scenario() ==
+        // StressTest)` default (see its own comment) — that default gets
+        // baked in before any map is actually picked (MAP_ID isn't set
+        // yet), so a StressTest pick needs to apply the same auto-enable
+        // itself now that the choice is real.
+        noclip.0 = Scenario::from_map_id(button.0) == Scenario::StressTest;
+        spawn_client_connection(&mut commands, &channels);
+    }
 }
 
 // Just asks the server to restart — it's the one that actually decides how

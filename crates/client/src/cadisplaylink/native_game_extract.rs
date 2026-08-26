@@ -242,6 +242,9 @@ pub struct RenderSnapshot {
     pub game_over_panel: Option<SettingsMenuButtonSnapshot>,
     pub game_over_buttons: Vec<SettingsMenuButtonSnapshot>,
     pub game_over_texts: Vec<HudTextSnapshot>,
+    pub map_select_panel: Option<SettingsMenuButtonSnapshot>,
+    pub map_select_buttons: Vec<SettingsMenuButtonSnapshot>,
+    pub map_select_texts: Vec<HudTextSnapshot>,
     /// The `MapMsaaOn` cheat-menu toggle (crate::lib) — previously only
     /// ever read by `apply_map_render_toggles` to sync bevy_render's own
     /// `Msaa` component (the desktop/winit build's render path), which
@@ -893,6 +896,11 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     snapshot.game_over_panel = game_over_panel;
     snapshot.game_over_buttons = game_over_buttons;
     snapshot.game_over_texts = game_over_texts;
+
+    let (map_select_panel, map_select_buttons, map_select_texts) = extract_panel::<crate::MapSelectRoot>(world);
+    snapshot.map_select_panel = map_select_panel;
+    snapshot.map_select_buttons = map_select_buttons;
+    snapshot.map_select_texts = map_select_texts;
 
     // Static meshes: arena walls/floor + gun scene meshes, both plain
     // Mesh3d/MeshMaterial3d<StandardMaterial> entities — see this module's

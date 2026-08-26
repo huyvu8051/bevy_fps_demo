@@ -301,13 +301,6 @@ class ViewController: UIViewController {
     private var lookTouch: UITouch?
     private var lookTouchLast: CGPoint = .zero
     private var lastFrameTime: CFTimeInterval = CACurrentMediaTime()
-    // Native map-select overlay — see MapSelectView.swift's own doc
-    // comment. Only shown on a plain icon-tap launch (no MAP_ID env var
-    // already present); a `devicectl process launch -e '{"MAP_ID":"N"}'`
-    // skips it entirely, same shape as the existing REAL_GAME/
-    // MINIMAL_MAP_PROBE env-var launch overrides.
-    private let mapSelectView = MapSelectView()
-    private var mapSelectionPending = ProcessInfo.processInfo.environment["MAP_ID"] == nil
     // Bluetooth keyboard/mouse (GameController framework) — see
     // GameControllerInput.swift. Created after rustMetalProbe so its "wire
     // already-connected devices" check in init() has a real probe pointer
@@ -333,25 +326,6 @@ class ViewController: UIViewController {
         if #available(iOS 13.4, *) {
             self.metalV.addInteraction(UIPointerInteraction(delegate: self))
         }
-        self.view.addSubview(mapSelectView)
-        mapSelectView.onSelect = { [weak self] mapId in
-            guard let self else { return }
-            // setenv, not a new FFI call — Rust reads MAP_ID directly (see
-            // current_scenario() in crates/client/src/lib.rs and
-            // scenario_from_env() in crates/server/src/main.rs), the exact
-            // same env var a devicectl launch -e would already have set
-            // before this process even started.
-            setenv("MAP_ID", "\(mapId)", 1)
-            self.mapSelectionPending = false
-            self.mapSelectView.isHidden = true
-            self.createGameProbeIfNeeded()
-            self.displayLink.isPaused = false
-        }
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        mapSelectView.layout(in: self.view)
     }
 
     // Polled once per frame (see enterFrame) — HP/ammo/ping/crosshair are
@@ -369,10 +343,12 @@ class ViewController: UIViewController {
         WatchSessionManager.shared.update(hp: hp, killCount: killCount)
     }
 
-    // Extracted out of viewDidAppear so mapSelectView's tap handler can
-    // call it too, once a map has actually been picked. Safe to call more
-    // than once — the rustMetalProbe == nil guard makes every call after
-    // the first a no-op.
+    // Safe to call more than once — the rustMetalProbe == nil guard makes
+    // every call after the first a no-op. Only ever called once now (from
+    // viewDidAppear, unconditionally — see its own doc comment), but kept
+    // as its own function since createGameProbeIfNeeded's own set of
+    // one-time side effects (frame-rate range, GameControllerInput) reads
+    // more clearly named than inlined.
     private func createGameProbeIfNeeded() {
         guard rustMetalProbe == nil else { return }
         let viewPointer = Unmanaged.passUnretained(self.metalV).toOpaque()
@@ -399,16 +375,14 @@ class ViewController: UIViewController {
             if metalDevice == nil {
                 self.startNativeMetalDemo()
             }
-        } else if mapSelectionPending {
-            // Show the map-select menu instead of creating the probe —
-            // createGameProbeIfNeeded() runs from mapSelectView.onSelect
-            // (viewDidLoad) once the player actually picks one. Don't
-            // unpause the display link yet either: nothing exists to
-            // render/tick until a map's chosen.
-            mapSelectView.isHidden = false
-            mapSelectView.layout(in: self.view)
-            return
         } else {
+            // Always creates the probe (and the real headless game App
+            // inside it) immediately, whether or not MAP_ID is set yet —
+            // MapSelectionPending (crate::lib) holds off connect_to_server
+            // and shows a real bevy_ui map-select screen, drawn right here
+            // by native_metal_probe.rs's own draw_panel, until
+            // map_select_button picks one. No native map-select view left
+            // to gate this on anymore.
             createGameProbeIfNeeded()
         }
         if RUN_HEADLESS_GAME_APP_SPIKE && headlessGameApp == nil {

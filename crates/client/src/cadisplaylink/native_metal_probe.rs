@@ -720,6 +720,11 @@ pub struct NativeMetalProbe {
     ui_game_over_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_game_over_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_game_over_texts: Vec<super::native_game_extract::HudTextSnapshot>,
+    // Map-select overlay — see extract_panel's own doc comment
+    // (native_game_extract.rs).
+    ui_map_select_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
+    ui_map_select_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
+    ui_map_select_texts: Vec<super::native_game_extract::HudTextSnapshot>,
 }
 
 // Flattens ONE of the real game's extracted static meshes (arena
@@ -1304,6 +1309,9 @@ impl NativeMetalProbe {
             ui_game_over_panel: None,
             ui_game_over_buttons: Vec::new(),
             ui_game_over_texts: Vec::new(),
+            ui_map_select_panel: None,
+            ui_map_select_buttons: Vec::new(),
+            ui_map_select_texts: Vec::new(),
         }
     }
 
@@ -1600,6 +1608,9 @@ impl NativeMetalProbe {
             self.ui_game_over_panel = snapshot.game_over_panel;
             self.ui_game_over_buttons = snapshot.game_over_buttons;
             self.ui_game_over_texts = snapshot.game_over_texts;
+            self.ui_map_select_panel = snapshot.map_select_panel;
+            self.ui_map_select_buttons = snapshot.map_select_buttons;
+            self.ui_map_select_texts = snapshot.map_select_texts;
             self.msaa_enabled = snapshot.map_msaa_on;
             if let Some(cam) = &snapshot.camera {
                 self.camera_position = cam.eye;
@@ -1898,6 +1909,9 @@ impl NativeMetalProbe {
                 || self.ui_game_over_panel.is_some()
                 || !self.ui_game_over_buttons.is_empty()
                 || !self.ui_game_over_texts.is_empty()
+                || self.ui_map_select_panel.is_some()
+                || !self.ui_map_select_buttons.is_empty()
+                || !self.ui_map_select_texts.is_empty()
             {
                 let (view_w, view_h) = self.view_size_points();
                 encoder.set_render_pipeline_state(ui_pipeline);
@@ -2004,9 +2018,9 @@ impl NativeMetalProbe {
                 // text — see draw_hud_text_list's own doc comment.
                 draw_hud_text_list(encoder, &self.ui_hud_texts, view_w, view_h, &self.font_atlas_texture);
 
-                // Settings menu + GAME OVER overlay: same generic "panel +
-                // buttons + text" draw for both — see draw_panel's own doc
-                // comment.
+                // Settings menu + GAME OVER + map-select overlay: same
+                // generic "panel + buttons + text" draw for all three — see
+                // draw_panel's own doc comment.
                 draw_panel(
                     encoder,
                     &self.ui_settings_menu_panel,
@@ -2022,6 +2036,16 @@ impl NativeMetalProbe {
                     &self.ui_game_over_panel,
                     &self.ui_game_over_buttons,
                     &self.ui_game_over_texts,
+                    view_w,
+                    view_h,
+                    &self.white_texture,
+                    &self.font_atlas_texture,
+                );
+                draw_panel(
+                    encoder,
+                    &self.ui_map_select_panel,
+                    &self.ui_map_select_buttons,
+                    &self.ui_map_select_texts,
                     view_w,
                     view_h,
                     &self.white_texture,
