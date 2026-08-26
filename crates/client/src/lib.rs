@@ -4928,7 +4928,7 @@ fn spawn_map_select_ui(commands: &mut Commands) {
                 ..default()
             },
             BackgroundColor(Color::BLACK),
-            GlobalZIndex(STATIC_UI_Z_INDEX),
+            GlobalZIndex(STATIC_UI_Z_INDEX + 100),
             MapSelectRoot,
         ))
         .with_children(|root| {
