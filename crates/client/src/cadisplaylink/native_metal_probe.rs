@@ -592,7 +592,7 @@ const QUAD_SHADER_SOURCE: &str = r#"
 using namespace metal;
 
 struct QuadVertex {
-    packed_float2 position;
+    packed_float4 position;
     packed_float2 uv;
 };
 
@@ -601,11 +601,21 @@ struct QuadVertexOut {
     float2 uv;
 };
 
+// `position` is already real homogeneous clip space (not NDC) — see this
+// shader's own Rust-side doc comment (build_projected_quad) for why: the
+// real-game scope PIP now projects each of the lens quad's 4 real 3D
+// world-space corners individually (full rotation + perspective), instead
+// of building a flat always-facing-camera NDC quad and faking rotation/
+// distance with 2D tricks, so each vertex needs its own `w` for Metal's
+// rasterizer to interpolate `uv` perspective-correctly across the quad —
+// passing it straight through here (not wrapping z=0/w=1 like before) is
+// what makes that work. The demo-probe's still-flat fixed quad just
+// carries z=0/w=1 baked into its own vertex data instead.
 vertex QuadVertexOut quad_vertex(uint vid [[vertex_id]],
                                   const device QuadVertex *verts [[buffer(0)]]) {
     QuadVertexOut out;
     QuadVertex v = verts[vid];
-    out.position = float4(v.position, 0.0, 1.0);
+    out.position = v.position;
     out.uv = v.uv;
     return out;
 }
@@ -639,7 +649,7 @@ fragment float4 quad_fragment(QuadVertexOut in [[stage_in]],
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct QuadVertex {
-    position: [f32; 2],
+    position: [f32; 4],
     uv: [f32; 2],
 }
 
@@ -1103,45 +1113,51 @@ fn bake_static_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::Glt
 // `texture: None` (untextured material, or an unsupported CPU pixel format
 // — see native_game_extract.rs) falls back to `self.white_texture` in
 // `draw_scene`, same fallback Sponza's own meshes already use.
-// Real-game scope PIP: a small circle at `ndc_center`, spun by `roll` (see
-// render_frame's own call site — projects the real ScopeLens entity's
-// world position through the main camera's view_projection each frame for
-// `ndc_center`, and derives `roll` from the same entity's own local
-// rotation, so this tracks the gun's own shoulder-swap sweep/recoil kick/
-// reload dip/walk-bob AND roll/tilt/sway instead of sitting frozen at a
-// fixed screen position and orientation while the glass around it visibly
-// moves — see lens_world_pos/lens_local_rotation's own doc comments on
-// ScopeCameraSnapshot, native_game_extract.rs, for the full "these two
-// used to visibly desync" story) instead of the demo probe's fixed
-// top-right box. `half_height` is in NDC (-1..1); `aspect` (width/height)
-// corrects the X half-width so the quad is a true circle in screen space
-// rather than an ellipse stretched by a non-square viewport — same
-// reasoning perspective() already applies to the main projection's own
-// aspect correction. The rotation itself happens BEFORE that aspect
-// correction (in an isotropic half_height x half_height square), or a
-// non-square viewport would skew a rotated square into a parallelogram
-// instead of just spinning it in place.
-fn build_centered_quad(device: &Device, aspect: f32, half_height: f32, ndc_center: [f32; 2], roll: f32) -> metal::Buffer {
-    let [cx, cy] = ndc_center;
-    let (sin_r, cos_r) = roll.sin_cos();
+// Real-game scope PIP: instead of a flat always-facing-camera NDC quad
+// with position/roll faked on top (the previous two approaches — dead
+// center, then a projected center + a single 2D roll angle), this builds
+// the real ScopeLens circle mesh's own 4 corners in actual WORLD space
+// (`lens_world_pos` + the lens's real world rotation, at its real
+// `radius`) and projects each one individually through `view_projection`,
+// exactly like any other 3D quad in the scene. That's what naturally
+// picks up EVERY axis of update_scope_lens's real motion for free —
+// translation, roll, the recoil yaw-kick (a true horizontal turn of the
+// glass, not representable by a flat 2D quad + one roll angle), reload
+// tilt, AND real perspective-correct scaling as the lens sweeps toward/
+// away from the camera (ADS in/out, recoil kick along its own local Z) —
+// instead of the fixed apparent size every earlier version used. Passing
+// each corner's own homogeneous clip-space `[x, y, z, w]` straight to the
+// GPU (not pre-divided by `w` on the CPU) is what makes Metal's
+// rasterizer interpolate `uv` correctly across a quad that's no longer
+// perfectly fronto-parallel to the screen — see quad_vertex's own MSL
+// comment. `world_rotation` is `camera_rotation * lens_local_rotation`,
+// mirroring exactly how Bevy composes a ChildOf(camera) entity's own
+// GlobalTransform from its parent's.
+fn build_projected_quad(
+    device: &Device,
+    view_projection: [[f32; 4]; 4],
+    center: [f32; 3],
+    world_rotation: bevy::math::Quat,
+    radius: f32,
+) -> metal::Buffer {
+    let right = (world_rotation * bevy::math::Vec3::X) * radius;
+    let up = (world_rotation * bevy::math::Vec3::Y) * radius;
+    let center = bevy::math::Vec3::from_array(center);
     // V=0 is the texture's TOP row (image-space convention, same as
-    // ndc_ui_rect's own doc comment) — so the (pre-rotation) TOP corners
-    // (local y = +half_height) must carry uv.y = 0.0, not the bottom ones.
-    // Had this backwards before (bottom-of-quad -> uv.y=0), which sampled
-    // scope_color_texture's top row at the screen's bottom and vice versa
-    // — a vertical flip, the scope PIP rendering upside down.
-    let corner = |lx: f32, ly: f32, uv: [f32; 2]| {
-        // Rotate in the isotropic square first, aspect-correct X last —
-        // see this fn's own doc comment for why the order matters.
-        let rx = lx * cos_r - ly * sin_r;
-        let ry = lx * sin_r + ly * cos_r;
-        QuadVertex { position: [cx + rx / aspect, cy + ry], uv }
+    // ndc_ui_rect's own doc comment) — so the TOP corners (+up) must
+    // carry uv.y = 0.0, not the bottom ones. Had this backwards before
+    // (bottom-of-quad -> uv.y=0), which sampled scope_color_texture's top
+    // row at the screen's bottom and vice versa — a vertical flip, the
+    // scope PIP rendering upside down.
+    let corner = |signed_right: f32, signed_up: f32, uv: [f32; 2]| {
+        let world = center + right * signed_right + up * signed_up;
+        QuadVertex { position: transform_point(view_projection, world.to_array()), uv }
     };
     let (tl, tr, br, bl) = (
-        corner(-half_height, half_height, [0.0, 0.0]),
-        corner(half_height, half_height, [1.0, 0.0]),
-        corner(half_height, -half_height, [1.0, 1.0]),
-        corner(-half_height, -half_height, [0.0, 1.0]),
+        corner(-1.0, 1.0, [0.0, 0.0]),
+        corner(1.0, 1.0, [1.0, 0.0]),
+        corner(1.0, -1.0, [1.0, 1.0]),
+        corner(-1.0, -1.0, [0.0, 1.0]),
     );
     let verts = [bl, br, tr, bl, tr, tl];
     device.new_buffer_with_data(
@@ -1658,16 +1674,20 @@ impl NativeMetalProbe {
             };
         // Picture-in-picture rectangle in the top-right corner, in NDC
         // (-1..1) space — no view/projection needed, it's drawn directly
-        // over the finished main-camera frame. Two triangles, position +
-        // uv interleaved per vertex (same "raw device buffer, no vertex
+        // over the finished main-camera frame. z=0/w=1 makes this plain
+        // NDC-as-clip-space, same as before quad_vertex started taking
+        // real per-vertex clip positions (see its own MSL doc comment) —
+        // this demo-probe quad is still flat/fixed, unlike the real-game
+        // scope PIP's build_projected_quad. Two triangles, position + uv
+        // interleaved per vertex (same "raw device buffer, no vertex
         // descriptor" reasoning as every other shader in this file).
         let quad_verts = [
-            QuadVertex { position: [0.55, 0.55], uv: [0.0, 0.0] },
-            QuadVertex { position: [0.95, 0.55], uv: [1.0, 0.0] },
-            QuadVertex { position: [0.95, 0.95], uv: [1.0, 1.0] },
-            QuadVertex { position: [0.55, 0.55], uv: [0.0, 0.0] },
-            QuadVertex { position: [0.95, 0.95], uv: [1.0, 1.0] },
-            QuadVertex { position: [0.55, 0.95], uv: [0.0, 1.0] },
+            QuadVertex { position: [0.55, 0.55, 0.0, 1.0], uv: [0.0, 0.0] },
+            QuadVertex { position: [0.95, 0.55, 0.0, 1.0], uv: [1.0, 0.0] },
+            QuadVertex { position: [0.95, 0.95, 0.0, 1.0], uv: [1.0, 1.0] },
+            QuadVertex { position: [0.55, 0.55, 0.0, 1.0], uv: [0.0, 0.0] },
+            QuadVertex { position: [0.95, 0.95, 0.0, 1.0], uv: [1.0, 1.0] },
+            QuadVertex { position: [0.55, 0.95, 0.0, 1.0], uv: [0.0, 1.0] },
         ];
         let quad_vertex_buffer = device.new_buffer_with_data(
             quad_verts.as_ptr() as *const _,
@@ -2624,42 +2644,37 @@ impl NativeMetalProbe {
         if show_scope {
             let quad_pipeline_ref = if msaa_enabled { &self.quad_pipeline } else { &self.quad_pipeline_no_msaa };
             if let Some(quad_pipeline) = quad_pipeline_ref {
-                // Real-game mode: projects the real ScopeLens entity's own
-                // world position through this frame's main-camera
-                // view_projection to get its actual NDC screen position —
-                // see build_centered_quad's own doc comment for why (the
-                // PIP used to sit hardcoded dead-center regardless of
-                // recoil/reload/sway, visibly desyncing from the real 3D
-                // lens glass drawn around it). `w <= 0` means the lens is
-                // behind the camera this frame (shouldn't really happen
-                // while show_scope is true, but a stale/first-frame
-                // extraction could race it) — falls back to dead center
-                // rather than dividing by a non-positive w and flinging
-                // the quad to a nonsense position. The demo probe keeps
+                // Real-game mode: builds the real ScopeLens circle's own 4
+                // world-space corners and projects each individually — see
+                // build_projected_quad's own doc comment for the full
+                // "this replaced two earlier flat-quad approximations"
+                // story (dead-center fixed position, then a projected
+                // center + one 2D roll angle — neither could represent a
+                // true horizontal turn of the glass or real perspective-
+                // correct near/far scaling, only build_projected_quad's
+                // real per-corner projection can). SCOPE_LENS_RADIUS
+                // mirrors crate::lib's own SCOPE_LENS_SIZE / 2.0 — same
+                // "small duplicated constant, not shared across the wgpu/
+                // Metal boundary" reasoning as kShininess/kSpecularStrength
+                // above. world_rotation composes the real camera's own
+                // world rotation with the lens's LOCAL one (ChildOf
+                // (camera) — see lens_local_rotation's own doc comment on
+                // ScopeCameraSnapshot), mirroring exactly how Bevy itself
+                // derives a child's GlobalTransform. The demo probe keeps
                 // its original fixed top-right box, which has no real "is
                 // this actually where the lens sits" state to match.
+                const SCOPE_LENS_RADIUS: f32 = 0.015;
                 let real_game_quad_buffer = is_real_game.then(|| {
-                    let clip = transform_point(view_projection, self.real_game_scope_lens_world_pos);
-                    let ndc_center = if clip[3] > 1e-4 { [clip[0] / clip[3], clip[1] / clip[3]] } else { [0.0, 0.0] };
-                    // On-screen roll: rotate a reference "up" vector by
-                    // ScopeLens's own LOCAL rotation (relative to the
-                    // camera — see lens_local_rotation's own doc comment)
-                    // and read off how far it tilted within the screen's
-                    // X/Y plane. The rotation's Z component (depth) is
-                    // ignored — this is a flat 2D overlay quad, not a
-                    // real 3D plane, so only the in-screen-plane portion
-                    // of the roll/tilt/sway stack is representable at
-                    // all; atan2 naturally picks that up without needing
-                    // to hand-decompose update_scope_lens's actual
-                    // quaternion formula (recoil yaw-kick + roll-kick +
-                    // reload tilt + look-sway) here — this stays correct
-                    // even if that formula changes later.
-                    let q = self.real_game_scope_lens_local_rotation;
-                    let rq = bevy::math::Quat::from_array(q) * bevy::math::Vec3::Y;
-                    // Inverted from the initial atan2(x, y) — confirmed
-                    // backwards on-device.
-                    let roll = -rq.x.atan2(rq.y);
-                    build_centered_quad(&self.device, aspect, 0.35, ndc_center, roll)
+                    let camera_rotation = bevy::math::Quat::from_array(self.real_game_camera_rotation);
+                    let lens_local_rotation = bevy::math::Quat::from_array(self.real_game_scope_lens_local_rotation);
+                    let world_rotation = camera_rotation * lens_local_rotation;
+                    build_projected_quad(
+                        &self.device,
+                        view_projection,
+                        self.real_game_scope_lens_world_pos,
+                        world_rotation,
+                        SCOPE_LENS_RADIUS,
+                    )
                 });
                 let quad_buffer = real_game_quad_buffer.as_ref().unwrap_or(&self.quad_vertex_buffer);
                 encoder.set_render_pipeline_state(quad_pipeline);
