@@ -117,6 +117,12 @@ const AUTOPILOT_ENGAGE_RANGE: f32 = 28.0;
 // autopilot backs away instead of just stopping.
 const AUTOPILOT_RETREAT_RANGE: f32 = 5.0;
 const AUTOPILOT_RETARGET_INTERVAL: f32 = 1.2;
+// Below this distance autopilot doesn't bother raising ADS — target's
+// close enough hip-fire is fine. Was an inline 10.0, then 15.0; bumped
+// again so ADS only kicks in once the target is farther out. Only a
+// narrow band under AUTOPILOT_ENGAGE_RANGE (+1.0) now actually triggers
+// ADS since engage range itself is 28.0.
+const AUTOPILOT_ADS_MIN_DISTANCE: f32 = 25.0;
 // A random pause (rolled once per target switch — see AutopilotState's own
 // hold_fire_timer doc comment) before firing resumes on the new target, so
 // autopilot doesn't keep spraying uninterrupted the instant it swaps to a
@@ -134,9 +140,8 @@ const AUTOPILOT_TAP_FIRE_DISTANCE: f32 = 18.0;
 // Gap enforced between taps at long range. RECOIL_RECOVERY_SPEED (5.0/sec)
 // decays pitch_kick exponentially, so this gap lets most of a shot's kick
 // bleed off before the next one instead of stacking on top of it. Was
-// 0.35 — tightened for a faster tap rate while still leaving enough of a
-// gap for pitch_kick to mostly decay between shots.
-const AUTOPILOT_TAP_FIRE_INTERVAL: f32 = 0.22;
+// 0.35, then 0.22 — tightened further for an even faster tap rate.
+const AUTOPILOT_TAP_FIRE_INTERVAL: f32 = 0.14;
 // Rate-limited aim tracking — was 180.0, matching ZOMBIE_TURN_RATE_DEG
 // (shared/src/lib.rs), but bumped faster for snappier target acquisition;
 // the fade-in/distance easing below still keeps it from reading as an
@@ -334,7 +339,7 @@ pub(crate) fn autopilot_think(
     } else {
         want_fire
     };
-    intent.aim = horizontal_distance <= AUTOPILOT_ENGAGE_RANGE + 1.0 && horizontal_distance > 10.0;
+    intent.aim = horizontal_distance <= AUTOPILOT_ENGAGE_RANGE + 1.0 && horizontal_distance > AUTOPILOT_ADS_MIN_DISTANCE;
     if autopilot.0 {
         touch_aiming.0 = intent.aim;
     }
