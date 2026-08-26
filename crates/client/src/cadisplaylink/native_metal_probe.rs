@@ -872,6 +872,9 @@ pub struct NativeMetalProbe {
     layer: MetalLayer,
     queue: CommandQueue,
     depth_state: metal::DepthStencilState,
+    // Less-compare, write-DISABLED depth-stencil state for draw_scene's
+    // blend pass — see its own construction comment (in `new()`).
+    blend_depth_state: metal::DepthStencilState,
     // Always-pass, no-write depth-stencil state for the bevy_ui overlay —
     // see its own construction comment (in `new()`) for why the overlay
     // can't just inherit `depth_state` above.
@@ -1239,8 +1242,16 @@ struct RealGameMeshDraw<'a> {
     emissive: [f32; 4],
     texture: Option<&'a metal::Texture>,
     normal_texture: Option<&'a metal::Texture>,
-    // See ExtractedMesh::is_gun's own doc comment.
-    is_gun: bool,
+    // See ExtractedMesh::is_blend's own doc comment — this is what
+    // draw_scene actually splits its two static-mesh passes on now.
+    is_blend: bool,
+    // Squared distance from the main camera's eye to this mesh's own
+    // world-space transform.translation — used to sort the blend pass
+    // back-to-front (farthest first) so overlapping translucent meshes
+    // composite in the right order, same as any standard forward-
+    // renderer transparency pass. Squared to skip a sqrt() per mesh per
+    // frame; only the relative ordering it produces is ever used.
+    camera_dist_sq: f32,
 }
 
 impl NativeMetalProbe {
@@ -1279,6 +1290,21 @@ impl NativeMetalProbe {
         depth_descriptor.set_depth_compare_function(metal::MTLCompareFunction::Less);
         depth_descriptor.set_depth_write_enabled(true);
         let depth_state = device.new_depth_stencil_state(&depth_descriptor);
+
+        // Same Less-compare as depth_state above, but write DISABLED — for
+        // draw_scene's blend pass (translucent meshes, see ExtractedMesh::
+        // is_blend). Still correctly hidden behind anything nearer that's
+        // already in the depth buffer (opaque geometry, zombies), but
+        // doesn't itself write depth, so it can never occlude anything —
+        // the standard "opaque writes, transparent only tests" split any
+        // forward renderer needs for correct transparency, instead of
+        // relying on draw order alone (see draw_scene's own comment on
+        // why draw order alone wasn't enough for two overlapping blended
+        // meshes).
+        let blend_depth_descriptor = metal::DepthStencilDescriptor::new();
+        blend_depth_descriptor.set_depth_compare_function(metal::MTLCompareFunction::Less);
+        blend_depth_descriptor.set_depth_write_enabled(false);
+        let blend_depth_state = device.new_depth_stencil_state(&blend_depth_descriptor);
 
         // The bevy_ui overlay (health bars, floating damage, touch controls)
         // is drawn with the SAME `encoder` as the 3D scene right before it,
@@ -1691,6 +1717,7 @@ impl NativeMetalProbe {
             white_texture,
             flat_normal_texture,
             depth_state,
+            blend_depth_state,
             ui_depth_state,
             msaa_targets: super::metal_msaa::MsaaTargets::new(MSAA_SAMPLE_COUNT),
             msaa_enabled: false,
@@ -1914,13 +1941,14 @@ impl NativeMetalProbe {
             // textured) unchanged — arena/gun geometry is textured exactly
             // like Sponza's, just rebaked into world space fresh each frame
             // (see bake_static_mesh_vertices) instead of once at load time.
-            // Arena only here — gun/viewmodel meshes (is_gun) are drawn in
-            // a second pass below, AFTER the skinned zombies/remote
-            // players, regardless of their own alpha — see that pass's
-            // own comment for why.
+            // Opaque/Mask only here (is_blend false — see ExtractedMesh::
+            // is_blend) — real AlphaMode::Blend materials anywhere in the
+            // scene (arena or gun) are drawn in a second pass below, AFTER
+            // the skinned zombies/remote players, with depth WRITE
+            // disabled — see that pass's own comment for the full story.
             encoder.set_render_pipeline_state(sponza_pipeline.unwrap());
             encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
-            for m in meshes.iter().filter(|m| !m.is_gun) {
+            for m in meshes.iter().filter(|m| !m.is_blend) {
                 draw_static_mesh(m);
             }
         }
@@ -2028,34 +2056,60 @@ impl NativeMetalProbe {
         }
 
         if let Some(meshes) = real_game_meshes {
-            // Gun/viewmodel meshes (is_gun — receiver, scope lens, red-dot
-            // sight, ...) drawn LAST, after both the arena pass above and
-            // the skinned zombies/remote players just above this, and
-            // regardless of the mesh's own alpha (not just the ones with
-            // alpha < 1 — see ExtractedMesh::is_gun's own doc comment for
-            // why alpha alone wasn't a reliable enough signal: the red-dot
-            // sight's own lens glass still showed this bug despite reading
-            // as fully opaque). Order matters here because self.depth_
-            // state (see its own construction comment) writes depth for
-            // every draw regardless of blending — drawing any gun mesh
-            // before a zombie standing behind/through it wrote the gun's
-            // own (much nearer) depth into the buffer first, so the zombie
-            // drawn afterward failed the depth test against it and got
-            // silently culled: invisible through the gun's own glass bits
-            // despite blending being enabled on this pipeline, while the
-            // shadow map (a wholly separate pass/depth buffer — see
-            // draw_shadow_casters) kept showing the zombie's shadow fine.
-            // Opaque geometry renders identically regardless of draw order
-            // (see build_sponza_descriptor's own "safe for opaque geometry
-            // too" comment) — a genuinely solid gun part (the receiver,
-            // say) still correctly occludes whatever's directly behind it
-            // even drawn this late, so moving the whole gun here doesn't
-            // change anything for its opaque parts, only lets its
-            // translucent ones actually show through like the real game.
-            encoder.set_render_pipeline_state(sponza_pipeline.unwrap());
-            encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
-            for m in meshes.iter().filter(|m| m.is_gun) {
-                draw_static_mesh(m);
+            // Real AlphaMode::Blend/Premultiplied/Add/Multiply meshes
+            // (is_blend — the scope lens glass, the red-dot sight's own
+            // lens, or any future translucent material anywhere in the
+            // scene, arena or gun) drawn LAST, after both the opaque pass
+            // above and the skinned zombies/remote players just above
+            // this — AND with self.blend_depth_state (test-only, write
+            // disabled) instead of self.depth_state. Two distinct bugs
+            // this fixes together:
+            //   1. Draw order: self.depth_state (see its own construction
+            //      comment) writes depth for every draw regardless of
+            //      blending, so a blended mesh drawn BEFORE a zombie
+            //      behind it wrote its own (much nearer) depth first —
+            //      the zombie's later draw failed the depth test against
+            //      that and got silently culled, invisible through any
+            //      translucent geometry despite blending being enabled on
+            //      this pipeline. Drawing translucent meshes after
+            //      everything solid (opaque geometry + zombies) fixes
+            //      this the same way any forward renderer's opaque-then-
+            //      transparent pass split does — the shadow map (a wholly
+            //      separate pass/depth buffer, see draw_shadow_casters)
+            //      was never affected, which is why the zombie's shadow
+            //      still showed even though the zombie itself didn't.
+            //   2. Depth WRITE: even drawn last, a shared depth-write-
+            //      enabled state would make two overlapping translucent
+            //      meshes (e.g. the scope lens glass sitting just in
+            //      front of the red-dot sight's own lens) occlude each
+            //      other by draw order alone instead of correctly
+            //      blending both — same underlying issue, just between
+            //      two blended meshes instead of a blended mesh and a
+            //      zombie. blend_depth_state still respects real
+            //      occlusion from anything nearer already in the depth
+            //      buffer (test stays on), it just never writes its own
+            //      depth, so nothing drawn in this same pass can
+            //      incorrectly block another blended mesh behind it.
+            // Sorted back-to-front (farthest camera_dist_sq first) so
+            // overlapping blended meshes still composite in the right
+            // visual order even without a depth write to fall back on —
+            // standard transparency-pass sorting, same reasoning as
+            // camera_dist_sq's own doc comment on RealGameMeshDraw.
+            let mut blended: Vec<&RealGameMeshDraw> = meshes.iter().filter(|m| m.is_blend).collect();
+            blended.sort_by(|a, b| b.camera_dist_sq.total_cmp(&a.camera_dist_sq));
+            if !blended.is_empty() {
+                encoder.set_depth_stencil_state(&self.blend_depth_state);
+                encoder.set_render_pipeline_state(sponza_pipeline.unwrap());
+                encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
+                for m in blended {
+                    draw_static_mesh(m);
+                }
+                // Restore — nothing downstream in this same render pass
+                // (e.g. render_frame's scope PIP quad, drawn with this
+                // same encoder right after draw_scene returns) should
+                // have to reason about which depth-stencil state
+                // draw_scene happened to leave bound.
+                encoder.set_depth_stencil_state(&self.depth_state);
             }
         }
     }
@@ -2265,6 +2319,11 @@ impl NativeMetalProbe {
                 );
                 let texture = mesh.texture.as_ref().and_then(|t| self.real_game_textures.get(&t.id));
                 let normal_texture = mesh.normal_texture.as_ref().and_then(|t| self.real_game_textures.get(&t.id));
+                let d = [
+                    mesh.transform.translation.x - self.camera_position[0],
+                    mesh.transform.translation.y - self.camera_position[1],
+                    mesh.transform.translation.z - self.camera_position[2],
+                ];
                 RealGameMeshDraw {
                     vertex_buffer,
                     vertex_count: verts.len(),
@@ -2272,7 +2331,8 @@ impl NativeMetalProbe {
                     emissive: mesh.emissive,
                     texture,
                     normal_texture,
-                    is_gun: mesh.is_gun,
+                    is_blend: mesh.is_blend,
+                    camera_dist_sq: d[0] * d[0] + d[1] * d[1] + d[2] * d[2],
                 }
             })
             .collect();

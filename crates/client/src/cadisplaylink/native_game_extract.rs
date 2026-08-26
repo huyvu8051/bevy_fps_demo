@@ -19,6 +19,7 @@ use bevy::image::Image;
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::light::{DirectionalLight, PointLight};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
+use bevy::render::alpha::AlphaMode;
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::render::render_resource::TextureFormat;
 use bevy::text::{TextColor, TextFont};
@@ -178,14 +179,18 @@ pub struct ExtractedMesh {
     /// converted to a plain `Transform` for the renderer's convenience —
     /// see `bake_static_meshes` in native_metal_probe.rs).
     pub transform: Transform,
-    /// Whether this mesh is a descendant of the `Gun` entity (its glTF
-    /// scene's own meshes — receiver, scope lens, red-dot sight, etc.),
-    /// as opposed to arena wall/floor geometry. native_metal_probe.rs's
-    /// draw_scene draws gun meshes in a separate late pass (after
-    /// zombies) regardless of their own alpha, so a translucent gun part
-    /// never depth-occludes a zombie standing behind it — see that pass's
-    /// own doc comment.
-    pub is_gun: bool,
+    /// The real `StandardMaterial::alpha_mode` — `true` for `Blend`/
+    /// `Premultiplied`/`Add`/`Multiply` (anything that needs to composite
+    /// with what's already drawn rather than fully replace it), `false`
+    /// for `Opaque`/`Mask`. native_metal_probe.rs's draw_scene uses this
+    /// (the real material property, not a guessed alpha threshold or an
+    /// entity-hierarchy heuristic) to draw every blended mesh in the
+    /// whole scene — arena or gun — in a separate
+    /// late pass with depth-write disabled, so translucent geometry never
+    /// depth-occludes whatever's behind it. See that pass's own doc
+    /// comment for the full story of why an entity-hierarchy or alpha-
+    /// value heuristic wasn't reliable enough.
+    pub is_blend: bool,
 }
 
 /// Camera pose. `eye` is the `FpsCamera` entity's own world-space
@@ -966,21 +971,19 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // "garbled giant mesh" failure mode as the gun's own GlobalTransform-
     // propagation bug noted above, just from skipping skinning instead of
     // skipping GlobalTransform.
-    // Gun visibility + identity: the mesh_query below has no notion of
-    // Bevy `Visibility` at all — this headless App never runs the render
+    // Gun visibility: the mesh_query below has no notion of Bevy
+    // `Visibility` at all — this headless App never runs the render
     // crate's visibility-propagation systems (no `InheritedVisibility`/
     // `ViewVisibility` to read even if it did), so without this the gun's
     // meshes always got baked into static_meshes regardless of the
     // `GunVisible` cheat toggle (crate::lib's `apply_map_render_toggles`
     // only ever updates the real `Gun` entity's `Visibility` component,
     // which only the desktop/wgpu render path actually reads) — same class
-    // of bug `map_msaa_on` above was added to fix for MSAA. Collected
-    // unconditionally now (not just when hidden) — also used to tag
-    // `ExtractedMesh::is_gun` below, which native_metal_probe.rs needs to
-    // draw the viewmodel in its own late pass (after zombies) regardless
-    // of the mesh's own alpha, so a translucent gun part (scope lens, the
-    // red-dot sight's own lens glass, ...) never depth-occludes a zombie
-    // standing behind it — see draw_scene's own doc comment on that pass.
+    // of bug `map_msaa_on` above was added to fix for MSAA. Only used to
+    // skip drawing the gun entirely when the toggle is off — draw ORDER
+    // (native_metal_probe.rs's draw_scene, opaque-vs-blend pass split) is
+    // decided by the real material AlphaMode instead, see ExtractedMesh::
+    // is_blend below, not by whether a mesh belongs to the gun.
     let mut gun_visible_state: SystemState<Res<crate::GunVisible>> = SystemState::new(world);
     let gun_visible = gun_visible_state.get(world).0;
     let gun_mesh_entities: std::collections::HashSet<bevy::ecs::entity::Entity> = {
@@ -1100,7 +1103,10 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             tangents,
             normal_texture,
             transform: transform.compute_transform(),
-            is_gun,
+            is_blend: matches!(
+                material.alpha_mode,
+                AlphaMode::Blend | AlphaMode::Premultiplied | AlphaMode::Add | AlphaMode::Multiply
+            ),
         });
     }
 
