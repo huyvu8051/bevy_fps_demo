@@ -1834,7 +1834,7 @@ fn build_game_common(app: &mut App) {
         .init_resource::<SensitivityScale>()
         .init_resource::<KillCount>()
         .init_resource::<RecentlyHitZombies>()
-        .add_systems(Startup, (setup /*, log_window_resolution */,));
+        .add_systems(Startup, (setup, force_game_over_on_start /*, log_window_resolution */).chain());
     // CPU bisection (temporary, not deleted): the ENTIRE Update schedule
     // below is commented out — rock-bottom baseline with only whatever
     // Bevy/wgpu itself does every frame (extraction/prepare/render graph)
@@ -4551,6 +4551,14 @@ fn check_game_over(
         cursor.visible = true;
     }
 
+    spawn_game_over_ui(&mut commands);
+}
+
+// Factored out of check_game_over so GAME_OVER_ON_START (see its own doc
+// comment) can spawn the exact same overlay without needing a real death
+// first — same launch-time-verification idea as OPEN_SETTINGS_MENU/
+// TOUCH_UI_PREVIEW.
+fn spawn_game_over_ui(commands: &mut Commands) {
     commands
         .spawn((
             Node {
@@ -4613,6 +4621,22 @@ fn check_game_over(
                 ));
             });
         });
+}
+
+// GAME_OVER_ON_START=1 shows the GAME OVER overlay immediately at launch —
+// same launch-time-override idea as OPEN_SETTINGS_MENU/TOUCH_UI_PREVIEW, so
+// it (and, on iOS, the cadisplaylink Metal renderer's own draw of it) can
+// be visually verified without needing a real death first. Runs on Startup,
+// after setup() has already spawned everything else — GameOverUi is a
+// dynamic overlay (unlike SettingsMenuRoot, always spawned but hidden),
+// so this is the one env-var override that adds a new entity rather than
+// just flipping a resource.
+fn force_game_over_on_start(mut commands: Commands, mut game_over: ResMut<GameOver>) {
+    if std::env::var("GAME_OVER_ON_START").is_err() {
+        return;
+    }
+    game_over.0 = true;
+    spawn_game_over_ui(&mut commands);
 }
 
 // Just asks the server to restart — it's the one that actually decides how

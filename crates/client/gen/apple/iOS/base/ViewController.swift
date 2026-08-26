@@ -301,10 +301,6 @@ class ViewController: UIViewController {
     private var lookTouch: UITouch?
     private var lookTouchLast: CGPoint = .zero
     private var lastFrameTime: CFTimeInterval = CACurrentMediaTime()
-    // Native death/restart overlay — see GameOverView.swift's own doc
-    // comment for why this exists instead of relying on bevy_ui.
-    private let gameOverView = GameOverView()
-    private var gameOverWasVisible = false
     // Native map-select overlay — see MapSelectView.swift's own doc
     // comment. Only shown on a plain icon-tap launch (no MAP_ID env var
     // already present); a `devicectl process launch -e '{"MAP_ID":"N"}'`
@@ -337,12 +333,6 @@ class ViewController: UIViewController {
         if #available(iOS 13.4, *) {
             self.metalV.addInteraction(UIPointerInteraction(delegate: self))
         }
-        self.view.addSubview(gameOverView)
-        gameOverView.onRestart = { [weak self] in
-            guard let self, let probe = self.rustMetalProbe else { return }
-            native_metal_probe_trigger_restart(probe)
-        }
-
         self.view.addSubview(mapSelectView)
         mapSelectView.onSelect = { [weak self] mapId in
             guard let self else { return }
@@ -361,22 +351,7 @@ class ViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        gameOverView.layout(in: self.view)
         mapSelectView.layout(in: self.view)
-    }
-
-    // Polled once per frame (see enterFrame), since GameOver can also
-    // become true from the server's own GameStateEvent broadcast
-    // (on_game_state_event in crate::lib), not just this client's own
-    // check_game_over.
-    private func syncGameOver() {
-        guard USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe else { return }
-        let visible = native_metal_probe_game_over(probe)
-        gameOverView.isHidden = !visible
-        if visible && !gameOverWasVisible {
-            gameOverView.layout(in: self.view)
-        }
-        gameOverWasVisible = visible
     }
 
     // Polled once per frame (see enterFrame) — HP/ammo/ping/crosshair are
@@ -703,7 +678,6 @@ class ViewController: UIViewController {
             native_metal_probe_update_camera(probe, forward, strafe, lookDx, lookDy, deltaTime)
             native_metal_probe_render_frame(probe)
             syncHud()
-            syncGameOver()
             return
         }
         self.renderNativeMetalFrame()

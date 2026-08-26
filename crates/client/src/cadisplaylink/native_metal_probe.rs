@@ -715,6 +715,11 @@ pub struct NativeMetalProbe {
     ui_settings_menu_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_settings_menu_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_settings_menu_texts: Vec<super::native_game_extract::HudTextSnapshot>,
+    // GAME OVER overlay — see extract_panel's own doc comment
+    // (native_game_extract.rs).
+    ui_game_over_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
+    ui_game_over_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
+    ui_game_over_texts: Vec<super::native_game_extract::HudTextSnapshot>,
 }
 
 // Flattens ONE of the real game's extracted static meshes (arena
@@ -859,6 +864,39 @@ fn draw_hud_text_list(
             cursor_x += glyph_w + scale;
         }
     }
+}
+
+// Draws a "panel + buttons + text" UI subtree — shared by the settings
+// menu and the GAME OVER overlay (see extract_panel's own doc comment in
+// native_game_extract.rs for why both extract into the same
+// SettingsMenuButtonSnapshot/HudTextSnapshot shapes). The panel's own
+// backdrop is drawn first, so the real buttons/text land on top of it;
+// buttons are plain rects (no label — labels are `texts`' own Text
+// children, drawn last via draw_hud_text_list).
+fn draw_panel(
+    encoder: &metal::RenderCommandEncoderRef,
+    panel: &Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
+    buttons: &[super::native_game_extract::SettingsMenuButtonSnapshot],
+    texts: &[super::native_game_extract::HudTextSnapshot],
+    view_w: f32,
+    view_h: f32,
+    white_texture: &metal::Texture,
+    font_atlas_texture: &metal::Texture,
+) {
+    const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+    if let Some(panel) = panel {
+        let [x, y] = panel.top_left;
+        let [w, h] = panel.size;
+        let quad = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
+        draw_ui_quad(encoder, &quad, panel.color, white_texture);
+    }
+    for button in buttons {
+        let [x, y] = button.top_left;
+        let [w, h] = button.size;
+        let quad = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
+        draw_ui_quad(encoder, &quad, button.color, white_texture);
+    }
+    draw_hud_text_list(encoder, texts, view_w, view_h, font_atlas_texture);
 }
 
 struct RealGameMeshDraw<'a> {
@@ -1263,6 +1301,9 @@ impl NativeMetalProbe {
             ui_settings_menu_panel: None,
             ui_settings_menu_buttons: Vec::new(),
             ui_settings_menu_texts: Vec::new(),
+            ui_game_over_panel: None,
+            ui_game_over_buttons: Vec::new(),
+            ui_game_over_texts: Vec::new(),
         }
     }
 
@@ -1556,6 +1597,9 @@ impl NativeMetalProbe {
             self.ui_settings_menu_panel = snapshot.settings_menu_panel;
             self.ui_settings_menu_buttons = snapshot.settings_menu_buttons;
             self.ui_settings_menu_texts = snapshot.settings_menu_texts;
+            self.ui_game_over_panel = snapshot.game_over_panel;
+            self.ui_game_over_buttons = snapshot.game_over_buttons;
+            self.ui_game_over_texts = snapshot.game_over_texts;
             self.msaa_enabled = snapshot.map_msaa_on;
             if let Some(cam) = &snapshot.camera {
                 self.camera_position = cam.eye;
@@ -1851,6 +1895,9 @@ impl NativeMetalProbe {
                 || self.ui_settings_menu_panel.is_some()
                 || !self.ui_settings_menu_buttons.is_empty()
                 || !self.ui_settings_menu_texts.is_empty()
+                || self.ui_game_over_panel.is_some()
+                || !self.ui_game_over_buttons.is_empty()
+                || !self.ui_game_over_texts.is_empty()
             {
                 let (view_w, view_h) = self.view_size_points();
                 encoder.set_render_pipeline_state(ui_pipeline);
@@ -1957,27 +2004,29 @@ impl NativeMetalProbe {
                 // text — see draw_hud_text_list's own doc comment.
                 draw_hud_text_list(encoder, &self.ui_hud_texts, view_w, view_h, &self.font_atlas_texture);
 
-                // Settings menu: the panel's own dark backdrop first (drawn
-                // under everything else spawned inside it — see
-                // settings_menu_panel's own doc comment in
-                // native_game_extract.rs for why it needs its own separate
-                // extraction/draw, not just "another button"), then plain
-                // rects for every button (no label here, labels are
-                // settings_menu_texts' own Text children, drawn as ordinary
-                // text right after) plus its own text.
-                if let Some(panel) = &self.ui_settings_menu_panel {
-                    let [x, y] = panel.top_left;
-                    let [w, h] = panel.size;
-                    let quad = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
-                    draw_ui_quad(encoder, &quad, panel.color, &self.white_texture);
-                }
-                for button in &self.ui_settings_menu_buttons {
-                    let [x, y] = button.top_left;
-                    let [w, h] = button.size;
-                    let quad = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
-                    draw_ui_quad(encoder, &quad, button.color, &self.white_texture);
-                }
-                draw_hud_text_list(encoder, &self.ui_settings_menu_texts, view_w, view_h, &self.font_atlas_texture);
+                // Settings menu + GAME OVER overlay: same generic "panel +
+                // buttons + text" draw for both — see draw_panel's own doc
+                // comment.
+                draw_panel(
+                    encoder,
+                    &self.ui_settings_menu_panel,
+                    &self.ui_settings_menu_buttons,
+                    &self.ui_settings_menu_texts,
+                    view_w,
+                    view_h,
+                    &self.white_texture,
+                    &self.font_atlas_texture,
+                );
+                draw_panel(
+                    encoder,
+                    &self.ui_game_over_panel,
+                    &self.ui_game_over_buttons,
+                    &self.ui_game_over_texts,
+                    view_w,
+                    view_h,
+                    &self.white_texture,
+                    &self.font_atlas_texture,
+                );
             }
         }
 

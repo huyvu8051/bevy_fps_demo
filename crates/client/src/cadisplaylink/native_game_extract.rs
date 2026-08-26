@@ -239,6 +239,9 @@ pub struct RenderSnapshot {
     pub settings_menu_panel: Option<SettingsMenuButtonSnapshot>,
     pub settings_menu_buttons: Vec<SettingsMenuButtonSnapshot>,
     pub settings_menu_texts: Vec<HudTextSnapshot>,
+    pub game_over_panel: Option<SettingsMenuButtonSnapshot>,
+    pub game_over_buttons: Vec<SettingsMenuButtonSnapshot>,
+    pub game_over_texts: Vec<HudTextSnapshot>,
     /// The `MapMsaaOn` cheat-menu toggle (crate::lib) — previously only
     /// ever read by `apply_map_render_toggles` to sync bevy_render's own
     /// `Msaa` component (the desktop/winit build's render path), which
@@ -415,6 +418,65 @@ fn logical_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> ([f32; 2]
     let center = transform.affine().translation * inv_scale;
     let top_left = center - size / 2.0;
     (top_left.to_array(), size.to_array())
+}
+
+/// Extracts a "panel root + everything inside it" UI subtree generically —
+/// shared by the settings menu (`SettingsMenuRoot`) and the GAME OVER
+/// overlay (`GameOverUi`), the same reasoning as `SettingsMenuButtonSnapshot`'s
+/// own doc comment for why: neither wants a dedicated marker component on
+/// every button/text spawned inside it (the settings menu has dozens of
+/// distinct button types; GAME OVER only has one today, `RestartButton`,
+/// but reusing the same generic walk means a future addition — a "Main
+/// Menu" button, say — needs no new extraction code at all). Returns
+/// `(panel, buttons, texts)`; all empty/`None` if no entity carries
+/// `Root`. The panel itself (its own `BackgroundColor` — a dark
+/// translucent backdrop for both) isn't a `Button`, so it's extracted
+/// separately from the descendant walk, same as `settings_menu_panel`'s
+/// own original doc comment explained.
+fn extract_panel<Root: bevy::ecs::component::Component>(
+    world: &mut bevy::ecs::world::World,
+) -> (Option<SettingsMenuButtonSnapshot>, Vec<SettingsMenuButtonSnapshot>, Vec<HudTextSnapshot>) {
+    let mut root_state: SystemState<
+        Query<(bevy::ecs::entity::Entity, &ComputedNode, &UiGlobalTransform, &BackgroundColor), With<Root>>,
+    > = SystemState::new(world);
+    let root_query = root_state.get(world);
+    let Some((root, root_node, root_transform, root_bg)) = root_query.iter().next() else {
+        return (None, Vec::new(), Vec::new());
+    };
+    let (top_left, size) = logical_rect(root_node, root_transform);
+    let c = root_bg.0.to_srgba();
+    let panel = Some(SettingsMenuButtonSnapshot { top_left, size, color: [c.red, c.green, c.blue, c.alpha] });
+
+    let mut children_state: SystemState<Query<&Children>> = SystemState::new(world);
+    let children_query = children_state.get(world);
+    let mut descendants = Vec::new();
+    collect_descendants(root, &children_query, &mut descendants);
+
+    let mut button_state: SystemState<Query<(&ComputedNode, &UiGlobalTransform, &BackgroundColor), With<Button>>> = SystemState::new(world);
+    let button_query = button_state.get(world);
+    let buttons = descendants
+        .iter()
+        .filter_map(|&e| button_query.get(e).ok())
+        .map(|(node, transform, bg)| {
+            let (top_left, size) = logical_rect(node, transform);
+            let c = bg.0.to_srgba();
+            SettingsMenuButtonSnapshot { top_left, size, color: [c.red, c.green, c.blue, c.alpha] }
+        })
+        .collect();
+
+    let mut text_state: SystemState<Query<(&ComputedNode, &UiGlobalTransform, &Text, &TextColor, &TextFont)>> = SystemState::new(world);
+    let text_query = text_state.get(world);
+    let texts = descendants
+        .iter()
+        .filter_map(|&e| text_query.get(e).ok())
+        .map(|(node, transform, text, color, font)| {
+            let (top_left, size) = logical_rect(node, transform);
+            let c = color.0.to_srgba();
+            HudTextSnapshot { top_left, size, text: text.0.clone(), color: [c.red, c.green, c.blue, c.alpha], font_size: font.font_size }
+        })
+        .collect();
+
+    (panel, buttons, texts)
 }
 
 /// The scene's real `DirectionalLight` ("MainSun", crate::lib — spawned
@@ -814,53 +876,23 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         })
         .collect();
 
-    // Settings menu: see SettingsMenuButtonSnapshot/collect_descendants'
-    // own doc comments for why this walks the real Children hierarchy
-    // generically instead of a per-button-type marker. Skips entirely
-    // (leaving both Vecs empty, same as `Display::None`-collapsed content
-    // elsewhere in this file) if the menu was never spawned yet.
-    let mut settings_root_state: SystemState<
-        Query<(bevy::ecs::entity::Entity, &ComputedNode, &UiGlobalTransform, &BackgroundColor), With<crate::SettingsMenuRoot>>,
-    > = SystemState::new(world);
-    if let Some((root, root_node, root_transform, root_bg)) = settings_root_state.get(world).iter().next() {
-        // The root panel itself (crate::lib's dark translucent backdrop
-        // behind every row/button) isn't a Button, so it never shows up in
-        // the descendant walk below — extracted separately here, same
-        // logical_rect technique, and drawn FIRST (see render_frame) so
-        // the real buttons/text still land on top of it.
-        let (top_left, size) = logical_rect(root_node, root_transform);
-        let c = root_bg.0.to_srgba();
-        snapshot.settings_menu_panel = Some(SettingsMenuButtonSnapshot { top_left, size, color: [c.red, c.green, c.blue, c.alpha] });
+    // Settings menu + GAME OVER overlay: see extract_panel's own doc
+    // comment for why both share this one generic "panel root + everything
+    // inside it" extraction instead of a per-button-type marker. Each
+    // leaves its Vecs empty/panel None if its own root doesn't exist this
+    // frame — for the settings menu that's Display::None-collapsed (see
+    // logical_rect's own zero-size behavior for hidden nodes), for GAME
+    // OVER it's simply not spawned yet (a dynamic overlay, unlike
+    // SettingsMenuRoot which always exists but hidden).
+    let (settings_menu_panel, settings_menu_buttons, settings_menu_texts) = extract_panel::<crate::SettingsMenuRoot>(world);
+    snapshot.settings_menu_panel = settings_menu_panel;
+    snapshot.settings_menu_buttons = settings_menu_buttons;
+    snapshot.settings_menu_texts = settings_menu_texts;
 
-        let mut children_state: SystemState<Query<&Children>> = SystemState::new(world);
-        let children_query = children_state.get(world);
-        let mut descendants = Vec::new();
-        collect_descendants(root, &children_query, &mut descendants);
-
-        let mut button_state: SystemState<Query<(&ComputedNode, &UiGlobalTransform, &BackgroundColor), With<Button>>> = SystemState::new(world);
-        let button_query = button_state.get(world);
-        snapshot.settings_menu_buttons = descendants
-            .iter()
-            .filter_map(|&e| button_query.get(e).ok())
-            .map(|(node, transform, bg)| {
-                let (top_left, size) = logical_rect(node, transform);
-                let c = bg.0.to_srgba();
-                SettingsMenuButtonSnapshot { top_left, size, color: [c.red, c.green, c.blue, c.alpha] }
-            })
-            .collect();
-
-        let mut text_state: SystemState<Query<(&ComputedNode, &UiGlobalTransform, &Text, &TextColor, &TextFont)>> = SystemState::new(world);
-        let text_query = text_state.get(world);
-        snapshot.settings_menu_texts = descendants
-            .iter()
-            .filter_map(|&e| text_query.get(e).ok())
-            .map(|(node, transform, text, color, font)| {
-                let (top_left, size) = logical_rect(node, transform);
-                let c = color.0.to_srgba();
-                HudTextSnapshot { top_left, size, text: text.0.clone(), color: [c.red, c.green, c.blue, c.alpha], font_size: font.font_size }
-            })
-            .collect();
-    }
+    let (game_over_panel, game_over_buttons, game_over_texts) = extract_panel::<crate::GameOverUi>(world);
+    snapshot.game_over_panel = game_over_panel;
+    snapshot.game_over_buttons = game_over_buttons;
+    snapshot.game_over_texts = game_over_texts;
 
     // Static meshes: arena walls/floor + gun scene meshes, both plain
     // Mesh3d/MeshMaterial3d<StandardMaterial> entities — see this module's
