@@ -34,7 +34,7 @@
 use bevy::math::ops;
 use bevy::prelude::*;
 
-use crate::{FpsCamera, Player};
+use crate::{FpsCamera, Player, TouchAiming};
 use shared::{random_aim_point, resolve_bone_world_positions, Health, NetPlayer, Zombie, ZombieHitboxBones, PLAYER_MAX_HEALTH};
 
 /// Master on/off switch — ON by default, see the module doc comment. OFF by
@@ -88,6 +88,12 @@ pub(crate) struct AutopilotState {
     /// gated on this hitting 0, so autopilot pauses a beat on acquiring a
     /// new target instead of instantly spraying it the same frame it swaps.
     hold_fire_timer: f32,
+    pub(crate) time_since_swap: f32,
+    /// Gates fire at long range (see AUTOPILOT_TAP_FIRE_DISTANCE) so
+    /// autopilot taps single shots instead of holding the trigger down —
+    /// counts down to 0, at which point one more tap is allowed and it's
+    /// reset to AUTOPILOT_TAP_FIRE_INTERVAL.
+    tap_fire_timer: f32,
 }
 
 /// Synthesized "virtual input" for this frame — read by send_player_input/
@@ -97,15 +103,16 @@ pub(crate) struct AutopilotIntent {
     pub(crate) move_axis: Vec2,
     pub(crate) sprint: bool,
     pub(crate) fire: bool,
+    pub(crate) aim: bool,
 }
 
 // Mirrors DEBUG_BOT_DETECT_RANGE (40.0, shared/src/lib.rs) — a bit tighter
 // since the player (unlike a debug bot) also needs to react/retreat, not
 // just approach.
-const AUTOPILOT_DETECT_RANGE: f32 = 35.0;
+const AUTOPILOT_DETECT_RANGE: f32 = 80.0;
 // The "comfortable shooting distance" — a bit past DEBUG_BOT_ENGAGE_RANGE
 // (10.0) since the player should shoot at range, not melee.
-const AUTOPILOT_ENGAGE_RANGE: f32 = 14.0;
+const AUTOPILOT_ENGAGE_RANGE: f32 = 28.0;
 // New: debug bots have no equivalent of this — below this distance,
 // autopilot backs away instead of just stopping.
 const AUTOPILOT_RETREAT_RANGE: f32 = 5.0;
@@ -117,10 +124,35 @@ const AUTOPILOT_RETARGET_INTERVAL: f32 = 1.2;
 // seamless aimbot hand-off.
 const AUTOPILOT_TARGET_SWITCH_HOLD_MIN: f32 = 0.1;
 const AUTOPILOT_TARGET_SWITCH_HOLD_MAX: f32 = 0.3;
-// Rate-limited aim tracking, mirroring ZOMBIE_TURN_RATE_DEG (180.0,
-// shared/src/lib.rs) used everywhere else in this codebase for the same
-// "looks like tracking, not an instant aimbot snap" reasoning.
-const AUTOPILOT_TURN_RATE_DEG: f32 = 180.0;
+// Beyond this range, spray (holding fire every eligible frame) climbs
+// bullet spread (current_bullet_spread's "heat" from ViewRecoil.pitch_kick,
+// lib.rs) faster than it can decay between shots at FIRE_RATE, so distant
+// shots keep missing wider. Autopilot instead taps single shots at this
+// range — see AUTOPILOT_TAP_FIRE_INTERVAL below — giving pitch_kick time to
+// decay (RECOIL_RECOVERY_SPEED, lib.rs) between each one.
+const AUTOPILOT_TAP_FIRE_DISTANCE: f32 = 18.0;
+// Gap enforced between taps at long range. RECOIL_RECOVERY_SPEED (5.0/sec)
+// decays pitch_kick exponentially, so this gap lets most of a shot's kick
+// bleed off before the next one instead of stacking on top of it. Was
+// 0.35 — tightened for a faster tap rate while still leaving enough of a
+// gap for pitch_kick to mostly decay between shots.
+const AUTOPILOT_TAP_FIRE_INTERVAL: f32 = 0.22;
+// Rate-limited aim tracking — was 180.0, matching ZOMBIE_TURN_RATE_DEG
+// (shared/src/lib.rs), but bumped faster for snappier target acquisition;
+// the fade-in/distance easing below still keeps it from reading as an
+// instant aimbot snap.
+const AUTOPILOT_TURN_RATE_DEG: f32 = 260.0;
+// Distance (m) at which the turn-rate distance-curve bottoms out at its
+// slowest — widened from 40.0 so the fast→slow transition is spread over
+// more distance (gentler falloff per meter) instead of compressed close in.
+const AUTOPILOT_TURN_FAR_DISTANCE: f32 = 55.0;
+// How long after acquiring a new target the turn rate takes to fade up to
+// full (distance-curve) speed, instead of snapping to it the instant a
+// target is committed — an ease-out sine (fast at first, smoothly
+// decelerating as it nears full speed, never a hard stop) so the very
+// first frames of tracking a freshly-swapped target read as a deliberate
+// camera settling in, not an instant snap.
+const AUTOPILOT_TURN_FADE_IN_DURATION: f32 = 0.4;
 // Don't fire until aim has actually caught up to the target.
 const AUTOPILOT_FIRE_AIM_TOLERANCE_DEG: f32 = 12.0;
 const AUTOPILOT_SPRINT_APPROACH_DISTANCE: f32 = 22.0;
@@ -180,6 +212,7 @@ pub(crate) fn autopilot_pick_target(
             let base = (ops::sin(time.elapsed_secs() * 947.0) + 1.0) * 0.5;
             state.hold_fire_timer =
                 AUTOPILOT_TARGET_SWITCH_HOLD_MIN + base * (AUTOPILOT_TARGET_SWITCH_HOLD_MAX - AUTOPILOT_TARGET_SWITCH_HOLD_MIN);
+            state.time_since_swap = 0.0;
         }
         state.target = new_target;
         state.retarget_timer = AUTOPILOT_RETARGET_INTERVAL;
@@ -203,9 +236,15 @@ pub(crate) fn autopilot_think(
     health: Query<&Health, With<Player>>,
     mut camera: Query<(&mut FpsCamera, &GlobalTransform)>,
     mut decision_timer: Local<f32>,
+    mut touch_aiming: ResMut<TouchAiming>,
 ) {
-    if !autopilot.0 && !look_only.0 {
-        return;
+    if !autopilot.0 {
+        if touch_aiming.0 {
+            touch_aiming.0 = false;
+        }
+        if !look_only.0 {
+            return;
+        }
     }
     let Ok(player_transform) = player.single() else {
         return;
@@ -214,7 +253,6 @@ pub(crate) fn autopilot_think(
         return;
     };
     let dt = time.delta_secs();
-    let turn_step = AUTOPILOT_TURN_RATE_DEG.to_radians() * dt;
 
     let Some((target_entity, target_transform, target_bones)) =
         state.target.and_then(|target| zombies.get(target).ok().map(|(t, b)| (target, t, b)))
@@ -226,6 +264,9 @@ pub(crate) fn autopilot_think(
         // proves insufficient.
         cam.yaw += AUTOPILOT_IDLE_SCAN_DEG_PER_SEC.to_radians() * dt;
         *intent = AutopilotIntent::default();
+        if autopilot.0 {
+            touch_aiming.0 = false;
+        }
         state.aiming_region = None;
         return;
     };
@@ -250,6 +291,20 @@ pub(crate) fn autopilot_think(
     // wobbled one — the wobble should sway the aim, not flicker the engage-
     // range/fire gate in and out near a boundary.
     let horizontal_distance = Vec2::new(to_target.x, to_target.z).length();
+    // Smooth cosine S-curve interpolation between 1.0 (close) and 0.15 (far,
+    // >=AUTOPILOT_TURN_FAR_DISTANCE).
+    let t = (horizontal_distance / AUTOPILOT_TURN_FAR_DISTANCE).clamp(0.0, 1.0);
+    let ease = (1.0 + ops::cos(t * std::f32::consts::PI)) * 0.5;
+    let distance_scale = 0.15 + (1.0 - 0.15) * ease;
+    // Fade the turn rate in over the first AUTOPILOT_TURN_FADE_IN_DURATION
+    // seconds after a target swap (see its own comment) — sine ease-out, so
+    // it ramps up quickly at first then settles smoothly into full speed
+    // rather than snapping straight to the distance curve above.
+    state.time_since_swap += dt;
+    let fade_t = (state.time_since_swap / AUTOPILOT_TURN_FADE_IN_DURATION).clamp(0.0, 1.0);
+    let fade_in_scale = ops::sin(fade_t * std::f32::consts::FRAC_PI_2);
+    let turn_rate_scale = distance_scale * fade_in_scale;
+    let turn_step = AUTOPILOT_TURN_RATE_DEG.to_radians() * turn_rate_scale * dt;
 
     let wobbled_target = to_target;
 
@@ -259,12 +314,30 @@ pub(crate) fn autopilot_think(
     cam.pitch = turn_towards_angle(cam.pitch, desired_pitch, turn_step);
 
     state.hold_fire_timer = (state.hold_fire_timer - dt).max(0.0);
+    state.tap_fire_timer = (state.tap_fire_timer - dt).max(0.0);
 
     let raw_aim_error = (cam.yaw - desired_yaw).rem_euclid(std::f32::consts::TAU);
     let aim_error = raw_aim_error.min(std::f32::consts::TAU - raw_aim_error);
-    intent.fire = state.hold_fire_timer <= 0.0
+    let want_fire = state.hold_fire_timer <= 0.0
         && horizontal_distance <= AUTOPILOT_ENGAGE_RANGE + 1.0
         && aim_error < AUTOPILOT_FIRE_AIM_TOLERANCE_DEG.to_radians();
+    // Far enough that spraying would climb spread faster than it decays —
+    // tap instead of holding the trigger down (see AUTOPILOT_TAP_FIRE_
+    // DISTANCE's own comment).
+    intent.fire = if want_fire && horizontal_distance > AUTOPILOT_TAP_FIRE_DISTANCE {
+        if state.tap_fire_timer <= 0.0 {
+            state.tap_fire_timer = AUTOPILOT_TAP_FIRE_INTERVAL;
+            true
+        } else {
+            false
+        }
+    } else {
+        want_fire
+    };
+    intent.aim = horizontal_distance <= AUTOPILOT_ENGAGE_RANGE + 1.0 && horizontal_distance > 10.0;
+    if autopilot.0 {
+        touch_aiming.0 = intent.aim;
+    }
 
     // Everything below is the actual "what should I do about it" decision
     // — including the O(zombie count) nearby-scan for swarm-retreat — which

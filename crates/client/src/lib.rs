@@ -72,7 +72,7 @@ const SCENE_PATH: &str = "models/Sponza/Sponza.gltf";
 const USE_TEST_ARENA: bool = true;
 // Half the arena's side length (so it spans -ARENA_HALF_SIZE..ARENA_HALF_SIZE
 // on both X and Z) — see spawn_test_arena.
-const ARENA_HALF_SIZE: f32 = 18.0;
+const ARENA_HALF_SIZE: f32 = 36.0;
 const ARENA_WALL_HEIGHT: f32 = 5.0;
 const ARENA_WALL_THICKNESS: f32 = 1.0;
 
@@ -511,10 +511,7 @@ const RESOLUTION_SCALE_MIN_TEXTURE_PX: u32 = 64;
 const SCOPE_TEXTURE_SIZE: u32 = 512;
 const SCOPE_MIN_ZOOM: f32 = 6.0;
 const SCOPE_MAX_ZOOM: f32 = 25.0;
-// Was a fixed 8.0 — set to the minimum so aiming starts at the widest
-// (least-zoomed) scope FOV by default; scroll wheel/ADS-button still
-// steps it up toward SCOPE_MAX_ZOOM from there (adjust_scope_zoom).
-const SCOPE_DEFAULT_ZOOM: f32 = SCOPE_MIN_ZOOM;
+const SCOPE_DEFAULT_ZOOM: f32 = 8.0;
 // Multiplicative, not additive — fov = SCOPE_BASE_FOV / zoom means a fixed
 // +0.5-per-scroll step barely changes the FOV once zoom is already high
 // (1/x flattens out), so zooming in felt like it kept slowing down. A fixed
@@ -522,6 +519,13 @@ const SCOPE_DEFAULT_ZOOM: f32 = SCOPE_MIN_ZOOM;
 // zoom level instead.
 const SCOPE_ZOOM_STEP_FACTOR: f32 = 1.15;
 const SCOPE_BASE_FOV: f32 = BASE_FOV;
+// While autopilot has a zombie locked, the scope auto-zooms to frame it
+// instead of taking scroll-wheel input: at AUTO_ZOOM_NEAR_DISTANCE or
+// closer the target is already big in view so zoom stays at
+// SCOPE_MIN_ZOOM, at AUTO_ZOOM_FAR_DISTANCE or beyond it ramps up to
+// SCOPE_MAX_ZOOM, linearly interpolated in between.
+const AUTO_ZOOM_NEAR_DISTANCE: f32 = 10.0;
+const AUTO_ZOOM_FAR_DISTANCE: f32 = 100.0;
 // Guessed placement for the lens quad in the same camera-local space as
 // GUN_ADS_OFFSET/MUZZLE_OFFSET (can't see the model to calibrate exactly) —
 // closer to the camera than GUN_ADS_OFFSET.z so it renders in front of the
@@ -3816,10 +3820,11 @@ fn update_touch_controls_idle_hidden(
     time: Res<Time>,
     touches: Res<Touches>,
     settings_visible: Res<SettingsMenuVisible>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut idle_elapsed: Local<f32>,
     mut hidden: ResMut<TouchControlsIdleHidden>,
 ) {
-    if settings_visible.0 || touches.iter().next().is_some() {
+    if settings_visible.0 || touches.iter().next().is_some() || keys.just_pressed(KeyCode::Backquote) {
         *idle_elapsed = 0.0;
         if hidden.0 {
             hidden.0 = false;
@@ -7018,6 +7023,10 @@ fn shoot(
             ));
         }
 
+        if is_aiming(cursor, &mouse, touch_aiming.0) {
+            *cooldown = FIRE_RATE * (1.0 + (distance / 10.0).min(4.0));
+        }
+
         // Mark this zombie as "hit by us, watch for it dying" — see
         // count_local_kills, which is the only place this entry is ever
         // read/removed. Overwrites any still-live entry from an earlier
@@ -7277,6 +7286,9 @@ fn adjust_scope_zoom(
     touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut zoom: ResMut<ScopeZoom>,
+    camera: Query<&GlobalTransform, With<FpsCamera>>,
+    autopilot_state: Res<AutopilotState>,
+    zombies: Query<&Transform, With<Zombie>>,
 ) {
     let Ok(cursor) = cursor.single() else {
         return;
@@ -7284,6 +7296,19 @@ fn adjust_scope_zoom(
     if !is_aiming(cursor, &mouse, touch_aiming.0) {
         wheel.clear();
         return;
+    }
+    if let Some(target_entity) = autopilot_state.target {
+        if let (Ok(camera_global), Ok(zombie_transform)) =
+            (camera.single(), zombies.get(target_entity))
+        {
+            let distance = camera_global.translation().distance(zombie_transform.translation);
+            let t = ((distance - AUTO_ZOOM_NEAR_DISTANCE)
+                / (AUTO_ZOOM_FAR_DISTANCE - AUTO_ZOOM_NEAR_DISTANCE))
+                .clamp(0.0, 1.0);
+            zoom.0 = SCOPE_MIN_ZOOM + (SCOPE_MAX_ZOOM - SCOPE_MIN_ZOOM) * t;
+            wheel.clear();
+            return;
+        }
     }
     for event in wheel.read() {
         zoom.0 = (zoom.0 * SCOPE_ZOOM_STEP_FACTOR.powf(event.y.signum()))

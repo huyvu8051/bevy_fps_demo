@@ -4,7 +4,7 @@
 
 use bevy::prelude::Vec2;
 
-pub const ARENA_HALF_SIZE: f32 = 18.0;
+pub const ARENA_HALF_SIZE: f32 = 36.0;
 pub const ARENA_WALL_HEIGHT: f32 = 5.0;
 pub const ARENA_WALL_THICKNESS: f32 = 1.0;
 
