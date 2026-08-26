@@ -25,7 +25,7 @@ use objc::{runtime::Object, *};
 // only the vertex data and camera pose source change. See
 // native_game_app.rs (headless App) and native_game_extract.rs
 // (extraction).
-use super::metal_math::{look_at, mat_mul, orthographic, perspective};
+use super::metal_math::{look_at, mat_mul, orthographic, perspective, transform_point};
 use super::native_game_app::build_headless_game_ecs_app;
 use super::native_game_extract::{
     extract_render_snapshot, prime_camera_viewport, ExtractedMesh, FloatingDamageSnapshot, HealthBarSnapshot,
@@ -998,6 +998,12 @@ pub struct NativeMetalProbe {
     real_game_scope_rotation: [f32; 4],
     real_game_scope_active: bool,
     real_game_scope_fov: f32,
+    // Real ScopeLens entity's own world position — see
+    // ScopeCameraSnapshot::lens_world_pos's own doc comment
+    // (native_game_extract.rs). Projected through the main camera's
+    // view_projection each frame to place the scope PIP quad where the
+    // real 3D lens glass actually is, instead of a fixed screen center.
+    real_game_scope_lens_world_pos: [f32; 3],
     // The scene's real PointLight, if any — see LightSnapshot's own doc
     // comment. `None` (falls back to FALLBACK_LIGHT) before the first
     // extraction, or for the toy demo/patrol probe world, which has no
@@ -1095,17 +1101,23 @@ fn bake_static_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::Glt
 // `texture: None` (untextured material, or an unsupported CPU pixel format
 // — see native_game_extract.rs) falls back to `self.white_texture` in
 // `draw_scene`, same fallback Sponza's own meshes already use.
-// Real-game scope PIP: a small circle centered on screen (matching where
-// the real game's lens quad sits, dead center in the scope tube — see
-// SCOPE_LENS_OFFSET/update_scope_lens in crates/client/src/lib.rs) instead
-// of the demo probe's fixed top-right box. `half_height` is in NDC
-// (-1..1); `aspect` (width/height) corrects the X half-width so the quad
-// is a true circle in screen space rather than an ellipse stretched by a
-// non-square viewport — same reasoning perspective() already applies to
-// the main projection's own aspect correction.
-fn build_centered_quad(device: &Device, aspect: f32, half_height: f32) -> metal::Buffer {
+// Real-game scope PIP: a small circle at `ndc_center` (see render_frame's
+// own call site — projects the real ScopeLens entity's world position
+// through the main camera's view_projection each frame, so this tracks the
+// gun's own shoulder-swap sweep/recoil kick/reload dip/walk-bob instead of
+// sitting frozen at a fixed screen position while the glass around it
+// visibly moves — see lens_world_pos's own doc comment on
+// ScopeCameraSnapshot, native_game_extract.rs, for the full "these two
+// used to visibly desync" story) instead of the demo probe's fixed
+// top-right box. `half_height` is in NDC (-1..1); `aspect` (width/height)
+// corrects the X half-width so the quad is a true circle in screen space
+// rather than an ellipse stretched by a non-square viewport — same
+// reasoning perspective() already applies to the main projection's own
+// aspect correction.
+fn build_centered_quad(device: &Device, aspect: f32, half_height: f32, ndc_center: [f32; 2]) -> metal::Buffer {
     let half_w = half_height / aspect;
     let half_h = half_height;
+    let [cx, cy] = ndc_center;
     // V=0 is the texture's TOP row (image-space convention, same as
     // ndc_ui_rect's own doc comment) — so the screen quad's TOP vertices
     // (position.y = +half_h) must carry uv.y = 0.0, not the bottom ones.
@@ -1113,12 +1125,12 @@ fn build_centered_quad(device: &Device, aspect: f32, half_height: f32) -> metal:
     // scope_color_texture's top row at the screen's bottom and vice versa
     // — a vertical flip, the scope PIP rendering upside down.
     let verts = [
-        QuadVertex { position: [-half_w, -half_h], uv: [0.0, 1.0] },
-        QuadVertex { position: [half_w, -half_h], uv: [1.0, 1.0] },
-        QuadVertex { position: [half_w, half_h], uv: [1.0, 0.0] },
-        QuadVertex { position: [-half_w, -half_h], uv: [0.0, 1.0] },
-        QuadVertex { position: [half_w, half_h], uv: [1.0, 0.0] },
-        QuadVertex { position: [-half_w, half_h], uv: [0.0, 0.0] },
+        QuadVertex { position: [cx - half_w, cy - half_h], uv: [0.0, 1.0] },
+        QuadVertex { position: [cx + half_w, cy - half_h], uv: [1.0, 1.0] },
+        QuadVertex { position: [cx + half_w, cy + half_h], uv: [1.0, 0.0] },
+        QuadVertex { position: [cx - half_w, cy - half_h], uv: [0.0, 1.0] },
+        QuadVertex { position: [cx + half_w, cy + half_h], uv: [1.0, 0.0] },
+        QuadVertex { position: [cx - half_w, cy + half_h], uv: [0.0, 0.0] },
     ];
     device.new_buffer_with_data(
         verts.as_ptr() as *const _,
@@ -1745,6 +1757,7 @@ impl NativeMetalProbe {
             real_game_scope_rotation: [0.0, 0.0, 0.0, 1.0],
             real_game_scope_active: false,
             real_game_scope_fov: 12.0_f32.to_radians(),
+            real_game_scope_lens_world_pos: [0.0, 0.0, 0.0],
             real_game_light: FALLBACK_LIGHT,
             ui_pipeline,
             ui_pipeline_no_msaa,
@@ -2250,6 +2263,7 @@ impl NativeMetalProbe {
                 self.real_game_scope_rotation = scope_cam.rotation;
                 self.real_game_scope_active = scope_cam.active;
                 self.real_game_scope_fov = scope_cam.fov;
+                self.real_game_scope_lens_world_pos = scope_cam.lens_world_pos;
             } else {
                 self.real_game_scope_active = false;
             }
@@ -2596,13 +2610,25 @@ impl NativeMetalProbe {
         if show_scope {
             let quad_pipeline_ref = if msaa_enabled { &self.quad_pipeline } else { &self.quad_pipeline_no_msaa };
             if let Some(quad_pipeline) = quad_pipeline_ref {
-                // Real-game mode: a circle dead center (matches the real
-                // lens quad's screen position — see build_centered_quad's
-                // own doc comment); the demo probe keeps its original
-                // fixed top-right box, which has no real "is this actually
-                // where the lens sits" state to match.
-                let real_game_quad_buffer =
-                    is_real_game.then(|| build_centered_quad(&self.device, aspect, 0.35));
+                // Real-game mode: projects the real ScopeLens entity's own
+                // world position through this frame's main-camera
+                // view_projection to get its actual NDC screen position —
+                // see build_centered_quad's own doc comment for why (the
+                // PIP used to sit hardcoded dead-center regardless of
+                // recoil/reload/sway, visibly desyncing from the real 3D
+                // lens glass drawn around it). `w <= 0` means the lens is
+                // behind the camera this frame (shouldn't really happen
+                // while show_scope is true, but a stale/first-frame
+                // extraction could race it) — falls back to dead center
+                // rather than dividing by a non-positive w and flinging
+                // the quad to a nonsense position. The demo probe keeps
+                // its original fixed top-right box, which has no real "is
+                // this actually where the lens sits" state to match.
+                let real_game_quad_buffer = is_real_game.then(|| {
+                    let clip = transform_point(view_projection, self.real_game_scope_lens_world_pos);
+                    let ndc_center = if clip[3] > 1e-4 { [clip[0] / clip[3], clip[1] / clip[3]] } else { [0.0, 0.0] };
+                    build_centered_quad(&self.device, aspect, 0.35, ndc_center)
+                });
                 let quad_buffer = real_game_quad_buffer.as_ref().unwrap_or(&self.quad_vertex_buffer);
                 encoder.set_render_pipeline_state(quad_pipeline);
                 encoder.set_vertex_buffer(0, Some(quad_buffer), 0);

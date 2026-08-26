@@ -63,6 +63,23 @@ pub fn look_at(eye: [f32; 3], center: [f32; 3], up: [f32; 3]) -> [[f32; 4]; 4] {
     ]
 }
 
+/// Transforms a point (implicit w=1) by a column-major 4x4 matrix,
+/// returning the full homogeneous clip-space `[x, y, z, w]` — callers that
+/// need NDC (native_metal_probe.rs's scope-PIP screen projection, to place
+/// the PIP circle where the real 3D lens quad's world position actually
+/// projects to instead of a fixed screen position) must divide by `w`
+/// themselves, and check `w > 0` first: a point behind the camera has
+/// `w <= 0`, and dividing by it would fling the projected point to the
+/// wrong side of the screen instead of correctly reporting "not visible".
+pub fn transform_point(m: [[f32; 4]; 4], p: [f32; 3]) -> [f32; 4] {
+    [
+        m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
+        m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
+        m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
+        m[0][3] * p[0] + m[1][3] * p[1] + m[2][3] * p[2] + m[3][3],
+    ]
+}
+
 /// Column-major 4x4 matrix multiply (`a * b`).
 pub fn mat_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
     let mut out = [[0.0f32; 4]; 4];

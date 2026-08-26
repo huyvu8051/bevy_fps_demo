@@ -253,6 +253,19 @@ pub struct ScopeCameraSnapshot {
     /// Real `Projection::Perspective.fov` (radians), already
     /// `SCOPE_BASE_FOV / ScopeZoom` per `update_scope_lens`.
     pub fov: f32,
+    /// The real `ScopeLens` entity's own `GlobalTransform.translation` —
+    /// same gun-child quad `update_scope_lens` moves every tick with the
+    /// shoulder-swap sweep, recoil kick, reload dip/tilt, and walk-bob
+    /// (same math `sync_scope_camera` mirrors onto the camera itself, see
+    /// this fn's own doc comment). The renderer projects this through the
+    /// MAIN camera's own view_projection each frame to find where on
+    /// screen the scope PIP should sit — previously hardcoded to a fixed
+    /// screen-center position that never moved, so on recoil/reload the
+    /// gun's real lens glass (and reticle) visibly kicked while the
+    /// picture inside it stayed frozen dead center, instead of reading as
+    /// one physical object like the desktop build (whose PIP is that same
+    /// real 3D lens quad, not a separate screen-space overlay).
+    pub lens_world_pos: [f32; 3],
 }
 
 #[derive(Default)]
@@ -691,19 +704,31 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // Scope camera: read the real ScopeCamera entity's own final state
     // directly — see ScopeCameraSnapshot's own doc comment for why this
     // supersedes reimplementing sync_scope_camera/update_scope_lens.
-    let mut scope_state: SystemState<
+    // ScopeLens's own GlobalTransform.translation rides along here too —
+    // it's the real gun-mesh child quad update_scope_lens moves every
+    // tick (shoulder-swap sweep, recoil kick, reload dip/tilt, walk-bob,
+    // all the same math sync_scope_camera mirrors for the camera itself),
+    // so a renderer needs its world position to know WHERE on screen the
+    // scope picture should actually sit this frame — see lens_world_pos's
+    // own doc comment on ScopeCameraSnapshot for why this replaced a
+    // fixed-screen-position PIP.
+    let mut scope_state: SystemState<(
         Query<(&GlobalTransform, &bevy::camera::Camera, &bevy::camera::Projection), With<crate::ScopeCamera>>,
-    > = SystemState::new(world);
-    if let Some((transform, camera, projection)) = scope_state.get(world).iter().next() {
+        Query<&GlobalTransform, With<crate::ScopeLens>>,
+    )> = SystemState::new(world);
+    let (scope_camera_query, scope_lens_query) = scope_state.get(world);
+    if let Some((transform, camera, projection)) = scope_camera_query.iter().next() {
         let fov = match projection {
             bevy::camera::Projection::Perspective(p) => p.fov,
             _ => 0.0,
         };
+        let lens_world_pos = scope_lens_query.iter().next().map(|t| t.translation().to_array()).unwrap_or(transform.translation().to_array());
         snapshot.scope_camera = Some(ScopeCameraSnapshot {
             eye: transform.translation().to_array(),
             rotation: transform.rotation().to_array(),
             active: camera.is_active,
             fov,
+            lens_world_pos,
         });
     }
 
