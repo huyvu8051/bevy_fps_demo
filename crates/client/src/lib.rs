@@ -6018,15 +6018,35 @@ fn grab_cursor(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    pending: Res<MapSelectionPending>,
+    menu: Res<SettingsMenuVisible>,
 ) {
     let Ok(mut cursor) = cursor.single_mut() else {
         return;
     };
 
-    if mouse.just_pressed(MouseButton::Left) && cursor.grab_mode == CursorGrabMode::None {
+    // Toggle cursor grab on backtick (`) key press
+    if keys.just_pressed(KeyCode::Backquote) {
+        if cursor.grab_mode == CursorGrabMode::None {
+            cursor.grab_mode = CursorGrabMode::Locked;
+            cursor.visible = false;
+        } else {
+            cursor.grab_mode = CursorGrabMode::None;
+            cursor.visible = true;
+        }
+    }
+
+    // Left click only grabs the cursor if no menu is open/pending
+    if mouse.just_pressed(MouseButton::Left)
+        && cursor.grab_mode == CursorGrabMode::None
+        && !pending.0
+        && !menu.0
+    {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
     }
+
+    // Escape releases it
     if keys.just_pressed(KeyCode::Escape) {
         cursor.grab_mode = CursorGrabMode::None;
         cursor.visible = true;
