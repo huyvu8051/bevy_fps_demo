@@ -291,6 +291,7 @@ pub struct RenderSnapshot {
     pub health_bars: Vec<HealthBarSnapshot>,
     pub touch_buttons: Vec<TouchButtonSnapshot>,
     pub touch_joystick: Option<TouchJoystickSnapshot>,
+    pub scope_zoom_slider: Option<ScopeZoomSliderSnapshot>,
     pub hud_texts: Vec<HudTextSnapshot>,
     pub crosshair_lines: Vec<CrosshairLineSnapshot>,
     pub settings_menu_panel: Option<SettingsMenuButtonSnapshot>,
@@ -376,6 +377,25 @@ pub struct TouchJoystickSnapshot {
     pub base_size: [f32; 2],
     pub knob_top_left: [f32; 2],
     pub knob_size: [f32; 2],
+}
+
+/// The scope-zoom slider's track + handle (crate::lib's `spawn_touch_
+/// controls`) — same "dragged, not tapped, so extracted like the joystick
+/// instead of TouchButtonSnapshot" reasoning as `TouchJoystickSnapshot`'s
+/// own doc comment. `None` only when `TouchControlsEnabled` is off
+/// (spawn_touch_controls never ran, so neither node exists) — while
+/// simply not ADS'd, the track stays `Some` but zero-sized (the real
+/// `Node.display: Display::None` toggle, `update_scope_zoom_slider_
+/// visibility` in crate::lib, collapses it out of layout the same way a
+/// `Display::None` `CrosshairRoot`'s children come back zero-sized — see
+/// `CrosshairLineSnapshot`'s own extraction site), so the renderer just
+/// naturally draws nothing visible rather than needing a separate
+/// aiming-state field to check.
+pub struct ScopeZoomSliderSnapshot {
+    pub track_top_left: [f32; 2],
+    pub track_size: [f32; 2],
+    pub handle_top_left: [f32; 2],
+    pub handle_size: [f32; 2],
 }
 
 /// One always-on HUD text readout (HP, ammo, or ping — crate::lib's
@@ -934,6 +954,21 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             let (base_top_left, base_size) = logical_rect(base_node, base_transform);
             let (knob_top_left, knob_size) = logical_rect(knob_node, knob_transform);
             TouchJoystickSnapshot { base_top_left, base_size, knob_top_left, knob_size }
+        },
+    );
+
+    // Scope-zoom slider track + handle: see ScopeZoomSliderSnapshot's own
+    // doc comment.
+    let mut zoom_slider_state: SystemState<(
+        Query<(&ComputedNode, &UiGlobalTransform), With<crate::TouchScopeZoomSliderTrack>>,
+        Query<(&ComputedNode, &UiGlobalTransform), With<crate::TouchScopeZoomSliderHandle>>,
+    )> = SystemState::new(world);
+    let (zoom_track_query, zoom_handle_query) = zoom_slider_state.get(world);
+    snapshot.scope_zoom_slider = zoom_track_query.iter().next().zip(zoom_handle_query.iter().next()).map(
+        |((track_node, track_transform), (handle_node, handle_transform))| {
+            let (track_top_left, track_size) = logical_rect(track_node, track_transform);
+            let (handle_top_left, handle_size) = logical_rect(handle_node, handle_transform);
+            ScopeZoomSliderSnapshot { track_top_left, track_size, handle_top_left, handle_size }
         },
     );
 

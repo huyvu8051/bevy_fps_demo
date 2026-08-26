@@ -1039,6 +1039,7 @@ pub struct NativeMetalProbe {
     // so this frame's set replaces last frame's wholesale like those do.
     ui_touch_buttons: Vec<super::native_game_extract::TouchButtonSnapshot>,
     ui_touch_joystick: Option<super::native_game_extract::TouchJoystickSnapshot>,
+    ui_scope_zoom_slider: Option<super::native_game_extract::ScopeZoomSliderSnapshot>,
     // HP/ammo/ping readouts + crosshair — see HudTextSnapshot/
     // CrosshairLineSnapshot's own doc comments (native_game_extract.rs).
     ui_hud_texts: Vec<super::native_game_extract::HudTextSnapshot>,
@@ -1800,6 +1801,7 @@ impl NativeMetalProbe {
             ui_health_bars: Vec::new(),
             ui_touch_buttons: Vec::new(),
             ui_touch_joystick: None,
+            ui_scope_zoom_slider: None,
             ui_hud_texts: Vec::new(),
             ui_crosshair_lines: Vec::new(),
             ui_settings_menu_panel: None,
@@ -2270,6 +2272,7 @@ impl NativeMetalProbe {
             self.ui_health_bars = snapshot.health_bars;
             self.ui_touch_buttons = snapshot.touch_buttons;
             self.ui_touch_joystick = snapshot.touch_joystick;
+            self.ui_scope_zoom_slider = snapshot.scope_zoom_slider;
             self.ui_hud_texts = snapshot.hud_texts;
             self.ui_crosshair_lines = snapshot.crosshair_lines;
             self.ui_settings_menu_panel = snapshot.settings_menu_panel;
@@ -2702,6 +2705,7 @@ impl NativeMetalProbe {
                 || !self.ui_floating_damage.is_empty()
                 || !self.ui_touch_buttons.is_empty()
                 || self.ui_touch_joystick.is_some()
+                || self.ui_scope_zoom_slider.is_some()
                 || !self.ui_hud_texts.is_empty()
                 || !self.ui_crosshair_lines.is_empty()
                 || self.ui_settings_menu_panel.is_some()
@@ -2768,6 +2772,24 @@ impl NativeMetalProbe {
                     let [kw, kh] = joystick.knob_size;
                     let knob = ndc_ui_rect(kx, ky, kw, kh, view_w, view_h, FULL_UV);
                     draw_ui_quad(encoder, &knob, [1.0, 1.0, 1.0, 0.55], &self.white_texture);
+                }
+
+                // Scope-zoom slider — same track-then-handle draw order/
+                // colors as the joystick above (matching spawn_touch_
+                // controls' own base-then-knob alpha values: 0.3 track,
+                // 0.55 handle). Zero-sized (drawing nothing visible) while
+                // not ADS'd — see ScopeZoomSliderSnapshot's own doc
+                // comment for why that needs no separate visibility check
+                // here.
+                if let Some(slider) = &self.ui_scope_zoom_slider {
+                    let [tx, ty] = slider.track_top_left;
+                    let [tw, th] = slider.track_size;
+                    let track = ndc_ui_rect(tx, ty, tw, th, view_w, view_h, FULL_UV);
+                    draw_ui_quad(encoder, &track, [1.0, 1.0, 1.0, 0.3], &self.white_texture);
+                    let [hx, hy] = slider.handle_top_left;
+                    let [hw, hh] = slider.handle_size;
+                    let handle = ndc_ui_rect(hx, hy, hw, hh, view_w, view_h, FULL_UV);
+                    draw_ui_quad(encoder, &handle, [1.0, 1.0, 1.0, 0.55], &self.white_texture);
                 }
 
                 for button in &self.ui_touch_buttons {

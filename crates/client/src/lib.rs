@@ -276,6 +276,14 @@ const TOUCH_JOYSTICK_KNOB_PX: f32 = 64.0;
 // magnitude, so dragging further than this doesn't move any faster.
 const TOUCH_JOYSTICK_RADIUS_PX: f32 = (TOUCH_JOYSTICK_BASE_PX - TOUCH_JOYSTICK_KNOB_PX) / 2.0;
 const TOUCH_FIRE_BUTTON_PX: f32 = 90.0;
+// Vertical scope-zoom slider (only relevant while ADS'd — desktop's
+// equivalent is the scroll wheel, see adjust_scope_zoom) — a track the
+// player drags up/down, dragging up = more zoom (SCOPE_MAX_ZOOM at the
+// top), down = less (SCOPE_MIN_ZOOM at the bottom), same "drag a handle
+// along a track" shape as the joystick above but 1D instead of 2D.
+const TOUCH_SCOPE_ZOOM_TRACK_WIDTH_PX: f32 = 44.0;
+const TOUCH_SCOPE_ZOOM_TRACK_HEIGHT_PX: f32 = 200.0;
+const TOUCH_SCOPE_ZOOM_HANDLE_PX: f32 = 40.0;
 // bevy_ui's own UiStack sorts root-level (parentless) UI nodes by
 // (GlobalZIndex, ZIndex), falling back to ECS table/archetype iteration
 // order — NOT spawn order — for nodes that tie on both. Root nodes are
@@ -316,6 +324,10 @@ impl Default for TouchControlsEnabled {
 struct TouchJoystickBase;
 #[derive(Component)]
 struct TouchJoystickKnob;
+#[derive(Component)]
+struct TouchScopeZoomSliderTrack;
+#[derive(Component)]
+struct TouchScopeZoomSliderHandle;
 #[derive(Component)]
 struct TouchFireButton;
 #[derive(Component)]
@@ -373,6 +385,16 @@ struct TouchMoveAxis(Vec2);
 struct TouchLookState {
     touch_id: Option<u64>,
     last_pos: Vec2,
+}
+
+// Which touch is currently dragging the scope-zoom slider — same
+// commit-a-touch-id-until-release shape as TouchMoveState, but there's no
+// separate "axis" resource since this system writes straight into the
+// real ScopeZoom.0 (the slider's whole value range already IS the zoom
+// range, unlike movement which composes a drag delta with WASD).
+#[derive(Resource, Default)]
+struct TouchScopeZoomState {
+    touch_id: Option<u64>,
 }
 
 #[derive(Resource, Default)]
@@ -857,6 +879,22 @@ struct ShowHitMarkers(bool);
 impl Default for ShowHitMarkers {
     fn default() -> Self {
         if let Ok(val) = std::env::var("SHOW_HIT_MARKERS") {
+            Self(val == "1" || val.to_lowercase() == "true")
+        } else {
+            Self(true)
+        }
+    }
+}
+
+// Debug/dev: toggled by settings/cheats or env SHOW_BULLET_TRACERS. Gates
+// spawn_bullet_tracer entirely — same on/off-toggle shape as ShowHitMarkers
+// right above, just for the tracer streak instead of the hit-marker sphere.
+#[derive(Resource)]
+struct ShowBulletTracers(bool);
+
+impl Default for ShowBulletTracers {
+    fn default() -> Self {
+        if let Ok(val) = std::env::var("SHOW_BULLET_TRACERS") {
             Self(val == "1" || val.to_lowercase() == "true")
         } else {
             Self(true)
@@ -1885,6 +1923,7 @@ fn build_game_common(app: &mut App) {
         .init_resource::<GodMode>()
         .init_resource::<ShowAutopilotTarget>()
         .init_resource::<ShowHitMarkers>()
+        .init_resource::<ShowBulletTracers>()
         .init_resource::<DebugPanelVisible>()
         .init_resource::<SettingsMenuVisible>()
         .init_resource::<SettingsMenuScrollState>()
@@ -1910,6 +1949,7 @@ fn build_game_common(app: &mut App) {
         .init_resource::<TouchControlsEnabled>()
         .init_resource::<TouchMoveState>()
         .init_resource::<TouchMoveAxis>()
+        .init_resource::<TouchScopeZoomState>()
         .init_resource::<TouchLookState>()
         .init_resource::<TouchFiring>()
         .init_resource::<TouchAiming>()
@@ -1946,6 +1986,7 @@ fn build_game_common(app: &mut App) {
                 touch_look,
                 touch_fire_button,
                 touch_aim_button,
+                touch_scope_zoom_drag,
                 touch_jump_button,
                 update_noclip_fly_input,
                 touch_crouch_button,
@@ -2047,6 +2088,8 @@ fn build_game_common(app: &mut App) {
                 .chain(),
             (
                 adjust_scope_zoom,
+                update_scope_zoom_slider_visual,
+                update_scope_zoom_slider_visibility,
                 gun_view_animation,
                 sync_scope_camera,
                 update_scope_lens,
@@ -2868,6 +2911,7 @@ fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "LookAt", CheatLookAtTargetButton);
                         spawn_cheat_toggle_button(row, "TraceAim", CheatShowAutopilotTargetButton);
                         spawn_cheat_toggle_button(row, "HitMarks", CheatShowHitMarkersButton);
+                        spawn_cheat_toggle_button(row, "Tracer", CheatShowTracersButton);
                     });
                 }
             });
@@ -3207,6 +3251,8 @@ struct CheatLookAtTargetButton;
 struct CheatShowAutopilotTargetButton;
 #[derive(Component)]
 struct CheatShowHitMarkersButton;
+#[derive(Component)]
+struct CheatShowTracersButton;
 
 // Changed<Interaction>-gated like every other touch button in this file —
 // each tap flips the same resource the matching desktop key
@@ -3327,11 +3373,13 @@ fn cheat_toggle_buttons_3(
     mut show_aim: ResMut<ShowAutopilotTarget>,
     mut show_markers: ResMut<ShowHitMarkers>,
     mut scope_camera: ResMut<ScopeCameraEnabled>,
+    mut show_tracers: ResMut<ShowBulletTracers>,
     dof_alt_btn: Query<&Interaction, (With<CheatDofAltButton>, Changed<Interaction>)>,
     look_at_btn: Query<&Interaction, (With<CheatLookAtTargetButton>, Changed<Interaction>)>,
     show_aim_btn: Query<&Interaction, (With<CheatShowAutopilotTargetButton>, Changed<Interaction>)>,
     show_markers_btn: Query<&Interaction, (With<CheatShowHitMarkersButton>, Changed<Interaction>)>,
     scope_camera_btn: Query<&Interaction, (With<CheatScopeCameraButton>, Changed<Interaction>)>,
+    show_tracers_btn: Query<&Interaction, (With<CheatShowTracersButton>, Changed<Interaction>)>,
 ) {
     if tapped(&dof_alt_btn) {
         dof_alt.0 = !dof_alt.0;
@@ -3344,6 +3392,9 @@ fn cheat_toggle_buttons_3(
     }
     if tapped(&show_markers_btn) {
         show_markers.0 = !show_markers.0;
+    }
+    if tapped(&show_tracers_btn) {
+        show_tracers.0 = !show_tracers.0;
     }
     if tapped(&scope_camera_btn) {
         scope_camera.0 = !scope_camera.0;
@@ -3460,6 +3511,7 @@ fn update_extra_toggle_colors(
     show_aim: Res<ShowAutopilotTarget>,
     show_markers: Res<ShowHitMarkers>,
     scope_camera: Res<ScopeCameraEnabled>,
+    show_tracers: Res<ShowBulletTracers>,
     mut buttons: Query<
         (
             &mut BackgroundColor,
@@ -3469,6 +3521,7 @@ fn update_extra_toggle_colors(
             Option<&CheatShowAutopilotTargetButton>,
             Option<&CheatShowHitMarkersButton>,
             Option<&CheatScopeCameraButton>,
+            Option<&CheatShowTracersButton>,
         ),
         Or<(
             With<AutopilotButton>,
@@ -3477,11 +3530,12 @@ fn update_extra_toggle_colors(
             With<CheatShowAutopilotTargetButton>,
             With<CheatShowHitMarkersButton>,
             With<CheatScopeCameraButton>,
+            With<CheatShowTracersButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, scope_camera_m) in &mut buttons {
+    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, scope_camera_m, show_tracers_m) in &mut buttons {
         let on = if auto_m.is_some() {
             autopilot.0
         } else if dof_m.is_some() {
@@ -3492,8 +3546,10 @@ fn update_extra_toggle_colors(
             show_aim.0
         } else if show_markers_m.is_some() {
             show_markers.0
+        } else if scope_camera_m.is_some() {
+            scope_camera.0
         } else {
-            scope_camera_m.is_some() && scope_camera.0
+            show_tracers_m.is_some() && show_tracers.0
         };
         *bg = BackgroundColor(color_for(on));
     }
@@ -4482,7 +4538,10 @@ fn spawn_spark_effects(commands: &mut Commands, spark_assets: &SparkAssets, time
 // use its own unrelated-looking frequency, so two shots landing the same
 // frame don't roll identically. Pure VFX — called only after the real hit
 // is already resolved, so this can never affect damage.
-fn spawn_bullet_tracer(commands: &mut Commands, tracer_assets: &TracerAssets, seed: f32, start: Vec3, end: Vec3) {
+fn spawn_bullet_tracer(commands: &mut Commands, tracer_assets: &TracerAssets, seed: f32, start: Vec3, end: Vec3, show_tracers: bool) {
+    if !show_tracers {
+        return;
+    }
     // (sin(seed) + 1) / 2 maps to a roughly-uniform [0, 1] value — below
     // TRACER_CHANCE means "this shot gets a tracer".
     if (ops::sin(seed) + 1.0) * 0.5 >= TRACER_CHANCE {
@@ -5768,6 +5827,47 @@ fn spawn_touch_controls(commands: &mut Commands) {
         Color::srgba(0.4, 0.85, 0.5, 0.4),
         TouchLeanRightButton,
     );
+
+    // Scope-zoom slider — right edge, well above the Fire/ADS/Reload
+    // cluster (bottom:48 + TOUCH_FIRE_BUTTON_PX + margin), so a thumb
+    // reaching up from Fire doesn't cross it. Hidden by default
+    // (Display::None) — only relevant while ADS'd, toggled to Flex by
+    // update_scope_zoom_slider_visibility the same way update_crosshair
+    // toggles CrosshairRoot off while aiming (just inverted: this one
+    // shows on aim instead of hiding).
+    commands
+        .spawn((
+            Node {
+                width: Val::Px(TOUCH_SCOPE_ZOOM_TRACK_WIDTH_PX),
+                height: Val::Px(TOUCH_SCOPE_ZOOM_TRACK_HEIGHT_PX),
+                position_type: PositionType::Absolute,
+                right: Val::Px(24.0),
+                bottom: Val::Px(48.0 + TOUCH_FIRE_BUTTON_PX + 48.0),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(TOUCH_SCOPE_ZOOM_TRACK_WIDTH_PX / 2.0)),
+                display: Display::None,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+            GlobalZIndex(STATIC_UI_Z_INDEX),
+            TouchScopeZoomSliderTrack,
+        ))
+        .with_children(|track| {
+            track.spawn((
+                Node {
+                    width: Val::Px(TOUCH_SCOPE_ZOOM_HANDLE_PX),
+                    height: Val::Px(TOUCH_SCOPE_ZOOM_HANDLE_PX),
+                    position_type: PositionType::Absolute,
+                    left: Val::Px((TOUCH_SCOPE_ZOOM_TRACK_WIDTH_PX - TOUCH_SCOPE_ZOOM_HANDLE_PX) / 2.0),
+                    top: Val::Px(0.0),
+                    border_radius: BorderRadius::all(Val::Px(TOUCH_SCOPE_ZOOM_HANDLE_PX / 2.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.55)),
+                TouchScopeZoomSliderHandle,
+            ));
+        });
 }
 
 // Shared helper for the small round left/right/right-labeled touch buttons
@@ -6022,6 +6122,105 @@ fn update_joystick_knob_visual(state: Res<TouchMoveState>, touches: Res<Touches>
     let center = (TOUCH_JOYSTICK_BASE_PX - TOUCH_JOYSTICK_KNOB_PX) / 2.0;
     node.left = Val::Px(center + offset.x);
     node.top = Val::Px(center + offset.y);
+}
+
+// Drags ScopeZoom directly between SCOPE_MIN_ZOOM (bottom of the track)
+// and SCOPE_MAX_ZOOM (top) — the touch equivalent of desktop's scroll
+// wheel (adjust_scope_zoom). Deliberately a separate system/resource
+// rather than folded into adjust_scope_zoom itself: that system's own
+// early-return (not aiming) and autopilot auto-zoom branch already gate
+// out everything this needs to skip, and since this only ever WRITES
+// zoom.0 (never reads it), running before or after adjust_scope_zoom in
+// the frame doesn't matter — whichever runs last simply wins, same as
+// scroll-wheel vs. touch-drag would on any platform that had both.
+fn touch_scope_zoom_drag(
+    touches: Res<Touches>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mouse_ui_locked: Res<MouseUiLocked>,
+    touch_aiming: Res<TouchAiming>,
+    autopilot: Res<Autopilot>,
+    track: Query<(&ComputedNode, &UiGlobalTransform), With<TouchScopeZoomSliderTrack>>,
+    mut state: ResMut<TouchScopeZoomState>,
+    mut zoom: ResMut<ScopeZoom>,
+) {
+    // Only while manually ADS'd on touch — the slider is hidden
+    // (Display::None, see update_scope_zoom_slider_visibility) whenever
+    // not aiming anyway, and autopilot drives its own auto-zoom in
+    // adjust_scope_zoom (see that fn's own doc comment on why it checks
+    // Autopilot.0 rather than trusting a possibly-stale target).
+    // AssistiveTouch guard (MouseUiLocked) mirrors touch_move_axis's own.
+    if !touch_aiming.0 || autopilot.0 || mouse_ui_locked.0 {
+        state.touch_id = None;
+        return;
+    }
+    let (Ok(window), Ok((node, transform))) = (windows.single(), track.single()) else {
+        return;
+    };
+    let scale_factor = window.scale_factor();
+
+    if let Some(id) = state.touch_id {
+        if touches.get_pressed(id).is_none() {
+            state.touch_id = None;
+        }
+    }
+    if state.touch_id.is_none() {
+        if let Some(touch) = touches
+            .iter_just_pressed()
+            .find(|touch| node.contains_point(*transform, touch.position() * scale_factor))
+        {
+            state.touch_id = Some(touch.id());
+        }
+    }
+    let Some(touch) = state.touch_id.and_then(|id| touches.get_pressed(id)) else {
+        return;
+    };
+    // ComputedNode::size()/UiGlobalTransform's translation are both
+    // physical pixels (see multi_touch_button_interaction's own doc
+    // comment); touch.position() is logical — inverse_scale_factor
+    // converts the node's own rect to logical to compare directly,
+    // same technique native_game_extract.rs's logical_rect uses.
+    let logical_height = node.size().y * node.inverse_scale_factor();
+    let logical_top = transform.affine().translation.y * node.inverse_scale_factor() - logical_height / 2.0;
+    let t = ((touch.position().y - logical_top) / logical_height).clamp(0.0, 1.0);
+    // t=0 (touch at the track's top) -> SCOPE_MAX_ZOOM; t=1 (bottom) ->
+    // SCOPE_MIN_ZOOM — dragging UP zooms IN, matching a real optic's zoom
+    // ring (twist/slide away from you = further/more magnified) better
+    // than the opposite would.
+    zoom.0 = SCOPE_MAX_ZOOM + (SCOPE_MIN_ZOOM - SCOPE_MAX_ZOOM) * t;
+}
+
+// Purely cosmetic, mirrors update_joystick_knob_visual — slides the
+// handle to reflect the CURRENT ScopeZoom.0 regardless of what's driving
+// it (touch drag above, desktop scroll wheel, or autopilot's own
+// auto-zoom in adjust_scope_zoom), so the slider always reads correctly
+// even on frames this touch isn't actively dragging it.
+fn update_scope_zoom_slider_visual(zoom: Res<ScopeZoom>, mut handle: Query<&mut Node, With<TouchScopeZoomSliderHandle>>) {
+    let Ok(mut node) = handle.single_mut() else {
+        return;
+    };
+    let t = ((zoom.0 - SCOPE_MIN_ZOOM) / (SCOPE_MAX_ZOOM - SCOPE_MIN_ZOOM)).clamp(0.0, 1.0);
+    // Inverse of touch_scope_zoom_drag's own t (max zoom = top of track);
+    // handle top position ranges from 0 (track top) to track_height -
+    // handle_height (track bottom).
+    let travel = TOUCH_SCOPE_ZOOM_TRACK_HEIGHT_PX - TOUCH_SCOPE_ZOOM_HANDLE_PX;
+    node.top = Val::Px(travel * (1.0 - t));
+}
+
+// Shows the slider only while actually ADS'd — inverse of update_
+// crosshair's own CrosshairRoot toggle (that one hides on aim, this one
+// shows on aim), same is_aiming(...) check so both agree on the exact
+// same frame.
+fn update_scope_zoom_slider_visibility(
+    mouse: Res<ButtonInput<MouseButton>>,
+    touch_aiming: Res<TouchAiming>,
+    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    mut track: Query<&mut Node, With<TouchScopeZoomSliderTrack>>,
+) {
+    let Ok(mut node) = track.single_mut() else {
+        return;
+    };
+    let aiming = cursor.single().is_ok_and(|c| is_aiming(c, &mouse, touch_aiming.0));
+    node.display = if aiming { Display::Flex } else { Display::None };
 }
 
 // Mirror of mouse_look for the right half of the screen — writes into the
@@ -6904,12 +7103,13 @@ fn shoot(
     globals: Query<&GlobalTransform>,
     touch_firing: Res<TouchFiring>,
     mut cooldown: Local<f32>,
-    (autopilot, intent, local_moving, local_sprinting, show_hit_markers): (
+    (autopilot, intent, local_moving, local_sprinting, show_hit_markers, show_tracers): (
         Res<Autopilot>,
         Res<AutopilotIntent>,
         Res<LocalPlayerMoving>,
         Res<LocalPlayerSprinting>,
         Res<ShowHitMarkers>,
+        Res<ShowBulletTracers>,
     ),
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
@@ -7104,7 +7304,7 @@ fn shoot(
     // fly on past whatever they didn't hit too).
     let tracer_end = predicted_hit.map_or(camera_transform.translation + *direction * MAX_SHOT_DISTANCE, |(_, _, point, _)| point);
     let tracer_start = muzzle_world_pos + Vec3::Y * TRACER_START_Y_OFFSET;
-    spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 733.0, tracer_start, tracer_end);
+    spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 733.0, tracer_start, tracer_end, show_tracers.0);
 
     info!("[shot] fired: origin={:.2?} direction={:.2?}", camera_transform.translation, *direction);
     commands.client_trigger(FireShot {
@@ -7149,6 +7349,7 @@ fn on_shot_fx(
     zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
     show_hit_markers: Res<ShowHitMarkers>,
+    show_tracers: Res<ShowBulletTracers>,
 ) {
     match *trigger.event() {
         ShotFx::ZombieHit { origin, point, normal, damage, killed } => {
@@ -7169,7 +7370,7 @@ fn on_shot_fx(
             }
             // Seeded off `point` (not just time) so multiple remote shots
             // landing the same frame don't all roll the same tracer chance.
-            spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 619.0 + point.x * 13.7 + point.z * 7.3, origin, point);
+            spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 619.0 + point.x * 13.7 + point.z * 7.3, origin, point, show_tracers.0);
 
             // The server doesn't send which zombie entity it was (avoiding
             // cross-network entity mapping for a purely cosmetic detail) —
@@ -7201,7 +7402,7 @@ fn on_shot_fx(
                     },
                 ));
             }
-            spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 619.0 + point.x * 13.7 + point.z * 7.3, origin, point);
+            spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 619.0 + point.x * 13.7 + point.z * 7.3, origin, point, show_tracers.0);
             spawn_spark_effects(&mut commands, &vfx_assets.sparks, &time, point, normal);
         }
     }
@@ -7271,6 +7472,79 @@ fn reload_gun(
     commands.spawn((AudioPlayer(reload_sound.0.clone()), PlaybackSettings::DESPAWN));
 }
 
+// Recoil/reload/bob numbers derived purely from Gun's own state — used to
+// be computed by hand, identically, in THREE places (gun_view_animation,
+// sync_scope_camera, update_scope_lens): same recoil_t/reload_t/dip/
+// bob_aim_scale/bob_x/bob_y arithmetic, three separate copies of one
+// formula. That's exactly the kind of duplication that quietly drifts —
+// tweak GUN_BOB_AMOUNT_X once and forget the other two call sites, and the
+// gun/camera/lens stop moving in lockstep without any compile error to
+// catch it. One pure function of `&Gun`, called by all three, instead.
+struct GunPoseTimings {
+    recoil_t: f32,
+    dip: f32,
+    bob_x: f32,
+    bob_y: f32,
+}
+
+fn gun_pose_timings(gun: &Gun) -> GunPoseTimings {
+    let recoil_t = gun.recoil / RECOIL_DURATION;
+    let reload_t = gun.reload_remaining / RELOAD_DURATION;
+    // Parabola: 0 at both ends of the reload, 1 at the midpoint — the gun
+    // dips down/tilts away and comes back up as the reload finishes.
+    let dip = 4.0 * reload_t * (1.0 - reload_t);
+    let bob_aim_scale = 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER);
+    let bob_x = ops::sin(gun.bob_phase) * GUN_BOB_AMOUNT_X * gun.bob_blend * bob_aim_scale;
+    let bob_y = ops::sin(gun.bob_phase * 2.0).abs() * GUN_BOB_AMOUNT_Y * gun.bob_blend * bob_aim_scale;
+    GunPoseTimings { recoil_t, dip, bob_x, bob_y }
+}
+
+// The FULL sway + recoil-yaw-kick + recoil-roll-kick + reload/recoil-tilt
+// rotation stack — used by update_scope_lens (the physical glass quad the
+// player sees on screen; its own rotation reads as "the whole optic
+// wobbling/kicking with the gun" the same way gun_view_animation's own
+// mesh rotation does). NOT used for sync_scope_camera (see
+// gun_camera_tilt_rotation's own doc comment right below for why the
+// ScopeCamera itself only gets the tilt term, not this full stack) and
+// NOT used by gun_view_animation either: the gun mesh's own rotation
+// composes an extra base model-facing rotation (GUN_ROTATION_Y_DEG) and
+// wall-raise tilt IN BETWEEN these same terms, which changes the
+// composition order — quaternion multiplication doesn't commute, so
+// forcing the mesh through this exact stack would change its own visual
+// result in a way there's no device here to verify; gun_view_animation
+// still uses the same underlying GunPoseTimings numbers, just composes
+// its own rotation around them.
+fn gun_recoil_sway_rotation(gun: &Gun, timings: &GunPoseTimings) -> Quat {
+    Quat::from_rotation_z(gun.look_sway_roll.to_radians())
+        * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
+        * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
+        * Quat::from_rotation_x((RELOAD_TILT_DEG * timings.dip + RECOIL_TILT_UP_DEG * timings.recoil_t).to_radians())
+}
+
+// Tilt-only subset of gun_recoil_sway_rotation, for the ScopeCamera itself
+// (sync_scope_camera) — deliberately DROPS the sway-roll and recoil-roll-
+// kick/yaw-kick terms (the random per-shot "lắc" from gun.recoil_roll)
+// that update_scope_lens's full stack carries. Two reasons:
+//   1. Design: the scope's own aim kick should read as a clean straight-up
+//      recoil (what you actually feel/compensate for while ADS'd), while
+//      the random wobble is reserved for the visible gun mesh/lens as
+//      cosmetic flair, not something that should throw off the player's
+//      actual view through the optic.
+//   2. A real bug this fixes: the two roll terms (look_sway_roll,
+//      RECOIL_ROLL_DEG) are pure rotation around the view axis. Applying
+//      the SAME roll angle to both the ScopeCamera (which captures the
+//      picture into a texture — a camera rolled by θ renders its content
+//      rotated by -θ) AND the ScopeLens quad displaying that texture
+//      (rotated by +θ on screen) cancels out exactly: -θ + θ = 0. The
+//      picture visibly never tilted at all despite the formula being
+//      "there" on both sides — reported as "camera phụ không nghiêng
+//      chút nào". Yaw-kick isn't pure axial roll so it doesn't cancel the
+//      same clean way, but it's still part of the "random lắc" this
+//      function intentionally excludes per point 1 above.
+fn gun_camera_tilt_rotation(timings: &GunPoseTimings) -> Quat {
+    Quat::from_rotation_x((RELOAD_TILT_DEG * timings.dip + RECOIL_TILT_UP_DEG * timings.recoil_t).to_radians())
+}
+
 // Keeps the scope's render-to-texture camera glued to the main camera's
 // position/orientation every frame — it has no parent/player-follow logic
 // of its own, it just mirrors the real camera exactly.
@@ -7307,35 +7581,22 @@ fn sync_scope_camera(
     let sweep_y = SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend);
 
     // Same recoil kick (X/Y/Z) and reload dip/tilt gun_view_animation stacks
-    // on top of that base position — recoil_t/dip peak the same way they do
-    // there, so the whole view (not just position) wobbles along with the
-    // gun on every axis instead of holding rock-steady through recoil and
-    // reload.
-    let recoil_t = gun.recoil / RECOIL_DURATION;
-    let reload_t = gun.reload_remaining / RELOAD_DURATION;
-    let dip = 4.0 * reload_t * (1.0 - reload_t);
+    // on top of that base position — GunPoseTimings peaks the same way it
+    // does there, so the whole view (not just position) wobbles along with
+    // the gun on every axis instead of holding rock-steady through recoil
+    // and reload.
+    let timings = gun_pose_timings(gun);
     let recoil_and_reload = Vec3::new(
-        -RELOAD_LEFT_DIP * dip,
-        RECOIL_KICK_UP * recoil_t - RELOAD_DIP * dip,
-        RECOIL_KICK * recoil_t,
+        -RELOAD_LEFT_DIP * timings.dip,
+        RECOIL_KICK_UP * timings.recoil_t - RELOAD_DIP * timings.dip,
+        RECOIL_KICK * timings.recoil_t,
     );
-
-    // Same walk-bob gun_view_animation applies to the gun mesh (reads
-    // gun.bob_phase/bob_blend a frame stale, same as ads_blend/wall_raise
-    // above — imperceptible for a continuous oscillation).
-    let bob_aim_scale = 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER);
-    let bob_x = ops::sin(gun.bob_phase) * GUN_BOB_AMOUNT_X * gun.bob_blend * bob_aim_scale;
-    let bob_y =
-        ops::sin(gun.bob_phase * 2.0).abs() * GUN_BOB_AMOUNT_Y * gun.bob_blend * bob_aim_scale;
 
     scope_transform.translation += local_to_world(Vec3::new(swapped_sweep_x, sweep_y, sweep_z))
         + local_to_world(recoil_and_reload)
-        + local_to_world(Vec3::new(bob_x, -bob_y, 0.0))
+        + local_to_world(Vec3::new(timings.bob_x, -timings.bob_y, 0.0))
         + camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend;
-    scope_transform.rotation *= Quat::from_rotation_z(gun.look_sway_roll.to_radians())
-        * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * recoil_t)
-        * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * recoil_t)
-        * Quat::from_rotation_x((RELOAD_TILT_DEG * dip + RECOIL_TILT_UP_DEG * recoil_t).to_radians());
+    scope_transform.rotation *= gun_camera_tilt_rotation(&timings);
 }
 
 // Scroll wheel steps ScopeZoom up/down while aiming — ignored (and drained,
@@ -7433,28 +7694,16 @@ fn update_scope_lens(
         // is needed here (unlike sync_scope_camera, which has to rebuild a
         // world offset for the free-floating scope camera).
         let lens_x = GUN_OFFSET.x + (SCOPE_LENS_OFFSET.x - GUN_OFFSET.x) * gun.ads_blend;
-        let recoil_t = gun.recoil / RECOIL_DURATION;
-        let reload_t = gun.reload_remaining / RELOAD_DURATION;
-        let dip = 4.0 * reload_t * (1.0 - reload_t);
-        let bob_aim_scale = 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER);
-        let bob_x = ops::sin(gun.bob_phase) * GUN_BOB_AMOUNT_X * gun.bob_blend * bob_aim_scale;
-        let bob_y = ops::sin(gun.bob_phase * 2.0).abs()
-            * GUN_BOB_AMOUNT_Y
-            * gun.bob_blend
-            * bob_aim_scale;
-        let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend) - RELOAD_LEFT_DIP * dip + bob_x;
+        let timings = gun_pose_timings(gun);
+        let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend) - RELOAD_LEFT_DIP * timings.dip + timings.bob_x;
         let lens_y = SCOPE_LENS_OFFSET.y - SCOPE_LENS_HIDDEN_DROP * (1.0 - gun.ads_blend)
             + SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend)
-            + RECOIL_KICK_UP * recoil_t
-            - RELOAD_DIP * dip
-            - bob_y;
-        let lens_z =
-            GUN_OFFSET.z + (SCOPE_LENS_OFFSET.z - GUN_OFFSET.z) * gun.ads_blend + RECOIL_KICK * recoil_t;
+            + RECOIL_KICK_UP * timings.recoil_t
+            - RELOAD_DIP * timings.dip
+            - timings.bob_y;
+        let lens_z = GUN_OFFSET.z + (SCOPE_LENS_OFFSET.z - GUN_OFFSET.z) * gun.ads_blend + RECOIL_KICK * timings.recoil_t;
         transform.translation = Vec3::new(swapped_x, lens_y, lens_z);
-        transform.rotation = Quat::from_rotation_z(gun.look_sway_roll.to_radians())
-            * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * recoil_t)
-            * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * recoil_t)
-            * Quat::from_rotation_x((RELOAD_TILT_DEG * dip + RECOIL_TILT_UP_DEG * recoil_t).to_radians());
+        transform.rotation = gun_recoil_sway_rotation(gun, &timings);
         *visibility = if visible { Visibility::Visible } else { Visibility::Hidden };
     }
 }
@@ -7531,22 +7780,16 @@ fn gun_view_animation(
         if moving {
             gun.bob_phase += GUN_BOB_SPEED * time.delta_secs();
         }
-        let bob_aim_scale = 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER);
-        let bob_x = ops::sin(gun.bob_phase) * GUN_BOB_AMOUNT_X * gun.bob_blend * bob_aim_scale;
-        let bob_y =
-            ops::sin(gun.bob_phase * 2.0).abs() * GUN_BOB_AMOUNT_Y * gun.bob_blend * bob_aim_scale;
-
         // Sign flipped from the initial guess — reported backwards in-game.
         let sway_target =
             (look_delta.0.x * LOOK_SWAY_SENSITIVITY).clamp(-LOOK_SWAY_MAX_DEG, LOOK_SWAY_MAX_DEG);
         let sway_step = (LOOK_SWAY_SPEED * time.delta_secs()).min(1.0);
         gun.look_sway_roll += (sway_target - gun.look_sway_roll) * sway_step;
 
-        let recoil_t = gun.recoil / RECOIL_DURATION;
-        let reload_t = gun.reload_remaining / RELOAD_DURATION;
-        // Parabola: 0 at both ends of the reload, 1 at the midpoint — the
-        // gun dips down/tilts away and comes back up as the reload finishes.
-        let dip = 4.0 * reload_t * (1.0 - reload_t);
+        // Same GunPoseTimings sync_scope_camera/update_scope_lens read —
+        // see its own doc comment for why this used to be three separate
+        // hand-written copies of this exact arithmetic.
+        let timings = gun_pose_timings(&gun);
 
         let base_pos = gun.base_offset.lerp(GUN_ADS_OFFSET, gun.ads_blend);
         // Holding the lean-left key swaps the gun over to the left shoulder
@@ -7557,10 +7800,10 @@ fn gun_view_animation(
         let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
         transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)
             + Vec3::new(
-                bob_x,
-                RECOIL_KICK_UP * recoil_t - RELOAD_DIP * dip - bob_y
+                timings.bob_x,
+                RECOIL_KICK_UP * timings.recoil_t - RELOAD_DIP * timings.dip - timings.bob_y
                     + WALL_GUN_RAISE_HEIGHT * gun.wall_raise,
-                RECOIL_KICK * recoil_t,
+                RECOIL_KICK * timings.recoil_t,
             );
         // Recoil tilt is applied as the outer rotation (camera-local space),
         // not composed inside the model's own base orientation like the
@@ -7569,7 +7812,7 @@ fn gun_view_animation(
         // roll than an up/down pitch (reported as the gun leaning right on
         // recoil instead of the muzzle rising).
         let base_rotation = Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians())
-            * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * dip);
+            * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip);
         // Sign flipped: the previous sign raised the stock/rear instead of
         // the muzzle.
         // Same outer/camera-space composition as the recoil tilt above, same
@@ -7577,9 +7820,9 @@ fn gun_view_animation(
         let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
         transform.rotation = Quat::from_rotation_x(wall_raise_tilt)
             * Quat::from_rotation_z(gun.look_sway_roll.to_radians())
-            * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * recoil_t)
-            * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * recoil_t)
-            * Quat::from_rotation_x(RECOIL_TILT_UP_DEG.to_radians() * recoil_t)
+            * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
+            * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
+            * Quat::from_rotation_x(RECOIL_TILT_UP_DEG.to_radians() * timings.recoil_t)
             * base_rotation;
     }
 }
