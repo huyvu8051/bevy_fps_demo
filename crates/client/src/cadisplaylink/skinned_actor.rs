@@ -57,9 +57,13 @@ impl SkinnedModelRegistry {
 /// to extract from yet — `SkinnedModel::compute_joint_matrices` samples
 /// its own hand-parsed copy of the glTF's animation data instead, which
 /// can in principle drift from `bevy_animation`'s own sampling over time.
-/// Currently only this project's remote-player/soldier extraction uses
-/// this fallback (zombies use `JointMatrices`) — see native_metal_probe.rs's
-/// own draw_scene doc comment for the plan to close this gap too.
+/// Both of this project's own skinned actors (zombies, remote players) now
+/// use `JointMatrices` — `Clip` is unused here but kept as the documented
+/// escape hatch for a future skinned actor type whose ECS animation state
+/// isn't wired up to extract from yet (a new monster added mid-prototype,
+/// before bothering to link its `AnimationPlayer` the way
+/// `ZombieAnimationPlayer`/`PlayerModelAnimationPlayer` do).
+#[allow(dead_code)]
 pub enum SkinnedActorPose {
     JointMatrices(Vec<[[f32; 4]; 4]>),
     Clip { clip_index: usize, time: f32 },

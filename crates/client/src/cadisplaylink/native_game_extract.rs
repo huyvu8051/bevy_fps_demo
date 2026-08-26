@@ -188,8 +188,8 @@ pub struct ScopeCameraSnapshot {
 pub struct RenderSnapshot {
     pub camera: Option<CameraSnapshot>,
     pub scope_camera: Option<ScopeCameraSnapshot>,
-    pub zombies: Vec<ZombieRenderState>,
-    pub remote_players: Vec<Transform>,
+    pub zombies: Vec<SkinnedRenderState>,
+    pub remote_players: Vec<SkinnedRenderState>,
     pub static_meshes: Vec<ExtractedMesh>,
     pub light: Option<LightSnapshot>,
     pub sun: Option<SunSnapshot>,
@@ -267,21 +267,24 @@ pub struct LightSnapshot {
     pub range: f32,
 }
 
-/// A zombie's world transform plus its already-animated skinning matrices
-/// — one per joint, ready to upload straight into the renderer's joint
-/// buffer. Read directly from the real `bevy_animation`/`TransformPlugin`
-/// state this headless App already computes every tick (see
-/// `joint_matrices_for`'s own doc comment) instead of re-sampling the
-/// zombie's animation clip by hand a second time — the same "extract the
-/// real thing, don't reimplement it" principle this module already applies
-/// to the camera/scope camera, now covering skinning too: the previous
-/// version extracted a raw clip index + seek time and made the RENDERER
-/// (skinned_gltf.rs's own hand-parsed copy of zombie.glb) re-sample the
-/// clip independently — two separate implementations of the same keyframe
-/// math that could silently drift apart from the desktop/wgpu path's own
-/// `bevy_animation`. This extracts the actual per-joint result instead, so
-/// both paths share the exact same animation computation.
-pub struct ZombieRenderState {
+/// A skinned actor's (zombie or remote player) world transform plus its
+/// already-animated skinning matrices — one per joint, ready to upload
+/// straight into the renderer's joint buffer. Read directly from the real
+/// `bevy_animation`/`TransformPlugin` state this headless App already
+/// computes every tick (see `joint_matrices_for`'s own doc comment) instead
+/// of re-sampling an animation clip by hand a second time — the same
+/// "extract the real thing, don't reimplement it" principle this module
+/// already applies to the camera/scope camera, now covering skinning too:
+/// the old approach extracted a raw clip index + seek time and made the
+/// RENDERER (skinned_gltf.rs's own hand-parsed copy of the glTF) re-sample
+/// the clip independently — two separate implementations of the same
+/// keyframe math that could silently drift apart from the desktop/wgpu
+/// path's own `bevy_animation`. This extracts the actual per-joint result
+/// instead, so both paths share the exact same animation computation.
+/// Generic across gameplay type (used for both `snapshot.zombies` and
+/// `snapshot.remote_players`) since `find_first_skinned_mesh`/
+/// `joint_matrices_for` never cared what kind of entity `root` was either.
+pub struct SkinnedRenderState {
     pub transform: Transform,
     pub joint_matrices: Vec<[[f32; 4]; 4]>,
 }
@@ -405,7 +408,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     }
 
     // Zombies: world-space transform plus real per-joint skinning matrices
-    // — see ZombieRenderState's own doc comment for why this reads the
+    // — see SkinnedRenderState's own doc comment for why this reads the
     // already-animated skeleton instead of extracting a clip index/seek
     // time for the renderer to re-sample by hand. `entity` (the zombie
     // root) is where `find_first_skinned_mesh` starts walking down to find
@@ -427,7 +430,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
                 .and_then(|mesh_entity| skinned_mesh_query.get(mesh_entity).ok())
                 .map(|skinned| joint_matrices_for(skinned, &joint_globals, &inverse_bindposes_assets))
                 .unwrap_or_default();
-            ZombieRenderState { transform: transform.compute_transform(), joint_matrices }
+            SkinnedRenderState { transform: transform.compute_transform(), joint_matrices }
         })
         .collect();
 
@@ -444,21 +447,42 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // player's own pivot by a fixed eye-height offset even for the correct
     // entity, so a 3D distance check (tried first) missed this case. A
     // genuine remote player is never this close horizontally.
+    // Same real-per-joint-matrices approach as zombies above (see
+    // SkinnedRenderState's own doc comment) — `find_first_skinned_mesh`/
+    // `joint_matrices_for` are generic over any root entity, so this is a
+    // drop-in reuse, not a second implementation. `entity` here is the
+    // NetPlayer root; the actual `SkinnedMesh` lives on a descendant inside
+    // its `PlayerModelAnimRoot` child's asynchronously-loaded glTF scene
+    // (see `on_net_player_replicated`/`wire_player_model_animations` in
+    // crate::lib), same "root isn't the skinned entity" relationship as
+    // zombies.
     const LOCAL_PLAYER_EXCLUSION_RADIUS_XZ: f32 = 1.0;
     let camera_eye_xz = snapshot.camera.as_ref().map(|c| bevy::math::Vec2::new(c.eye[0], c.eye[2]));
-    let mut remote_state: SystemState<
-        Query<&GlobalTransform, (With<NetPlayer>, bevy::ecs::query::Without<crate::LocalPlayer>)>,
-    > = SystemState::new(world);
-    snapshot.remote_players = remote_state
-        .get(world)
+    let mut remote_state: SystemState<(
+        Query<(bevy::ecs::entity::Entity, &GlobalTransform), (With<NetPlayer>, bevy::ecs::query::Without<crate::LocalPlayer>)>,
+        Query<&Children>,
+        Query<&SkinnedMesh>,
+        Query<&GlobalTransform>,
+        Res<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
+    )> = SystemState::new(world);
+    let (remote_query, remote_children_query, remote_skinned_query, remote_joint_globals, remote_inverse_bindposes_assets) =
+        remote_state.get(world);
+    snapshot.remote_players = remote_query
         .iter()
-        .map(|t| t.compute_transform())
-        .filter(|t| match camera_eye_xz {
+        .map(|(entity, t)| (entity, t.compute_transform()))
+        .filter(|(_, t)| match camera_eye_xz {
             Some(eye_xz) => {
                 let pos_xz = bevy::math::Vec2::new(t.translation.x, t.translation.z);
                 pos_xz.distance(eye_xz) > LOCAL_PLAYER_EXCLUSION_RADIUS_XZ
             }
             None => true,
+        })
+        .map(|(entity, transform)| {
+            let joint_matrices = find_first_skinned_mesh(entity, &remote_children_query, &remote_skinned_query)
+                .and_then(|mesh_entity| remote_skinned_query.get(mesh_entity).ok())
+                .map(|skinned| joint_matrices_for(skinned, &remote_joint_globals, &remote_inverse_bindposes_assets))
+                .unwrap_or_default();
+            SkinnedRenderState { transform, joint_matrices }
         })
         .collect();
 

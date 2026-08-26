@@ -1415,21 +1415,17 @@ impl NativeMetalProbe {
                 model: "zombie",
                 pose: super::skinned_actor::SkinnedActorPose::JointMatrices(z.joint_matrices),
             }));
-            // Remote players: no per-entity pose extraction wired up yet
-            // (out of scope for this pass, which was specifically about
-            // zombie.glb's 5 poses — see update_zombie_animation) — keep
-            // playing PLAYER_MODEL_ANIM_WALK statically rather than the
-            // previous hardcoded clip 0, which was correct for neither.
-            // TODO: give remote players the same real-skeleton extraction
-            // zombies just got (see native_game_extract.rs's
-            // joint_matrices_for/find_first_skinned_mesh — both are already
-            // generic over any root entity, not zombie-specific) instead of
-            // this Clip fallback, once per-entity NetPlayer animation state
-            // is worth wiring up.
-            real_game_extracted.extend(snapshot.remote_players.into_iter().map(|t| super::skinned_actor::SkinnedActorDraw {
-                transform: t,
+            // Remote players: same real-per-joint-skeleton extraction as
+            // zombies now — see native_game_extract.rs's remote-player
+            // extraction (find_first_skinned_mesh/joint_matrices_for,
+            // reading `PlayerModelAnimationPlayer`-driven AnimationPlayer
+            // state that `update_remote_player_model_animation` already
+            // plays for real, headless included) instead of the old static
+            // "always PLAYER_MODEL_ANIM_WALK at wall-clock time" guess.
+            real_game_extracted.extend(snapshot.remote_players.into_iter().map(|p| super::skinned_actor::SkinnedActorDraw {
+                transform: p.transform,
                 model: "soldier",
-                pose: super::skinned_actor::SkinnedActorPose::Clip { clip_index: crate::PLAYER_MODEL_ANIM_WALK, time: now },
+                pose: super::skinned_actor::SkinnedActorPose::JointMatrices(p.joint_matrices),
             }));
         }
         // Texture cache: upload once per unique `Image` asset, keyed by its
