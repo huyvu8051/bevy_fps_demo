@@ -432,20 +432,36 @@ fn logical_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> ([f32; 2]
 /// but reusing the same generic walk means a future addition — a "Main
 /// Menu" button, say — needs no new extraction code at all). Returns
 /// `(panel, buttons, texts)`; all empty/`None` if no entity carries
-/// `Root`. The panel itself (its own `BackgroundColor` — a dark
-/// translucent backdrop for both) isn't a `Button`, so it's extracted
-/// separately from the descendant walk, same as `settings_menu_panel`'s
-/// own original doc comment explained.
+/// `Root`, OR if `Root` exists but is currently `Display::None` (the
+/// settings menu's own hide mechanism, toggled by `update_settings_menu`
+/// — see `SettingsMenuVisible` — rather than despawned/respawned the way
+/// `GameOverUi`/`MapSelectRoot` are; GAME OVER and map-select never hit
+/// this branch since they simply don't exist while inactive). That check
+/// matters: unlike a hidden CHILD (`CrosshairLine`, whose PARENT toggling
+/// `Display::None` collapses it to a real zero-size `ComputedNode`), a
+/// hidden ROOT's own subtree can retain a stale non-zero `ComputedNode`
+/// from whenever it was last laid out (bevy_ui measures text size
+/// independent of layout position) — extracting that produced this
+/// project's own "closed settings menu's old page-0 text draws garbled
+/// over the HP corner" bug, fixed by explicitly requiring `Display::Flex`
+/// here instead of assuming a hidden subtree always reads back empty. The
+/// panel itself (its own `BackgroundColor` — a dark translucent backdrop
+/// for all three) isn't a `Button`, so it's extracted separately from the
+/// descendant walk, same as `settings_menu_panel`'s own original doc
+/// comment explained.
 fn extract_panel<Root: bevy::ecs::component::Component>(
     world: &mut bevy::ecs::world::World,
 ) -> (Option<SettingsMenuButtonSnapshot>, Vec<SettingsMenuButtonSnapshot>, Vec<HudTextSnapshot>) {
     let mut root_state: SystemState<
-        Query<(bevy::ecs::entity::Entity, &ComputedNode, &UiGlobalTransform, &BackgroundColor), With<Root>>,
+        Query<(bevy::ecs::entity::Entity, &ComputedNode, &UiGlobalTransform, &BackgroundColor, &Node), With<Root>>,
     > = SystemState::new(world);
     let root_query = root_state.get(world);
-    let Some((root, root_node, root_transform, root_bg)) = root_query.iter().next() else {
+    let Some((root, root_node, root_transform, root_bg, root_style)) = root_query.iter().next() else {
         return (None, Vec::new(), Vec::new());
     };
+    if root_style.display != Display::Flex {
+        return (None, Vec::new(), Vec::new());
+    }
     let (top_left, size) = logical_rect(root_node, root_transform);
     let c = root_bg.0.to_srgba();
     let panel = Some(SettingsMenuButtonSnapshot { top_left, size, color: [c.red, c.green, c.blue, c.alpha] });
