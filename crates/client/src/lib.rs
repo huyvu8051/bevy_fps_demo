@@ -321,6 +321,31 @@ struct TouchReloadButton;
 struct TouchJumpButton;
 #[derive(Component)]
 struct TouchCrouchButton;
+#[derive(Component)]
+struct TouchSprintButton;
+#[derive(Component)]
+struct TouchProneButton;
+#[derive(Component)]
+struct TouchLeanLeftButton;
+#[derive(Component)]
+struct TouchLeanRightButton;
+
+/// Marks every real touch-control button (plus the settings-menu toggle) with
+/// its own on-screen label, purely so the cadisplaylink Metal renderer
+/// (native_game_extract.rs) can extract "draw this button, with this text"
+/// generically — one query over `TouchControlButton` instead of a separate
+/// per-marker-type query for each of the 10 buttons. The label here is a
+/// second source of truth for the same text already spawned as a `Text`
+/// child below (kept in sync by hand at each spawn site) rather than the
+/// renderer re-reading that child `Text` component, since these labels are
+/// static and never change — an empty string (the fire button) means "draw
+/// the button shape, no text".
+// `.0` is only ever read by the cadisplaylink Metal renderer
+// (native_game_extract.rs, iOS-only) — desktop/normal-wgpu builds never
+// read it (bevy_ui already draws real Text children there), hence the
+// allow: this is a real cross-platform consumer, not dead code.
+#[derive(Component)]
+struct TouchControlButton(#[allow(dead_code)] &'static str);
 
 // Which touch (Bevy's own per-touch id) is currently driving the joystick,
 // and where it started — drag-from-start is the whole joystick model, no
@@ -380,6 +405,21 @@ struct TouchJump(bool);
 #[derive(Resource, Default)]
 struct TouchReload(bool);
 
+// Held level (not a pulse) — same "no Changed<> gate, read every tick"
+// shape as update_noclip_fly_input's own jump/crouch reads, since sprint is
+// a continuous hold, not a toggle. send_player_input ORs this in alongside
+// keys.pressed(KeyCode::ShiftLeft).
+#[derive(Resource, Default)]
+struct TouchSprintHeld(bool);
+
+// Same held-level shape as TouchSprintHeld — apply_lean_input ORs each side
+// in alongside keys.pressed(KeyCode::KeyQ)/KeyE.
+#[derive(Resource, Default)]
+struct TouchLeanHeld {
+    left: bool,
+    right: bool,
+}
+
 // Touch's up/down hold state for noclip flight (Jump = fly up, Crouch =
 // fly down) — bundled into one resource/system (update_noclip_fly_input)
 // rather than two separate ones so send_player_input only needs one extra
@@ -406,6 +446,7 @@ struct NoclipFlyInput {
 struct TouchGameplayInputs<'w> {
     aiming: Res<'w, TouchAiming>,
     jump: Res<'w, TouchJump>,
+    sprint: Res<'w, TouchSprintHeld>,
     noclip_fly: Res<'w, NoclipFlyInput>,
 }
 
@@ -1778,6 +1819,8 @@ fn build_game_common(app: &mut App) {
         .init_resource::<TouchJump>()
         .init_resource::<NoclipFlyInput>()
         .init_resource::<TouchReload>()
+        .init_resource::<TouchSprintHeld>()
+        .init_resource::<TouchLeanHeld>()
         .init_resource::<SensitivityScale>()
         .init_resource::<KillCount>()
         .init_resource::<RecentlyHitZombies>()
@@ -1809,6 +1852,9 @@ fn build_game_common(app: &mut App) {
                 update_noclip_fly_input,
                 touch_crouch_button,
                 touch_reload_button,
+                touch_prone_button,
+                touch_sprint_button,
+                touch_lean_buttons,
             )
                 .chain(),
             (
@@ -3315,6 +3361,7 @@ fn spawn_settings_toggle_button(commands: &mut Commands) {
             Interaction::default(),
             GlobalZIndex(STATIC_UI_Z_INDEX),
             SettingsToggleButton,
+            TouchControlButton("=="),
         ))
         .with_children(|btn| {
             // Plain ASCII, not a Unicode glyph (e.g. gear "\u{2699}") —
@@ -5015,6 +5062,7 @@ fn spawn_touch_controls(commands: &mut Commands) {
         Interaction::default(),
         GlobalZIndex(STATIC_UI_Z_INDEX),
         TouchFireButton,
+        TouchControlButton(""),
     ));
 
     // Toggle (not hold) — see TouchAiming's own doc comment for why. Sits
@@ -5039,6 +5087,7 @@ fn spawn_touch_controls(commands: &mut Commands) {
             Interaction::default(),
             GlobalZIndex(STATIC_UI_Z_INDEX),
             TouchAimButton,
+            TouchControlButton("ADS"),
         ))
         .with_children(|btn| {
             btn.spawn((
@@ -5073,6 +5122,7 @@ fn spawn_touch_controls(commands: &mut Commands) {
             Interaction::default(),
             GlobalZIndex(STATIC_UI_Z_INDEX),
             TouchReloadButton,
+            TouchControlButton("RELOAD"),
         ))
         .with_children(|btn| {
             btn.spawn((
@@ -5101,13 +5151,39 @@ fn spawn_touch_controls(commands: &mut Commands) {
         Color::srgba(1.0, 0.8, 0.3, 0.4),
         TouchCrouchButton,
     );
+
+    // Stacked in the same left-side column above JUMP/CROUCH, out of the
+    // joystick's own drag path (radius-limited — see TOUCH_JOYSTICK_RADIUS_PX)
+    // same reasoning as JUMP/CROUCH's own placement comment.
+    let row2_bottom = stance_btn_bottom + stance_btn_px + 12.0;
+    spawn_touch_round_button(commands, "PRONE", 32.0, row2_bottom, stance_btn_px, Color::srgba(0.6, 0.5, 1.0, 0.4), TouchProneButton);
+    spawn_touch_round_button(
+        commands,
+        "SPRINT",
+        32.0 + stance_btn_px + 12.0,
+        row2_bottom,
+        stance_btn_px,
+        Color::srgba(1.0, 0.55, 0.15, 0.4),
+        TouchSprintButton,
+    );
+    let row3_bottom = row2_bottom + stance_btn_px + 12.0;
+    spawn_touch_round_button(commands, "LEAN <", 32.0, row3_bottom, stance_btn_px, Color::srgba(0.4, 0.85, 0.5, 0.4), TouchLeanLeftButton);
+    spawn_touch_round_button(
+        commands,
+        "LEAN >",
+        32.0 + stance_btn_px + 12.0,
+        row3_bottom,
+        stance_btn_px,
+        Color::srgba(0.4, 0.85, 0.5, 0.4),
+        TouchLeanRightButton,
+    );
 }
 
 // Shared helper for the small round left/right/right-labeled touch buttons
 // (Jump, Crouch) — mirrors the TouchAimButton node built by hand just above,
 // factored out since there are now two more of these with only position/
 // label/color/marker differing.
-fn spawn_touch_round_button(commands: &mut Commands, label: &str, left_px: f32, bottom_px: f32, size_px: f32, color: Color, marker: impl Component) {
+fn spawn_touch_round_button(commands: &mut Commands, label: &'static str, left_px: f32, bottom_px: f32, size_px: f32, color: Color, marker: impl Component) {
     commands
         .spawn((
             Node {
@@ -5128,6 +5204,7 @@ fn spawn_touch_round_button(commands: &mut Commands, label: &str, left_px: f32, 
             Interaction::default(),
             GlobalZIndex(STATIC_UI_Z_INDEX),
             marker,
+            TouchControlButton(label),
         ))
         .with_children(|btn| {
             btn.spawn((
@@ -5203,6 +5280,35 @@ fn touch_crouch_button(
             };
         }
     }
+}
+
+// Same tap-edge toggle as touch_crouch_button, mirroring toggle_player_
+// stance's own KeyX branch (Standing<->Prone, switches straight over from
+// Crouching too) so a touch tap and a desktop KeyX press behave
+// identically. No noclip skip needed — unlike Crouch, Prone has no second
+// job driving noclip fly-down.
+fn touch_prone_button(button: Query<&Interaction, (With<TouchProneButton>, Changed<Interaction>)>, mut player: Query<&mut PlayerStance, With<Player>>) {
+    for interaction in &button {
+        if *interaction == Interaction::Pressed {
+            let Ok(mut stance) = player.single_mut() else {
+                return;
+            };
+            *stance = if *stance == PlayerStance::Prone { PlayerStance::Standing } else { PlayerStance::Prone };
+        }
+    }
+}
+
+// Held level, same "no Changed<> gate, read every tick" shape as
+// update_noclip_fly_input's own jump/crouch reads — sprint needs a
+// continuous held state, not an edge/toggle.
+fn touch_sprint_button(mut sprint: ResMut<TouchSprintHeld>, button: Query<&Interaction, With<TouchSprintButton>>) {
+    sprint.0 = button.iter().any(|interaction| *interaction == Interaction::Pressed);
+}
+
+// Same held-level shape as touch_sprint_button, one bool per side.
+fn touch_lean_buttons(mut lean: ResMut<TouchLeanHeld>, left_button: Query<&Interaction, With<TouchLeanLeftButton>>, right_button: Query<&Interaction, With<TouchLeanRightButton>>) {
+    lean.left = left_button.iter().any(|interaction| *interaction == Interaction::Pressed);
+    lean.right = right_button.iter().any(|interaction| *interaction == Interaction::Pressed);
 }
 
 // Claims whichever touch starts on the left half of the screen as the
@@ -5504,13 +5610,16 @@ fn apply_view_recoil(
 fn apply_lean_input(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    touch_lean: Res<TouchLeanHeld>,
     game_over: Res<GameOver>,
     mut query: Query<&mut Lean>,
 ) {
     let target: f32 = if game_over.0 {
         0.0
     } else {
-        match (keys.pressed(KeyCode::KeyQ), keys.pressed(KeyCode::KeyE)) {
+        let left = keys.pressed(KeyCode::KeyQ) || touch_lean.left;
+        let right = keys.pressed(KeyCode::KeyE) || touch_lean.right;
+        match (left, right) {
             (true, false) => -1.0,
             (false, true) => 1.0,
             _ => 0.0,
@@ -5947,7 +6056,7 @@ fn send_player_input(
     let (move_axis, sprinting) = if autopilot.0 {
         (intent.move_axis, intent.sprint)
     } else {
-        let sprinting = keys.pressed(KeyCode::ShiftLeft) && stance == PlayerStance::Standing;
+        let sprinting = (keys.pressed(KeyCode::ShiftLeft) || touch.sprint.0) && stance == PlayerStance::Standing;
         let mut move_axis = Vec2::ZERO;
         if keys.pressed(KeyCode::KeyW) {
             move_axis.y += 1.0;

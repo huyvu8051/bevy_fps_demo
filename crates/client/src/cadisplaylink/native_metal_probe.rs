@@ -444,9 +444,13 @@ struct UiUniforms {
 // character -> cell mapping and glyph_uv_rect for the per-glyph UV rect.
 const GLYPH_W: usize = 5;
 const GLYPH_H: usize = 7;
-const GLYPH_COUNT: usize = 12;
+const GLYPH_COUNT: usize = 32;
 // Row-major bits, MSB (bit 4) = leftmost pixel, 7 rows per glyph, in
-// glyph_index order: '0'..'9', '.', '/'.
+// glyph_index order: '0'..'9', '.', '/', then the uppercase-subset +
+// symbols needed for touch-control button labels (ADS/RELOAD/JUMP/CROUCH/
+// PRONE/SPRINT/"LEAN <"/"LEAN >"/"=="). Only the 16 letters those labels
+// actually use, not the full alphabet — extend here if a future label
+// needs one this doesn't cover yet.
 const GLYPH_BITMAPS: [[u8; GLYPH_H]; GLYPH_COUNT] = [
     [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110], // 0
     [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110], // 1
@@ -460,6 +464,26 @@ const GLYPH_BITMAPS: [[u8; GLYPH_H]; GLYPH_COUNT] = [
     [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100], // 9
     [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100], // .
     [0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b00000, 0b00000], // /
+    [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001], // A
+    [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111], // C
+    [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110], // D
+    [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111], // E
+    [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001], // H
+    [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110], // I
+    [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100], // J
+    [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111], // L
+    [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001], // M
+    [0b10001, 0b11001, 0b10101, 0b10101, 0b10011, 0b10001, 0b10001], // N
+    [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110], // O
+    [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000], // P
+    [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001], // R
+    [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110], // S
+    [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100], // T
+    [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110], // U
+    [0b00001, 0b00010, 0b00100, 0b01000, 0b00100, 0b00010, 0b00001], // <
+    [0b10000, 0b01000, 0b00100, 0b00010, 0b00100, 0b01000, 0b10000], // >
+    [0b00000, 0b00000, 0b11111, 0b00000, 0b11111, 0b00000, 0b00000], // =
+    [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000], // space
 ];
 
 fn glyph_index(c: char) -> Option<usize> {
@@ -467,6 +491,26 @@ fn glyph_index(c: char) -> Option<usize> {
         '0'..='9' => Some(c as usize - '0' as usize),
         '.' => Some(10),
         '/' => Some(11),
+        'A' => Some(12),
+        'C' => Some(13),
+        'D' => Some(14),
+        'E' => Some(15),
+        'H' => Some(16),
+        'I' => Some(17),
+        'J' => Some(18),
+        'L' => Some(19),
+        'M' => Some(20),
+        'N' => Some(21),
+        'O' => Some(22),
+        'P' => Some(23),
+        'R' => Some(24),
+        'S' => Some(25),
+        'T' => Some(26),
+        'U' => Some(27),
+        '<' => Some(28),
+        '>' => Some(29),
+        '=' => Some(30),
+        ' ' => Some(31),
         _ => None,
     }
 }
@@ -628,6 +672,13 @@ pub struct NativeMetalProbe {
     font_atlas_texture: metal::Texture,
     ui_floating_damage: Vec<FloatingDamageSnapshot>,
     ui_health_bars: Vec<HealthBarSnapshot>,
+    // Touch controls (HUD buttons + joystick) — see TouchButtonSnapshot/
+    // TouchJoystickSnapshot's own doc comments (native_game_extract.rs).
+    // Drawn with the exact same `ui_pipeline`/white_texture/font_atlas_texture
+    // as the health bars/floating damage above, just a separate cached Vec
+    // so this frame's set replaces last frame's wholesale like those do.
+    ui_touch_buttons: Vec<super::native_game_extract::TouchButtonSnapshot>,
+    ui_touch_joystick: Option<super::native_game_extract::TouchJoystickSnapshot>,
 }
 
 // Flattens ONE of the real game's extracted static meshes (arena
@@ -1104,6 +1155,8 @@ impl NativeMetalProbe {
             font_atlas_texture,
             ui_floating_damage: Vec::new(),
             ui_health_bars: Vec::new(),
+            ui_touch_buttons: Vec::new(),
+            ui_touch_joystick: None,
         }
     }
 
@@ -1390,6 +1443,8 @@ impl NativeMetalProbe {
             let snapshot = extract_render_snapshot(app.world_mut());
             self.ui_floating_damage = snapshot.floating_damage;
             self.ui_health_bars = snapshot.health_bars;
+            self.ui_touch_buttons = snapshot.touch_buttons;
+            self.ui_touch_joystick = snapshot.touch_joystick;
             self.msaa_enabled = snapshot.map_msaa_on;
             if let Some(cam) = &snapshot.camera {
                 self.camera_position = cam.eye;
@@ -1669,7 +1724,11 @@ impl NativeMetalProbe {
         // comments for why these were never visible before this pass.
         let ui_pipeline_ref = if msaa_enabled { &self.ui_pipeline } else { &self.ui_pipeline_no_msaa };
         if let Some(ui_pipeline) = ui_pipeline_ref {
-            if !self.ui_health_bars.is_empty() || !self.ui_floating_damage.is_empty() {
+            if !self.ui_health_bars.is_empty()
+                || !self.ui_floating_damage.is_empty()
+                || !self.ui_touch_buttons.is_empty()
+                || self.ui_touch_joystick.is_some()
+            {
                 let (view_w, view_h) = self.view_size_points();
                 encoder.set_render_pipeline_state(ui_pipeline);
                 encoder.set_fragment_sampler_state(0, Some(&self.ui_sampler));
@@ -1704,6 +1763,59 @@ impl NativeMetalProbe {
                         let quad = ndc_ui_rect(cursor_x, y, glyph_w, glyph_h, view_w, view_h, uv);
                         draw_ui_quad(encoder, &quad, dmg.color, &self.font_atlas_texture);
                         cursor_x += glyph_w + scale;
+                    }
+                }
+
+                // Touch controls: joystick first (drawn under the buttons,
+                // matching the bevy_ui path's own spawn/z-order — see
+                // spawn_touch_controls, crate::lib) then the buttons
+                // themselves. Both flat rects, no rounded-corner mask (the
+                // real bevy_ui nodes are circles/rounded-rects via
+                // BorderRadius — UI_SHADER_SOURCE has no SDF corner
+                // rounding yet, same simplification the health bars above
+                // already accept for their own rounded corners).
+                if let Some(joystick) = &self.ui_touch_joystick {
+                    let [bx, by] = joystick.base_top_left;
+                    let [bw, bh] = joystick.base_size;
+                    let base = ndc_ui_rect(bx, by, bw, bh, view_w, view_h, FULL_UV);
+                    draw_ui_quad(encoder, &base, [1.0, 1.0, 1.0, 0.3], &self.white_texture);
+                    let [kx, ky] = joystick.knob_top_left;
+                    let [kw, kh] = joystick.knob_size;
+                    let knob = ndc_ui_rect(kx, ky, kw, kh, view_w, view_h, FULL_UV);
+                    draw_ui_quad(encoder, &knob, [1.0, 1.0, 1.0, 0.55], &self.white_texture);
+                }
+
+                for button in &self.ui_touch_buttons {
+                    let [x, y] = button.top_left;
+                    let [w, h] = button.size;
+                    // Pressed buttons brighten (alpha bumped, same "press
+                    // feedback" idea a native UIButton highlight gives) —
+                    // there's no separate pressed-state color to extract,
+                    // so this just bumps whatever color BackgroundColor
+                    // already carries.
+                    let mut color = button.color;
+                    if button.pressed {
+                        color[3] = (color[3] * 1.6).min(1.0);
+                    }
+                    let quad = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
+                    draw_ui_quad(encoder, &quad, color, &self.white_texture);
+
+                    if !button.label.is_empty() {
+                        let font_size = 10.0_f32.min(h * 0.3);
+                        let scale = font_size / GLYPH_H as f32;
+                        let text_w: f32 = button.label.chars().map(|_| GLYPH_W as f32 * scale + scale).sum();
+                        let mut cursor_x = x + (w - text_w) / 2.0;
+                        let text_y = y + (h - GLYPH_H as f32 * scale) / 2.0;
+                        for ch in button.label.chars() {
+                            let Some(index) = glyph_index(ch) else { continue };
+                            let (u0, u1) = glyph_uv_rect(index);
+                            let uv = [[u0, 1.0], [u1, 1.0], [u1, 0.0], [u0, 0.0]];
+                            let glyph_w = GLYPH_W as f32 * scale;
+                            let glyph_h = GLYPH_H as f32 * scale;
+                            let glyph_quad = ndc_ui_rect(cursor_x, text_y, glyph_w, glyph_h, view_w, view_h, uv);
+                            draw_ui_quad(encoder, &glyph_quad, [1.0, 1.0, 1.0, 1.0], &self.font_atlas_texture);
+                            cursor_x += glyph_w + scale;
+                        }
                     }
                 }
             }

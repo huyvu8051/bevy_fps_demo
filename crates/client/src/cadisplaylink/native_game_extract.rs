@@ -24,7 +24,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::text::{TextColor, TextFont};
 use bevy::transform::components::{GlobalTransform, Transform};
 use bevy::ui::widget::Text;
-use bevy::ui::{Display, Node, Val};
+use bevy::ui::{BackgroundColor, ComputedNode, Display, Interaction, Node, UiGlobalTransform, Val};
 
 use shared::{NetPlayer, Zombie};
 
@@ -195,6 +195,8 @@ pub struct RenderSnapshot {
     pub sun: Option<SunSnapshot>,
     pub floating_damage: Vec<FloatingDamageSnapshot>,
     pub health_bars: Vec<HealthBarSnapshot>,
+    pub touch_buttons: Vec<TouchButtonSnapshot>,
+    pub touch_joystick: Option<TouchJoystickSnapshot>,
     /// The `MapMsaaOn` cheat-menu toggle (crate::lib) — previously only
     /// ever read by `apply_map_render_toggles` to sync bevy_render's own
     /// `Msaa` component (the desktop/winit build's render path), which
@@ -230,6 +232,61 @@ pub struct FloatingDamageSnapshot {
 pub struct HealthBarSnapshot {
     pub screen_pos: [f32; 2],
     pub fraction: f32,
+}
+
+/// One real touch-control button (any of JUMP/CROUCH/PRONE/SPRINT/LEAN
+/// left+right/ADS/RELOAD/FIRE, plus the settings-menu "==" toggle) —
+/// extracted generically via the `TouchControlButton` marker (crate::lib)
+/// rather than one query per button type, since all 10 share the same
+/// shape: a `Button` with a `BackgroundColor` and a static label. Unlike
+/// `FloatingDamageSnapshot`/`HealthBarSnapshot`, `top_left`/`size` can't be
+/// read straight off `Node.left/.top` — these buttons are positioned via a
+/// mix of `left`/`right`/`top`/`bottom` anchors (see spawn_touch_controls),
+/// so there's no single field that always holds "the" position. Instead
+/// they come from the real computed layout (`ComputedNode`/
+/// `UiGlobalTransform`, converted from physical to logical pixels via
+/// `ComputedNode::inverse_scale_factor` — see `logical_rect`), the same
+/// anchor-agnostic technique `multi_touch_button_interaction` (crate::lib)
+/// already uses for touch hit-testing. `pressed` mirrors the button's own
+/// `Interaction` so the renderer can draw a pressed-down visual without
+/// re-deriving hit-testing separately.
+pub struct TouchButtonSnapshot {
+    pub top_left: [f32; 2],
+    pub size: [f32; 2],
+    pub color: [f32; 4],
+    pub label: &'static str,
+    pub pressed: bool,
+}
+
+/// The touch joystick's base + knob (crate::lib's `spawn_touch_controls`) —
+/// not a `Button`/`TouchControlButton` (dragged, not tapped), so extracted
+/// separately with the same `logical_rect` technique. `None` when
+/// `TouchUiEnabled` is off (spawn_touch_controls never ran, so neither node
+/// exists) — a fixed base + a knob that's already offset by
+/// `update_touch_joystick_visual` (crate::lib) toward wherever the thumb
+/// has dragged it, so drawing both each frame reproduces the exact same
+/// drag visual the bevy_ui path already renders.
+pub struct TouchJoystickSnapshot {
+    pub base_top_left: [f32; 2],
+    pub base_size: [f32; 2],
+    pub knob_top_left: [f32; 2],
+    pub knob_size: [f32; 2],
+}
+
+/// Converts a node's real computed layout to a logical-points (matching
+/// `Node.left/.top`'s own unit, see `ndc_ui_rect`'s doc comment) top-left +
+/// size rect. `ComputedNode::size`/`UiGlobalTransform`'s translation are
+/// both in physical pixels (see `multi_touch_button_interaction`'s own doc
+/// comment); `inverse_scale_factor` is exactly the conversion factor bevy_ui
+/// itself carries per-node for this, so no separate `Window` lookup is
+/// needed here the way `multi_touch_button_interaction` needs one to go the
+/// other direction (logical touch position -> physical, for hit-testing).
+fn logical_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> ([f32; 2], [f32; 2]) {
+    let inv_scale = node.inverse_scale_factor();
+    let size = node.size() * inv_scale;
+    let center = transform.affine().translation * inv_scale;
+    let top_left = center - size / 2.0;
+    (top_left.to_array(), size.to_array())
 }
 
 /// The scene's real `DirectionalLight` ("MainSun", crate::lib — spawned
@@ -555,6 +612,43 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             })
         })
         .collect();
+
+    // Touch-control buttons: see TouchButtonSnapshot's own doc comment for
+    // why ComputedNode/UiGlobalTransform (not Node.left/.top) is what's
+    // read here.
+    let mut touch_button_state: SystemState<
+        Query<(&ComputedNode, &UiGlobalTransform, &BackgroundColor, &crate::TouchControlButton, &Interaction)>,
+    > = SystemState::new(world);
+    snapshot.touch_buttons = touch_button_state
+        .get(world)
+        .iter()
+        .map(|(node, transform, bg, marker, interaction)| {
+            let (top_left, size) = logical_rect(node, transform);
+            let c = bg.0.to_srgba();
+            TouchButtonSnapshot {
+                top_left,
+                size,
+                color: [c.red, c.green, c.blue, c.alpha],
+                label: marker.0,
+                pressed: *interaction == Interaction::Pressed,
+            }
+        })
+        .collect();
+
+    // Touch joystick base + knob: see TouchJoystickSnapshot's own doc
+    // comment for why this is a separate extraction from the buttons above.
+    let mut joystick_state: SystemState<(
+        Query<(&ComputedNode, &UiGlobalTransform), With<crate::TouchJoystickBase>>,
+        Query<(&ComputedNode, &UiGlobalTransform), With<crate::TouchJoystickKnob>>,
+    )> = SystemState::new(world);
+    let (joystick_base_query, joystick_knob_query) = joystick_state.get(world);
+    snapshot.touch_joystick = joystick_base_query.iter().next().zip(joystick_knob_query.iter().next()).map(
+        |((base_node, base_transform), (knob_node, knob_transform))| {
+            let (base_top_left, base_size) = logical_rect(base_node, base_transform);
+            let (knob_top_left, knob_size) = logical_rect(knob_node, knob_transform);
+            TouchJoystickSnapshot { base_top_left, base_size, knob_top_left, knob_size }
+        },
+    );
 
     // Static meshes: arena walls/floor + gun scene meshes, both plain
     // Mesh3d/MeshMaterial3d<StandardMaterial> entities — see this module's
