@@ -5336,44 +5336,66 @@ fn spawn_touch_controls(commands: &mut Commands) {
             ));
         });
 
-    // Jump/Crouch sit just above the joystick, out of the thumb's drag path
-    // (which stays within TOUCH_JOYSTICK_RADIUS_PX of the base) — side by
-    // side rather than stacked so neither ends up directly above the other
-    // under a moving thumb.
+    // Jump/Crouch/Prone (stance row) sit just above the joystick, out of
+    // the thumb's drag path (stays within TOUCH_JOYSTICK_RADIUS_PX of the
+    // base) — 3-across rather than the original 2-across/3-down grid: on
+    // a landscape phone the whole column's real height (joystick + every
+    // row) was landing close enough to the top edge to overlap HealthUi's
+    // own top:16 label (both are real ComputedNode rects now that both
+    // draw via the Metal renderer — see native_metal_probe.rs's
+    // touch-control/HUD draw loops — so this was actually visible, not
+    // just theoretical). One fewer row buys back a full row's height.
     let stance_btn_px = TOUCH_FIRE_BUTTON_PX * 0.6;
-    let stance_btn_bottom = 32.0 + TOUCH_JOYSTICK_BASE_PX + 16.0;
-    spawn_touch_round_button(commands, "JUMP", 32.0, stance_btn_bottom, stance_btn_px, Color::srgba(0.3, 1.0, 0.4, 0.4), TouchJumpButton);
+    let stance_row_gap = 12.0;
+    let stance_row_bottom = 32.0 + TOUCH_JOYSTICK_BASE_PX + 16.0;
+    spawn_touch_round_button(commands, "JUMP", 32.0, stance_row_bottom, stance_btn_px, Color::srgba(0.3, 1.0, 0.4, 0.4), TouchJumpButton);
     spawn_touch_round_button(
         commands,
         "CROUCH",
-        32.0 + stance_btn_px + 12.0,
-        stance_btn_bottom,
+        32.0 + (stance_btn_px + stance_row_gap),
+        stance_row_bottom,
         stance_btn_px,
         Color::srgba(1.0, 0.8, 0.3, 0.4),
         TouchCrouchButton,
     );
+    spawn_touch_round_button(
+        commands,
+        "PRONE",
+        32.0 + (stance_btn_px + stance_row_gap) * 2.0,
+        stance_row_bottom,
+        stance_btn_px,
+        Color::srgba(0.6, 0.5, 1.0, 0.4),
+        TouchProneButton,
+    );
 
-    // Stacked in the same left-side column above JUMP/CROUCH, out of the
-    // joystick's own drag path (radius-limited — see TOUCH_JOYSTICK_RADIUS_PX)
-    // same reasoning as JUMP/CROUCH's own placement comment.
-    let row2_bottom = stance_btn_bottom + stance_btn_px + 12.0;
-    spawn_touch_round_button(commands, "PRONE", 32.0, row2_bottom, stance_btn_px, Color::srgba(0.6, 0.5, 1.0, 0.4), TouchProneButton);
+    // Sprint/Lean (movement-modifier row) stacked once above the stance
+    // row, same left-side column, out of the joystick's own drag path
+    // (radius-limited — see TOUCH_JOYSTICK_RADIUS_PX) — same reasoning as
+    // the stance row's own placement comment.
+    let modifier_row_bottom = stance_row_bottom + stance_btn_px + stance_row_gap;
     spawn_touch_round_button(
         commands,
         "SPRINT",
-        32.0 + stance_btn_px + 12.0,
-        row2_bottom,
+        32.0,
+        modifier_row_bottom,
         stance_btn_px,
         Color::srgba(1.0, 0.55, 0.15, 0.4),
         TouchSprintButton,
     );
-    let row3_bottom = row2_bottom + stance_btn_px + 12.0;
-    spawn_touch_round_button(commands, "LEAN <", 32.0, row3_bottom, stance_btn_px, Color::srgba(0.4, 0.85, 0.5, 0.4), TouchLeanLeftButton);
+    spawn_touch_round_button(
+        commands,
+        "LEAN <",
+        32.0 + (stance_btn_px + stance_row_gap),
+        modifier_row_bottom,
+        stance_btn_px,
+        Color::srgba(0.4, 0.85, 0.5, 0.4),
+        TouchLeanLeftButton,
+    );
     spawn_touch_round_button(
         commands,
         "LEAN >",
-        32.0 + stance_btn_px + 12.0,
-        row3_bottom,
+        32.0 + (stance_btn_px + stance_row_gap) * 2.0,
+        modifier_row_bottom,
         stance_btn_px,
         Color::srgba(0.4, 0.85, 0.5, 0.4),
         TouchLeanRightButton,
