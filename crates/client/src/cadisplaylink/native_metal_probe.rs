@@ -2656,7 +2656,9 @@ impl NativeMetalProbe {
                     // even if that formula changes later.
                     let q = self.real_game_scope_lens_local_rotation;
                     let rq = bevy::math::Quat::from_array(q) * bevy::math::Vec3::Y;
-                    let roll = rq.x.atan2(rq.y);
+                    // Inverted from the initial atan2(x, y) — confirmed
+                    // backwards on-device.
+                    let roll = -rq.x.atan2(rq.y);
                     build_centered_quad(&self.device, aspect, 0.35, ndc_center, roll)
                 });
                 let quad_buffer = real_game_quad_buffer.as_ref().unwrap_or(&self.quad_vertex_buffer);
