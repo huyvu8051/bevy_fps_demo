@@ -196,7 +196,7 @@ pub fn load_skinned_gltf(device: &Device, path: &std::path::Path) -> Option<Skin
 
     let textures: Vec<Option<metal::Texture>> = images
         .iter()
-        .map(|image| Some(super::gltf_scene::upload_texture(device, image.width, image.height, &super::gltf_scene::to_rgba8(image))))
+        .map(|image| Some(super::metal_texture::upload_texture(device, image.width, image.height, &super::gltf_scene::to_rgba8(image))))
         .collect();
 
     let node_count = document.nodes().count();

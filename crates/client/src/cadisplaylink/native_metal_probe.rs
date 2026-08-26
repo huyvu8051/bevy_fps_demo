@@ -25,6 +25,7 @@ use objc::{runtime::Object, *};
 // only the vertex data and camera pose source change. See
 // native_game_app.rs (headless App) and native_game_extract.rs
 // (extraction).
+use super::metal_math::{look_at, mat_mul, perspective};
 use super::native_game_app::build_headless_game_ecs_app;
 use super::native_game_extract::{
     extract_render_snapshot, prime_camera_viewport, ExtractedMesh, FloatingDamageSnapshot, HealthBarSnapshot,
@@ -97,14 +98,6 @@ const FALLBACK_LIGHT: LightUniform = LightUniform {
     sun_color: [1.0, 1.0, 1.0, 0.0],
 };
 
-// The real game's own Sponza asset — loaded directly via the `gltf` crate
-// (see gltf_scene.rs), no offline conversion needed. (Model I/O on iOS
-// doesn't support .gltf at all — confirmed on-device via
-// canImportFileExtension — which is why the Swift demo needed a
-// pre-converted .obj; the pure-Rust `gltf` crate has no such OS
-// dependency.)
-const SPONZA_GLTF_RELATIVE_PATH: &str = "assets/models/Sponza/Sponza.gltf";
-
 // Rust has no direct equivalent of Swift's `Bundle.main.resourcePath` —
 // reach into Foundation via objc the same way the rest of this module
 // already talks to UIKit/CAMetalLayer.
@@ -122,197 +115,6 @@ fn bundle_resource_path() -> Option<String> {
         }
         Some(std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned())
     }
-}
-
-const ARENA_HALF_SIZE: f32 = 10.0;
-const ARENA_WALL_HEIGHT: f32 = 4.0;
-const ARENA_WALL_THICKNESS: f32 = 0.3;
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-struct Vertex {
-    position: [f32; 3],
-    normal: [f32; 3],
-    color: [f32; 3],
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-struct Uniforms {
-    view_projection: [[f32; 4]; 4],
-    light_pos: [f32; 3],
-    light_range: f32,
-    light_color: [f32; 4],
-    sun_dir: [f32; 3],
-    _sun_pad: f32,
-    sun_color: [f32; 4],
-}
-
-const SHADER_SOURCE: &str = r#"
-#include <metal_stdlib>
-using namespace metal;
-
-// packed_float3, not float3: MSL gives plain float3 struct members 16-byte
-// alignment (12 bytes of data + 4 padding) even in the device address
-// space, but Rust's #[repr(C)] Vertex below uses [f32; 3] fields, which
-// are tightly packed at 12 bytes with no padding — reading a
-// device-buffer array of that layout as plain float3 fields shifts every
-// field after the first by 4 bytes per preceding vec3, which is exactly
-// what produced the garbled rainbow/spike geometry the first time. Same
-// reasoning applies to every float3 in Uniforms below (see skinned_fragment's
-// own doc comment for the exact bug this caused once a struct had fields
-// *after* a plain float3).
-// No [[attribute(N)]] annotations here — those only apply to structs read
-// via [[stage_in]]/a vertex descriptor. vertex_main below reads this
-// straight out of a raw device buffer by index instead, so plain struct
-// fields are all that's needed.
-struct Vertex {
-    packed_float3 position;
-    packed_float3 normal;
-    packed_float3 color;
-};
-
-struct Uniforms {
-    float4x4 viewProjection;
-    packed_float3 lightPos;
-    float lightRange;
-    float4 lightColor;
-    packed_float3 sunDir;
-    float _sunPad;
-    float4 sunColor;
-};
-
-struct VertexOut {
-    float4 position [[position]];
-    float3 worldPos;
-    float3 normal;
-    float3 color;
-};
-
-vertex VertexOut vertex_main(uint vid [[vertex_id]],
-                              const device Vertex *verts [[buffer(0)]],
-                              constant Uniforms &uniforms [[buffer(1)]]) {
-    VertexOut out;
-    Vertex v = verts[vid];
-    out.position = uniforms.viewProjection * float4(float3(v.position), 1.0);
-    out.worldPos = float3(v.position);
-    out.normal = float3(v.normal);
-    out.color = float3(v.color);
-    return out;
-}
-
-fragment float4 fragment_main(VertexOut in [[stage_in]],
-                               constant Uniforms &uniforms [[buffer(1)]]) {
-    float sunDiffuse = max(dot(normalize(in.normal), -normalize(float3(uniforms.sunDir))), 0.0);
-    float3 sunTerm = uniforms.sunColor.rgb * sunDiffuse;
-
-    float3 toLight = float3(uniforms.lightPos) - in.worldPos;
-    float dist = length(toLight);
-    float atten = clamp(1.0 - dist / max(uniforms.lightRange, 0.0001), 0.0, 1.0);
-    atten *= atten;
-    float pointDiffuse = max(dot(normalize(in.normal), toLight / max(dist, 0.0001)), 0.0) * atten;
-    float3 pointTerm = uniforms.lightColor.rgb * pointDiffuse;
-
-    float3 lightTerm = clamp(sunTerm + pointTerm, 0.0, 1.0);
-    float3 lit = in.color * (0.35 + 0.65 * lightTerm);
-    return float4(lit, 1.0);
-}
-"#;
-
-fn append_box(verts: &mut Vec<Vertex>, center: [f32; 3], half: [f32; 3], color: [f32; 3]) {
-    let (cx, cy, cz) = (center[0], center[1], center[2]);
-    let (x, y, z) = (half[0], half[1], half[2]);
-    let c = |dx: f32, dy: f32, dz: f32| [cx + dx * x, cy + dy * y, cz + dz * z];
-    let c000 = c(-1.0, -1.0, -1.0);
-    let c001 = c(-1.0, -1.0, 1.0);
-    let c010 = c(-1.0, 1.0, -1.0);
-    let c011 = c(-1.0, 1.0, 1.0);
-    let c100 = c(1.0, -1.0, -1.0);
-    let c101 = c(1.0, -1.0, 1.0);
-    let c110 = c(1.0, 1.0, -1.0);
-    let c111 = c(1.0, 1.0, 1.0);
-
-    let mut face = |a: [f32; 3], b: [f32; 3], cc: [f32; 3], d: [f32; 3], n: [f32; 3]| {
-        for p in [a, b, cc, a, cc, d] {
-            verts.push(Vertex { position: p, normal: n, color });
-        }
-    };
-    face(c001, c101, c111, c011, [0.0, 0.0, 1.0]);
-    face(c100, c000, c010, c110, [0.0, 0.0, -1.0]);
-    face(c101, c100, c110, c111, [1.0, 0.0, 0.0]);
-    face(c000, c001, c011, c010, [-1.0, 0.0, 0.0]);
-    face(c010, c011, c111, c110, [0.0, 1.0, 0.0]);
-    face(c001, c000, c100, c101, [0.0, -1.0, 0.0]);
-}
-
-fn build_arena_vertices() -> Vec<Vertex> {
-    let mut verts = Vec::new();
-    let floor_color = [0.35, 0.35, 0.38];
-    let wall_color = [0.55, 0.5, 0.45];
-    let floor_size = ARENA_HALF_SIZE * 2.0;
-
-    append_box(
-        &mut verts,
-        [0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0],
-        [floor_size / 2.0, ARENA_WALL_THICKNESS / 2.0, floor_size / 2.0],
-        floor_color,
-    );
-
-    let wall_span = floor_size + ARENA_WALL_THICKNESS;
-    let walls = [
-        ([0.0, ARENA_WALL_HEIGHT / 2.0, -ARENA_HALF_SIZE], wall_span, ARENA_WALL_THICKNESS),
-        ([0.0, ARENA_WALL_HEIGHT / 2.0, ARENA_HALF_SIZE], wall_span, ARENA_WALL_THICKNESS),
-        ([-ARENA_HALF_SIZE, ARENA_WALL_HEIGHT / 2.0, 0.0], ARENA_WALL_THICKNESS, wall_span),
-        ([ARENA_HALF_SIZE, ARENA_WALL_HEIGHT / 2.0, 0.0], ARENA_WALL_THICKNESS, wall_span),
-    ];
-    for (center, size_x, size_z) in walls {
-        append_box(&mut verts, center, [size_x / 2.0, ARENA_WALL_HEIGHT / 2.0, size_z / 2.0], wall_color);
-    }
-    verts
-}
-
-fn perspective(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
-    let y_scale = 1.0 / (fov_y_radians * 0.5).tan();
-    let x_scale = y_scale / aspect;
-    let z_range = far - near;
-    let z_scale = -(far + near) / z_range;
-    let wz_scale = -2.0 * far * near / z_range;
-    [
-        [x_scale, 0.0, 0.0, 0.0],
-        [0.0, y_scale, 0.0, 0.0],
-        [0.0, 0.0, z_scale, -1.0],
-        [0.0, 0.0, wz_scale, 0.0],
-    ]
-}
-
-fn look_at(eye: [f32; 3], center: [f32; 3], up: [f32; 3]) -> [[f32; 4]; 4] {
-    let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-    let norm = |v: [f32; 3]| {
-        let len = (dot(v, v)).sqrt();
-        [v[0] / len, v[1] / len, v[2] / len]
-    };
-    let f = norm(sub(center, eye));
-    let s = norm(cross(f, up));
-    let u = cross(s, f);
-    [
-        [s[0], u[0], -f[0], 0.0],
-        [s[1], u[1], -f[1], 0.0],
-        [s[2], u[2], -f[2], 0.0],
-        [-dot(s, eye), -dot(u, eye), dot(f, eye), 1.0],
-    ]
-}
-
-fn mat_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
-    let mut out = [[0.0f32; 4]; 4];
-    for col in 0..4 {
-        for row in 0..4 {
-            out[col][row] =
-                a[0][row] * b[col][0] + a[1][row] * b[col][1] + a[2][row] * b[col][2] + a[3][row] * b[col][3];
-        }
-    }
-    out
 }
 
 const SPONZA_SHADER_SOURCE: &str = r#"
@@ -727,13 +529,6 @@ pub struct NativeMetalProbe {
     device: Device,
     layer: MetalLayer,
     queue: CommandQueue,
-    pipeline: RenderPipelineState,
-    // Sample-count-1 twin of `pipeline` — see MSAA_SAMPLE_COUNT's own doc
-    // comment and RenderSnapshot::map_msaa_on for why the MapMsaaOn toggle
-    // needs a second compiled pipeline per shader rather than a uniform.
-    pipeline_no_msaa: RenderPipelineState,
-    vertex_buffer: metal::Buffer,
-    vertex_count: usize,
     depth_state: metal::DepthStencilState,
     depth_texture: Option<metal::Texture>,
     // Sample-count-1 twin of depth_texture, used when MapMsaaOn is off —
@@ -753,7 +548,6 @@ pub struct NativeMetalProbe {
     msaa_enabled: bool,
     sponza_pipeline: Option<RenderPipelineState>,
     sponza_pipeline_no_msaa: Option<RenderPipelineState>,
-    sponza_meshes: Vec<super::gltf_scene::GltfMesh>,
     sponza_sampler: metal::SamplerState,
     white_texture: metal::Texture,
     camera_position: [f32; 3],
@@ -774,20 +568,10 @@ pub struct NativeMetalProbe {
     quad_pipeline: Option<RenderPipelineState>,
     quad_pipeline_no_msaa: Option<RenderPipelineState>,
     quad_vertex_buffer: metal::Buffer,
-    // Phase 3: entities now genuinely live in a Bevy ECS World (see
-    // ecs_app below) instead of a hardcoded Vec — patrol movement runs as
-    // a real Bevy system over real Transform components. Real
-    // spawn/despawn and movement driven by actual networking is a later
-    // step (this ECS App has no RepliconPlugins/game logic yet, just
-    // MinimalPlugins + our own patrol system) — this proves the "extract
-    // a draw list from ECS each frame" seam works end-to-end, which is
-    // the actual architectural risk the plan calls out.
-    ecs_app: bevy::app::App,
     start_time: std::time::Instant,
-    // Phase 6 Step 4 (temporary, alongside `ecs_app`'s toy patrol World):
     // `Some` only when constructed via `new(view, true)` — the headless
     // real game (build_game_common: physics/networking/AI/prediction),
-    // ticked and extracted every frame instead of the toy `ecs_app`. When
+    // ticked and extracted every frame. When
     // present, `render_frame` draws its static geometry (arena+gun) and
     // drives the camera from its `FpsCamera` instead of touch input.
     real_game_app: Option<bevy::app::App>,
@@ -854,72 +638,6 @@ pub struct NativeMetalProbe {
 enum EntityKind {
     Soldier,
     Zombie,
-}
-
-#[derive(bevy::ecs::component::Component)]
-struct Patrol {
-    center: [f32; 2],
-    radius: f32,
-    speed: f32,
-    phase: f32,
-}
-
-#[derive(bevy::ecs::component::Component)]
-struct AnimOffset(f32);
-
-// Real Bevy ECS system — walks every entity with a Patrol component and
-// moves its Transform along a circle each tick, driven by Bevy's own Time
-// resource (from MinimalPlugins' TimePlugin). This is the seam the plan
-// calls "extract": render_frame() below queries the same World for
-// (Transform, EntityKind, AnimOffset) after ticking this system, instead
-// of reading a hand-maintained Vec.
-fn patrol_system(time: bevy::ecs::system::Res<bevy::time::Time>, mut query: bevy::ecs::system::Query<(&mut bevy::transform::components::Transform, &Patrol)>) {
-    let now = time.elapsed_secs();
-    for (mut transform, patrol) in &mut query {
-        let angle = patrol.phase + now * patrol.speed;
-        let x = patrol.center[0] + angle.cos() * patrol.radius;
-        let z = patrol.center[1] + angle.sin() * patrol.radius;
-        let facing = angle + std::f32::consts::FRAC_PI_2;
-        transform.translation = bevy::math::Vec3::new(x, 0.0, z);
-        transform.rotation = bevy::math::Quat::from_rotation_y(facing);
-    }
-}
-
-fn build_entity_ecs_app() -> bevy::app::App {
-    let mut app = bevy::app::App::new();
-    app.add_plugins(bevy::MinimalPlugins);
-    app.add_systems(bevy::app::Update, patrol_system);
-    app.world_mut().spawn((
-        bevy::transform::components::Transform::IDENTITY,
-        EntityKind::Zombie,
-        Patrol { center: [-4.0, -3.0], radius: 2.5, speed: 0.4, phase: 0.0 },
-        AnimOffset(0.0),
-    ));
-    app.world_mut().spawn((
-        bevy::transform::components::Transform::IDENTITY,
-        EntityKind::Zombie,
-        Patrol { center: [3.0, -4.0], radius: 3.0, speed: 0.3, phase: 1.7 },
-        AnimOffset(0.5),
-    ));
-    app.world_mut().spawn((
-        bevy::transform::components::Transform::IDENTITY,
-        EntityKind::Zombie,
-        Patrol { center: [-2.0, -6.0], radius: 2.0, speed: 0.5, phase: 3.1 },
-        AnimOffset(1.1),
-    ));
-    app.world_mut().spawn((
-        bevy::transform::components::Transform::IDENTITY,
-        EntityKind::Zombie,
-        Patrol { center: [5.0, -2.0], radius: 2.2, speed: 0.35, phase: 4.6 },
-        AnimOffset(1.8),
-    ));
-    app.world_mut().spawn((
-        bevy::transform::components::Transform::IDENTITY,
-        EntityKind::Soldier,
-        Patrol { center: [0.0, -3.0], radius: 1.5, speed: 0.2, phase: 0.0 },
-        AnimOffset(0.0),
-    ));
-    app
 }
 
 // Flattens ONE of the real game's extracted static meshes (arena
@@ -1068,38 +786,7 @@ impl NativeMetalProbe {
 
         let queue = device.new_command_queue();
 
-        let vertices = build_arena_vertices();
-        let vertex_buffer = device.new_buffer_with_data(
-            vertices.as_ptr() as *const _,
-            (vertices.len() * std::mem::size_of::<Vertex>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
         let compile_options = CompileOptions::new();
-        let library = device.new_library_with_source(SHADER_SOURCE, &compile_options).expect("shader compile failed");
-        let vertex_fn = library.get_function("vertex_main", None).unwrap();
-        let fragment_fn = library.get_function("fragment_main", None).unwrap();
-
-        let pipeline_descriptor = RenderPipelineDescriptor::new();
-        pipeline_descriptor.set_vertex_function(Some(&vertex_fn));
-        pipeline_descriptor.set_fragment_function(Some(&fragment_fn));
-        pipeline_descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-        pipeline_descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
-        pipeline_descriptor.set_raster_sample_count(MSAA_SAMPLE_COUNT);
-        let pipeline = device.new_render_pipeline_state(&pipeline_descriptor).expect("pipeline creation failed");
-
-        // Same shader, sample_count 1 — the MapMsaaOn-off variant (see
-        // MSAA_SAMPLE_COUNT's own doc comment and RenderSnapshot::
-        // map_msaa_on for why a second compiled pipeline is needed rather
-        // than just changing a uniform: Metal ties rasterSampleCount to the
-        // PSO, not something a shader can branch on at draw time).
-        let pipeline_no_msaa_descriptor = RenderPipelineDescriptor::new();
-        pipeline_no_msaa_descriptor.set_vertex_function(Some(&vertex_fn));
-        pipeline_no_msaa_descriptor.set_fragment_function(Some(&fragment_fn));
-        pipeline_no_msaa_descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-        pipeline_no_msaa_descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
-        let pipeline_no_msaa =
-            device.new_render_pipeline_state(&pipeline_no_msaa_descriptor).expect("pipeline creation failed");
 
         let depth_descriptor = metal::DepthStencilDescriptor::new();
         depth_descriptor.set_depth_compare_function(metal::MTLCompareFunction::Less);
@@ -1160,8 +847,6 @@ impl NativeMetalProbe {
                     (None, None)
                 }
             };
-        let gltf_path = std::path::Path::new(&bundle_resource_path().unwrap_or_default()).join(SPONZA_GLTF_RELATIVE_PATH);
-        let sponza_meshes = super::gltf_scene::load_gltf_scene(&device, &gltf_path);
 
         let sampler_descriptor = metal::SamplerDescriptor::new();
         sampler_descriptor.set_min_filter(metal::MTLSamplerMinMagFilter::Linear);
@@ -1219,7 +904,6 @@ impl NativeMetalProbe {
         let zombie_path = std::path::Path::new(&resource_path).join("assets/characters/zombie/mesh/zombie.glb");
         let zombie_model = super::skinned_gltf::load_skinned_gltf(&device, &zombie_path);
 
-        let ecs_app = build_entity_ecs_app();
         let real_game_app = if real_game { Some(build_headless_game_ecs_app()) } else { None };
 
         // Resolve target — single-sample, still what quad_fragment (the PIP
@@ -1368,15 +1052,10 @@ impl NativeMetalProbe {
             device,
             layer,
             queue,
-            pipeline,
-            pipeline_no_msaa,
             sponza_pipeline,
             sponza_pipeline_no_msaa,
-            sponza_meshes,
             sponza_sampler,
             white_texture,
-            vertex_buffer,
-            vertex_count: vertices.len(),
             depth_state,
             depth_texture: None,
             depth_texture_no_msaa: None,
@@ -1396,7 +1075,6 @@ impl NativeMetalProbe {
             quad_pipeline,
             quad_pipeline_no_msaa,
             quad_vertex_buffer,
-            ecs_app,
             start_time: std::time::Instant::now(),
             real_game_app,
             real_game_textures: std::collections::HashMap::new(),
@@ -1581,7 +1259,6 @@ impl NativeMetalProbe {
         // actual AnimationPlayer's seek_time, not wall-clock time).
         extracted: &[(bevy::transform::components::Transform, EntityKind, (usize, f32))],
         _now: f32,
-        use_sponza: bool,
         real_game_meshes: Option<&[RealGameMeshDraw]>,
         // Selects which of each shader's two compiled pipelines (see
         // MSAA_SAMPLE_COUNT's own doc comment) to bind — must match
@@ -1591,8 +1268,18 @@ impl NativeMetalProbe {
     ) {
         let sponza_pipeline = if msaa_enabled { self.sponza_pipeline.as_ref() } else { self.sponza_pipeline_no_msaa.as_ref() };
         let skinned_pipeline = if msaa_enabled { self.skinned_pipeline.as_ref() } else { self.skinned_pipeline_no_msaa.as_ref() };
-        let demo_pipeline = if msaa_enabled { &self.pipeline } else { &self.pipeline_no_msaa };
 
+        // `real_game_meshes` is `None` only in the brief window before the
+        // headless gameplay App's first Startup schedule has actually run
+        // (spawn_test_arena hasn't spawned the floor/walls yet) — nothing to
+        // draw here that frame, not an error. There used to be two more
+        // fallback branches here (a hardcoded box-arena demo, and a
+        // Sponza-scene "probe" demo) from earlier phases of this renderer's
+        // own development, both unreachable in the shipped app (Swift's
+        // ViewController.swift hardcodes USE_REAL_GAME_NATIVE_RENDERER =
+        // true, USE_NATIVE_METAL_DEMO = false) — removed rather than kept
+        // as dead weight; see git history if either is ever worth
+        // resurrecting for a standalone demo/probe build again.
         if let Some(meshes) = real_game_meshes {
             // Reuses Sponza's own pipeline/shader (position+normal+uv,
             // textured) unchanged — arena/gun geometry is textured exactly
@@ -1627,62 +1314,6 @@ impl NativeMetalProbe {
                 encoder.set_fragment_texture(0, Some(texture));
                 encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, m.vertex_count as u64);
             }
-        } else if use_sponza {
-            encoder.set_render_pipeline_state(sponza_pipeline.unwrap());
-            encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
-            for mesh in &self.sponza_meshes {
-                let sponza_uniforms = SponzaUniforms {
-                    view_projection,
-                    light_pos: light.position,
-                    light_range: light.range,
-                    light_color: light.color,
-                    sun_dir: light.sun_dir,
-                    _sun_pad: 0.0,
-                    sun_color: light.sun_color,
-                    base_color_factor: mesh.base_color_factor,
-                    // Sponza's own static demo scene has no emissive
-                    // materials worth carrying — see ExtractedMesh::
-                    // emissive's own doc comment for where this field
-                    // actually matters (real-game muzzle flash/reticle/
-                    // spark quads, the `real_game_meshes` branch above).
-                    emissive: [0.0, 0.0, 0.0, 0.0],
-                };
-                encoder.set_vertex_buffer(0, Some(&mesh.vertex_buffer), 0);
-                encoder.set_vertex_bytes(
-                    1,
-                    std::mem::size_of::<SponzaUniforms>() as u64,
-                    &sponza_uniforms as *const _ as *const _,
-                );
-                encoder.set_fragment_bytes(
-                    1,
-                    std::mem::size_of::<SponzaUniforms>() as u64,
-                    &sponza_uniforms as *const _ as *const _,
-                );
-                let texture = mesh.base_color_texture.as_ref().unwrap_or(&self.white_texture);
-                encoder.set_fragment_texture(0, Some(texture));
-                encoder.draw_indexed_primitives(
-                    MTLPrimitiveType::Triangle,
-                    mesh.index_count as u64,
-                    MTLIndexType::UInt32,
-                    &mesh.index_buffer,
-                    0,
-                );
-            }
-        } else {
-            let uniforms = Uniforms {
-                view_projection,
-                light_pos: light.position,
-                light_range: light.range,
-                light_color: light.color,
-                sun_dir: light.sun_dir,
-                _sun_pad: 0.0,
-                sun_color: light.sun_color,
-            };
-            encoder.set_render_pipeline_state(demo_pipeline);
-            encoder.set_vertex_buffer(0, Some(&self.vertex_buffer), 0);
-            encoder.set_vertex_bytes(1, std::mem::size_of::<Uniforms>() as u64, &uniforms as *const _ as *const _);
-            encoder.set_fragment_bytes(1, std::mem::size_of::<Uniforms>() as u64, &uniforms as *const _ as *const _);
-            encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, self.vertex_count as u64);
         }
 
         let Some(pipeline) = skinned_pipeline else { return };
@@ -1795,7 +1426,6 @@ impl NativeMetalProbe {
         let drawable_size = self.layer.drawable_size();
         let (width, height) = (drawable_size.width as u64, drawable_size.height as u64);
 
-        let use_sponza = self.sponza_pipeline.is_some() && !self.sponza_meshes.is_empty();
         let is_real_game = self.real_game_app.is_some();
         // Moved up from further below (used to only be needed just before
         // the draw_scene calls) — the remote-player extraction just below
@@ -1885,7 +1515,7 @@ impl NativeMetalProbe {
         for mesh in &real_game_static_meshes {
             let Some(t) = mesh.texture.as_ref() else { continue };
             if !self.real_game_textures.contains_key(&t.id) {
-                let uploaded = super::gltf_scene::upload_texture(&self.device, t.width, t.height, &t.rgba);
+                let uploaded = super::metal_texture::upload_texture(&self.device, t.width, t.height, &t.rgba);
                 self.real_game_textures.insert(t.id, uploaded);
             }
         }
@@ -1911,9 +1541,8 @@ impl NativeMetalProbe {
         let real_game_meshes_opt =
             if real_game_meshes.is_empty() { None } else { Some(real_game_meshes.as_slice()) };
 
-        let use_camera_state = use_sponza || is_real_game;
         let aspect = width as f32 / height.max(1) as f32;
-        let far = if use_camera_state { 500.0 } else { 100.0 };
+        let far = if is_real_game { 500.0 } else { 100.0 };
         // Real-game mode: derive look direction + up from the actual
         // camera rotation quaternion (includes ViewRecoil kick + Lean
         // roll — see real_game_camera_rotation's own doc comment), not
@@ -1939,12 +1568,12 @@ impl NativeMetalProbe {
             self.camera_position[1] + look_dir[1],
             self.camera_position[2] + look_dir[2],
         ];
-        let view = if use_camera_state {
+        let view = if is_real_game {
             look_at(self.camera_position, center, up)
         } else {
             look_at([0.0, 3.0, 10.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0])
         };
-        let proj = perspective(if use_camera_state { 60.0_f32 } else { 45.0 }.to_radians(), aspect, 0.05, far);
+        let proj = perspective(if is_real_game { 60.0_f32 } else { 45.0 }.to_radians(), aspect, 0.05, far);
         // The scene's real PointLight (see LightUniform's own doc comment)
         // — falls back to a fixed distant "sun" only for the toy demo/
         // patrol probe world, which has no ECS lights at all.
@@ -1979,39 +1608,14 @@ impl NativeMetalProbe {
         let scope_proj = perspective(scope_fov, 1.0, 0.05, far);
         let scope_view_projection = mat_mul(scope_proj, scope_view);
 
-        // Tick the ECS world once (advances Time, runs patrol_system over
-        // every Patrol+Transform entity), then extract — the actual
-        // "extract" seam the plan calls for, decoupled from bevy_render
-        // entirely. Collected into an owned Vec (not a live query/World
-        // borrow) so draw_scene can be called twice — once per camera —
-        // without re-ticking Time in between.
-        // In real-game mode the toy patrol World is irrelevant (its
-        // hardcoded zombies/soldier would just float inside the real
-        // arena) — skip ticking/extracting it and draw the real
-        // zombies/remote players collected above instead.
-        let extracted: Vec<(bevy::transform::components::Transform, EntityKind, (usize, f32))> = if is_real_game {
-            real_game_extracted
-        } else {
-            self.ecs_app.update();
-            let mut query_state = self
-                .ecs_app
-                .world_mut()
-                .query::<(&bevy::transform::components::Transform, &EntityKind, &AnimOffset)>();
-            query_state
-                .iter(self.ecs_app.world())
-                .map(|(t, k, a)| {
-                    // No real AnimationPlayer to read for these hand-placed
-                    // patrol dummies (see AnimOffset's own doc comment) —
-                    // just keep them walking, staggered by AnimOffset's old
-                    // per-entity phase, same visual as before this change.
-                    let clip_index = match k {
-                        EntityKind::Zombie => crate::ZOMBIE_ANIM_WALK,
-                        EntityKind::Soldier => crate::PLAYER_MODEL_ANIM_WALK,
-                    };
-                    (*t, *k, (clip_index, now + a.0))
-                })
-                .collect()
-        };
+        // Collected into an owned Vec (not a live query/World borrow) so
+        // draw_scene can be called twice — once per camera — without
+        // re-extracting in between. Used to also have a toy "patrol" World
+        // fallback here (a hand-placed ECS demo, ticked/extracted only when
+        // NOT in real-game mode) — removed once real_game=false was
+        // confirmed unreachable in the shipped app; see git history if it's
+        // ever worth resurrecting for a standalone demo/probe build again.
+        let extracted: Vec<(bevy::transform::components::Transform, EntityKind, (usize, f32))> = real_game_extracted;
 
         // Pass 1: scope camera into the offscreen texture — skipped
         // entirely in real-game mode while not aiming (see `show_scope`),
@@ -2048,7 +1652,6 @@ impl NativeMetalProbe {
                 light,
                 &extracted,
                 now,
-                use_sponza,
                 real_game_meshes_opt,
                 msaa_enabled,
             );
@@ -2097,7 +1700,6 @@ impl NativeMetalProbe {
             light,
             &extracted,
             now,
-            use_sponza,
             real_game_meshes_opt,
             msaa_enabled,
         );
