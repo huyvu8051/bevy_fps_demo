@@ -532,10 +532,10 @@ bool_toggle_ffi!(
     super::native_menu::set_show_autopilot_target
 );
 bool_toggle_ffi!(
-    native_metal_probe_get_show_wall_hits,
-    native_metal_probe_set_show_wall_hits,
-    super::native_menu::show_wall_hits,
-    super::native_menu::set_show_wall_hits
+    native_metal_probe_get_show_hit_markers,
+    native_metal_probe_set_show_hit_markers,
+    super::native_menu::show_hit_markers,
+    super::native_menu::set_show_hit_markers
 );
 bool_toggle_ffi!(
     native_metal_probe_get_aim_blur_enabled,

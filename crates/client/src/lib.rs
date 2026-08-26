@@ -835,23 +835,18 @@ impl Default for ShowAutopilotTarget {
     }
 }
 
-// Debug/dev: toggled by settings/cheats or env SHOW_WALL_HITS. Spawns persistent red spheres on wall bullet hits.
+// Debug/dev: toggled by settings/cheats or env SHOW_HIT_MARKERS. Enables/disables hit marker spheres on hits.
 #[derive(Resource)]
-struct ShowWallHits(bool);
+struct ShowHitMarkers(bool);
 
-impl Default for ShowWallHits {
+impl Default for ShowHitMarkers {
     fn default() -> Self {
-        Self(std::env::var("SHOW_WALL_HITS").is_ok_and(|v| v == "1" || v.to_lowercase() == "true"))
+        if let Ok(val) = std::env::var("SHOW_HIT_MARKERS") {
+            Self(val == "1" || val.to_lowercase() == "true")
+        } else {
+            Self(true)
+        }
     }
-}
-
-#[derive(Component)]
-struct WallHitSphere;
-
-#[derive(Resource)]
-struct WallHitAssets {
-    mesh: Handle<Mesh>,
-    material: Handle<StandardMaterial>,
 }
 
 // Debug/dev: toggled by KeyG. Player takes no damage while true — see
@@ -1384,7 +1379,7 @@ fn auto_reconnect(
 // Player puppet, which isn't replicated — clears them out; things that
 // reference a zombie by Entity (health bars) already self-heal once their
 // target is gone (see update_zombie_health_bars).
-fn despawn_replicated_on_disconnect(mut commands: Commands, entities: Query<Entity, Or<(With<Zombie>, With<NetPlayer>, With<WallHitSphere>)>>) {
+fn despawn_replicated_on_disconnect(mut commands: Commands, entities: Query<Entity, Or<(With<Zombie>, With<NetPlayer>)>>) {
     for entity in &entities {
         commands.entity(entity).despawn();
     }
@@ -1859,8 +1854,7 @@ fn build_game_common(app: &mut App) {
         .init_resource::<ShowHitboxes>()
         .init_resource::<GodMode>()
         .init_resource::<ShowAutopilotTarget>()
-        .init_resource::<ShowWallHits>()
-        .add_systems(Update, clean_wall_hits_on_toggle)
+        .init_resource::<ShowHitMarkers>()
         .init_resource::<DebugPanelVisible>()
         .init_resource::<SettingsMenuVisible>()
         .init_resource::<SettingsMenuScrollState>()
@@ -2240,14 +2234,6 @@ fn setup(
         material: materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.15, 0.1),
             emissive: LinearRgba::rgb(4.0, 0.3, 0.2),
-            unlit: true,
-            ..default()
-        }),
-    });
-    commands.insert_resource(WallHitAssets {
-        mesh: meshes.add(Sphere::new(0.05)),
-        material: materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.0, 0.0),
             unlit: true,
             ..default()
         }),
@@ -2832,7 +2818,7 @@ fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "DofAlt", CheatDofAltButton);
                         spawn_cheat_toggle_button(row, "LookAt", CheatLookAtTargetButton);
                         spawn_cheat_toggle_button(row, "TraceAim", CheatShowAutopilotTargetButton);
-                        spawn_cheat_toggle_button(row, "WallHits", CheatShowWallHitsButton);
+                        spawn_cheat_toggle_button(row, "HitMarks", CheatShowHitMarkersButton);
                     });
                 }
             });
@@ -3169,7 +3155,7 @@ struct CheatLookAtTargetButton;
 #[derive(Component)]
 struct CheatShowAutopilotTargetButton;
 #[derive(Component)]
-struct CheatShowWallHitsButton;
+struct CheatShowHitMarkersButton;
 
 // Changed<Interaction>-gated like every other touch button in this file —
 // each tap flips the same resource the matching desktop key
@@ -3288,11 +3274,11 @@ fn cheat_toggle_buttons_3(
     mut dof_alt: ResMut<AimDofFocalDistanceAlt>,
     mut look_only: ResMut<AutopilotLookOnly>,
     mut show_aim: ResMut<ShowAutopilotTarget>,
-    mut show_wall: ResMut<ShowWallHits>,
+    mut show_markers: ResMut<ShowHitMarkers>,
     dof_alt_btn: Query<&Interaction, (With<CheatDofAltButton>, Changed<Interaction>)>,
     look_at_btn: Query<&Interaction, (With<CheatLookAtTargetButton>, Changed<Interaction>)>,
     show_aim_btn: Query<&Interaction, (With<CheatShowAutopilotTargetButton>, Changed<Interaction>)>,
-    show_wall_btn: Query<&Interaction, (With<CheatShowWallHitsButton>, Changed<Interaction>)>,
+    show_markers_btn: Query<&Interaction, (With<CheatShowHitMarkersButton>, Changed<Interaction>)>,
 ) {
     if tapped(&dof_alt_btn) {
         dof_alt.0 = !dof_alt.0;
@@ -3303,8 +3289,8 @@ fn cheat_toggle_buttons_3(
     if tapped(&show_aim_btn) {
         show_aim.0 = !show_aim.0;
     }
-    if tapped(&show_wall_btn) {
-        show_wall.0 = !show_wall.0;
+    if tapped(&show_markers_btn) {
+        show_markers.0 = !show_markers.0;
     }
 }
 
@@ -3416,7 +3402,7 @@ fn update_extra_toggle_colors(
     dof_alt: Res<AimDofFocalDistanceAlt>,
     look_only: Res<AutopilotLookOnly>,
     show_aim: Res<ShowAutopilotTarget>,
-    show_wall: Res<ShowWallHits>,
+    show_markers: Res<ShowHitMarkers>,
     mut buttons: Query<
         (
             &mut BackgroundColor,
@@ -3424,19 +3410,19 @@ fn update_extra_toggle_colors(
             Option<&CheatDofAltButton>,
             Option<&CheatLookAtTargetButton>,
             Option<&CheatShowAutopilotTargetButton>,
-            Option<&CheatShowWallHitsButton>,
+            Option<&CheatShowHitMarkersButton>,
         ),
         Or<(
             With<AutopilotButton>,
             With<CheatDofAltButton>,
             With<CheatLookAtTargetButton>,
             With<CheatShowAutopilotTargetButton>,
-            With<CheatShowWallHitsButton>,
+            With<CheatShowHitMarkersButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_wall_m) in &mut buttons {
+    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m) in &mut buttons {
         let on = if auto_m.is_some() {
             autopilot.0
         } else if dof_m.is_some() {
@@ -3446,21 +3432,9 @@ fn update_extra_toggle_colors(
         } else if show_aim_m.is_some() {
             show_aim.0
         } else {
-            show_wall_m.is_some() && show_wall.0
+            show_markers_m.is_some() && show_markers.0
         };
         *bg = BackgroundColor(color_for(on));
-    }
-}
-
-fn clean_wall_hits_on_toggle(
-    show_wall_hits: Res<ShowWallHits>,
-    mut commands: Commands,
-    entities: Query<Entity, With<WallHitSphere>>,
-) {
-    if show_wall_hits.is_changed() && !show_wall_hits.0 {
-        for entity in &entities {
-            commands.entity(entity).despawn();
-        }
     }
 }
 
@@ -6868,15 +6842,12 @@ fn shoot(
     globals: Query<&GlobalTransform>,
     touch_firing: Res<TouchFiring>,
     mut cooldown: Local<f32>,
-    // Bundled into one nested-tuple param instead of four flat ones — this
-    // fn was already at Bevy's flat SystemParam tuple arity limit (16); see
-    // send_player_input's own comment for the same constraint and the same
-    // nesting fix.
-    (autopilot, intent, local_moving, local_sprinting): (
+    (autopilot, intent, local_moving, local_sprinting, show_hit_markers): (
         Res<Autopilot>,
         Res<AutopilotIntent>,
         Res<LocalPlayerMoving>,
         Res<LocalPlayerSprinting>,
+        Res<ShowHitMarkers>,
     ),
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
@@ -7036,14 +7007,16 @@ fn shoot(
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
     if let Some((distance, entity, point, normal)) = predicted_hit {
         info!("[shot] local prediction: real bone hit zombie={entity} distance={distance:.2}");
-        commands.spawn((
-            Mesh3d(vfx_assets.hit_assets.mesh.clone()),
-            MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
-            Transform::from_translation(point + normal.normalize_or_zero() * 0.01),
-            HitMarker {
-                remaining: HIT_MARKER_LIFETIME,
-            },
-        ));
+        if show_hit_markers.0 {
+            commands.spawn((
+                Mesh3d(vfx_assets.hit_assets.mesh.clone()),
+                MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
+                Transform::from_translation(point + normal.normalize_or_zero() * 0.01),
+                HitMarker {
+                    remaining: HIT_MARKER_LIFETIME,
+                },
+            ));
+        }
 
         // Mark this zombie as "hit by us, watch for it dying" — see
         // count_local_kills, which is the only place this entry is ever
@@ -7105,8 +7078,7 @@ fn on_shot_fx(
     spatial_query: SpatialQuery,
     zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
-    show_wall_hits: Res<ShowWallHits>,
-    wall_hit_assets: Res<WallHitAssets>,
+    show_hit_markers: Res<ShowHitMarkers>,
 ) {
     match *trigger.event() {
         ShotFx::ZombieHit { origin, point, normal, damage, killed } => {
@@ -7115,14 +7087,16 @@ fn on_shot_fx(
             } else {
                 info!("[shot] (remote player) outer capsule hit but missed every inner bone capsule (0 damage)");
             }
-            commands.spawn((
-                Mesh3d(vfx_assets.hit_assets.mesh.clone()),
-                MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
-                Transform::from_translation(point + normal.normalize_or_zero() * 0.01),
-                HitMarker {
-                    remaining: HIT_MARKER_LIFETIME,
-                },
-            ));
+            if show_hit_markers.0 {
+                commands.spawn((
+                    Mesh3d(vfx_assets.hit_assets.mesh.clone()),
+                    MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
+                    Transform::from_translation(point + normal.normalize_or_zero() * 0.01),
+                    HitMarker {
+                        remaining: HIT_MARKER_LIFETIME,
+                    },
+                ));
+            }
             // Seeded off `point` (not just time) so multiple remote shots
             // landing the same frame don't all roll the same tracer chance.
             spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 619.0 + point.x * 13.7 + point.z * 7.3, origin, point);
@@ -7147,20 +7121,14 @@ fn on_shot_fx(
             spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed);
         }
         ShotFx::SurfaceHit { origin, point, normal } => {
-            commands.spawn((
-                Mesh3d(vfx_assets.hit_assets.mesh.clone()),
-                MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
-                Transform::from_translation(point + normal.normalize_or_zero() * 0.01),
-                HitMarker {
-                    remaining: HIT_MARKER_LIFETIME,
-                },
-            ));
-            if show_wall_hits.0 {
+            if show_hit_markers.0 {
                 commands.spawn((
-                    Mesh3d(wall_hit_assets.mesh.clone()),
-                    MeshMaterial3d(wall_hit_assets.material.clone()),
-                    Transform::from_translation(point),
-                    WallHitSphere,
+                    Mesh3d(vfx_assets.hit_assets.mesh.clone()),
+                    MeshMaterial3d(vfx_assets.hit_assets.material.clone()),
+                    Transform::from_translation(point + normal.normalize_or_zero() * 0.01),
+                    HitMarker {
+                        remaining: HIT_MARKER_LIFETIME,
+                    },
                 ));
             }
             spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 619.0 + point.x * 13.7 + point.z * 7.3, origin, point);

@@ -196,7 +196,7 @@ bool_toggle!(zombie_health_bars_hidden, set_zombie_health_bars_hidden, crate::Zo
 bool_toggle!(zombie_lod_disabled, set_zombie_lod_disabled, crate::ZombieLodDisabled, false);
 bool_toggle!(player_model_visible, set_player_model_visible, crate::PlayerModelVisible, false);
 bool_toggle!(show_autopilot_target, set_show_autopilot_target, crate::ShowAutopilotTarget, false);
-bool_toggle!(show_wall_hits, set_show_wall_hits, crate::ShowWallHits, false);
+bool_toggle!(show_hit_markers, set_show_hit_markers, crate::ShowHitMarkers, true);
 
 // Zombie count +/-10 (crate::lib's `zombie_count_buttons`) — like Kill All/
 // Spawn +100, `SetZombieCount` is a server-authoritative replicon client
