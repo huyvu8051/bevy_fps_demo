@@ -574,6 +574,10 @@ pub struct NativeMetalProbe {
     layer: MetalLayer,
     queue: CommandQueue,
     depth_state: metal::DepthStencilState,
+    // Always-pass, no-write depth-stencil state for the bevy_ui overlay —
+    // see its own construction comment (in `new()`) for why the overlay
+    // can't just inherit `depth_state` above.
+    ui_depth_state: metal::DepthStencilState,
     // Main pass's depth/color render targets — see metal_msaa.rs's own doc
     // comment. The color one is resolved into the real drawable texture
     // each frame (MTLStoreAction::MultisampleResolve), never sampled
@@ -828,6 +832,29 @@ impl NativeMetalProbe {
         depth_descriptor.set_depth_compare_function(metal::MTLCompareFunction::Less);
         depth_descriptor.set_depth_write_enabled(true);
         let depth_state = device.new_depth_stencil_state(&depth_descriptor);
+
+        // The bevy_ui overlay (health bars, floating damage, touch controls)
+        // is drawn with the SAME `encoder` as the 3D scene right before it,
+        // in the SAME render pass — Metal never resets depth-stencil state
+        // between draw calls, so without an explicit override here the
+        // overlay inherits `depth_state` above (Less-compare, write
+        // enabled) and gets depth-tested against the 3D scene's own
+        // just-written depth buffer. UI_SHADER_SOURCE's vertex shader
+        // always outputs z=0.0 (nearest possible in Metal's [0,1] NDC
+        // range), which should in principle always beat real scene
+        // geometry — but real-device testing (screenshots of the same
+        // frame data taken moments apart) showed the overlay intermittently
+        // NOT rendering at all depending on what 3D geometry happened to be
+        // behind it, which is exactly what a marginal/borderline depth
+        // comparison produces. A screen-space overlay should never be
+        // depth-tested against the 3D scene in the first place — same
+        // reasoning any real renderer's HUD pass uses — so this is a
+        // dedicated always-pass, no-write state instead of trying to tune
+        // z=0.0 to reliably win.
+        let ui_depth_descriptor = metal::DepthStencilDescriptor::new();
+        ui_depth_descriptor.set_depth_compare_function(metal::MTLCompareFunction::Always);
+        ui_depth_descriptor.set_depth_write_enabled(false);
+        let ui_depth_state = device.new_depth_stencil_state(&ui_depth_descriptor);
 
         // Builds one Sponza RenderPipelineDescriptor (shared blend setup)
         // at the given sample count — used twice below (MSAA on/off) so the
@@ -1122,6 +1149,7 @@ impl NativeMetalProbe {
             sponza_sampler,
             white_texture,
             depth_state,
+            ui_depth_state,
             msaa_targets: super::metal_msaa::MsaaTargets::new(MSAA_SAMPLE_COUNT),
             msaa_enabled: false,
             camera_position: [0.0, 2.5, 2.0],
@@ -1724,6 +1752,13 @@ impl NativeMetalProbe {
         // comments for why these were never visible before this pass.
         let ui_pipeline_ref = if msaa_enabled { &self.ui_pipeline } else { &self.ui_pipeline_no_msaa };
         if let Some(ui_pipeline) = ui_pipeline_ref {
+            // See ui_depth_state's own construction comment (in `new()`) —
+            // without this, the overlay inherits the 3D scene's own
+            // Less-compare/write-enabled depth state from `self.depth_state`
+            // (set once, above, for the whole render pass) and gets
+            // intermittently depth-tested away depending on what real scene
+            // geometry happens to be behind it.
+            encoder.set_depth_stencil_state(&self.ui_depth_state);
             if !self.ui_health_bars.is_empty()
                 || !self.ui_floating_damage.is_empty()
                 || !self.ui_touch_buttons.is_empty()

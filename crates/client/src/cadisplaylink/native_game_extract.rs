@@ -48,16 +48,53 @@ use shared::{NetPlayer, Zombie};
 pub fn prime_camera_viewport(world: &mut bevy::ecs::world::World, width_pts: f32, height_pts: f32) {
     let mut state: SystemState<Query<(&mut Camera, &mut Projection), With<crate::FpsCamera>>> = SystemState::new(world);
     let mut query = state.get_mut(world);
-    let Ok((mut camera, mut projection)) = query.single_mut() else { return };
     let (w, h) = (width_pts.max(1.0), height_pts.max(1.0));
-    // No `camera.viewport` override — leaving it `None` means "the full
-    // render target", which `target_info` below now defines.
-    camera.computed.target_info = Some(RenderTargetInfo {
-        physical_size: bevy::math::UVec2::new(w as u32, h as u32),
-        scale_factor: 1.0,
-    });
-    projection.update(w, h);
-    camera.computed.clip_from_view = projection.get_clip_from_view();
+    let target_info = || {
+        Some(RenderTargetInfo { physical_size: bevy::math::UVec2::new(w as u32, h as u32), scale_factor: 1.0 })
+    };
+    if let Ok((mut camera, mut projection)) = query.single_mut() {
+        // No `camera.viewport` override — leaving it `None` means "the full
+        // render target", which `target_info` below now defines.
+        camera.computed.target_info = target_info();
+        projection.update(w, h);
+        camera.computed.clip_from_view = projection.get_clip_from_view();
+    }
+
+    // `present_camera` (Camera2d + IsDefaultUiCamera, crate::lib's setup())
+    // is a SEPARATE camera entity from FpsCamera above — every UI node
+    // without an explicit `UiTargetCamera` (which is all of them here)
+    // sizes/positions itself off THIS camera's own `computed.target_info`,
+    // not FpsCamera's, so touch-control buttons/joystick were being laid
+    // out against whatever this camera's target_info happened to be —
+    // `None`/stale, since the real `bevy_render` `camera_system` that
+    // normally fills it in from the Window every frame never runs in this
+    // headless app either — same root cause as FpsCamera's own target_info
+    // above, just a second camera nobody had primed yet.
+    let mut ui_camera_state: SystemState<Query<&mut Camera, With<bevy::ui::IsDefaultUiCamera>>> = SystemState::new(world);
+    for mut ui_camera in ui_camera_state.get_mut(world).iter_mut() {
+        ui_camera.computed.target_info = target_info();
+    }
+
+    // The headless App's own synthetic PrimaryWindow (native_game_app.rs)
+    // is spawned once with a hardcoded placeholder resolution (1170x2532,
+    // a portrait iPhone size picked purely to satisfy `With<PrimaryWindow>`
+    // queries at startup — see its own doc comment) and NOTHING used to
+    // keep it in sync with the real view size the way `camera.computed`
+    // above already is. bevy_ui's own `ui_layout_system` sizes the UI root
+    // node off THIS Window's resolution, not the camera — so every
+    // touch-control button/joystick node was being laid out against a
+    // fixed wrong-orientation size, landing it far outside the visible NDC
+    // range once drawn (TouchButtonSnapshot/TouchJoystickSnapshot came back
+    // populated, just with coordinates off-screen) rather than merely
+    // mispositioned within it. Same "extract/patch the minimum Bevy state a
+    // system needs, every frame since the view can resize" approach this
+    // function already applies to the camera, now covering the Window too.
+    // `scale_factor` stays at its default 1.0 (matching `target_info`
+    // above), so points and physical pixels are the same number here.
+    let mut window_state: SystemState<Query<&mut bevy::window::Window, With<bevy::window::PrimaryWindow>>> = SystemState::new(world);
+    if let Ok(mut window) = window_state.get_mut(world).single_mut() {
+        window.resolution.set(w, h);
+    }
 }
 
 /// Raw RGBA8 pixel data for one mesh's base-color texture, extracted from
@@ -619,8 +656,8 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     let mut touch_button_state: SystemState<
         Query<(&ComputedNode, &UiGlobalTransform, &BackgroundColor, &crate::TouchControlButton, &Interaction)>,
     > = SystemState::new(world);
-    snapshot.touch_buttons = touch_button_state
-        .get(world)
+    let touch_button_query = touch_button_state.get(world);
+    snapshot.touch_buttons = touch_button_query
         .iter()
         .map(|(node, transform, bg, marker, interaction)| {
             let (top_left, size) = logical_rect(node, transform);
