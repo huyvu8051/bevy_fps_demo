@@ -25,8 +25,10 @@ use shared::{
     HitboxTestSlot, HITBOX_TEST_PLAYER_SPAWN, HITBOX_TEST_RESPAWN_DELAY, HITBOX_TEST_ZOMBIE_POSITIONS,
     MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PILLAR_RADIUS,
     PLAYER_LENGTH, PLAYER_RADIUS, PLAYER_SPAWN, Scenario,
+    RENDER_COMPARE_PLAYER_SPAWN, RENDER_COMPARE_ZOMBIE_POSITIONS,
     STRESS_TEST_PLAYER_SPAWN, STRESS_TEST_ZOMBIE_COUNT,
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
+    ZOMBIE_CRAWL_HEALTH_FRACTION,
     ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
     DIRECTOR_CALM_DURATION_SECS, DIRECTOR_CALM_PRESSURE_THRESHOLD, DIRECTOR_HORDE_SIZE,
     DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, INTERP_DELAY_SECS,
@@ -221,6 +223,7 @@ fn main() {
                 spawn_initial_zombies.run_if(resource_equals(Scenario::Normal)),
                 spawn_hitbox_test_zombies.run_if(resource_equals(Scenario::HitboxTest)),
                 spawn_stress_test_zombies.run_if(resource_equals(Scenario::StressTest)),
+                spawn_render_compare_zombies_system.run_if(resource_equals(Scenario::RenderCompare)),
                 setup_server_zombie_anim,
             ),
         )
@@ -235,7 +238,7 @@ fn main() {
             Update,
             (
                 move_players,
-                (move_zombies, update_server_zombie_pose, record_zombie_history).chain(),
+                (assign_render_compare_bite_target, move_zombies, update_server_zombie_pose, record_zombie_history).chain(),
                 (bot_pick_target, move_debug_bots, debug_bot_fire).chain(),
                 tick_respawns,
                 decay_player_threat,
@@ -345,6 +348,7 @@ fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands, scena
         Scenario::Normal => PLAYER_SPAWN,
         Scenario::HitboxTest => HITBOX_TEST_PLAYER_SPAWN,
         Scenario::StressTest => STRESS_TEST_PLAYER_SPAWN,
+        Scenario::RenderCompare => RENDER_COMPARE_PLAYER_SPAWN,
     };
     commands.entity(entity).insert((
         Transform::from_translation(spawn_pos),
@@ -1118,6 +1122,91 @@ fn spawn_hitbox_test_zombies(mut commands: Commands) {
 // grid the normal game uses.
 fn spawn_stress_test_zombies(mut commands: Commands) {
     spawn_zombies(&mut commands, &ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT], true, false, false);
+}
+
+// Scenario::RenderCompare's Startup spawn — 3 stationary zombies, one per
+// RENDER_COMPARE_ZOMBIE_POSITIONS entry, each hand-built (not via
+// spawn_zombies — no Thinker/Chase on any of them, so move_zombies never
+// touches them, and each needs different bonus components) to land on a
+// different ZombiePose without ever moving:
+//   - Idle: no ChaseTarget at all, so update_server_zombie_pose's query
+//     (which requires &ChaseTarget) skips it entirely — it just sits on
+//     ZombiePose's own spawn-time default forever.
+//   - Crawl: a bare ChaseTarget (entity: None — distance then reads as
+//     f32::MAX, well past ZOMBIE_STOP_DISTANCE, so it can't accidentally
+//     read as Bite) plus low Health, since zombie_pose_for's Crawl branch
+//     only looks at health_fraction.
+//   - Bite: a bare ChaseTarget too, but assign_render_compare_bite_target
+//     (Update) points its `entity` at the first connected player once one
+//     exists (impossible to do here — no player has connected yet at
+//     Startup) — RENDER_COMPARE_ZOMBIE_POSITIONS' Bite entry is already
+//     placed within ZOMBIE_STOP_DISTANCE of RENDER_COMPARE_PLAYER_SPAWN,
+//     so once ChaseTarget.entity is set the distance check passes too.
+fn spawn_render_compare_zombies_system(mut commands: Commands) {
+    spawn_render_compare_zombies(&mut commands);
+}
+
+fn spawn_render_compare_zombies(commands: &mut Commands) {
+    for (i, &spawn_pos) in RENDER_COMPARE_ZOMBIE_POSITIONS.iter().enumerate() {
+        let mut zombie = commands.spawn_empty();
+        zombie.insert((
+            Transform::from_translation(spawn_pos),
+            Zombie,
+            ZombieMotion::default(),
+            KnockbackVelocity::default(),
+            ZombieAttackTimer::default(),
+            NetTransform { translation: spawn_pos, yaw: 0.0, moving: false, sprinting: false },
+            Replicated,
+            Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
+            ZombieHistory::default(),
+            ZombieHitboxBones::default(),
+            ZombiePose::default(),
+            Visibility::default(),
+        ));
+        match i {
+            // Crawl: low health, bare ChaseTarget.
+            2 => {
+                zombie.insert((Health(ZOMBIE_MAX_HEALTH * ZOMBIE_CRAWL_HEALTH_FRACTION * 0.5), ChaseTarget::default()));
+            }
+            // Bite: full health, bare ChaseTarget — entity filled in once a
+            // player connects, see assign_render_compare_bite_target.
+            1 => {
+                zombie.insert((Health(ZOMBIE_MAX_HEALTH), ChaseTarget::default(), RenderCompareBiteZombie));
+            }
+            // Idle: full health, no ChaseTarget at all.
+            _ => {
+                zombie.insert(Health(ZOMBIE_MAX_HEALTH));
+            }
+        }
+    }
+}
+
+// Marker for RenderCompare's one Bite-pose zombie — lets
+// assign_render_compare_bite_target find it without a magic index into
+// RENDER_COMPARE_ZOMBIE_POSITIONS.
+#[derive(Component)]
+struct RenderCompareBiteZombie;
+
+// Startup spawns this zombie before any player has connected, so its
+// ChaseTarget.entity starts None — this fills it in with the first
+// connected player as soon as one exists, which is what actually makes
+// update_server_zombie_pose's distance check (RENDER_COMPARE_ZOMBIE_
+// POSITIONS' Bite entry is already within ZOMBIE_STOP_DISTANCE of
+// RENDER_COMPARE_PLAYER_SPAWN) start passing. Runs every frame but is a
+// no-op once assigned or once there's simply no player yet.
+fn assign_render_compare_bite_target(
+    players: Query<Entity, With<NetPlayer>>,
+    mut zombie: Query<&mut ChaseTarget, With<RenderCompareBiteZombie>>,
+) {
+    let Ok(mut chase_target) = zombie.single_mut() else {
+        return;
+    };
+    if chase_target.entity.is_some() {
+        return;
+    }
+    if let Some(player) = players.iter().next() {
+        chase_target.entity = Some(player);
+    }
 }
 
 // --- Phase 2 (HITBOX_PLAN.md): real skeleton on every server zombie -------
@@ -1947,6 +2036,10 @@ fn on_request_restart(
         Scenario::StressTest => {
             spawn_zombies(&mut commands, &ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT], true, false, false);
             STRESS_TEST_PLAYER_SPAWN
+        }
+        Scenario::RenderCompare => {
+            spawn_render_compare_zombies(&mut commands);
+            RENDER_COMPARE_PLAYER_SPAWN
         }
     };
 

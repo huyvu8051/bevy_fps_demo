@@ -23,6 +23,26 @@ pub fn perspective(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> [[f3
     ]
 }
 
+/// Right-handed orthographic projection, same "OpenGL-style" Z in [-1, 1]
+/// convention as `perspective` above (see its own doc comment for why this
+/// renderer deliberately doesn't remap into Metal's native [0, 1] depth
+/// range — self-consistent Less-compare depth testing doesn't actually
+/// need that remap). Used for the shadow-mapping light camera (native_
+/// metal_probe.rs) — a directional light has no perspective falloff, so
+/// its shadow frustum is a plain box, not perspective's view-frustum
+/// pyramid.
+pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
+    let rl = right - left;
+    let tb = top - bottom;
+    let fmn = far - near;
+    [
+        [2.0 / rl, 0.0, 0.0, 0.0],
+        [0.0, 2.0 / tb, 0.0, 0.0],
+        [0.0, 0.0, -2.0 / fmn, 0.0],
+        [-(right + left) / rl, -(top + bottom) / tb, -(far + near) / fmn, 1.0],
+    ]
+}
+
 /// Standard right-handed look-at view matrix.
 pub fn look_at(eye: [f32; 3], center: [f32; 3], up: [f32; 3]) -> [[f32; 4]; 4] {
     let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];

@@ -153,6 +153,27 @@ pub struct ExtractedMesh {
     /// `base_color` with no glow at all.
     pub emissive: [f32; 4],
     pub texture: Option<ExtractedTexture>,
+    /// glTF tangents (xyz direction + w handedness sign) — needed to build
+    /// a per-fragment TBN basis for `normal_texture` below. Empty when the
+    /// source mesh has no `ATTRIBUTE_TANGENT` (most of this game's own
+    /// procedural arena geometry has no normal map anyway, so there's
+    /// nothing to build a basis for); `bake_static_mesh_vertices` (native_
+    /// metal_probe.rs) falls back to a fixed `[1,0,0,1]` tangent in that
+    /// case, same as it already falls back to `Vec3::Y` for missing
+    /// normals — harmless since normal_texture is also None whenever
+    /// tangents are missing (see below), so that fallback tangent is never
+    /// actually sampled through.
+    pub tangents: Vec<[f32; 4]>,
+    /// `StandardMaterial::normal_map_texture` — the AK47's own real
+    /// glTF material carries one (surface scratches/wear that only show up
+    /// as a lighting response, not a flat color — see this field's own
+    /// extraction site for the full story of why the renderer looked
+    /// "textureless" on the gun's receiver despite base_color loading
+    /// fine). `None` whenever the mesh has no tangents to build a TBN
+    /// basis from, even if the material itself has one — sampling a
+    /// normal map without a real tangent basis produces worse artifacts
+    /// than just not perturbing the normal at all.
+    pub normal_texture: Option<ExtractedTexture>,
     /// World-space transform at extraction time (from `GlobalTransform`,
     /// converted to a plain `Transform` for the renderer's convenience —
     /// see `bake_static_meshes` in native_metal_probe.rs).
@@ -960,6 +981,10 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             Some(bevy::mesh::VertexAttributeValues::Float32x2(uv)) => uv.clone(),
             _ => Vec::new(),
         };
+        let tangents = match mesh.attribute(Mesh::ATTRIBUTE_TANGENT) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x4(t)) => t.clone(),
+            _ => Vec::new(),
+        };
         let indices = mesh
             .indices()
             .map(|i| i.iter().map(|v| v as u32).collect())
@@ -995,6 +1020,27 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             continue;
         }
 
+        // Same decode-or-skip rule as base_color_texture above, plus:
+        // never surface a normal map without real tangents to build a TBN
+        // basis from (see normal_texture's own doc comment on ExtractedMesh).
+        let normal_texture = if tangents.is_empty() {
+            None
+        } else {
+            material.normal_map_texture.as_ref().and_then(|handle| {
+                let image = images.get(handle)?;
+                let data = image.data.as_ref()?;
+                match image.texture_descriptor.format {
+                    TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => Some(ExtractedTexture {
+                        id: handle.id(),
+                        width: image.texture_descriptor.size.width,
+                        height: image.texture_descriptor.size.height,
+                        rgba: data.clone(),
+                    }),
+                    _ => None,
+                }
+            })
+        };
+
         snapshot.static_meshes.push(ExtractedMesh {
             positions,
             normals,
@@ -1011,6 +1057,8 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
                 material.emissive.alpha,
             ],
             texture,
+            tangents,
+            normal_texture,
             transform: transform.compute_transform(),
         });
     }

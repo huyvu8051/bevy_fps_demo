@@ -25,7 +25,7 @@ use objc::{runtime::Object, *};
 // only the vertex data and camera pose source change. See
 // native_game_app.rs (headless App) and native_game_extract.rs
 // (extraction).
-use super::metal_math::{look_at, mat_mul, perspective};
+use super::metal_math::{look_at, mat_mul, orthographic, perspective};
 use super::native_game_app::build_headless_game_ecs_app;
 use super::native_game_extract::{
     extract_render_snapshot, prime_camera_viewport, ExtractedMesh, FloatingDamageSnapshot, HealthBarSnapshot,
@@ -125,6 +125,10 @@ struct Vertex {
     packed_float3 position;
     packed_float3 normal;
     packed_float2 uv;
+    // xyz = tangent direction, w = handedness — see GltfVertex's own doc
+    // comment (gltf_scene.rs) for where this gets baked (CPU-side, world
+    // space, same as position/normal above).
+    packed_float4 tangent;
 };
 
 struct Uniforms {
@@ -137,6 +141,16 @@ struct Uniforms {
     float4 sunColor;
     float4 baseColorFactor;
     float4 emissive;
+    // Shadow-mapping/specular pass (see SHADOW_SHADER_SOURCE's own doc
+    // comment) — lightViewProjection/pointLightViewProjection re-project
+    // worldPos into the sun's and the point light's own shadow maps to
+    // sample occlusion; cameraPos is needed to reconstruct a view
+    // direction per-fragment for the Blinn-Phong specular term, since this
+    // shader has no other way to know where the eye is.
+    float4x4 lightViewProjection;
+    float4x4 pointLightViewProjection;
+    packed_float3 cameraPos;
+    float _cameraPad;
 };
 
 struct VertexOut {
@@ -144,6 +158,7 @@ struct VertexOut {
     float3 worldPos;
     float3 normal;
     float2 uv;
+    float4 tangent;
 };
 
 vertex VertexOut sponza_vertex(uint vid [[vertex_id]],
@@ -155,27 +170,117 @@ vertex VertexOut sponza_vertex(uint vid [[vertex_id]],
     out.worldPos = float3(v.position);
     out.normal = float3(v.normal);
     out.uv = float2(v.uv);
+    out.tangent = float4(v.tangent);
     return out;
+}
+
+// Shininess exponent for the Blinn-Phong specular term — one fixed value
+// for every material (this renderer has no per-material roughness/
+// metallic map to drive it from, unlike bevy_render's real PBR path).
+// Was 48 initially, which looked fine on the zombie's more irregular
+// low-poly normals but washed the gun's large flat receiver faces into a
+// smooth gray gradient wide enough to bury its own brushed-metal albedo
+// texture underneath — those faces interpolate one near-constant normal
+// across a much bigger area than the zombie's, so the same "reasonably
+// tight" exponent produced a much wider hotspot there. 90 narrows the
+// falloff enough to stay a small glint even on a big flat face.
+constant float kShininess = 90.0;
+// Specular intensity multiplier — see kShininess's own comment for why
+// this also came down (0.6 -> 0.35): a wide AND bright highlight is what
+// was burying the gun's texture detail, not just the width alone.
+constant float kSpecularStrength = 0.35;
+
+// Reads `shadowMap` (already-normalized-to-texture-space `lightViewProjection`)
+// at `worldPos`, returning 1.0 (fully lit) .. 0.0 (fully shadowed) via
+// Metal's hardware `sample_compare` (free bilinear = 2x2 PCF). Shared by
+// both the sun and point-light shadow lookups below — same convention,
+// different light_view_projection/texture per call.
+static inline float sample_shadow(float4x4 light_view_projection, float3 worldPos, depth2d<float> shadowMap, sampler shadowSampler) {
+    float4 lightClip = light_view_projection * float4(worldPos, 1.0);
+    float3 lightNdc = lightClip.xyz / lightClip.w;
+    float2 shadowUv = lightNdc.xy * 0.5 + 0.5;
+    shadowUv.y = 1.0 - shadowUv.y;
+    // A small constant bias (subtracted so a fragment reads slightly
+    // nearer-to-light than it actually is) avoids shadow acne — self-
+    // shadowing false positives from the shadow map's own limited
+    // resolution. Doubled vs. a typical [0,1]-range bias since this
+    // renderer's depth range spans [-1,1] (twice as wide).
+    float shadowBias = 0.004;
+    if (shadowUv.x < 0.0 || shadowUv.x > 1.0 || shadowUv.y < 0.0 || shadowUv.y > 1.0 || lightNdc.z > 1.0) {
+        return 1.0;
+    }
+    return shadowMap.sample_compare(shadowSampler, shadowUv, lightNdc.z - shadowBias);
 }
 
 fragment float4 sponza_fragment(VertexOut in [[stage_in]],
                                  constant Uniforms &uniforms [[buffer(1)]],
                                  texture2d<float> baseColorTexture [[texture(0)]],
-                                 sampler texSampler [[sampler(0)]]) {
-    float sunDiffuse = max(dot(normalize(in.normal), -normalize(float3(uniforms.sunDir))), 0.0);
-    float3 sunTerm = uniforms.sunColor.rgb * sunDiffuse;
+                                 sampler texSampler [[sampler(0)]],
+                                 depth2d<float> shadowMap [[texture(1)]],
+                                 sampler shadowSampler [[sampler(1)]],
+                                 depth2d<float> pointShadowMap [[texture(2)]],
+                                 texture2d<float> normalTexture [[texture(3)]]) {
+    // Geometric (per-vertex-interpolated) normal, reoriented by the
+    // sampled normal map below when this mesh actually has one — see
+    // ExtractedMesh::normal_texture's own doc comment (native_game_
+    // extract.rs) for why the AK47's receiver looked flat/textureless
+    // without this: its "brushed metal" scratches are a lighting response
+    // to a normal map, not a base-color pattern, and this renderer never
+    // read normal maps at all before now. normalTexture is always bound
+    // to SOMETHING (see flat_normal_texture's own doc comment) — a flat
+    // "pointing straight up in tangent space" 1x1 fallback for meshes
+    // with no real one, so this math runs unconditionally instead of
+    // branching on an extra "has a normal map" uniform flag.
+    float3 geometricNormal = normalize(in.normal);
+    float3 tangent = normalize(in.tangent.xyz - geometricNormal * dot(in.tangent.xyz, geometricNormal));
+    float3 bitangent = cross(geometricNormal, tangent) * in.tangent.w;
+    float3x3 TBN = float3x3(tangent, bitangent, geometricNormal);
+    float3 sampledNormal = normalTexture.sample(texSampler, in.uv).xyz * 2.0 - 1.0;
+    float3 normal = normalize(TBN * sampledNormal);
+
+    float3 viewDir = normalize(float3(uniforms.cameraPos) - in.worldPos);
+    float3 toSun = -normalize(float3(uniforms.sunDir));
+
+    // See SHADOW_SHADER_SOURCE's own doc comment for how these were
+    // written — same lightViewProjection convention used to read them back
+    // keeps the comparison self-consistent regardless of Metal's "native"
+    // depth range (this renderer never uses it, see metal_math::
+    // perspective's own doc comment). Both the sun (parallel rays, hence
+    // an orthographic lightViewProjection) and the arena's overhead point
+    // light (a real position, hence a perspective one — see render_frame's
+    // "Pass 0b") cast real shadows here; bevy_render's own PBR path does
+    // too for both, which is what an earlier version of this shader was
+    // missing (only the sun was covered) — visible as a zombie/pillar
+    // having two *different* real shadows on desktop that this renderer
+    // only drew one of.
+    float sunShadow = sample_shadow(uniforms.lightViewProjection, in.worldPos, shadowMap, shadowSampler);
+    float pointShadowFactor = sample_shadow(uniforms.pointLightViewProjection, in.worldPos, pointShadowMap, shadowSampler);
+
+    float sunDiffuse = max(dot(normal, toSun), 0.0) * sunShadow;
+    float sunSpecular = sunDiffuse > 0.0 ? pow(max(dot(normal, normalize(toSun + viewDir)), 0.0), kShininess) * sunShadow : 0.0;
 
     float3 toLight = float3(uniforms.lightPos) - in.worldPos;
     float dist = length(toLight);
     float atten = clamp(1.0 - dist / max(uniforms.lightRange, 0.0001), 0.0, 1.0);
     atten *= atten;
-    float pointDiffuse = max(dot(normalize(in.normal), toLight / max(dist, 0.0001)), 0.0) * atten;
-    float3 pointTerm = uniforms.lightColor.rgb * pointDiffuse;
+    float3 pointDir = toLight / max(dist, 0.0001);
+    float pointDiffuse = max(dot(normal, pointDir), 0.0) * atten * pointShadowFactor;
+    float pointSpecular = pointDiffuse > 0.0 ? pow(max(dot(normal, normalize(pointDir + viewDir)), 0.0), kShininess) * atten * pointShadowFactor : 0.0;
 
-    float3 lightTerm = clamp(sunTerm + pointTerm, 0.0, 1.0);
+    // Diffuse modulates the surface's own base color (as before); specular
+    // is intentionally kept SEPARATE and added on top unmultiplied by
+    // baseColor — a real (even non-PBR) specular highlight is the light's
+    // own color reflecting off the surface, not tinted by its albedo, and
+    // folding it into the same term that gets multiplied by baseColor.rgb
+    // below crushed it to near-invisible on dark surfaces (the gun's black
+    // metal) even though the math upstream was already computing it
+    // correctly — this was the actual bug, not a missing specular term.
+    float3 diffuseTerm = clamp(uniforms.sunColor.rgb * sunDiffuse + uniforms.lightColor.rgb * pointDiffuse, 0.0, 1.0);
+    float3 specularTerm = (uniforms.sunColor.rgb * sunSpecular + uniforms.lightColor.rgb * pointSpecular) * kSpecularStrength;
+
     float4 texColor = baseColorTexture.sample(texSampler, in.uv);
     float4 baseColor = texColor * uniforms.baseColorFactor;
-    float3 lit = baseColor.rgb * (0.35 + 0.65 * lightTerm);
+    float3 lit = baseColor.rgb * (0.35 + 0.65 * diffuseTerm) + specularTerm;
     // Additive — no real Bloom pass exists in this renderer (see
     // ExtractedMesh::emissive's own doc comment for why these values are
     // authored well above 1.0), but adding the raw emissive term straight
@@ -200,6 +305,10 @@ struct SponzaUniforms {
     sun_color: [f32; 4],
     base_color_factor: [f32; 4],
     emissive: [f32; 4],
+    light_view_projection: [[f32; 4]; 4],
+    point_light_view_projection: [[f32; 4]; 4],
+    camera_pos: [f32; 3],
+    _camera_pad: f32,
 }
 
 // Phase 2 of the wgpu-replacement plan: GPU skinning for
@@ -231,6 +340,12 @@ struct Uniforms {
     float _sunPad;
     float4 sunColor;
     float4 baseColorFactor;
+    // Shadow-mapping/specular pass — see SPONZA_SHADER_SOURCE's own
+    // Uniforms doc comment, identical reasoning applies here.
+    float4x4 lightViewProjection;
+    float4x4 pointLightViewProjection;
+    packed_float3 cameraPos;
+    float _cameraPad;
 };
 
 struct VertexOut {
@@ -263,10 +378,35 @@ vertex VertexOut skinned_vertex(uint vid [[vertex_id]],
     return out;
 }
 
+// Same fixed shininess/specular-strength constants as SPONZA_SHADER_SOURCE
+// — duplicated, not shared, since each shader source string in this file
+// compiles as its own independent Metal library.
+constant float kShininess = 48.0;
+constant float kSpecularStrength = 0.6;
+
+// Same shadow-sampling helper as SPONZA_SHADER_SOURCE — duplicated, not
+// shared, since each shader source string in this file compiles as its
+// own independent Metal library (see kShininess/kSpecularStrength's own
+// "duplicated, not shared" comment above).
+static inline float sample_shadow(float4x4 light_view_projection, float3 worldPos, depth2d<float> shadowMap, sampler shadowSampler) {
+    float4 lightClip = light_view_projection * float4(worldPos, 1.0);
+    float3 lightNdc = lightClip.xyz / lightClip.w;
+    float2 shadowUv = lightNdc.xy * 0.5 + 0.5;
+    shadowUv.y = 1.0 - shadowUv.y;
+    float shadowBias = 0.004;
+    if (shadowUv.x < 0.0 || shadowUv.x > 1.0 || shadowUv.y < 0.0 || shadowUv.y > 1.0 || lightNdc.z > 1.0) {
+        return 1.0;
+    }
+    return shadowMap.sample_compare(shadowSampler, shadowUv, lightNdc.z - shadowBias);
+}
+
 fragment float4 skinned_fragment(VertexOut in [[stage_in]],
                                   constant Uniforms &uniforms [[buffer(1)]],
                                   texture2d<float> baseColorTexture [[texture(0)]],
-                                  sampler texSampler [[sampler(0)]]) {
+                                  sampler texSampler [[sampler(0)]],
+                                  depth2d<float> shadowMap [[texture(1)]],
+                                  sampler shadowSampler [[sampler(1)]],
+                                  depth2d<float> pointShadowMap [[texture(2)]]) {
     // Root cause of an earlier version of this struct (kept for the next
     // person who hits this class of bug) found via a 3-step device/
     // Simulator console+shader bisection: (1) raw texColor sample alone →
@@ -283,23 +423,145 @@ fragment float4 skinned_fragment(VertexOut in [[stage_in]],
     // each field's offset lands on the same byte in both Rust's repr(C)
     // layout and MSL's (see LightUniform's own doc comment) instead of
     // re-deriving this by trial and error again.
-    float sunDiffuse = max(dot(normalize(in.normal), -normalize(float3(uniforms.sunDir))), 0.0);
-    float3 sunTerm = uniforms.sunColor.rgb * sunDiffuse;
+    float3 normal = normalize(in.normal);
+    float3 viewDir = normalize(float3(uniforms.cameraPos) - in.worldPos);
+    float3 toSun = -normalize(float3(uniforms.sunDir));
+
+    // See SHADOW_SHADER_SOURCE's own doc comment for how these were
+    // written, and SPONZA_SHADER_SOURCE's matching block for why both the
+    // sun AND the point light get their own real shadow here (not
+    // repeated per-shader).
+    float sunShadow = sample_shadow(uniforms.lightViewProjection, in.worldPos, shadowMap, shadowSampler);
+    float pointShadowFactor = sample_shadow(uniforms.pointLightViewProjection, in.worldPos, pointShadowMap, shadowSampler);
+
+    float sunDiffuse = max(dot(normal, toSun), 0.0) * sunShadow;
+    float sunSpecular = sunDiffuse > 0.0 ? pow(max(dot(normal, normalize(toSun + viewDir)), 0.0), kShininess) * sunShadow : 0.0;
 
     float3 toLight = float3(uniforms.lightPos) - in.worldPos;
     float dist = length(toLight);
     float atten = clamp(1.0 - dist / max(uniforms.lightRange, 0.0001), 0.0, 1.0);
     atten *= atten;
-    float pointDiffuse = max(dot(normalize(in.normal), toLight / max(dist, 0.0001)), 0.0) * atten;
-    float3 pointTerm = uniforms.lightColor.rgb * pointDiffuse;
+    float3 pointDir = toLight / max(dist, 0.0001);
+    float pointDiffuse = max(dot(normal, pointDir), 0.0) * atten * pointShadowFactor;
+    float pointSpecular = pointDiffuse > 0.0 ? pow(max(dot(normal, normalize(pointDir + viewDir)), 0.0), kShininess) * atten * pointShadowFactor : 0.0;
 
-    float3 lightTerm = clamp(sunTerm + pointTerm, 0.0, 1.0);
+    // See SPONZA_SHADER_SOURCE's matching block for why specular is kept
+    // separate from baseColor's multiply instead of folded into the same
+    // term (that crushed it to near-invisible on dark surfaces).
+    float3 diffuseTerm = clamp(uniforms.sunColor.rgb * sunDiffuse + uniforms.lightColor.rgb * pointDiffuse, 0.0, 1.0);
+    float3 specularTerm = (uniforms.sunColor.rgb * sunSpecular + uniforms.lightColor.rgb * pointSpecular) * kSpecularStrength;
+
     float4 texColor = baseColorTexture.sample(texSampler, in.uv);
     float4 baseColor = texColor * uniforms.baseColorFactor;
-    float3 lit = baseColor.rgb * (0.35 + 0.65 * lightTerm);
+    float3 lit = baseColor.rgb * (0.35 + 0.65 * diffuseTerm) + specularTerm;
     return float4(lit, baseColor.a);
 }
 "#;
+
+// Sun-only shadow map: renders every shadow-casting mesh (arena walls/
+// floor/gun via shadow_vertex_sponza, zombies/remote players via
+// shadow_vertex_skinned) from the light's own point of view into a
+// depth-only render target — see NativeMetalProbe::shadow_map's own doc
+// comment for the texture itself, and render_frame's "Pass 0" for how the
+// resulting `lightViewProjection` matrix is built (an orthographic box
+// centered on the camera, since a directional light has no single
+// position/frustum of its own). No fragment function at all — a depth-
+// only pass only needs position, and Metal explicitly supports a
+// fragmentFunction-less pipeline for exactly this (`set_fragment_function
+// (None)`, see this shader's two RenderPipelineDescriptors in `new()`).
+// Position math is otherwise a stripped copy of sponza_vertex/
+// skinned_vertex (same model/skinning transforms, just projected through
+// the light's viewProjection instead of the camera's).
+const SHADOW_SHADER_SOURCE: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct SponzaVertex {
+    packed_float3 position;
+    packed_float3 normal;
+    packed_float2 uv;
+    // Unused here (this pass only needs position) but MUST stay present —
+    // this struct's buffer(0) is the exact same GltfVertex-laid-out buffer
+    // SPONZA_SHADER_SOURCE's own Vertex reads (bake_static_mesh_vertices
+    // builds one buffer per mesh, shared by both the shadow and main
+    // passes — see draw_shadow_casters/draw_scene). Metal computes this
+    // struct's own stride from ITS OWN size to index verts[vid], so
+    // dropping this field would silently read every vertex 16 bytes short
+    // — position/normal/uv would land right, but every vertex AFTER the
+    // first would already be reading from the wrong offset.
+    packed_float4 tangent;
+};
+
+struct SponzaShadowUniforms {
+    float4x4 lightViewProjection;
+};
+
+vertex float4 shadow_vertex_sponza(uint vid [[vertex_id]],
+                                    const device SponzaVertex *verts [[buffer(0)]],
+                                    constant SponzaShadowUniforms &uniforms [[buffer(1)]]) {
+    SponzaVertex v = verts[vid];
+    return uniforms.lightViewProjection * float4(float3(v.position), 1.0);
+}
+
+struct SkinnedVertex {
+    packed_float3 position;
+    packed_float3 normal;
+    packed_float2 uv;
+    ushort4 joints;
+    packed_float4 weights;
+};
+
+struct SkinnedShadowUniforms {
+    float4x4 lightViewProjection;
+    float4x4 modelMatrix;
+};
+
+vertex float4 shadow_vertex_skinned(uint vid [[vertex_id]],
+                                     const device SkinnedVertex *verts [[buffer(0)]],
+                                     constant SkinnedShadowUniforms &uniforms [[buffer(1)]],
+                                     const device float4x4 *jointMatrices [[buffer(2)]]) {
+    SkinnedVertex v = verts[vid];
+    float4x4 skin =
+        v.weights.x * jointMatrices[v.joints.x] +
+        v.weights.y * jointMatrices[v.joints.y] +
+        v.weights.z * jointMatrices[v.joints.z] +
+        v.weights.w * jointMatrices[v.joints.w];
+    float4 skinnedPos = skin * float4(float3(v.position), 1.0);
+    float4 worldPos = uniforms.modelMatrix * skinnedPos;
+    return uniforms.lightViewProjection * worldPos;
+}
+"#;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct SponzaShadowUniforms {
+    light_view_projection: [[f32; 4]; 4],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct SkinnedShadowUniforms {
+    light_view_projection: [[f32; 4]; 4],
+    model_matrix: [[f32; 4]; 4],
+}
+
+// Fixed square resolution for the sun's shadow map — no cascades, no
+// resize-on-demand (unlike msaa_targets' screen-sized depth buffer): this
+// renderer's whole shadow frustum is a fixed-size box recentered on the
+// camera every frame (see render_frame's "Pass 0"), so its texture
+// resolution has nothing to do with screen size. 2048 is generous for a
+// single non-cascaded map covering a ~44-unit box — soft enough at the
+// PCF-filtered edges (see SPONZA_SHADER_SOURCE's shadowBias) without the
+// blocky look a smaller map would show up close.
+const SHADOW_MAP_SIZE: u64 = 2048;
+// Half-extent (world units) of the shadow frustum's ortho box, and how far
+// back along the light direction its "eye" sits — see render_frame's
+// "Pass 0" for the actual light_view_projection construction. Centered on
+// the camera every frame rather than fit to the whole arena, so resolution
+// stays concentrated on what's actually visible instead of being spread
+// across geometry far outside the current view.
+const SHADOW_HALF_EXTENT: f32 = 22.0;
+const SHADOW_DISTANCE: f32 = 40.0;
 
 // Phase 3's other half: a second camera (narrow FOV, same
 // position/orientation as the main one — simulates a rifle scope) rendered
@@ -590,6 +852,10 @@ struct SkinnedUniforms {
     _sun_pad: f32,
     sun_color: [f32; 4],
     base_color_factor: [f32; 4],
+    light_view_projection: [[f32; 4]; 4],
+    point_light_view_projection: [[f32; 4]; 4],
+    camera_pos: [f32; 3],
+    _camera_pad: f32,
 }
 
 pub struct NativeMetalProbe {
@@ -614,7 +880,44 @@ pub struct NativeMetalProbe {
     sponza_pipeline: Option<RenderPipelineState>,
     sponza_pipeline_no_msaa: Option<RenderPipelineState>,
     sponza_sampler: metal::SamplerState,
+    // Sun shadow map — see SHADOW_SHADER_SOURCE's own doc comment.
+    // Depth-only, fixed SHADOW_MAP_SIZE resolution, no MSAA twin needed
+    // (never multisampled — shadow maps are sampled with PCF instead, see
+    // shadow_sampler below).
+    shadow_map: metal::Texture,
+    // The arena's overhead PointLight's own shadow map — same shape/
+    // pipelines as shadow_map above (render_frame's "Pass 0b" just runs
+    // draw_shadow_casters a second time with a different light_view_
+    // projection into this texture instead), kept as a separate texture
+    // rather than a second layer/slice since Metal render targets are
+    // simplest as whole textures. Without this, only the sun casts a
+    // shadow — a real difference from bevy_render's own PBR path (which
+    // shadows both), visible as one real shadow direction on this
+    // renderer vs. two distinct overlapping ones on desktop.
+    shadow_map_point: metal::Texture,
+    shadow_pipeline_sponza: Option<RenderPipelineState>,
+    shadow_pipeline_skinned: Option<RenderPipelineState>,
+    // Depth-only state for Pass 0 (see render_frame) — write-enabled,
+    // Less-compare, same convention as `depth_state` below (nearer wins);
+    // a dedicated field only because `depth_state`'s pixel format is tied
+    // to the main pass's own depth attachment format at creation time on
+    // some platforms, and keeping them distinct avoids ever having to
+    // reason about whether reusing one for the other is safe.
+    shadow_depth_state: metal::DepthStencilState,
+    // Comparison sampler — `set_compare_function(LessEqual)` makes
+    // `shadowMap.sample_compare(...)` in the fragment shaders return
+    // hardware-filtered (free bilinear, effectively a 2x2 PCF tap) shadow
+    // visibility directly instead of a raw depth value to compare by hand.
+    shadow_sampler: metal::SamplerState,
     white_texture: metal::Texture,
+    // Fallback for meshes with no real normal map (most of them — see
+    // ExtractedMesh::normal_texture's own doc comment) — a single tangent-
+    // space "pointing straight up" texel (RGB 128,128,255 decodes to
+    // roughly (0,0,1) once sponza_fragment's `* 2.0 - 1.0` unpacks it),
+    // which leaves the TBN-transformed normal equal to the untouched
+    // geometric normal. Same "always bind something, skip the branch"
+    // reasoning as white_texture above.
+    flat_normal_texture: metal::Texture,
     camera_position: [f32; 3],
     camera_yaw: f32,
     camera_pitch: f32,
@@ -750,7 +1053,17 @@ fn bake_static_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::Glt
         let uv = if mesh.uvs.is_empty() { [0.0, 0.0] } else { mesh.uvs[idx] };
         let world_pos = mesh.transform.transform_point(local_pos);
         let world_normal = (mesh.transform.rotation * local_normal).normalize_or_zero();
-        super::gltf_scene::GltfVertex { position: world_pos.to_array(), normal: world_normal.to_array(), uv }
+        // Only the xyz direction rotates into world space like the normal
+        // above — w is glTF's handedness sign, not a spatial component, so
+        // it carries straight through unchanged.
+        let tangent = if mesh.tangents.is_empty() {
+            [1.0, 0.0, 0.0, 1.0]
+        } else {
+            let [tx, ty, tz, tw] = mesh.tangents[idx];
+            let world_tangent = (mesh.transform.rotation * bevy::math::Vec3::new(tx, ty, tz)).normalize_or_zero();
+            [world_tangent.x, world_tangent.y, world_tangent.z, tw]
+        };
+        super::gltf_scene::GltfVertex { position: world_pos.to_array(), normal: world_normal.to_array(), uv, tangent }
     };
     if mesh.indices.is_empty() {
         for idx in 0..mesh.positions.len() {
@@ -781,13 +1094,19 @@ fn bake_static_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::Glt
 fn build_centered_quad(device: &Device, aspect: f32, half_height: f32) -> metal::Buffer {
     let half_w = half_height / aspect;
     let half_h = half_height;
+    // V=0 is the texture's TOP row (image-space convention, same as
+    // ndc_ui_rect's own doc comment) — so the screen quad's TOP vertices
+    // (position.y = +half_h) must carry uv.y = 0.0, not the bottom ones.
+    // Had this backwards before (bottom-of-quad -> uv.y=0), which sampled
+    // scope_color_texture's top row at the screen's bottom and vice versa
+    // — a vertical flip, the scope PIP rendering upside down.
     let verts = [
-        QuadVertex { position: [-half_w, -half_h], uv: [0.0, 0.0] },
-        QuadVertex { position: [half_w, -half_h], uv: [1.0, 0.0] },
-        QuadVertex { position: [half_w, half_h], uv: [1.0, 1.0] },
-        QuadVertex { position: [-half_w, -half_h], uv: [0.0, 0.0] },
-        QuadVertex { position: [half_w, half_h], uv: [1.0, 1.0] },
-        QuadVertex { position: [-half_w, half_h], uv: [0.0, 1.0] },
+        QuadVertex { position: [-half_w, -half_h], uv: [0.0, 1.0] },
+        QuadVertex { position: [half_w, -half_h], uv: [1.0, 1.0] },
+        QuadVertex { position: [half_w, half_h], uv: [1.0, 0.0] },
+        QuadVertex { position: [-half_w, -half_h], uv: [0.0, 1.0] },
+        QuadVertex { position: [half_w, half_h], uv: [1.0, 0.0] },
+        QuadVertex { position: [-half_w, half_h], uv: [0.0, 0.0] },
     ];
     device.new_buffer_with_data(
         verts.as_ptr() as *const _,
@@ -910,6 +1229,7 @@ struct RealGameMeshDraw<'a> {
     base_color_factor: [f32; 4],
     emissive: [f32; 4],
     texture: Option<&'a metal::Texture>,
+    normal_texture: Option<&'a metal::Texture>,
 }
 
 impl NativeMetalProbe {
@@ -1045,6 +1365,80 @@ impl NativeMetalProbe {
         white_texture_descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
         let white_texture = device.new_texture(&white_texture_descriptor);
         white_texture.replace_region(metal::MTLRegion::new_2d(0, 0, 1, 1), 0, [255u8, 255, 255, 255].as_ptr() as *const _, 4);
+
+        // See flat_normal_texture's own field doc comment.
+        let flat_normal_descriptor = metal::TextureDescriptor::new();
+        flat_normal_descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm);
+        flat_normal_descriptor.set_width(1);
+        flat_normal_descriptor.set_height(1);
+        flat_normal_descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
+        let flat_normal_texture = device.new_texture(&flat_normal_descriptor);
+        flat_normal_texture.replace_region(metal::MTLRegion::new_2d(0, 0, 1, 1), 0, [128u8, 128, 255, 255].as_ptr() as *const _, 4);
+
+        // Sun + point-light shadow maps — see SHADOW_SHADER_SOURCE/
+        // SHADOW_MAP_SIZE's own doc comments. Private storage (GPU-only,
+        // never CPU-read) + RenderTarget (Pass 0/0b write them) |
+        // ShaderRead (the main/scope passes' fragment shaders sample
+        // them). Same descriptor shape reused for both — see
+        // shadow_map_point's own field doc comment for why they're two
+        // separate textures rather than one.
+        let shadow_map_descriptor = metal::TextureDescriptor::new();
+        shadow_map_descriptor.set_pixel_format(MTLPixelFormat::Depth32Float);
+        shadow_map_descriptor.set_width(SHADOW_MAP_SIZE);
+        shadow_map_descriptor.set_height(SHADOW_MAP_SIZE);
+        shadow_map_descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        shadow_map_descriptor.set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        let shadow_map = device.new_texture(&shadow_map_descriptor);
+        let shadow_map_point = device.new_texture(&shadow_map_descriptor);
+
+        let shadow_depth_descriptor = metal::DepthStencilDescriptor::new();
+        shadow_depth_descriptor.set_depth_compare_function(metal::MTLCompareFunction::Less);
+        shadow_depth_descriptor.set_depth_write_enabled(true);
+        let shadow_depth_state = device.new_depth_stencil_state(&shadow_depth_descriptor);
+
+        // Comparison sampler for `sample_compare` in the fragment shaders —
+        // see shadow_sampler's own field doc comment (struct definition).
+        // Clamp-to-edge (not Repeat, unlike sponza_sampler above): outside
+        // the shadow frustum's box should read as "no occluder recorded"
+        // (handled explicitly by the shadowUv bounds check in the shader),
+        // not tile the shadow map's edge texels.
+        let shadow_sampler_descriptor = metal::SamplerDescriptor::new();
+        shadow_sampler_descriptor.set_min_filter(metal::MTLSamplerMinMagFilter::Linear);
+        shadow_sampler_descriptor.set_mag_filter(metal::MTLSamplerMinMagFilter::Linear);
+        shadow_sampler_descriptor.set_address_mode_s(metal::MTLSamplerAddressMode::ClampToEdge);
+        shadow_sampler_descriptor.set_address_mode_t(metal::MTLSamplerAddressMode::ClampToEdge);
+        shadow_sampler_descriptor.set_compare_function(metal::MTLCompareFunction::LessEqual);
+        let shadow_sampler = device.new_sampler(&shadow_sampler_descriptor);
+
+        // Depth-only pipelines — no fragment function, no color
+        // attachments at all (see SHADOW_SHADER_SOURCE's own doc comment).
+        // Single sample count only: the shadow map is never multisampled
+        // (PCF via shadow_sampler above already softens its edges), so
+        // unlike every other pipeline in this renderer there's no MSAA/
+        // no-MSAA twin to build.
+        let (shadow_pipeline_sponza, shadow_pipeline_skinned) =
+            match device.new_library_with_source(SHADOW_SHADER_SOURCE, &compile_options) {
+                Ok(shadow_library) => {
+                    let sponza_shadow_vertex_fn = shadow_library.get_function("shadow_vertex_sponza", None).unwrap();
+                    let sponza_descriptor = RenderPipelineDescriptor::new();
+                    sponza_descriptor.set_vertex_function(Some(&sponza_shadow_vertex_fn));
+                    sponza_descriptor.set_fragment_function(None);
+                    sponza_descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+                    let skinned_shadow_vertex_fn = shadow_library.get_function("shadow_vertex_skinned", None).unwrap();
+                    let skinned_descriptor = RenderPipelineDescriptor::new();
+                    skinned_descriptor.set_vertex_function(Some(&skinned_shadow_vertex_fn));
+                    skinned_descriptor.set_fragment_function(None);
+                    skinned_descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+                    (
+                        device.new_render_pipeline_state(&sponza_descriptor).ok(),
+                        device.new_render_pipeline_state(&skinned_descriptor).ok(),
+                    )
+                }
+                Err(err) => {
+                    eprintln!("[native_metal_probe] shadow shader compile failed: {err}");
+                    (None, None)
+                }
+            };
 
         fn build_skinned_descriptor(
             vertex_fn: &metal::FunctionRef,
@@ -1263,7 +1657,14 @@ impl NativeMetalProbe {
             sponza_pipeline,
             sponza_pipeline_no_msaa,
             sponza_sampler,
+            shadow_map,
+            shadow_map_point,
+            shadow_pipeline_sponza,
+            shadow_pipeline_skinned,
+            shadow_depth_state,
+            shadow_sampler,
             white_texture,
+            flat_normal_texture,
             depth_state,
             ui_depth_state,
             msaa_targets: super::metal_msaa::MsaaTargets::new(MSAA_SAMPLE_COUNT),
@@ -1418,9 +1819,21 @@ impl NativeMetalProbe {
         // whatever sample count the caller's render pass attachments
         // actually have, or Metal rejects every draw call in this pass.
         msaa_enabled: bool,
+        // Sun/point-light shadow map read-back — see render_frame's
+        // "Pass 0"/"Pass 0b" for how `light_view_projection`/
+        // `point_light_view_projection` are built; `camera_pos` feeds the
+        // fragment shaders' Blinn-Phong specular term (see SPONZA_SHADER_
+        // SOURCE's own Uniforms doc comment for why it needs the eye
+        // position at all).
+        light_view_projection: [[f32; 4]; 4],
+        point_light_view_projection: [[f32; 4]; 4],
+        camera_pos: [f32; 3],
     ) {
         let sponza_pipeline = if msaa_enabled { self.sponza_pipeline.as_ref() } else { self.sponza_pipeline_no_msaa.as_ref() };
         let skinned_pipeline = if msaa_enabled { self.skinned_pipeline.as_ref() } else { self.skinned_pipeline_no_msaa.as_ref() };
+        encoder.set_fragment_texture(1, Some(&self.shadow_map));
+        encoder.set_fragment_sampler_state(1, Some(&self.shadow_sampler));
+        encoder.set_fragment_texture(2, Some(&self.shadow_map_point));
 
         // `real_game_meshes` is `None` only in the brief window before the
         // headless gameplay App's first Startup schedule has actually run
@@ -1451,6 +1864,10 @@ impl NativeMetalProbe {
                     sun_color: light.sun_color,
                     base_color_factor: m.base_color_factor,
                     emissive: m.emissive,
+                    light_view_projection,
+                    point_light_view_projection,
+                    camera_pos,
+                    _camera_pad: 0.0,
                 };
                 encoder.set_vertex_buffer(0, Some(&m.vertex_buffer), 0);
                 encoder.set_vertex_bytes(
@@ -1465,6 +1882,8 @@ impl NativeMetalProbe {
                 );
                 let texture = m.texture.unwrap_or(&self.white_texture);
                 encoder.set_fragment_texture(0, Some(texture));
+                let normal_texture = m.normal_texture.unwrap_or(&self.flat_normal_texture);
+                encoder.set_fragment_texture(3, Some(normal_texture));
                 encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, m.vertex_count as u64);
             }
         }
@@ -1542,6 +1961,10 @@ impl NativeMetalProbe {
                     _sun_pad: 0.0,
                     sun_color: light.sun_color,
                     base_color_factor: mesh.base_color_factor,
+                    light_view_projection,
+                    point_light_view_projection,
+                    camera_pos,
+                    _camera_pad: 0.0,
                 };
                 encoder.set_vertex_buffer(0, Some(&mesh.vertex_buffer), 0);
                 encoder.set_vertex_buffer(2, Some(&joint_buffer), 0);
@@ -1557,6 +1980,84 @@ impl NativeMetalProbe {
                 );
                 let texture = mesh.base_color_texture.as_ref().unwrap_or(&self.white_texture);
                 encoder.set_fragment_texture(0, Some(texture));
+                encoder.draw_indexed_primitives(
+                    MTLPrimitiveType::Triangle,
+                    mesh.index_count as u64,
+                    MTLIndexType::UInt32,
+                    &mesh.index_buffer,
+                    0,
+                );
+            }
+        }
+    }
+
+    // Pass 0 (see render_frame): renders the same geometry draw_scene does
+    // into the sun's shadow map instead of the screen — depth-only, no
+    // fragment shader, no lighting. The model_matrix/joint_matrices pose
+    // resolution below is a deliberate copy of draw_scene's own (not
+    // factored into a shared helper) — this renderer already accepts small
+    // duplication like this for shader-adjacent logic (see kShininess/
+    // kSpecularStrength's own "duplicated, not shared" comment) rather than
+    // threading an extra owned Vec<(model_matrix, joint_buffer)> through
+    // both call sites just to avoid it.
+    fn draw_shadow_casters(
+        &self,
+        encoder: &metal::RenderCommandEncoderRef,
+        light_view_projection: [[f32; 4]; 4],
+        extracted: &[super::skinned_actor::SkinnedActorDraw],
+        real_game_meshes: Option<&[RealGameMeshDraw]>,
+    ) {
+        if let Some(meshes) = real_game_meshes {
+            if let Some(pipeline) = self.shadow_pipeline_sponza.as_ref() {
+                encoder.set_render_pipeline_state(pipeline);
+                for m in meshes {
+                    let uniforms = SponzaShadowUniforms { light_view_projection };
+                    encoder.set_vertex_buffer(0, Some(&m.vertex_buffer), 0);
+                    encoder.set_vertex_bytes(1, std::mem::size_of::<SponzaShadowUniforms>() as u64, &uniforms as *const _ as *const _);
+                    encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, m.vertex_count as u64);
+                }
+            }
+        }
+
+        let Some(pipeline) = self.shadow_pipeline_skinned.as_ref() else { return };
+        encoder.set_render_pipeline_state(pipeline);
+        for actor in extracted {
+            let Some(slot) = self.skinned_models.get(actor.model) else { continue };
+            let (model, mesh_scale, y_offset) = (&slot.model, slot.scale, slot.y_offset);
+            let (model_matrix, joint_matrices) = match &actor.pose {
+                super::skinned_actor::SkinnedActorPose::JointMatrices(matrices) => {
+                    ([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], matrices.clone())
+                }
+                super::skinned_actor::SkinnedActorPose::Clip { clip_index, time } => {
+                    let rotation = if slot.facing_correction != 0.0 {
+                        actor.transform.rotation * bevy::math::Quat::from_rotation_y(slot.facing_correction)
+                    } else {
+                        actor.transform.rotation
+                    };
+                    let [qx, qy, qz, qw] = rotation.to_array();
+                    let (x2, y2, z2) = (qx + qx, qy + qy, qz + qz);
+                    let (xx, xy, xz) = (qx * x2, qx * y2, qx * z2);
+                    let (yy, yz, zz) = (qy * y2, qy * z2, qz * z2);
+                    let (wx, wy, wz) = (qw * x2, qw * y2, qw * z2);
+                    let matrix = [
+                        [(1.0 - (yy + zz)) * mesh_scale, (xy + wz) * mesh_scale, (xz - wy) * mesh_scale, 0.0],
+                        [(xy - wz) * mesh_scale, (1.0 - (xx + zz)) * mesh_scale, (yz + wx) * mesh_scale, 0.0],
+                        [(xz + wy) * mesh_scale, (yz - wx) * mesh_scale, (1.0 - (xx + yy)) * mesh_scale, 0.0],
+                        [actor.transform.translation.x, actor.transform.translation.y + y_offset, actor.transform.translation.z, 1.0],
+                    ];
+                    (matrix, model.compute_joint_matrices(*clip_index, *time))
+                }
+            };
+            let joint_buffer = self.device.new_buffer_with_data(
+                joint_matrices.as_ptr() as *const _,
+                (joint_matrices.len() * std::mem::size_of::<[[f32; 4]; 4]>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            for mesh in &model.meshes {
+                let uniforms = SkinnedShadowUniforms { light_view_projection, model_matrix };
+                encoder.set_vertex_buffer(0, Some(&mesh.vertex_buffer), 0);
+                encoder.set_vertex_buffer(2, Some(&joint_buffer), 0);
+                encoder.set_vertex_bytes(1, std::mem::size_of::<SkinnedShadowUniforms>() as u64, &uniforms as *const _ as *const _);
                 encoder.draw_indexed_primitives(
                     MTLPrimitiveType::Triangle,
                     mesh.index_count as u64,
@@ -1674,10 +2175,14 @@ impl NativeMetalProbe {
         let texture = drawable.texture();
 
         for mesh in &real_game_static_meshes {
-            let Some(t) = mesh.texture.as_ref() else { continue };
-            if !self.real_game_textures.contains_key(&t.id) {
-                let uploaded = super::metal_texture::upload_texture(&self.device, t.width, t.height, &t.rgba);
-                self.real_game_textures.insert(t.id, uploaded);
+            // Same identity-keyed upload-once cache for both — see
+            // real_game_textures' own doc comment; normal maps are just
+            // another Image asset to it, no special-casing needed.
+            for t in [mesh.texture.as_ref(), mesh.normal_texture.as_ref()].into_iter().flatten() {
+                if !self.real_game_textures.contains_key(&t.id) {
+                    let uploaded = super::metal_texture::upload_texture(&self.device, t.width, t.height, &t.rgba);
+                    self.real_game_textures.insert(t.id, uploaded);
+                }
             }
         }
         let real_game_meshes: Vec<RealGameMeshDraw> = real_game_static_meshes
@@ -1690,12 +2195,14 @@ impl NativeMetalProbe {
                     MTLResourceOptions::StorageModeShared,
                 );
                 let texture = mesh.texture.as_ref().and_then(|t| self.real_game_textures.get(&t.id));
+                let normal_texture = mesh.normal_texture.as_ref().and_then(|t| self.real_game_textures.get(&t.id));
                 RealGameMeshDraw {
                     vertex_buffer,
                     vertex_count: verts.len(),
                     base_color_factor: mesh.base_color,
                     emissive: mesh.emissive,
                     texture,
+                    normal_texture,
                 }
             })
             .collect();
@@ -1778,6 +2285,91 @@ impl NativeMetalProbe {
         // ever worth resurrecting for a standalone demo/probe build again.
         let extracted: Vec<super::skinned_actor::SkinnedActorDraw> = real_game_extracted;
 
+        // Sun's shadow-map camera: an orthographic box (directional lights
+        // have no single position/frustum of their own, unlike the point
+        // light) recentered on the player every frame rather than fit to
+        // the whole arena — see SHADOW_HALF_EXTENT/SHADOW_DISTANCE's own
+        // doc comments. `sun_dir` is "direction the light travels toward"
+        // (LightUniform's own doc comment), so the light's "eye" sits back
+        // along `-sun_dir` from the camera (where the light is coming
+        // from) looking forward along `+sun_dir` toward it.
+        let sun_dir = {
+            let d = bevy::math::Vec3::from_array(light.sun_dir);
+            if d.length_squared() > 1e-6 { d.normalize() } else { bevy::math::Vec3::new(-0.33, -0.67, -0.33).normalize() }
+        };
+        // Avoid an (up parallel to forward) degenerate look_at when the sun
+        // is nearly straight overhead/underfoot.
+        let shadow_up = if sun_dir.y.abs() > 0.99 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
+        let shadow_center = self.camera_position;
+        let shadow_eye = [
+            shadow_center[0] - sun_dir.x * SHADOW_DISTANCE,
+            shadow_center[1] - sun_dir.y * SHADOW_DISTANCE,
+            shadow_center[2] - sun_dir.z * SHADOW_DISTANCE,
+        ];
+        let shadow_view = look_at(shadow_eye, shadow_center, shadow_up);
+        let shadow_proj = orthographic(
+            -SHADOW_HALF_EXTENT,
+            SHADOW_HALF_EXTENT,
+            -SHADOW_HALF_EXTENT,
+            SHADOW_HALF_EXTENT,
+            0.1,
+            SHADOW_DISTANCE * 2.0,
+        );
+        let light_view_projection = mat_mul(shadow_proj, shadow_view);
+
+        // Pass 0: sun shadow map, depth-only — must run before Pass 1/2,
+        // both of which sample `self.shadow_map` while shading. See
+        // draw_shadow_casters' own doc comment.
+        {
+            let shadow_pass_descriptor = RenderPassDescriptor::new();
+            let shadow_depth = shadow_pass_descriptor.depth_attachment().unwrap();
+            shadow_depth.set_texture(Some(&self.shadow_map));
+            shadow_depth.set_load_action(MTLLoadAction::Clear);
+            shadow_depth.set_store_action(MTLStoreAction::Store);
+            shadow_depth.set_clear_depth(1.0);
+
+            let shadow_command_buffer = self.queue.new_command_buffer();
+            let shadow_encoder = shadow_command_buffer.new_render_command_encoder(shadow_pass_descriptor);
+            shadow_encoder.set_depth_stencil_state(&self.shadow_depth_state);
+            self.draw_shadow_casters(shadow_encoder, light_view_projection, &extracted, real_game_meshes_opt);
+            shadow_encoder.end_encoding();
+            shadow_command_buffer.commit();
+        }
+
+        // The arena's overhead PointLight's own shadow camera — unlike the
+        // sun, a point light has a REAL position (light.position), so this
+        // is a genuine perspective frustum from that position toward the
+        // player, not an orthographic box. A fixed wide FOV (90°) rather
+        // than one fit tightly to SHADOW_HALF_EXTENT at the actual
+        // light-to-player distance — simpler, and safely covers the
+        // relevant area regardless of exactly how high the light sits.
+        let point_light_pos = light.position;
+        let point_to_center = (bevy::math::Vec3::from_array(shadow_center) - bevy::math::Vec3::from_array(point_light_pos)).normalize_or_zero();
+        let point_up = if point_to_center.y.abs() > 0.99 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
+        let point_light_view = look_at(point_light_pos, shadow_center, point_up);
+        let point_light_proj = perspective(90.0_f32.to_radians(), 1.0, 0.1, light.range.max(SHADOW_DISTANCE * 2.0));
+        let point_light_view_projection = mat_mul(point_light_proj, point_light_view);
+
+        // Pass 0b: point light shadow map, depth-only — same shape as
+        // Pass 0 above, into its own texture (see shadow_map_point's own
+        // field doc comment for why the sun and point light need separate
+        // shadow maps, not one).
+        {
+            let point_shadow_pass_descriptor = RenderPassDescriptor::new();
+            let point_shadow_depth = point_shadow_pass_descriptor.depth_attachment().unwrap();
+            point_shadow_depth.set_texture(Some(&self.shadow_map_point));
+            point_shadow_depth.set_load_action(MTLLoadAction::Clear);
+            point_shadow_depth.set_store_action(MTLStoreAction::Store);
+            point_shadow_depth.set_clear_depth(1.0);
+
+            let point_shadow_command_buffer = self.queue.new_command_buffer();
+            let point_shadow_encoder = point_shadow_command_buffer.new_render_command_encoder(point_shadow_pass_descriptor);
+            point_shadow_encoder.set_depth_stencil_state(&self.shadow_depth_state);
+            self.draw_shadow_casters(point_shadow_encoder, point_light_view_projection, &extracted, real_game_meshes_opt);
+            point_shadow_encoder.end_encoding();
+            point_shadow_command_buffer.commit();
+        }
+
         // Pass 1: scope camera into the offscreen texture — skipped
         // entirely in real-game mode while not aiming (see `show_scope`),
         // both to avoid the wasted render pass and so the PIP quad below
@@ -1815,6 +2407,9 @@ impl NativeMetalProbe {
                 now,
                 real_game_meshes_opt,
                 msaa_enabled,
+                light_view_projection,
+                point_light_view_projection,
+                self.camera_position,
             );
             scope_encoder.end_encoding();
             scope_command_buffer.commit();
@@ -1863,6 +2458,9 @@ impl NativeMetalProbe {
             now,
             real_game_meshes_opt,
             msaa_enabled,
+            light_view_projection,
+            point_light_view_projection,
+            self.camera_position,
         );
 
         if show_scope {

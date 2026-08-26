@@ -497,6 +497,30 @@ pub const HITBOX_TEST_ZOMBIE_POSITIONS: [Vec3; 5] = [
     Vec3::new(HITBOX_TEST_ROW_X[4], ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0, 0.0),
 ];
 
+// Scenario::RenderCompare's 3-zombie lineup — one entry per target pose
+// (Idle/Bite/Crawl). Positions alone don't force a pose — the server's
+// spawn_render_compare_zombies (crates/server) also has to give each
+// entity the right components (see its own doc comment) — but the Bite
+// entry's position does matter: it has to land within ZOMBIE_STOP_DISTANCE
+// of RENDER_COMPARE_PLAYER_SPAWN (crate::network) once that zombie's
+// ChaseTarget is pointed at the connected player, or update_server_
+// zombie_pose will never actually pick Bite over Idle. Idle/Crawl's x=+-2.2
+// keeps both within about 24 degrees of dead-ahead from RENDER_COMPARE_
+// PLAYER_SPAWN (0, 3, 5) — narrow enough to stay in frame even at the
+// desktop client's narrower (~1.5:1) window aspect, not just the phone's
+// wide landscape one (an earlier +-3.0 spread cleared the phone's FOV but
+// clipped off-screen on desktop, discovered by literally comparing the two
+// — exactly the kind of render difference this map exists to catch). Bite
+// is offset to the same side as Idle (x=-0.9) rather than dead-center or
+// toward Crawl, so its up-close bulk doesn't screen-overlap Crawl on the
+// other side — distance from RENDER_COMPARE_PLAYER_SPAWN is
+// sqrt(0.9^2 + 0.7^2), about 1.14, comfortably under the 1.2 stop distance.
+pub const RENDER_COMPARE_ZOMBIE_POSITIONS: [Vec3; 3] = [
+    Vec3::new(-2.2, ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0, 0.0), // Idle
+    Vec3::new(-0.9, ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0, 4.3), // Bite
+    Vec3::new(2.2, ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0, 0.0),  // Crawl
+];
+
 // Sent by the client's "spawn 100 more" debug button — spawning must be a
 // server decision now, since zombies are server-authoritative.
 #[derive(Event, Clone, Copy, Serialize, Deserialize, Default)]

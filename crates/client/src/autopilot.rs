@@ -37,12 +37,39 @@ use bevy::prelude::*;
 use crate::{FpsCamera, Player};
 use shared::{random_aim_point, resolve_bone_world_positions, Health, NetPlayer, Zombie, ZombieHitboxBones, PLAYER_MAX_HEALTH};
 
-/// Master on/off switch — ON by default, see the module doc comment.
+/// Master on/off switch — ON by default, see the module doc comment. OFF by
+/// default for Scenario::RenderCompare specifically: that map exists to
+/// compare desktop/iOS rendering of 3 stationary zombies, which needs the
+/// player standing still and looking at them, not autopilot driving them
+/// around — mirrors Noclip's own scenario-conditional Default (lib.rs).
 #[derive(Resource)]
 pub(crate) struct Autopilot(pub(crate) bool);
 impl Default for Autopilot {
     fn default() -> Self {
-        Autopilot(true)
+        Autopilot(crate::current_scenario() != shared::Scenario::RenderCompare)
+    }
+}
+
+/// Runs ONLY autopilot's target-selection + camera-aim tracking (turns the
+/// player's view toward the nearest zombie), without the movement/sprint/
+/// fire decisions the full `Autopilot` toggle also drives — added so the
+/// scope-camera-not-showing-zombies investigation (native_metal_probe.rs)
+/// could get a zombie reliably centered in frame without needing to
+/// actually aim by hand first. `intent.move_axis`/`intent.fire` still only
+/// take effect downstream while `Autopilot.0` is true (see send_player_
+/// input/shoot's own `if autopilot.0 { ... }` branches), so leaving this on
+/// by itself is safe to combine with real touch/mouse movement — only the
+/// camera direction gets taken over, same as `Autopilot` does for aim, but
+/// with none of the rest.
+#[derive(Resource)]
+pub(crate) struct AutopilotLookOnly(pub(crate) bool);
+impl Default for AutopilotLookOnly {
+    // Same env-var-launch-override pattern as OPEN_SETTINGS_MENU/
+    // FORCE_ADS_ON_START — starts the camera already aimed at whatever
+    // zombie is nearest, so a screenshot taken moments after launch (no
+    // interactive aiming needed) reliably has one in frame.
+    fn default() -> Self {
+        Self(std::env::var("FORCE_LOOK_AT_TARGET").is_ok())
     }
 }
 
@@ -141,11 +168,12 @@ const AUTOPILOT_DECISION_HZ: f32 = 20.0;
 pub(crate) fn autopilot_pick_target(
     time: Res<Time>,
     autopilot: Res<Autopilot>,
+    look_only: Res<AutopilotLookOnly>,
     mut state: ResMut<AutopilotState>,
     player: Query<&Transform, (With<Player>, Without<NetPlayer>)>,
     zombies: Query<(Entity, &Transform), With<Zombie>>,
 ) {
-    if !autopilot.0 {
+    if !autopilot.0 && !look_only.0 {
         return;
     }
     let Ok(player_transform) = player.single() else {
@@ -182,6 +210,7 @@ pub(crate) fn autopilot_pick_target(
 pub(crate) fn autopilot_think(
     time: Res<Time>,
     autopilot: Res<Autopilot>,
+    look_only: Res<AutopilotLookOnly>,
     mut state: ResMut<AutopilotState>,
     mut intent: ResMut<AutopilotIntent>,
     player: Query<&Transform, (With<Player>, Without<NetPlayer>, Without<FpsCamera>)>,
@@ -191,7 +220,7 @@ pub(crate) fn autopilot_think(
     mut camera: Query<&mut FpsCamera>,
     mut decision_timer: Local<f32>,
 ) {
-    if !autopilot.0 {
+    if !autopilot.0 && !look_only.0 {
         return;
     }
     let Ok(player_transform) = player.single() else {

@@ -18,6 +18,14 @@ pub struct GltfVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
+    // xyz = tangent direction, w = handedness sign (glTF's own convention)
+    // — see native_metal_probe.rs's SPONZA_SHADER_SOURCE for the TBN basis
+    // this feeds. `[1,0,0,1]` (an arbitrary but valid unit tangent) when
+    // the source mesh has no real ATTRIBUTE_TANGENT — never actually
+    // sampled through in that case, since normal_texture is also None
+    // whenever tangents are missing (see ExtractedMesh::normal_texture's
+    // own doc comment).
+    pub tangent: [f32; 4],
 }
 
 // gltf::image::Data comes back in whatever channel layout the source image

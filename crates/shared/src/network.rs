@@ -45,6 +45,15 @@ pub enum Scenario {
     /// client-side, see crate::client's map-select handling) to observe
     /// FPS/behavior with a full horde active without being in melee range.
     StressTest,
+    /// Map 3: 3 stationary zombies, each parked in a different ZombiePose
+    /// (Idle/Crawl/Bite — see RENDER_COMPARE_ZOMBIE_POSITIONS' own doc
+    /// comment for how each pose is forced without AI movement), player
+    /// spawned facing all three and not moving (Autopilot auto-disabled
+    /// client-side for this scenario, mirroring StressTest's noclip
+    /// auto-enable). A pure visual-inspection rig for comparing the
+    /// desktop and iOS/Metal renderers side by side — not a combat test,
+    /// so unlike HitboxTest these zombies don't respawn once killed.
+    RenderCompare,
 }
 
 impl Scenario {
@@ -52,6 +61,7 @@ impl Scenario {
         match id {
             1 => Scenario::HitboxTest,
             2 => Scenario::StressTest,
+            3 => Scenario::RenderCompare,
             _ => Scenario::Normal,
         }
     }
@@ -61,6 +71,7 @@ impl Scenario {
             Scenario::Normal => 0,
             Scenario::HitboxTest => 1,
             Scenario::StressTest => 2,
+            Scenario::RenderCompare => 3,
         }
     }
 
@@ -79,6 +90,13 @@ pub const HITBOX_TEST_ROW_X: [f32; 5] = [-6.0, -3.0, 0.0, 3.0, 6.0];
 
 pub const STRESS_TEST_ZOMBIE_COUNT: usize = 50;
 pub const STRESS_TEST_PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 15.0, 0.0);
+
+// Scenario::RenderCompare — set back far enough that the Idle/Crawl
+// zombies (RENDER_COMPARE_ZOMBIE_POSITIONS' 1st/3rd entries) both fit in
+// view on either side, while the Bite-pose zombie (2nd entry) is offset to
+// one side rather than dead-center so its close-range bulk doesn't block
+// the other two — see that const's own doc comment for the exact math.
+pub const RENDER_COMPARE_PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 3.0, 5.0);
 
 // How far in the past (relative to local received-snapshot time) the
 // client renders everyone else's replicated position at — see the client's

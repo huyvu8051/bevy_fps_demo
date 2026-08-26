@@ -53,7 +53,7 @@ mod cadisplaylink;
 // AI takeover of the local player (auto-aim/move/fire) — see this module's
 // own doc comment for the full picture.
 mod autopilot;
-use autopilot::{autopilot_pick_target, autopilot_think, Autopilot, AutopilotIntent, AutopilotState};
+use autopilot::{autopilot_pick_target, autopilot_think, Autopilot, AutopilotIntent, AutopilotLookOnly, AutopilotState};
 
 // Downloaded once into assets/models/ so the app doesn't depend on a network
 // request (and a remote repo's file layout) every time it starts.
@@ -511,7 +511,10 @@ const RESOLUTION_SCALE_MIN_TEXTURE_PX: u32 = 64;
 const SCOPE_TEXTURE_SIZE: u32 = 512;
 const SCOPE_MIN_ZOOM: f32 = 6.0;
 const SCOPE_MAX_ZOOM: f32 = 25.0;
-const SCOPE_DEFAULT_ZOOM: f32 = 8.0;
+// Was a fixed 8.0 — set to the minimum so aiming starts at the widest
+// (least-zoomed) scope FOV by default; scroll wheel/ADS-button still
+// steps it up toward SCOPE_MAX_ZOOM from there (adjust_scope_zoom).
+const SCOPE_DEFAULT_ZOOM: f32 = SCOPE_MIN_ZOOM;
 // Multiplicative, not additive — fov = SCOPE_BASE_FOV / zoom means a fixed
 // +0.5-per-scroll step barely changes the FOV once zoom is already high
 // (1/x flattens out), so zooming in felt like it kept slowing down. A fixed
@@ -1815,6 +1818,7 @@ fn build_game_common(app: &mut App) {
         // other scenario keeps Noclip's normal off-by-default.
         .insert_resource(Noclip(current_scenario() == Scenario::StressTest))
         .init_resource::<Autopilot>()
+        .init_resource::<AutopilotLookOnly>()
         .init_resource::<AutopilotState>()
         .init_resource::<AutopilotIntent>()
         .init_resource::<FreezeZombies>()
@@ -1919,6 +1923,14 @@ fn build_game_common(app: &mut App) {
                     hide_ui_when_locked,
                 )
                     .chain(),
+                (
+                    cheat_toggle_buttons_3,
+                    autopilot_toggle_button,
+                    update_extra_toggle_colors,
+                    cheat_spawn_zombie_button,
+                    debug_bot_buttons,
+                )
+                    .chain(),
             )
                 .chain(),
             (
@@ -1979,6 +1991,7 @@ fn build_game_common(app: &mut App) {
                 update_ammo_ui,
                 update_ping_ui,
                 update_crosshair,
+                set_hitbox_gizmo_depth_bias,
                 draw_zombie_hitboxes,
                 update_debug_panel,
                 despawn_hit_markers,
@@ -2687,6 +2700,20 @@ fn spawn_settings_menu(commands: &mut Commands) {
                     }
                 });
 
+                // Autopilot — real player-facing feature (see its own doc
+                // comment), so unlike everything in the "Cheats" section
+                // below this row is NOT debug-gated: it's the mobile
+                // equivalent of desktop's always-available KeyI.
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|row| {
+                    spawn_cheat_toggle_button(row, "Autopilot", AutopilotButton);
+                });
+
                 // Touch equivalent of the desktop debug panel's keyboard-only
                 // cheats (KeyN/KeyG/KeyF/Digit1/Digit2) — that panel is
                 // unreachable on mobile (no keyboard), so none of it existed
@@ -2750,6 +2777,15 @@ fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "NoZAnim", CheatZombieAnimButton);
                         spawn_cheat_toggle_button(row, "NoHPBar", CheatZombieHealthBarsButton);
                         spawn_cheat_toggle_button(row, "FullLOD", CheatZombieLodButton);
+                    });
+                    page.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(8.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        spawn_cheat_toggle_button(row, "DofAlt", CheatDofAltButton);
+                        spawn_cheat_toggle_button(row, "LookAt", CheatLookAtTargetButton);
                     });
                 }
             });
@@ -2833,6 +2869,30 @@ fn spawn_settings_menu(commands: &mut Commands) {
                     .with_children(|row| {
                         spawn_cheat_action_button(row, "Heal Nearest", HealNearestButton);
                         spawn_cheat_action_button(row, "1HP Nearest", NearDeathNearestButton);
+                    });
+                    // Mobile equivalents of debug_panel_actions' Digit1
+                    // (spawn 1 local zombie) and the Digit6/[/]/Digit9/O
+                    // "debug bot" fake-NetPlayer testing tools — see
+                    // debug_bot_buttons' own doc comment.
+                    page.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(8.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        spawn_cheat_action_button(row, "Spawn 1", CheatSpawnZombieButton);
+                        spawn_cheat_action_button(row, "Bot+", CheatSpawnBotButton);
+                        spawn_cheat_action_button(row, "DelBot", CheatDespawnBotButton);
+                    });
+                    page.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(8.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        spawn_cheat_action_button(row, "<Bot", CheatPrevBotButton);
+                        spawn_cheat_action_button(row, "Bot>", CheatNextBotButton);
+                        spawn_cheat_action_button(row, "MoveBot", CheatMoveBotButton);
                     });
                 }
             });
@@ -3032,6 +3092,33 @@ struct CheatZombieHealthBarsButton;
 struct CheatZombieLodButton;
 #[derive(Component)]
 struct CheatPlayerModelButton;
+#[derive(Component)]
+struct CheatDofAltButton;
+// NOT a "Cheat*" marker on purpose — Autopilot is a real player-facing
+// feature (see its own module doc comment), not a debug cheat, so its
+// button lives outside the #[cfg(debug_assertions)] "Cheats" section
+// below, same reasoning as ResolutionScaleButton/SensitivityText.
+#[derive(Component)]
+struct AutopilotButton;
+#[derive(Component)]
+struct CheatSpawnZombieButton;
+#[derive(Component)]
+struct CheatSpawnBotButton;
+#[derive(Component)]
+struct CheatPrevBotButton;
+#[derive(Component)]
+struct CheatNextBotButton;
+#[derive(Component)]
+struct CheatMoveBotButton;
+#[derive(Component)]
+struct CheatDespawnBotButton;
+// Mobile toggle for AutopilotLookOnly (see its own doc comment,
+// autopilot.rs) — a debug/testing tool (forces the camera onto the
+// nearest zombie without touching movement/fire), so it's gated inside
+// the "Cheats" section like the other debug-only buttons, unlike the real
+// AutopilotButton above.
+#[derive(Component)]
+struct CheatLookAtTargetButton;
 
 // Changed<Interaction>-gated like every other touch button in this file —
 // each tap flips the same resource the matching desktop key
@@ -3143,6 +3230,32 @@ fn cheat_toggle_buttons_2(
     }
 }
 
+// Split out for the same arity reason as cheat_toggle_buttons_2 — this is
+// the merged mobile equivalent of desktop's KeyV (see AimDofFocalDistanceAlt's
+// own doc comment for what it A/B tests).
+fn cheat_toggle_buttons_3(
+    mut dof_alt: ResMut<AimDofFocalDistanceAlt>,
+    mut look_only: ResMut<AutopilotLookOnly>,
+    dof_alt_btn: Query<&Interaction, (With<CheatDofAltButton>, Changed<Interaction>)>,
+    look_at_btn: Query<&Interaction, (With<CheatLookAtTargetButton>, Changed<Interaction>)>,
+) {
+    if tapped(&dof_alt_btn) {
+        dof_alt.0 = !dof_alt.0;
+    }
+    if tapped(&look_at_btn) {
+        look_only.0 = !look_only.0;
+    }
+}
+
+// Mobile equivalent of desktop's KeyI — see AutopilotButton's own doc
+// comment for why this isn't grouped with the cheat_toggle_buttons* family
+// despite the identical tapped()-flips-a-bool shape.
+fn autopilot_toggle_button(mut autopilot: ResMut<Autopilot>, btn: Query<&Interaction, (With<AutopilotButton>, Changed<Interaction>)>) {
+    if tapped(&btn) {
+        autopilot.0 = !autopilot.0;
+    }
+}
+
 // Recolors the 3 toggle buttons green-ish while their cheat is active —
 // desktop's debug panel shows this as "[ON]"/"[OFF]" text instead, but
 // these buttons have no room for that plus a label, so color stands in.
@@ -3231,6 +3344,34 @@ fn update_cheat_toggle_colors(
     }
 }
 
+// Same color-feedback idea as update_cheat_toggle_colors, split into its
+// own query — AutopilotButton isn't a "Cheat*" marker (see its own doc
+// comment), and folding a 14th Option<&Marker> into that fn's already-13-
+// field tuple risked hitting Bevy's WorldQuery tuple arity ceiling for no
+// real benefit.
+#[allow(clippy::type_complexity)]
+fn update_extra_toggle_colors(
+    autopilot: Res<Autopilot>,
+    dof_alt: Res<AimDofFocalDistanceAlt>,
+    look_only: Res<AutopilotLookOnly>,
+    mut buttons: Query<
+        (&mut BackgroundColor, Option<&AutopilotButton>, Option<&CheatDofAltButton>, Option<&CheatLookAtTargetButton>),
+        Or<(With<AutopilotButton>, With<CheatDofAltButton>, With<CheatLookAtTargetButton>)>,
+    >,
+) {
+    let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
+    for (mut bg, auto_m, dof_m, look_m) in &mut buttons {
+        let on = if auto_m.is_some() {
+            autopilot.0
+        } else if dof_m.is_some() {
+            dof_alt.0
+        } else {
+            look_m.is_some() && look_only.0
+        };
+        *bg = BackgroundColor(color_for(on));
+    }
+}
+
 // Kill All is authoritative (ClearAllZombies), unlike the old desktop-only
 // debug panel's Digit2 action which just despawned the client's own local
 // replicated copy and silently got it back on the next replication update
@@ -3277,6 +3418,83 @@ fn cheat_zombie_health_buttons(
     }
     if tapped(&near_death_btn) {
         set_nearest_zombie_health(&mut zombies, player_transform.translation, 1.0);
+    }
+}
+
+// Mobile equivalent of debug_panel_actions' Digit1 — spawns one local-only
+// zombie 2m in front of the player, same as the desktop key.
+fn cheat_spawn_zombie_button(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    player: Query<&Transform, With<Player>>,
+    camera: Query<&FpsCamera>,
+    btn: Query<&Interaction, (With<CheatSpawnZombieButton>, Changed<Interaction>)>,
+) {
+    if !tapped(&btn) {
+        return;
+    }
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+    let forward = camera.single().map(|cam| Quat::from_rotation_y(cam.yaw) * Vec3::NEG_Z).unwrap_or(Vec3::NEG_Z);
+    spawn_local_zombie(&mut commands, &asset_server, player_transform.translation + forward * 2.0);
+}
+
+// Mobile equivalent of debug_panel_actions' Digit6/BracketLeft/
+// BracketRight/Digit9/KeyO — same body, just per-button instead of
+// per-key. See that fn's own comments for why each action exists (fake
+// NetPlayer "debug bot" for testing multiplayer zombie targeting without a
+// second real client).
+fn debug_bot_buttons(
+    mut commands: Commands,
+    player: Query<&Transform, With<Player>>,
+    camera: Query<&FpsCamera>,
+    camera_transform: Query<&Transform, (With<FpsCamera>, Without<Player>)>,
+    spatial_query: SpatialQuery,
+    debug_bots: Query<&DebugBot>,
+    mut selected_bot: ResMut<SelectedDebugBot>,
+    spawn_btn: Query<&Interaction, (With<CheatSpawnBotButton>, Changed<Interaction>)>,
+    prev_btn: Query<&Interaction, (With<CheatPrevBotButton>, Changed<Interaction>)>,
+    next_btn: Query<&Interaction, (With<CheatNextBotButton>, Changed<Interaction>)>,
+    move_btn: Query<&Interaction, (With<CheatMoveBotButton>, Changed<Interaction>)>,
+    despawn_btn: Query<&Interaction, (With<CheatDespawnBotButton>, Changed<Interaction>)>,
+) {
+    if tapped(&spawn_btn) {
+        if let Ok(player_transform) = player.single() {
+            let forward = camera.single().map(|cam| Quat::from_rotation_y(cam.yaw) * Vec3::NEG_Z).unwrap_or(Vec3::NEG_Z);
+            commands.client_trigger(SpawnDebugBot { at: player_transform.translation + forward * 2.0 });
+        }
+    }
+    let cycle_forward = tapped(&next_btn);
+    if cycle_forward || tapped(&prev_btn) {
+        let mut ids: Vec<u32> = debug_bots.iter().map(|bot| bot.0).collect();
+        ids.sort_unstable();
+        if !ids.is_empty() {
+            let next_index = match selected_bot.0.and_then(|current| ids.iter().position(|&id| id == current)) {
+                Some(index) if cycle_forward => (index + 1) % ids.len(),
+                Some(index) => (index + ids.len() - 1) % ids.len(),
+                None => 0,
+            };
+            selected_bot.0 = Some(ids[next_index]);
+        }
+    }
+    if tapped(&move_btn) {
+        if let Some(id) = selected_bot.0 {
+            if let Ok(camera_transform) = camera_transform.single() {
+                let filter = SpatialQueryFilter::default();
+                let target = spatial_query
+                    .cast_ray(camera_transform.translation, camera_transform.forward(), MAX_SHOT_DISTANCE, true, &filter)
+                    .map(|hit| camera_transform.translation + camera_transform.forward() * hit.distance)
+                    .unwrap_or(camera_transform.translation + camera_transform.forward() * 5.0);
+                commands.client_trigger(MoveDebugBot { id, target });
+            }
+        }
+    }
+    if tapped(&despawn_btn) {
+        if let Some(id) = selected_bot.0 {
+            commands.client_trigger(DespawnDebugBot { id });
+            selected_bot.0 = None;
+        }
     }
 }
 
@@ -4489,7 +4707,12 @@ fn zombies_damage_player(
     mut player: Query<(&Transform, &mut Health), With<Player>>,
     mut elapsed: Local<f32>,
 ) {
-    if game_over.0 || freeze.0 || god_mode.0 {
+    // RenderCompare deliberately parks its one Bite-pose zombie within
+    // ZOMBIE_STOP_DISTANCE of the player (see RENDER_COMPARE_ZOMBIE_
+    // POSITIONS' own doc comment) purely to force that pose for visual
+    // comparison — it's not a combat test, so real bite damage there would
+    // just end the game before anyone gets to look at anything.
+    if game_over.0 || freeze.0 || god_mode.0 || current_scenario() == Scenario::RenderCompare {
         return;
     }
     // ZombieAttackTimer counts down in real wall-clock seconds, so unlike
@@ -4679,10 +4902,11 @@ struct MapSelectButton(u8);
 // through native_metal_probe.rs's bitmap font on iOS too, which only has
 // uppercase A-Z/digits/a handful of symbols — see glyph_index's own doc
 // comment.
-const MAP_SELECT_ENTRIES: [(u8, &str, &str); 3] = [
+const MAP_SELECT_ENTRIES: [(u8, &str, &str); 4] = [
     (0, "MAP 0", "NORMAL"),
     (1, "MAP 1", "HITBOX TEST - 5 STATIONARY ZOMBIES"),
     (2, "MAP 2", "STRESS TEST - 50 ZOMBIES, NOCLIP"),
+    (3, "MAP 3", "RENDER COMPARE - 3 ZOMBIES, 3 POSES, AUTOPILOT OFF"),
 ];
 
 fn spawn_map_select_ui(commands: &mut Commands) {
@@ -4779,6 +5003,7 @@ fn map_select_button(
     root: Query<Entity, With<MapSelectRoot>>,
     mut pending: ResMut<MapSelectionPending>,
     mut noclip: ResMut<Noclip>,
+    mut autopilot: ResMut<Autopilot>,
     channels: Res<RepliconChannels>,
 ) {
     for (interaction, button) in &buttons {
@@ -4802,6 +5027,10 @@ fn map_select_button(
         // yet), so a StressTest pick needs to apply the same auto-enable
         // itself now that the choice is real.
         noclip.0 = Scenario::from_map_id(button.0) == Scenario::StressTest;
+        // Same reasoning — Autopilot::default() also baked in before any
+        // map was picked (see its own doc comment), so a RenderCompare pick
+        // needs to force autopilot off itself now that the choice is real.
+        autopilot.0 = Scenario::from_map_id(button.0) != Scenario::RenderCompare;
         spawn_client_connection(&mut commands, &channels);
     }
 }
@@ -5674,10 +5903,12 @@ fn touch_look(
     sensitivity_scale: Res<SensitivityScale>,
     mut query: Query<&mut FpsCamera>,
     autopilot: Res<Autopilot>,
+    look_only: Res<AutopilotLookOnly>,
 ) {
     // See mouse_look's own doc comment — same reasoning applies here: real
-    // touch-look input is ignored the whole time Autopilot is on.
-    if autopilot.0 {
+    // touch-look input is ignored the whole time Autopilot (or its look-
+    // only subset, AutopilotLookOnly) is on.
+    if autopilot.0 || look_only.0 {
         return;
     }
     // See touch_move_axis's own comment on MouseUiLocked/AssistiveTouch —
@@ -5766,11 +5997,13 @@ fn mouse_look(
     sensitivity_scale: Res<SensitivityScale>,
     mut query: Query<&mut FpsCamera>,
     autopilot: Res<Autopilot>,
+    look_only: Res<AutopilotLookOnly>,
 ) {
-    // Real look input is ignored the whole time Autopilot is on (see
-    // autopilot's own module doc comment) — autopilot_think already wrote
-    // FpsCamera.yaw/pitch this same tick.
-    if autopilot.0 {
+    // Real look input is ignored the whole time Autopilot (or its look-only
+    // subset, AutopilotLookOnly) is on (see autopilot's own module doc
+    // comment) — autopilot_think already wrote FpsCamera.yaw/pitch this
+    // same tick.
+    if autopilot.0 || look_only.0 {
         return;
     }
     let Ok(cursor) = cursor.single() else {
@@ -6117,6 +6350,21 @@ fn draw_bone_capsule(gizmos: &mut Gizmos, a: Vec3, b: Vec3, radius: f32, color: 
 // Falls back to the old height-band rings (drawn relative to the zombie's
 // root, not any bone) only for a zombie whose bones haven't resolved yet —
 // see wire_zombie_hitbox_bones.
+// Split out of draw_zombie_hitboxes — `Gizmos` (used there) already borrows
+// `Res<GizmoConfigStore>` internally to look up per-group config, so also
+// taking `ResMut<GizmoConfigStore>` directly in that same system panics at
+// startup (B0002: a ResMut conflicting with a Res access already in the
+// same system's param set). Setting the depth bias in its own system,
+// chained to run first, avoids the two ever being live in the same param
+// list at once.
+fn set_hitbox_gizmo_depth_bias(mut config_store: ResMut<GizmoConfigStore>) {
+    // Depth bias -1.0 so debug hitboxes/gizmos render in front of meshes —
+    // idempotent (same value every call), so no harm setting it every
+    // frame rather than only once at Startup.
+    let (config, _) = config_store.config_mut::<DefaultGizmoConfigGroup>();
+    config.depth_bias = -1.0;
+}
+
 fn draw_zombie_hitboxes(
     show: Res<ShowHitboxes>,
     zombies: Query<(&Transform, &ZombieHitboxBones), With<Zombie>>,
@@ -6126,6 +6374,7 @@ fn draw_zombie_hitboxes(
     if !show.0 {
         return;
     }
+
     for (transform, bones) in &zombies {
         // The actual collision shape handle_fire_shot/debug_bot_fire test
         // shots against (Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
@@ -6144,24 +6393,39 @@ fn draw_zombie_hitboxes(
 
         let mut any_bone = false;
         let bone_pos = |e: Entity| globals.get(e).ok().map(GlobalTransform::translation);
+        let mut joints_to_draw = Vec::new();
+
         // Single sphere at the Head bone's own raw resolved position — no
         // offset, no separate neck sphere (reverted per request). No second
         // joint to span a capsule to, so it stays a plain sphere.
         if let Some(pos) = bones.head.and_then(bone_pos) {
             gizmos.sphere(Isometry3d::from_translation(pos), HEAD_HITBOX_RADIUS, Color::srgb(1.0, 0.2, 0.2));
+            joints_to_draw.push(pos);
             any_bone = true;
         }
         if let (Some(belly), Some(chest)) = (bones.belly.and_then(bone_pos), bones.chest.and_then(bone_pos)) {
             draw_bone_capsule(&mut gizmos, belly, chest, TORSO_HITBOX_RADIUS, Color::srgb(1.0, 0.8, 0.0));
+            joints_to_draw.push(belly);
+            joints_to_draw.push(chest);
             any_bone = true;
         }
         for chain in [&bones.left_arm, &bones.right_arm, &bones.left_leg, &bones.right_leg] {
+            for joint_entity in chain.iter() {
+                if let Some(pos) = joint_entity.and_then(bone_pos) {
+                    joints_to_draw.push(pos);
+                }
+            }
             for pair in chain.windows(2) {
                 if let (Some(a), Some(b)) = (pair[0].and_then(bone_pos), pair[1].and_then(bone_pos)) {
                     draw_bone_capsule(&mut gizmos, a, b, LIMB_HITBOX_RADIUS, Color::srgb(0.2, 0.6, 1.0));
                     any_bone = true;
                 }
             }
+        }
+
+        // Draw the joint positions as small distinct spheres (e.g., green) on top
+        for joint_pos in joints_to_draw {
+            gizmos.sphere(Isometry3d::from_translation(joint_pos), 0.04, Color::srgb(0.0, 1.0, 0.0));
         }
 
         if any_bone {
