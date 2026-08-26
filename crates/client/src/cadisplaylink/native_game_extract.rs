@@ -266,6 +266,16 @@ pub struct ScopeCameraSnapshot {
     /// one physical object like the desktop build (whose PIP is that same
     /// real 3D lens quad, not a separate screen-space overlay).
     pub lens_world_pos: [f32; 3],
+    /// The real `ScopeLens` entity's own LOCAL `Transform.rotation` —
+    /// `ChildOf(camera)`, so this is the lens's roll/tilt/sway RELATIVE
+    /// to the camera (look_sway_roll + the recoil yaw-kick/roll-kick +
+    /// reload tilt `update_scope_lens` stacks onto it), not its absolute
+    /// world orientation. The renderer derives an on-screen 2D roll angle
+    /// from this (rotate a reference up-vector by it, read off the
+    /// resulting screen-space angle) and spins the PIP quad by that same
+    /// angle, so the picture visibly rolls/tilts together with the real
+    /// glass around it instead of only tracking its position.
+    pub lens_local_rotation: [f32; 4],
 }
 
 #[derive(Default)]
@@ -711,10 +721,14 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // so a renderer needs its world position to know WHERE on screen the
     // scope picture should actually sit this frame — see lens_world_pos's
     // own doc comment on ScopeCameraSnapshot for why this replaced a
-    // fixed-screen-position PIP.
+    // fixed-screen-position PIP. The LOCAL `Transform.rotation` (not
+    // GlobalTransform — ScopeLens is `ChildOf(camera)`, see its own spawn
+    // site in crate::lib's setup()) is the lens's own roll/tilt/sway
+    // RELATIVE to the camera, i.e. exactly the on-screen 2D rotation the
+    // PIP quad itself needs (see lens_local_rotation's own doc comment).
     let mut scope_state: SystemState<(
         Query<(&GlobalTransform, &bevy::camera::Camera, &bevy::camera::Projection), With<crate::ScopeCamera>>,
-        Query<&GlobalTransform, With<crate::ScopeLens>>,
+        Query<(&GlobalTransform, &Transform), With<crate::ScopeLens>>,
     )> = SystemState::new(world);
     let (scope_camera_query, scope_lens_query) = scope_state.get(world);
     if let Some((transform, camera, projection)) = scope_camera_query.iter().next() {
@@ -722,13 +736,18 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             bevy::camera::Projection::Perspective(p) => p.fov,
             _ => 0.0,
         };
-        let lens_world_pos = scope_lens_query.iter().next().map(|t| t.translation().to_array()).unwrap_or(transform.translation().to_array());
+        let (lens_world_pos, lens_local_rotation) = scope_lens_query
+            .iter()
+            .next()
+            .map(|(global, local)| (global.translation().to_array(), local.rotation.to_array()))
+            .unwrap_or((transform.translation().to_array(), [0.0, 0.0, 0.0, 1.0]));
         snapshot.scope_camera = Some(ScopeCameraSnapshot {
             eye: transform.translation().to_array(),
             rotation: transform.rotation().to_array(),
             active: camera.is_active,
             fov,
             lens_world_pos,
+            lens_local_rotation,
         });
     }
 
