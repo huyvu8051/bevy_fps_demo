@@ -6367,15 +6367,18 @@ fn set_hitbox_gizmo_depth_bias(mut config_store: ResMut<GizmoConfigStore>) {
 
 fn draw_zombie_hitboxes(
     show: Res<ShowHitboxes>,
-    zombies: Query<(&Transform, &ZombieHitboxBones), With<Zombie>>,
+    zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
     mut gizmos: Gizmos,
+    autopilot_state: Res<AutopilotState>,
 ) {
     if !show.0 {
         return;
     }
 
-    for (transform, bones) in &zombies {
+    for (zombie_entity, transform, bones) in &zombies {
+        let is_autopilot_target = autopilot_state.target == Some(zombie_entity);
+
         // The actual collision shape handle_fire_shot/debug_bot_fire test
         // shots against (Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
         // centered on this Transform — see ZOMBIE_MODEL_Y_OFFSET's own doc
@@ -6423,9 +6426,22 @@ fn draw_zombie_hitboxes(
             }
         }
 
-        // Draw the joint positions as small distinct spheres (e.g., green) on top
-        for joint_pos in joints_to_draw {
-            gizmos.sphere(Isometry3d::from_translation(joint_pos), 0.04, Color::srgb(0.0, 1.0, 0.0));
+        // Draw the joint positions as small distinct spheres (green, or cyan if targeted by autopilot)
+        let joint_color = if is_autopilot_target {
+            Color::srgb(0.0, 1.0, 1.0) // Cyan
+        } else {
+            Color::srgb(0.0, 1.0, 0.0) // Green
+        };
+        for joint_pos in &joints_to_draw {
+            gizmos.sphere(Isometry3d::from_translation(*joint_pos), 0.04, joint_color);
+        }
+
+        // Highlight the targeted zombie's aim point (between belly and chest) with a magenta sphere
+        if is_autopilot_target {
+            if let (Some(belly), Some(chest)) = (bones.belly.and_then(bone_pos), bones.chest.and_then(bone_pos)) {
+                let target_aim_point = belly.midpoint(chest);
+                gizmos.sphere(Isometry3d::from_translation(target_aim_point), 0.08, Color::srgb(1.0, 0.0, 1.0));
+            }
         }
 
         if any_bone {

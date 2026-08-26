@@ -77,7 +77,7 @@ impl Default for AutopilotLookOnly {
 /// commit-and-periodically-reevaluate pattern so aim doesn't flicker.
 #[derive(Resource, Default)]
 pub(crate) struct AutopilotState {
-    target: Option<Entity>,
+    pub(crate) target: Option<Entity>,
     retarget_timer: f32,
     /// Which body region random_aim_point picked for the current target —
     /// purely a HUD/debug label (see update_debug_panel's "Aiming: {}"
@@ -128,7 +128,7 @@ const AUTOPILOT_FIRE_AIM_TOLERANCE_DEG: f32 = 12.0;
 // up during a sustained spray; aiming a bit low to begin with keeps shots
 // landing closer to center over a spray instead of climbing off-target).
 // ~4.3 degrees, playtest-tunable.
-const AUTOPILOT_AIM_PITCH_LOWER: f32 = 0.075;
+const AUTOPILOT_AIM_PITCH_LOWER: f32 = 0.0;
 // Smooth continuous aim sway around the committed aim point, so autopilot
 // doesn't lock dead-still on target — reads as natural human aim, not a
 // robot. Driven by two continuous sin(time * freq) waves (not a per-frame
@@ -136,9 +136,9 @@ const AUTOPILOT_AIM_PITCH_LOWER: f32 = 0.075;
 // distinct-enough frequencies so the path traces an organic loop instead of
 // a perfect circle. Kept slow per request — a fast wobble reads as
 // twitching, not aiming.
-const AUTOPILOT_AIM_WOBBLE_RADIUS: f32 = 0.24;
-const AUTOPILOT_AIM_WOBBLE_FREQ_X: f32 = 0.55;
-const AUTOPILOT_AIM_WOBBLE_FREQ_Y: f32 = 0.7;
+const _AUTOPILOT_AIM_WOBBLE_RADIUS: f32 = 0.24;
+const _AUTOPILOT_AIM_WOBBLE_FREQ_X: f32 = 0.55;
+const _AUTOPILOT_AIM_WOBBLE_FREQ_Y: f32 = 0.7;
 const AUTOPILOT_SPRINT_APPROACH_DISTANCE: f32 = 22.0;
 const AUTOPILOT_LOW_HEALTH_FRACTION: f32 = 0.3;
 const AUTOPILOT_LOW_HEALTH_RETREAT_BONUS: f32 = 4.0;
@@ -217,7 +217,7 @@ pub(crate) fn autopilot_think(
     zombies: Query<(&Transform, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
     health: Query<&Health, With<Player>>,
-    mut camera: Query<&mut FpsCamera>,
+    mut camera: Query<(&mut FpsCamera, &GlobalTransform)>,
     mut decision_timer: Local<f32>,
 ) {
     if !autopilot.0 && !look_only.0 {
@@ -226,7 +226,7 @@ pub(crate) fn autopilot_think(
     let Ok(player_transform) = player.single() else {
         return;
     };
-    let Ok(mut cam) = camera.single_mut() else {
+    let Ok((mut cam, cam_global)) = camera.single_mut() else {
         return;
     };
     let dt = time.delta_secs();
@@ -258,23 +258,16 @@ pub(crate) fn autopilot_think(
     let (aim_point, aiming_region) = random_aim_point(&resolved_bones, target_entity)
         .map_or((target_transform.translation, None), |(point, region)| (point, Some(region)));
     state.aiming_region = aiming_region;
-    let to_target = aim_point - player_transform.translation;
+    
+    let camera_position = cam_global.translation();
+    let to_target = aim_point - camera_position;
     // horizontal_distance (used below for both the pitch angle and the fire-
     // range gate) is deliberately measured off the TRUE target, not the
     // wobbled one — the wobble should sway the aim, not flicker the engage-
     // range/fire gate in and out near a boundary.
     let horizontal_distance = Vec2::new(to_target.x, to_target.z).length();
 
-    // Smooth aim wobble — see AUTOPILOT_AIM_WOBBLE_RADIUS's own doc comment.
-    // Basis vectors perpendicular to the look direction so the sway traces a
-    // loop on screen (not, say, a line if it only ever moved along world Y).
-    let look_dir = to_target.normalize_or_zero();
-    let wobble_right = look_dir.cross(Vec3::Y).normalize_or_zero();
-    let wobble_up = wobble_right.cross(look_dir).normalize_or_zero();
-    let t = time.elapsed_secs();
-    let wobble = wobble_right * (ops::sin(t * AUTOPILOT_AIM_WOBBLE_FREQ_X) * AUTOPILOT_AIM_WOBBLE_RADIUS)
-        + wobble_up * (ops::sin(t * AUTOPILOT_AIM_WOBBLE_FREQ_Y + 1.7) * AUTOPILOT_AIM_WOBBLE_RADIUS);
-    let wobbled_target = to_target + wobble;
+    let wobbled_target = to_target;
 
     let desired_yaw = (-wobbled_target.x).atan2(-wobbled_target.z);
     // Nudged down a fixed amount (AUTOPILOT_AIM_PITCH_LOWER) rather than
