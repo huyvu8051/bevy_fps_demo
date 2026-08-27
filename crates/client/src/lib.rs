@@ -81,6 +81,15 @@ const USE_TEST_ARENA: bool = true;
 // used to compute off the stale local value while the server placed the
 // player using the correct, larger one.
 
+// Swaps in the Map 1 "Tòa nhà văn phòng" — Tầng B1 (Gara) greybox
+// blockout (docs/maps/map01_highrise.md, crates/shared's
+// map1_b1_garage.rs) in place of the generic USE_TEST_ARENA square room —
+// checked FIRST, so USE_TEST_ARENA's own bool only matters when this is
+// false. Temporary dev flag for trying out the real Map 1 layout; flip
+// back to false to go back to the plain arena. PLAYER_SPAWN below also
+// branches on this.
+const USE_MAP1_B1_GARAGE: bool = true;
+
 // "AK47 with Scope" by Wolf Schevelenbos (Sketchfab, CC-BY 4.0) —
 // https://sketchfab.com/3d-models/ak47-with-scope-d4d9720f3677485b958ceecc02f7965c
 // Keep this attribution if the project is shared/published (license requirement).
@@ -639,7 +648,11 @@ const PRONE_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.15;
 // data was ambiguous — could be meters or centimeters), so the player spawns
 // well above y=0 and lets gravity fall it onto whatever the real floor turns
 // out to be, rather than guessing a spawn height that might be inside a wall.
-const PLAYER_SPAWN: Vec3 = if USE_TEST_ARENA {
+const PLAYER_SPAWN: Vec3 = if USE_MAP1_B1_GARAGE {
+    // Map 1 B1 Garage greybox — "Khu A" spawn corner near the entrance,
+    // see shared::GARAGE_PLAYER_SPAWN / crates/shared/src/map1_b1_garage.rs.
+    shared::GARAGE_PLAYER_SPAWN
+} else if USE_TEST_ARENA {
     // Arena center — matches shared::player::PLAYER_SPAWN (used by the
     // server, the actual authority on where the player really is), so
     // zombie distance (ZOMBIE_SPAWNS, spread across the whole arena) ends
@@ -2383,7 +2396,12 @@ fn setup(
         }),
     });
 
-    if USE_TEST_ARENA {
+    if USE_MAP1_B1_GARAGE {
+        spawn_map1_b1_garage(&mut commands, &mut meshes, &mut materials);
+        // Sảnh G nối liền ngay phía Nam của Gara qua khoảng hở tường —
+        // spawn cùng lúc để đi bộ thẳng từ tầng này sang tầng kia.
+        spawn_map1_g_lobby(&mut commands, &mut meshes, &mut materials);
+    } else if USE_TEST_ARENA {
         spawn_test_arena(&mut commands, &mut meshes, &mut materials);
     } else {
         commands.spawn((
@@ -4753,6 +4771,191 @@ fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
         },
         Transform::from_xyz(0.0, ARENA_WALL_HEIGHT - 0.2, 0.0),
     ));
+}
+
+// Map 1 "Tòa nhà văn phòng" — Tầng B1 (Gara để xe) greybox, first walkable
+// test build of the real Map 1 layout (see USE_MAP1_B1_GARAGE and
+// docs/maps/map01_highrise.md for the ASCII mockup this is based on). Same
+// hand-built-primitives approach as spawn_test_arena (floor + walls +
+// obstacle cuboids, all with matching avian3d colliders) — CHƯA có
+// texture/model thật, chỉ để test đi lại + va chạm. Geometry itself lives
+// in shared::map1_b1_garage so crates/server's collider-only mirror can't
+// drift out of sync with what's drawn here (same discipline as
+// ARENA_HALF_SIZE/NAVMESH_COLUMN_OBSTACLES).
+fn spawn_map1_b1_garage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+    let floor_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.3, 0.3, 0.32),
+        perceptual_roughness: 0.95,
+        ..default()
+    });
+    let wall_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.5, 0.48, 0.45),
+        perceptual_roughness: 0.85,
+        ..default()
+    });
+    let car_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.65, 0.15, 0.15),
+        perceptual_roughness: 0.6,
+        ..default()
+    });
+
+    let floor_size_x = shared::GARAGE_HALF_SIZE_X * 2.0;
+    let floor_size_z = shared::GARAGE_HALF_SIZE_Z * 2.0;
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z))),
+        MeshMaterial3d(floor_material),
+        Transform::from_xyz(0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0),
+        RigidBody::Static,
+        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
+    ));
+
+    for (center, size_x, size_z) in shared::garage_walls() {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size_x, ARENA_WALL_HEIGHT, size_z))),
+            MeshMaterial3d(wall_material.clone()),
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, ARENA_WALL_HEIGHT, size_z),
+        ));
+    }
+
+    // "Xe hơi đậu" — placeholder cover boxes, not real car meshes yet.
+    let car_size = shared::GARAGE_CAR_SIZE;
+    let car_mesh = meshes.add(Cuboid::new(car_size.x, car_size.y, car_size.z));
+    for &(x, z) in &shared::GARAGE_CAR_POSITIONS {
+        commands.spawn((
+            Mesh3d(car_mesh.clone()),
+            MeshMaterial3d(car_material.clone()),
+            Transform::from_xyz(x, car_size.y / 2.0, z),
+            RigidBody::Static,
+            Collider::cuboid(car_size.x, car_size.y, car_size.z),
+        ));
+    }
+
+    // Same reasoning as spawn_test_arena's overhead PointLight — a garage
+    // has no windows, so without this the room would be pitch black.
+    commands.spawn((
+        PointLight {
+            color: Color::srgb(0.85, 0.88, 1.0),
+            intensity: 3_000_000.0,
+            range: (shared::GARAGE_HALF_SIZE_X + shared::GARAGE_HALF_SIZE_Z) * 1.5,
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(0.0, ARENA_WALL_HEIGHT - 0.2, 0.0),
+    ));
+}
+
+// Map 1 "Tòa nhà văn phòng" — Tầng G (Sảnh chính) greybox, nối liền phía
+// Nam của B1 Garage qua khoảng hở đã chừa sẵn trong garage_walls() (xem
+// USE_MAP1_B1_GARAGE và docs/maps/map01_highrise.md's "Tầng G — Sảnh
+// chính" cho mockup ASCII). Trần cao hơn Gara (LOBBY_WALL_HEIGHT) đúng
+// tinh thần "không gian mở" của mockup. Cùng cách dựng bằng primitives +
+// StandardMaterial màu phẳng như spawn_map1_b1_garage — CHƯA texture.
+fn spawn_map1_g_lobby(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+    let floor_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.42, 0.4, 0.36),
+        perceptual_roughness: 0.8,
+        ..default()
+    });
+    let wall_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.6, 0.58, 0.52),
+        perceptual_roughness: 0.7,
+        ..default()
+    });
+    let desk_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.25, 0.35, 0.45),
+        perceptual_roughness: 0.6,
+        ..default()
+    });
+    let staircase_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.35, 0.32, 0.3),
+        perceptual_roughness: 0.75,
+        ..default()
+    });
+    let ramp_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.38, 0.36, 0.33),
+        perceptual_roughness: 0.9,
+        ..default()
+    });
+
+    let floor_size_x = shared::LOBBY_HALF_SIZE_X * 2.0;
+    let floor_size_z = shared::LOBBY_HALF_SIZE_Z * 2.0;
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z))),
+        MeshMaterial3d(floor_material),
+        Transform::from_xyz(0.0, shared::FLOOR_HEIGHT - ARENA_WALL_THICKNESS / 2.0, shared::LOBBY_CENTER_Z),
+        RigidBody::Static,
+        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
+    ));
+
+    for (center, size_x, size_z) in shared::lobby_walls() {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size_x, shared::LOBBY_WALL_HEIGHT, size_z))),
+            MeshMaterial3d(wall_material.clone()),
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, shared::LOBBY_WALL_HEIGHT, size_z),
+        ));
+    }
+
+    // Đường dốc nối Gara B1 (Y=0) lên Sảnh G (Y=FLOOR_HEIGHT) — xem
+    // shared::ramp_geometry() cho lý do chọn mặt dốc thay vì bậc thang.
+    let (ramp_center, ramp_rotation, ramp_size) = shared::ramp_geometry();
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(ramp_size.x, ramp_size.y, ramp_size.z))),
+        MeshMaterial3d(ramp_material),
+        Transform::from_translation(ramp_center).with_rotation(ramp_rotation),
+        RigidBody::Static,
+        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
+    ));
+
+    // Tường chắn 2 bên đường dốc, tránh rơi ra ngoài khi lên/xuống.
+    for (center, size_x, size_y, size_z) in shared::ramp_guard_walls() {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size_x, size_y, size_z))),
+            MeshMaterial3d(wall_material.clone()),
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, size_y, size_z),
+        ));
+    }
+
+    // "Quầy lễ tân" — cover box, đặt trên mặt sàn đã nâng cao.
+    let desk_size = shared::LOBBY_DESK_SIZE;
+    let (desk_x, desk_z) = shared::LOBBY_DESK_POS;
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(desk_size.x, desk_size.y, desk_size.z))),
+        MeshMaterial3d(desk_material),
+        Transform::from_xyz(desk_x, shared::FLOOR_HEIGHT + desk_size.y / 2.0, desk_z),
+        RigidBody::Static,
+        Collider::cuboid(desk_size.x, desk_size.y, desk_size.z),
+    ));
+
+    // "Chân cầu thang xoắn ốc" — trụ placeholder, chưa dẫn lên F2.
+    let (stair_x, stair_z) = shared::LOBBY_STAIRCASE_POS;
+    commands.spawn((
+        Mesh3d(meshes.add(Cylinder::new(shared::LOBBY_STAIRCASE_RADIUS, shared::LOBBY_STAIRCASE_HEIGHT))),
+        MeshMaterial3d(staircase_material),
+        Transform::from_xyz(stair_x, shared::FLOOR_HEIGHT + shared::LOBBY_STAIRCASE_HEIGHT / 2.0, stair_z),
+        RigidBody::Static,
+        Collider::cylinder(shared::LOBBY_STAIRCASE_RADIUS, shared::LOBBY_STAIRCASE_HEIGHT),
+    ));
+
+    // Trần cao hơn Gara → cần 2 đèn overhead thay vì 1 để phủ đều không
+    // gian mở rộng hơn.
+    for &(lx, lz) in &[(-6.0, shared::LOBBY_CENTER_Z - 4.0), (6.0, shared::LOBBY_CENTER_Z + 4.0)] {
+        commands.spawn((
+            PointLight {
+                color: Color::srgb(0.95, 0.93, 0.88),
+                intensity: 4_500_000.0,
+                range: (shared::LOBBY_HALF_SIZE_X + shared::LOBBY_HALF_SIZE_Z) * 1.2,
+                shadows_enabled: true,
+                ..default()
+            },
+            Transform::from_xyz(lx, shared::FLOOR_HEIGHT + shared::LOBBY_WALL_HEIGHT - 0.3, lz),
+        ));
+    }
 }
 
 fn spawn_hall_lights(commands: &mut Commands) {

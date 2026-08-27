@@ -20,6 +20,10 @@ use shared::{
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
     ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos,
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
+    GARAGE_HALF_SIZE_X, GARAGE_HALF_SIZE_Z, GARAGE_PLAYER_SPAWN, GARAGE_CAR_SIZE, GARAGE_CAR_POSITIONS, garage_walls,
+    LOBBY_HALF_SIZE_X, LOBBY_HALF_SIZE_Z, LOBBY_WALL_HEIGHT, LOBBY_CENTER_Z, LOBBY_DESK_SIZE, LOBBY_DESK_POS,
+    LOBBY_STAIRCASE_RADIUS, LOBBY_STAIRCASE_HEIGHT, LOBBY_STAIRCASE_POS, lobby_walls,
+    FLOOR_HEIGHT, ramp_geometry, ramp_guard_walls,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     HitboxTestSlot, HITBOX_TEST_PLAYER_SPAWN, HITBOX_TEST_RESPAWN_DELAY, HITBOX_TEST_ZOMBIE_POSITIONS,
@@ -298,11 +302,25 @@ fn start_server(mut commands: Commands, channels: Res<RepliconChannels>, scenari
     info!("dedicated server listening on {public_addr}");
 }
 
+// Mirrors crates/client's USE_MAP1_B1_GARAGE dev flag — flip both together.
+// When true, this process's authoritative colliders/spawn point are the
+// Map 1 B1 Garage greybox instead of the generic test arena, so the two
+// processes' physical worlds stay in sync with whatever crates/client is
+// currently rendering (see spawn_arena_colliders' doc comment and
+// crates/shared/src/map1_b1_garage.rs for why this matters).
+const USE_MAP1_B1_GARAGE: bool = true;
+
 // Same flat room as crates/client's USE_TEST_ARENA path (floor + 4 walls),
 // minus the Mesh3d/MeshMaterial3d/lights — this process never renders
 // anything, it only needs the avian3d colliders so move_players has
 // something to collide against.
 fn spawn_arena_colliders(mut commands: Commands) {
+    if USE_MAP1_B1_GARAGE {
+        spawn_map1_b1_garage_colliders(&mut commands);
+        spawn_map1_g_lobby_colliders(&mut commands);
+        return;
+    }
+
     let floor_size = ARENA_HALF_SIZE * 2.0;
     commands.spawn((
         Transform::from_xyz(0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0),
@@ -337,6 +355,89 @@ fn spawn_arena_colliders(mut commands: Commands) {
     }
 }
 
+// Collider-only mirror of crates/client's spawn_map1_b1_garage — same
+// floor/walls/car-cover geometry, read from the same shared::map1_b1_garage
+// arrays/fn, so the two processes' physical worlds can't drift apart (same
+// discipline as spawn_arena_colliders above).
+fn spawn_map1_b1_garage_colliders(commands: &mut Commands) {
+    let floor_size_x = GARAGE_HALF_SIZE_X * 2.0;
+    let floor_size_z = GARAGE_HALF_SIZE_Z * 2.0;
+    commands.spawn((
+        Transform::from_xyz(0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0),
+        RigidBody::Static,
+        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
+    ));
+
+    for (center, size_x, size_z) in garage_walls() {
+        commands.spawn((
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, ARENA_WALL_HEIGHT, size_z),
+        ));
+    }
+
+    let car_size = GARAGE_CAR_SIZE;
+    for &(x, z) in &GARAGE_CAR_POSITIONS {
+        commands.spawn((
+            Transform::from_xyz(x, car_size.y / 2.0, z),
+            RigidBody::Static,
+            Collider::cuboid(car_size.x, car_size.y, car_size.z),
+        ));
+    }
+}
+
+// Collider-only mirror of crates/client's spawn_map1_g_lobby — same
+// floor/walls/desk/staircase-placeholder geometry, read from
+// shared::map1_g_lobby, so this room stays physically in sync with what
+// the client draws (same discipline as the garage above).
+fn spawn_map1_g_lobby_colliders(commands: &mut Commands) {
+    let floor_size_x = LOBBY_HALF_SIZE_X * 2.0;
+    let floor_size_z = LOBBY_HALF_SIZE_Z * 2.0;
+    commands.spawn((
+        Transform::from_xyz(0.0, FLOOR_HEIGHT - ARENA_WALL_THICKNESS / 2.0, LOBBY_CENTER_Z),
+        RigidBody::Static,
+        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
+    ));
+
+    for (center, size_x, size_z) in lobby_walls() {
+        commands.spawn((
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, LOBBY_WALL_HEIGHT, size_z),
+        ));
+    }
+
+    let (ramp_center, ramp_rotation, ramp_size) = ramp_geometry();
+    commands.spawn((
+        Transform::from_translation(ramp_center).with_rotation(ramp_rotation),
+        RigidBody::Static,
+        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
+    ));
+
+    for (center, size_x, size_y, size_z) in ramp_guard_walls() {
+        commands.spawn((
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, size_y, size_z),
+        ));
+    }
+
+    let desk_size = LOBBY_DESK_SIZE;
+    let (desk_x, desk_z) = LOBBY_DESK_POS;
+    commands.spawn((
+        Transform::from_xyz(desk_x, FLOOR_HEIGHT + desk_size.y / 2.0, desk_z),
+        RigidBody::Static,
+        Collider::cuboid(desk_size.x, desk_size.y, desk_size.z),
+    ));
+
+    let (stair_x, stair_z) = LOBBY_STAIRCASE_POS;
+    commands.spawn((
+        Transform::from_xyz(stair_x, FLOOR_HEIGHT + LOBBY_STAIRCASE_HEIGHT / 2.0, stair_z),
+        RigidBody::Static,
+        Collider::cylinder(LOBBY_STAIRCASE_RADIUS, LOBBY_STAIRCASE_HEIGHT),
+    ));
+}
+
 // Spawns the player's gameplay components directly onto its connection
 // entity (same pattern bevy_replicon_renet2's tic_tac_toe example uses) —
 // no separate lookup/owner component needed, since ClientId::Client wraps
@@ -345,6 +446,7 @@ fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands, scena
     let entity = trigger.event().entity;
     info!("client connected: {entity}");
     let spawn_pos = match *scenario {
+        Scenario::Normal if USE_MAP1_B1_GARAGE => GARAGE_PLAYER_SPAWN,
         Scenario::Normal => PLAYER_SPAWN,
         Scenario::HitboxTest => HITBOX_TEST_PLAYER_SPAWN,
         Scenario::StressTest => STRESS_TEST_PLAYER_SPAWN,
@@ -2028,7 +2130,7 @@ fn on_request_restart(
     let player_spawn = match *scenario {
         Scenario::Normal => {
             spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, ZOMBIE_AI_ENABLED, false, false);
-            PLAYER_SPAWN
+            if USE_MAP1_B1_GARAGE { GARAGE_PLAYER_SPAWN } else { PLAYER_SPAWN }
         }
         Scenario::HitboxTest => {
             spawn_zombies(&mut commands, &HITBOX_TEST_ZOMBIE_POSITIONS, false, false, true);
