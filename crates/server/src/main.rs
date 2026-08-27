@@ -234,7 +234,7 @@ fn main() {
                 // Mutually exclusive — exactly one runs, gated on the
                 // Scenario resource `insert_resource`d above (fixed for
                 // this process's whole lifetime, no runtime switching).
-                spawn_initial_zombies.run_if(resource_equals(Scenario::Normal)),
+                spawn_initial_zombies.run_if(|s: Res<Scenario>| matches!(*s, Scenario::Normal | Scenario::LegacyArena)),
                 spawn_hitbox_test_zombies.run_if(resource_equals(Scenario::HitboxTest)),
                 spawn_stress_test_zombies.run_if(resource_equals(Scenario::StressTest)),
                 spawn_render_compare_zombies_system.run_if(resource_equals(Scenario::RenderCompare)),
@@ -331,8 +331,10 @@ const USE_MAP1_B1_GARAGE: bool = true;
 // minus the Mesh3d/MeshMaterial3d/lights — this process never renders
 // anything, it only needs the avian3d colliders so move_players has
 // something to collide against.
-fn spawn_arena_colliders(mut commands: Commands) {
-    if USE_MAP1_B1_GARAGE {
+fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>) {
+    // LegacyArena always forces the old flat arena below, regardless of
+    // USE_MAP1_B1_GARAGE — see Scenario::LegacyArena's own doc comment.
+    if USE_MAP1_B1_GARAGE && *scenario != Scenario::LegacyArena {
         spawn_map1_level_pieces(&mut commands);
         return;
     }
@@ -621,6 +623,7 @@ fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands, scena
         Scenario::HitboxTest => HITBOX_TEST_PLAYER_SPAWN,
         Scenario::StressTest => STRESS_TEST_PLAYER_SPAWN,
         Scenario::RenderCompare => RENDER_COMPARE_PLAYER_SPAWN,
+        Scenario::LegacyArena => PLAYER_SPAWN,
     };
     commands.entity(entity).insert((
         Transform::from_translation(spawn_pos),
@@ -2313,6 +2316,10 @@ fn on_request_restart(
         Scenario::RenderCompare => {
             spawn_render_compare_zombies(&mut commands);
             RENDER_COMPARE_PLAYER_SPAWN
+        }
+        Scenario::LegacyArena => {
+            spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, ZOMBIE_AI_ENABLED, false, false);
+            PLAYER_SPAWN
         }
     };
 

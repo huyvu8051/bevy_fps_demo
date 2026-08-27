@@ -54,6 +54,14 @@ pub enum Scenario {
     /// desktop and iOS/Metal renderers side by side — not a combat test,
     /// so unlike HitboxTest these zombies don't respawn once killed.
     RenderCompare,
+    /// Map 4: the old flat test arena (floor + pillars, crates/shared's
+    /// arena.rs) — normal chase-AI zombie population, same as `Normal`,
+    /// just forced onto the pre-Map-1 geometry regardless of
+    /// USE_MAP1_B1_GARAGE (crates/server/src/main.rs). Kept around now
+    /// that `Normal` means the real Map 1 office building, so the old
+    /// arena is still reachable from the map-select menu for quick
+    /// combat/AI testing without the office building's geometry involved.
+    LegacyArena,
 }
 
 impl Scenario {
@@ -62,6 +70,7 @@ impl Scenario {
             1 => Scenario::HitboxTest,
             2 => Scenario::StressTest,
             3 => Scenario::RenderCompare,
+            4 => Scenario::LegacyArena,
             _ => Scenario::Normal,
         }
     }
@@ -72,6 +81,7 @@ impl Scenario {
             Scenario::HitboxTest => 1,
             Scenario::StressTest => 2,
             Scenario::RenderCompare => 3,
+            Scenario::LegacyArena => 4,
         }
     }
 
