@@ -2123,6 +2123,7 @@ fn build_game_common(app: &mut App) {
                 update_local_player_model_animation,
                 update_health_ui,
                 update_inspect_ui,
+                update_compass_ui,
                 update_zombie_health_bars,
                 update_floating_damage_texts,
             )
@@ -2684,6 +2685,7 @@ fn setup(
     spawn_health_ui(&mut commands);
     spawn_ammo_ui(&mut commands);
     spawn_ping_ui(&mut commands);
+    spawn_compass_ui(&mut commands);
     spawn_inspect_ui(&mut commands);
     spawn_debug_panel(&mut commands);
     spawn_settings_menu(&mut commands);
@@ -5142,6 +5144,146 @@ fn update_ping_ui(
         Some(client) => format!("Ping: {:.0} ms", client.rtt() * 1000.0),
         None => "Ping: -- ms".to_string(),
     };
+}
+
+// --- PUBG-style top-of-screen compass ---
+// A fixed-width "window" (COMPASS_WIDTH px, Overflow::clip()'d) onto a
+// ring of 8 heading labels (N/NE/E/.../NW) parked at their real compass
+// degree — update_compass_ui slides each one left/right every frame by
+// how far its fixed heading is from the camera's CURRENT heading, so the
+// strip scrolls under a stationary center tick exactly like a real
+// compass tape, rather than the labels themselves moving in the world.
+//
+// "Heading" here is 0..360°, clockwise from North (screen-compass
+// convention: N=0, E=90, S=180, W=270) — NOT the same number as
+// FpsCamera.yaw (radians, positive = turning toward -X/"West" by
+// Quat::from_rotation_y's own convention, see forward-vector call sites
+// elsewhere in this file). heading_deg() below is the one conversion
+// point between the two; nothing else in this file needs to know the
+// mapping.
+const COMPASS_WIDTH: f32 = 280.0;
+const COMPASS_HEIGHT: f32 = 26.0;
+// Screen px per degree of heading difference — 2.2 px/° over a 280px
+// window shows a bit over ±63° of the horizon at once, enough to always
+// have 2-3 marks in view without the strip feeling empty.
+const COMPASS_PX_PER_DEG: f32 = 2.2;
+// (heading_deg, label) — N first/red so it reads as the "primary" mark;
+// order otherwise doesn't matter, each is positioned independently by
+// its own heading_deg.
+const COMPASS_MARKS: [(f32, &str); 8] =
+    [(0.0, "N"), (45.0, "NE"), (90.0, "E"), (135.0, "SE"), (180.0, "S"), (225.0, "SW"), (270.0, "W"), (315.0, "NW")];
+
+// cam.yaw's own convention: forward = Quat::from_rotation_y(yaw) * NEG_Z,
+// so yaw=0 already faces "North" (-Z) here — heading is just that turned
+// into a clockwise-from-North degree value (mouse-right decreases yaw,
+// which should read as turning toward East/increasing heading, hence the
+// negation; see this function's own module-level doc comment above).
+fn heading_deg(yaw: f32) -> f32 {
+    (-yaw.to_degrees()).rem_euclid(360.0)
+}
+
+// Shortest signed difference `a - b` wrapped into (-180, 180] — how far
+// (and which way) to slide a mark whose fixed heading is `a` relative to
+// the compass window currently centered on heading `b`.
+fn heading_diff(a: f32, b: f32) -> f32 {
+    ((a - b + 180.0).rem_euclid(360.0)) - 180.0
+}
+
+#[derive(Component)]
+struct CompassMark(f32);
+
+#[derive(Component)]
+struct CompassHeadingText;
+
+fn spawn_compass_ui(commands: &mut Commands) {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(12.0),
+                left: Val::Percent(50.0),
+                margin: UiRect::left(Val::Px(-COMPASS_WIDTH / 2.0)),
+                width: Val::Px(COMPASS_WIDTH),
+                height: Val::Px(COMPASS_HEIGHT),
+                border: UiRect::all(Val::Px(1.0)),
+                overflow: Overflow::clip(),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
+            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.25)),
+            GlobalZIndex(STATIC_UI_Z_INDEX),
+        ))
+        .with_children(|root| {
+            for &(heading, label) in &COMPASS_MARKS {
+                root.spawn((
+                    Text::new(label),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(if heading == 0.0 { Color::srgb(1.0, 0.35, 0.3) } else { Color::srgb(0.85, 0.85, 0.85) }),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(4.0),
+                        ..default()
+                    },
+                    CompassMark(heading),
+                ));
+            }
+            // Center tick — stays put; the marks above scroll under it.
+            root.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(COMPASS_WIDTH / 2.0 - 1.0),
+                    bottom: Val::Px(0.0),
+                    width: Val::Px(2.0),
+                    height: Val::Px(6.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(1.0, 0.85, 0.2)),
+            ));
+        });
+
+    // Numeric heading readout (e.g. "047°"), centered just under the tape.
+    commands.spawn((
+        Text::new("000°"),
+        TextFont {
+            font_size: 14.0,
+            ..default()
+        },
+        TextColor(Color::srgb(1.0, 0.85, 0.2)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(12.0 + COMPASS_HEIGHT + 2.0),
+            left: Val::Percent(50.0),
+            margin: UiRect::left(Val::Px(-18.0)),
+            ..default()
+        },
+        GlobalZIndex(STATIC_UI_Z_INDEX),
+        CompassHeadingText,
+    ));
+}
+
+fn update_compass_ui(
+    camera: Query<&FpsCamera>,
+    mut marks: Query<(&CompassMark, &mut Node), Without<CompassHeadingText>>,
+    mut heading_text: Query<&mut Text, With<CompassHeadingText>>,
+) {
+    let Ok(cam) = camera.single() else {
+        return;
+    };
+    let current = heading_deg(cam.yaw);
+    for (mark, mut node) in &mut marks {
+        let x = COMPASS_WIDTH / 2.0 + heading_diff(mark.0, current) * COMPASS_PX_PER_DEG;
+        // -8px: rough half-glyph-width nudge so 1-2 letter labels look
+        // centered on their heading rather than left-edge-aligned to it —
+        // not pixel-perfect (labels are 1-2 chars), close enough for a HUD.
+        node.left = Val::Px(x - 8.0);
+    }
+    if let Ok(mut text) = heading_text.single_mut() {
+        text.0 = format!("{:03.0}°", current);
+    }
 }
 
 fn update_ammo_ui(gun: Query<&Gun, Changed<Gun>>, mut text: Query<&mut Text, With<AmmoUi>>) {
