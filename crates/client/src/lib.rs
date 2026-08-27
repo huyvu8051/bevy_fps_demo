@@ -4929,8 +4929,21 @@ fn spawn_level_box_visuals(
 // its back side. Collider is conditional on panel.collider_thickness
 // (see LevelPanel's own doc comment): None stays pure decoration (walk
 // through it), Some(t) gets a thin cuboid collider so it still blocks
-// movement like a wall/floor — the flat mesh is only a rendering-cost
-// win, not a physics one.
+// movement like a wall/floor.
+//
+// LevelTransform's translation/rotation place the VISIBLE face (where
+// the mesh renders — flush with whatever's adjacent, e.g. a floor's top
+// surface right where a player's feet/a wall's bottom actually are), not
+// the collider's center — a flat mesh has no volume to "be centered in",
+// unlike the old LevelBox. The collider instead goes on a CHILD entity
+// offset half a thickness INWARD (-thickness/2 along local Z, the
+// panel's own thin axis) so it ends up exactly where a LevelBox's
+// collider always was: centered on the piece's original footprint, not
+// hanging half a thickness above/below it. Skipping this was the earlier
+// bug report ("bị hở" — visible gaps under every floor/wall, floor
+// meshes floating half a thickness below where the player actually
+// stands) — the mesh and the collider were both pinned to the same
+// point when only the collider should be.
 fn spawn_level_panel_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -4944,14 +4957,15 @@ fn spawn_level_panel_visuals(
             cull_mode: None,
             ..default()
         });
-        let mut entity_commands = commands.entity(entity);
-        entity_commands.insert((
+        commands.entity(entity).insert((
             Mesh3d(meshes.add(Rectangle::new(panel.width, panel.height))),
             MeshMaterial3d(material),
             Transform::from_translation(level_transform.translation).with_rotation(level_transform.rotation),
         ));
         if let Some(thickness) = panel.collider_thickness {
-            entity_commands.insert((RigidBody::Static, Collider::cuboid(panel.width, panel.height, thickness)));
+            commands.entity(entity).insert(RigidBody::Static).with_children(|children| {
+                children.spawn((Transform::from_xyz(0.0, 0.0, -thickness / 2.0), Collider::cuboid(panel.width, panel.height, thickness)));
+            });
         }
     }
 }
