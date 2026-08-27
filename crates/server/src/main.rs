@@ -30,7 +30,7 @@ use shared::{
     office_room_walls, locker_room_walls,
     F3_WALL_HEIGHT, F3_FLOOR, F3_SHAFT_Z, f3_walls,
     stairwell_f2_to_f3, meeting_room_walls, office_a_walls, office_b_walls,
-    TOWER_SHAFT_X, TOWER_SHAFT_HALF,
+    TOWER_SHAFT_X, TOWER_STAIR_WIDTH, simple_stairwell_half_len,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     HitboxTestSlot, HITBOX_TEST_PLAYER_SPAWN, HITBOX_TEST_RESPAWN_DELAY, HITBOX_TEST_ZOMBIE_POSITIONS,
@@ -534,20 +534,16 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
     // --- F2 Office (chồng thật ngay trên G — xem F2_FLOOR's doc comment) ---
     let f2_wall_color = [0.72, 0.7, 0.64];
     let stairwell_color = [0.4, 0.38, 0.35];
-    for (center, size_x, size_z) in F2_FLOOR.floor_slab_with_hole(TOWER_SHAFT_X, F2_SHAFT_Z, TOWER_SHAFT_HALF) {
+    for (center, size_x, size_z) in F2_FLOOR.floor_slab_with_hole(TOWER_SHAFT_X, F2_SHAFT_Z, TOWER_STAIR_WIDTH / 2.0, simple_stairwell_half_len()) {
         panels.push(floor_panel(center, size_x, size_z, ARENA_WALL_THICKNESS, [0.5, 0.48, 0.44], 0.8));
     }
     for (center, size_x, size_z) in office_walls() {
         panels.push(wall_panel(center, size_x, size_z, F2_WALL_HEIGHT, f2_wall_color, 0.7));
     }
-    // Giếng thang "4 góc cuộn" G→F2 — thay đường dốc nằm xéo cũ, xem
+    // Cầu thang đơn giản G→F2 — thay đường dốc nằm xéo cũ, xem
     // stairwell_g_to_f2's doc comment.
-    let (g_to_f2_flights, g_to_f2_guards) = stairwell_g_to_f2();
-    for (center, rotation, size) in g_to_f2_flights {
+    for (center, rotation, size) in stairwell_g_to_f2() {
         panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stairwell_color, 0.9));
-    }
-    for (center, size_x, size_y, size_z) in g_to_f2_guards {
-        panels.push(wall_panel4(center, size_x, size_y, size_z, f2_wall_color, 0.7));
     }
     let f2_desk_size = F2_DESK_SIZE;
     for &(x, z) in &F2_DESK_POSITIONS {
@@ -559,20 +555,16 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
 
     // --- F3 Office (sustain peak) — chồng thật ngay trên F2 ---
     let f3_wall_color = [0.68, 0.62, 0.6];
-    for (center, size_x, size_z) in F3_FLOOR.floor_slab_with_hole(TOWER_SHAFT_X, F3_SHAFT_Z, TOWER_SHAFT_HALF) {
+    for (center, size_x, size_z) in F3_FLOOR.floor_slab_with_hole(TOWER_SHAFT_X, F3_SHAFT_Z, TOWER_STAIR_WIDTH / 2.0, simple_stairwell_half_len()) {
         panels.push(floor_panel(center, size_x, size_z, ARENA_WALL_THICKNESS, [0.48, 0.46, 0.42], 0.8));
     }
     for (center, size_x, size_z) in f3_walls() {
         panels.push(wall_panel(center, size_x, size_z, F3_WALL_HEIGHT, f3_wall_color, 0.7));
     }
-    // Giếng thang F2→F3 — cùng 1 trục X/Z với đoạn G→F2 ở trên (1 giếng
+    // Cầu thang F2→F3 — cùng 1 trục X/Z với đoạn G→F2 ở trên (1 đường đi
     // liên tục), chỉ khác đoạn cao độ.
-    let (f2_to_f3_flights, f2_to_f3_guards) = stairwell_f2_to_f3();
-    for (center, rotation, size) in f2_to_f3_flights {
+    for (center, rotation, size) in stairwell_f2_to_f3() {
         panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stairwell_color, 0.9));
-    }
-    for (center, size_x, size_y, size_z) in f2_to_f3_guards {
-        panels.push(wall_panel4(center, size_x, size_y, size_z, f3_wall_color, 0.7));
     }
     for (center, size_x, size_y, size_z) in meeting_room_walls() {
         panels.push(wall_panel4(center, size_x, size_y, size_z, [0.55, 0.65, 0.7], 0.4));

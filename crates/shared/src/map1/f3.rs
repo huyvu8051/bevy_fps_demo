@@ -20,7 +20,7 @@
 use bevy::prelude::{Quat, Vec3};
 
 use super::office::F2_FLOOR;
-use super::{small_room_walls, switchback_stairwell, FloorLevel, RoomDoor, FLOOR_HEIGHT, TOWER_SHAFT_X, TOWER_SHAFT_Z_OFFSET};
+use super::{small_room_walls, simple_stairwell, FloorLevel, RoomDoor, FLOOR_HEIGHT, TOWER_SHAFT_X, TOWER_SHAFT_Z_OFFSET};
 
 // Cao độ sàn F3 — 1 FLOOR_HEIGHT nữa so với F2 (3 * FLOOR_HEIGHT so với
 // Gara B1 ở đáy).
@@ -70,11 +70,11 @@ pub const F3_OFFICE_B_CENTER: (f32, f32) = (10.5, F3_NORTH_WALL_Z + 22.0);
 // lần build tới (giếng vẫn tiếp tục thẳng lên, chỉ chưa có F4 để nối).
 pub const F3_SHAFT_Z: f32 = F3_NORTH_WALL_Z + TOWER_SHAFT_Z_OFFSET;
 
-/// Giếng thang "4 góc cuộn" nối F2 lên F3 — thay cho đường dốc nằm xéo cũ
+/// Cầu thang đơn giản nối F2 lên F3 — thay cho đường dốc nằm xéo cũ
 /// (ramp3_geometry/ramp3_guard_walls, đã xoá) vì F3 giờ chồng thật ngay
 /// trên F2.
-pub fn stairwell_f2_to_f3() -> (Vec<(Vec3, Quat, Vec3)>, Vec<(Vec3, f32, f32, f32)>) {
-    switchback_stairwell(TOWER_SHAFT_X, F3_SHAFT_Z, &F2_FLOOR, &F3_FLOOR)
+pub fn stairwell_f2_to_f3() -> Vec<(Vec3, Quat, Vec3)> {
+    simple_stairwell(TOWER_SHAFT_X, F3_SHAFT_Z, &F2_FLOOR, &F3_FLOOR)
 }
 
 /// (center, size_x, size_z) cho 4 bức tường quây KÍN F3 — không còn

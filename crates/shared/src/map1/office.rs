@@ -16,7 +16,7 @@
 use bevy::prelude::{Quat, Vec3};
 
 use super::lobby::LOBBY_FLOOR;
-use super::{small_room_walls, switchback_stairwell, FloorLevel, RoomDoor, FLOOR_HEIGHT, TOWER_SHAFT_X, TOWER_SHAFT_Z_OFFSET};
+use super::{small_room_walls, simple_stairwell, FloorLevel, RoomDoor, FLOOR_HEIGHT, TOWER_SHAFT_X, TOWER_SHAFT_Z_OFFSET};
 
 // Cao độ sàn F2 — 1 FLOOR_HEIGHT nữa so với Sảnh G (2 * FLOOR_HEIGHT so
 // với Gara B1 ở đáy).
@@ -73,12 +73,11 @@ pub const F2_LOCKER_ROOM_CENTER: (f32, f32) = (11.0, F2_NORTH_WALL_Z + 11.0);
 // mod.rs cho lý do chọn đúng vị trí này, tránh mọi phòng nội thất).
 pub const F2_SHAFT_Z: f32 = F2_NORTH_WALL_Z + TOWER_SHAFT_Z_OFFSET;
 
-/// Giếng thang "4 góc cuộn" nối Sảnh G lên F2 — thay cho đường dốc nằm
-/// xéo cũ (ramp2_geometry/ramp2_guard_walls, đã xoá) vì F2 giờ chồng
-/// thật ngay trên G. Trả về (4 nhịp dốc, lan can) — xem
-/// switchback_stairwell's doc comment.
-pub fn stairwell_g_to_f2() -> (Vec<(Vec3, Quat, Vec3)>, Vec<(Vec3, f32, f32, f32)>) {
-    switchback_stairwell(TOWER_SHAFT_X, F2_SHAFT_Z, &LOBBY_FLOOR, &F2_FLOOR)
+/// Cầu thang đơn giản nối Sảnh G lên F2 — thay cho đường dốc nằm xéo cũ
+/// (ramp2_geometry/ramp2_guard_walls, đã xoá) vì F2 giờ chồng thật ngay
+/// trên G. Xem simple_stairwell's doc comment.
+pub fn stairwell_g_to_f2() -> Vec<(Vec3, Quat, Vec3)> {
+    simple_stairwell(TOWER_SHAFT_X, F2_SHAFT_Z, &LOBBY_FLOOR, &F2_FLOOR)
 }
 
 /// (center, size_x, size_z) cho 6 bức tường quây KÍN F2 — không còn
