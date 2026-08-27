@@ -863,6 +863,19 @@ struct RestartButton;
 #[derive(Resource, Default)]
 struct Noclip(bool);
 
+// Debug/dev: toggled by KeyL. A step further than plain Noclip — this is a
+// pure spectator camera for checking a map's own geometry/scale (walls,
+// ramps, gaps lining up between floors, etc.) without any player-shaped
+// interference: turning it on forces Noclip on and the gun invisible in the
+// same frame (see toggle_inspect_mode), and shoot() early-returns while it's
+// on so flying through a zombie's aim cone can't burn ammo or trigger a
+// reload. Turning it back off restores both to their prior state. Exists
+// because manually combining Noclip + hide-gun + "don't fire" by hand every
+// time you just want to eyeball a newly-built floor is exactly the kind of
+// bookkeeping a dedicated mode should absorb.
+#[derive(Resource, Default)]
+struct InspectMode(bool);
+
 // Debug/dev: toggled by KeyF. Freezes zombies in place (move_zombies and
 // zombies_damage_player both early-return) so hitbox regions can be tested
 // against a stationary target instead of a moving one.
@@ -1227,6 +1240,14 @@ struct DebugPanelText;
 // Marks the always-visible health readout so update_health_ui can find it.
 #[derive(Component)]
 struct HealthUi;
+
+// Marks the InspectMode coordinate readout so update_inspect_ui can find
+// it — only shown while InspectMode is on (see that system). Exists so
+// checking a newly-built floor's geometry against its own FloorLevel
+// constants (elevation, wall lines, ramp gaps) is "fly there and read the
+// numbers off screen" instead of guessing from the render alone.
+#[derive(Component)]
+struct InspectUi;
 
 // Screen-space health bar tracking a specific zombie — update_zombie_health_bars
 // repositions it every frame and despawns it once the tracked zombie is gone.
@@ -1926,6 +1947,7 @@ fn build_game_common(app: &mut App) {
         // zombie horde from a safe distance, no manual toggle needed. Every
         // other scenario keeps Noclip's normal off-by-default.
         .insert_resource(Noclip(current_scenario() == Scenario::StressTest))
+        .init_resource::<InspectMode>()
         .init_resource::<Autopilot>()
         .init_resource::<AutopilotLookOnly>()
         .init_resource::<AutopilotState>()
@@ -2074,10 +2096,11 @@ fn build_game_common(app: &mut App) {
                     .chain(),
                 // Nested one level down — this group is already at Bevy's
                 // 20-system tuple arity limit (see the inner .chain() above),
-                // so count_local_kills gets its own outer tuple slot instead
-                // of a 21st flat entry. Still fully ordered: .chain() on this
-                // outer 2-tuple runs the entire inner chain before this.
-                count_local_kills,
+                // so count_local_kills/toggle_inspect_mode get their own outer
+                // tuple slot instead of a 21st+ flat entry. Still fully
+                // ordered: .chain() on this outer tuple runs the entire inner
+                // chain before this.
+                (count_local_kills, toggle_inspect_mode).chain(),
             )
                 .chain(),
             (
@@ -2094,6 +2117,7 @@ fn build_game_common(app: &mut App) {
                 update_remote_player_model_animation,
                 update_local_player_model_animation,
                 update_health_ui,
+                update_inspect_ui,
                 update_zombie_health_bars,
                 update_floating_damage_texts,
             )
@@ -2401,6 +2425,8 @@ fn setup(
         // Sảnh G nối liền ngay phía Nam của Gara qua khoảng hở tường —
         // spawn cùng lúc để đi bộ thẳng từ tầng này sang tầng kia.
         spawn_map1_g_lobby(&mut commands, &mut meshes, &mut materials);
+        // F2 nối tiếp ngay phía Nam của Sảnh G qua đường dốc thứ 2.
+        spawn_map1_f2_office(&mut commands, &mut meshes, &mut materials);
     } else if USE_TEST_ARENA {
         spawn_test_arena(&mut commands, &mut meshes, &mut materials);
     } else {
@@ -2655,6 +2681,7 @@ fn setup(
     spawn_health_ui(&mut commands);
     spawn_ammo_ui(&mut commands);
     spawn_ping_ui(&mut commands);
+    spawn_inspect_ui(&mut commands);
     spawn_debug_panel(&mut commands);
     spawn_settings_menu(&mut commands);
     spawn_settings_toggle_button(&mut commands);
@@ -2887,6 +2914,7 @@ fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "Noclip", CheatNoclipButton);
                         spawn_cheat_toggle_button(row, "God", CheatGodModeButton);
                         spawn_cheat_toggle_button(row, "Freeze", CheatFreezeButton);
+                        spawn_cheat_toggle_button(row, "Inspect", CheatInspectButton);
                     });
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
@@ -3088,6 +3116,8 @@ struct CheatGodModeButton;
 #[derive(Component)]
 struct CheatFreezeButton;
 #[derive(Component)]
+struct CheatInspectButton;
+#[derive(Component)]
 struct CheatGunButton;
 #[derive(Component)]
 struct CheatMsaaButton;
@@ -3279,12 +3309,14 @@ struct CheatShowTracersButton;
 fn cheat_toggle_buttons(
     mut commands: Commands,
     mut noclip: ResMut<Noclip>,
+    mut inspect: ResMut<InspectMode>,
     mut god_mode: ResMut<GodMode>,
     mut freeze: ResMut<FreezeZombies>,
     mut gun_visible: ResMut<GunVisible>,
     mut map_msaa: ResMut<MapMsaaOn>,
     mut map_shadows: ResMut<MapShadowsOn>,
     noclip_btn: Query<&Interaction, (With<CheatNoclipButton>, Changed<Interaction>)>,
+    inspect_btn: Query<&Interaction, (With<CheatInspectButton>, Changed<Interaction>)>,
     god_btn: Query<&Interaction, (With<CheatGodModeButton>, Changed<Interaction>)>,
     freeze_btn: Query<&Interaction, (With<CheatFreezeButton>, Changed<Interaction>)>,
     gun_btn: Query<&Interaction, (With<CheatGunButton>, Changed<Interaction>)>,
@@ -3293,6 +3325,13 @@ fn cheat_toggle_buttons(
 ) {
     if tapped(&noclip_btn) {
         noclip.0 = !noclip.0;
+    }
+    // Same bundling as desktop's toggle_inspect_mode (KeyL) — see
+    // InspectMode's own doc comment.
+    if tapped(&inspect_btn) {
+        inspect.0 = !inspect.0;
+        noclip.0 = inspect.0;
+        gun_visible.0 = !inspect.0;
     }
     if tapped(&god_btn) {
         god_mode.0 = !god_mode.0;
@@ -3529,6 +3568,7 @@ fn update_extra_toggle_colors(
     show_markers: Res<ShowHitMarkers>,
     scope_camera: Res<ScopeCameraEnabled>,
     show_tracers: Res<ShowBulletTracers>,
+    inspect: Res<InspectMode>,
     mut buttons: Query<
         (
             &mut BackgroundColor,
@@ -3539,6 +3579,7 @@ fn update_extra_toggle_colors(
             Option<&CheatShowHitMarkersButton>,
             Option<&CheatScopeCameraButton>,
             Option<&CheatShowTracersButton>,
+            Option<&CheatInspectButton>,
         ),
         Or<(
             With<AutopilotButton>,
@@ -3548,11 +3589,12 @@ fn update_extra_toggle_colors(
             With<CheatShowHitMarkersButton>,
             With<CheatScopeCameraButton>,
             With<CheatShowTracersButton>,
+            With<CheatInspectButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, scope_camera_m, show_tracers_m) in &mut buttons {
+    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, scope_camera_m, show_tracers_m, inspect_m) in &mut buttons {
         let on = if auto_m.is_some() {
             autopilot.0
         } else if dof_m.is_some() {
@@ -3565,8 +3607,10 @@ fn update_extra_toggle_colors(
             show_markers.0
         } else if scope_camera_m.is_some() {
             scope_camera.0
+        } else if show_tracers_m.is_some() {
+            show_tracers.0
         } else {
-            show_tracers_m.is_some() && show_tracers.0
+            inspect_m.is_some() && inspect.0
         };
         *bg = BackgroundColor(color_for(on));
     }
@@ -4958,6 +5002,136 @@ fn spawn_map1_g_lobby(commands: &mut Commands, meshes: &mut Assets<Mesh>, materi
     }
 }
 
+// Map 1 "Tòa nhà văn phòng" — Tầng F2 (Văn phòng) greybox, nối tiếp Sảnh
+// G qua đường dốc thứ 2 (xem USE_MAP1_B1_GARAGE và
+// docs/maps/map01_highrise.md's "Tầng F2 — Văn phòng tầng 2" cho mockup
+// ASCII). Cùng cách dựng bằng primitives + StandardMaterial màu phẳng
+// như 2 tầng dưới — CHƯA texture.
+fn spawn_map1_f2_office(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+    let floor_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.5, 0.48, 0.44),
+        perceptual_roughness: 0.8,
+        ..default()
+    });
+    let wall_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.72, 0.7, 0.64),
+        perceptual_roughness: 0.7,
+        ..default()
+    });
+    let ramp_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.4, 0.38, 0.35),
+        perceptual_roughness: 0.9,
+        ..default()
+    });
+    let desk_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.55, 0.4, 0.25),
+        perceptual_roughness: 0.6,
+        ..default()
+    });
+    let room_wall_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.35, 0.5, 0.55),
+        perceptual_roughness: 0.65,
+        ..default()
+    });
+    let staircase_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.35, 0.32, 0.3),
+        perceptual_roughness: 0.75,
+        ..default()
+    });
+
+    let floor_size_x = shared::F2_HALF_SIZE_X * 2.0;
+    let floor_size_z = shared::F2_HALF_SIZE_Z * 2.0;
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z))),
+        MeshMaterial3d(floor_material),
+        Transform::from_xyz(0.0, shared::F2_ELEVATION - ARENA_WALL_THICKNESS / 2.0, shared::F2_CENTER_Z),
+        RigidBody::Static,
+        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
+    ));
+
+    for (center, size_x, size_z) in shared::office_walls() {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size_x, shared::F2_WALL_HEIGHT, size_z))),
+            MeshMaterial3d(wall_material.clone()),
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, shared::F2_WALL_HEIGHT, size_z),
+        ));
+    }
+
+    // Đường dốc nối Sảnh G lên F2.
+    let (ramp_center, ramp_rotation, ramp_size) = shared::ramp2_geometry();
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(ramp_size.x, ramp_size.y, ramp_size.z))),
+        MeshMaterial3d(ramp_material),
+        Transform::from_translation(ramp_center).with_rotation(ramp_rotation),
+        RigidBody::Static,
+        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
+    ));
+    for (center, size_x, size_y, size_z) in shared::ramp2_guard_walls() {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size_x, size_y, size_z))),
+            MeshMaterial3d(wall_material.clone()),
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, size_y, size_z),
+        ));
+    }
+
+    // "Dãy bàn làm việc" — cover thấp, dễ bắn qua đầu.
+    let desk_size = shared::F2_DESK_SIZE;
+    let desk_mesh = meshes.add(Cuboid::new(desk_size.x, desk_size.y, desk_size.z));
+    for &(x, z) in &shared::F2_DESK_POSITIONS {
+        commands.spawn((
+            Mesh3d(desk_mesh.clone()),
+            MeshMaterial3d(desk_material.clone()),
+            Transform::from_xyz(x, shared::F2_ELEVATION + desk_size.y / 2.0, z),
+            RigidBody::Static,
+            Collider::cuboid(desk_size.x, desk_size.y, desk_size.z),
+        ));
+    }
+
+    // "Văn phòng riêng" + "Phòng tủ đồ nhân viên" — mỗi phòng 3 tường,
+    // chừa 1 mặt mở làm lối vào (xem shared::small_room_walls doc comment).
+    for (center, size_x, size_y, size_z) in shared::office_room_walls().into_iter().chain(shared::locker_room_walls()) {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size_x, size_y, size_z))),
+            MeshMaterial3d(room_wall_material.clone()),
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, size_y, size_z),
+        ));
+    }
+
+    // "Chân cầu thang xoắn ốc" lên F3 — trụ placeholder, chưa dẫn lên đâu.
+    let (stair_x, stair_z) = shared::F2_STAIRCASE_POS;
+    commands.spawn((
+        Mesh3d(meshes.add(Cylinder::new(shared::F2_STAIRCASE_RADIUS, shared::F2_STAIRCASE_HEIGHT))),
+        MeshMaterial3d(staircase_material),
+        Transform::from_xyz(stair_x, shared::F2_ELEVATION + shared::F2_STAIRCASE_HEIGHT / 2.0, stair_z),
+        RigidBody::Static,
+        Collider::cylinder(shared::F2_STAIRCASE_RADIUS, shared::F2_STAIRCASE_HEIGHT),
+    ));
+
+    // Trần thấp hơn Sảnh → đèn overhead dày hơn để phủ đều dãy cubicle.
+    for &(lx, lz) in &[
+        (0.0, shared::F2_NORTH_WALL_Z + 5.0),
+        (0.0, shared::F2_CENTER_Z),
+        (0.0, shared::F2_SOUTH_WALL_Z - 5.0),
+    ] {
+        commands.spawn((
+            PointLight {
+                color: Color::srgb(0.95, 0.95, 0.9),
+                intensity: 2_500_000.0,
+                range: shared::F2_HALF_SIZE_X * 1.5,
+                shadows_enabled: true,
+                ..default()
+            },
+            Transform::from_xyz(lx, shared::F2_ELEVATION + shared::F2_WALL_HEIGHT - 0.3, lz),
+        ));
+    }
+}
+
 fn spawn_hall_lights(commands: &mut Commands) {
     for &x in &HALL_LIGHT_XS {
         commands.spawn((
@@ -5003,6 +5177,60 @@ fn update_health_ui(
         return;
     };
     text.0 = format!("HP: {}", health.0.max(0.0).round() as i32);
+}
+
+// Bottom-center so it doesn't collide with health (top-left)/ammo
+// (bottom-right)/ping (top-right) — hidden by default, only meaningful
+// while InspectMode is on.
+fn spawn_inspect_ui(commands: &mut Commands) {
+    commands.spawn((
+        Text::new(""),
+        TextFont {
+            font_size: 18.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.4, 1.0, 0.6)),
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(16.0),
+            bottom: Val::Px(16.0),
+            ..default()
+        },
+        GlobalZIndex(STATIC_UI_Z_INDEX),
+        Visibility::Hidden,
+        InspectUi,
+    ));
+}
+
+// World position + yaw/pitch of the spectator camera, refreshed every
+// frame InspectMode is on — the whole point of the mode is comparing this
+// against a floor's own FloorLevel constants (elevation, north_wall_z,
+// etc.) to confirm the built geometry actually lines up with the design.
+fn update_inspect_ui(
+    inspect: Res<InspectMode>,
+    camera: Query<(&Transform, &FpsCamera)>,
+    mut text: Query<(&mut Text, &mut Visibility), With<InspectUi>>,
+) {
+    let Ok((mut text, mut visibility)) = text.single_mut() else {
+        return;
+    };
+    if !inspect.0 {
+        *visibility = Visibility::Hidden;
+        return;
+    }
+    *visibility = Visibility::Visible;
+    let Ok((transform, cam)) = camera.single() else {
+        return;
+    };
+    let p = transform.translation;
+    text.0 = format!(
+        "INSPECT  x={:.2} y={:.2} z={:.2}  yaw={:.0}° pitch={:.0}°",
+        p.x,
+        p.y,
+        p.z,
+        cam.yaw.to_degrees(),
+        cam.pitch.to_degrees()
+    );
 }
 
 fn spawn_ammo_ui(commands: &mut Commands) {
@@ -6720,6 +6948,25 @@ fn toggle_noclip(keys: Res<ButtonInput<KeyCode>>, mut noclip: ResMut<Noclip>) {
     }
 }
 
+// Toggles InspectMode on KeyL — bundles Noclip + hide-gun together (and
+// restores both to their pre-inspect state on the way back out) so map
+// debugging is one keypress instead of three. See InspectMode's own doc
+// comment for why shoot() also needs to check it separately (this system
+// only handles the fly/visibility side, not firing).
+fn toggle_inspect_mode(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut inspect: ResMut<InspectMode>,
+    mut noclip: ResMut<Noclip>,
+    mut gun_visible: ResMut<GunVisible>,
+) {
+    if !keys.just_pressed(KeyCode::KeyL) {
+        return;
+    }
+    inspect.0 = !inspect.0;
+    noclip.0 = inspect.0;
+    gun_visible.0 = !inspect.0;
+}
+
 // KeyC toggles Standing<->Crouching; KeyX toggles Standing<->Prone. Pressing
 // C while Prone (or X while Crouching) switches directly to the other
 // stance rather than needing to stand up first.
@@ -7304,6 +7551,7 @@ fn shoot(
     zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
     touch_firing: Res<TouchFiring>,
+    inspect_mode: Res<InspectMode>,
     mut cooldown: Local<f32>,
     (autopilot, intent, local_moving, local_sprinting, show_hit_markers, show_tracers): (
         Res<Autopilot>,
@@ -7316,7 +7564,10 @@ fn shoot(
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
 
-    if game_over.0 {
+    // Pure spectator camera while inspecting a map — see InspectMode's own
+    // doc comment for why this can't just rely on the gun being hidden
+    // (hidden ≠ can't still fire and burn ammo/trigger a reload).
+    if game_over.0 || inspect_mode.0 {
         return;
     }
     let Ok(cursor) = cursor.single() else {
