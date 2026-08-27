@@ -1,7 +1,6 @@
 use avian3d::prelude::*;
 use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex};
 use bevy::animation::AnimationPlayer;
-use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::RenderTarget;
 use bevy::ecs::system::SystemParam;
@@ -34,7 +33,7 @@ use shared::{
     PlayerDiedFx, PlayerFiredFx,
     PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, wire_zombie_hitbox_bones,
-    INTERP_DELAY_SECS, MAX_SHOT_DISTANCE, MOVE_SPEED,
+    INTERP_DELAY_SECS, MAX_SHOT_DISTANCE,
     HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
     resolve_bone_world_positions, zombie_hit_damage_ray,
     NAVMESH_COLUMN_OBSTACLES, PILLAR_RADIUS, PROTOCOL_ID, ZOMBIE_ANIM_BITE, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_WALK,
@@ -7521,39 +7520,15 @@ fn gun_recoil_sway_rotation(gun: &Gun, timings: &GunPoseTimings) -> Quat {
         * Quat::from_rotation_x((RELOAD_TILT_DEG * timings.dip + RECOIL_TILT_UP_DEG * timings.recoil_t).to_radians())
 }
 
-// Tilt-only subset of gun_recoil_sway_rotation, for the ScopeCamera itself
-// (sync_scope_camera) — deliberately DROPS the sway-roll and recoil-roll-
-// kick/yaw-kick terms (the random per-shot "lắc" from gun.recoil_roll)
-// that update_scope_lens's full stack carries. Two reasons:
-//   1. Design: the scope's own aim kick should read as a clean straight-up
-//      recoil (what you actually feel/compensate for while ADS'd), while
-//      the random wobble is reserved for the visible gun mesh/lens as
-//      cosmetic flair, not something that should throw off the player's
-//      actual view through the optic.
-//   2. A real bug this fixes: the two roll terms (look_sway_roll,
-//      RECOIL_ROLL_DEG) are pure rotation around the view axis. Applying
-//      the SAME roll angle to both the ScopeCamera (which captures the
-//      picture into a texture — a camera rolled by θ renders its content
-//      rotated by -θ) AND the ScopeLens quad displaying that texture
-//      (rotated by +θ on screen) cancels out exactly: -θ + θ = 0. The
-//      picture visibly never tilted at all despite the formula being
-//      "there" on both sides — reported as "camera phụ không nghiêng
-//      chút nào". Yaw-kick isn't pure axial roll so it doesn't cancel the
-//      same clean way, but it's still part of the "random lắc" this
-//      function intentionally excludes per point 1 above.
-fn gun_camera_tilt_rotation(timings: &GunPoseTimings) -> Quat {
-    Quat::from_rotation_x((RELOAD_TILT_DEG * timings.dip + RECOIL_TILT_UP_DEG * timings.recoil_t).to_radians())
-}
-
 // Keeps the scope's render-to-texture camera glued to the main camera's
 // position/orientation every frame — it has no parent/player-follow logic
 // of its own, it just mirrors the real camera exactly.
 fn sync_scope_camera(
-    camera: Query<&Transform, (With<FpsCamera>, Without<ScopeCamera>)>,
-    gun: Query<&Gun>,
-    mut scope_camera: Query<&mut Transform, (With<ScopeCamera>, Without<FpsCamera>)>,
+    camera: Query<&Transform, (With<FpsCamera>, Without<ScopeCamera>, Without<Gun>)>,
+    gun: Query<(&Gun, &Transform), (Without<FpsCamera>, Without<ScopeCamera>)>,
+    mut scope_camera: Query<&mut Transform, (With<ScopeCamera>, Without<FpsCamera>, Without<Gun>)>,
 ) {
-    let (Ok(camera_transform), Ok(gun), Ok(mut scope_transform)) =
+    let (Ok(camera_transform), Ok((gun, gun_transform)), Ok(mut scope_transform)) =
         (camera.single(), gun.single(), scope_camera.single_mut())
     else {
         return;
@@ -7570,33 +7545,40 @@ fn sync_scope_camera(
             - camera_transform.forward() * local.z
     };
 
-    // Mirrors the same lateral + "pulled in closer" sweep the gun mesh
-    // itself makes from GUN_OFFSET to GUN_ADS_OFFSET as ads_blend eases in
-    // (gun_view_animation's base_pos), so the scope camera's eyepoint
-    // travels together with the gun instead of just rising straight up in
-    // place — same mirrored-shoulder treatment on X too.
-    let sweep_x = (GUN_OFFSET.x - GUN_ADS_OFFSET.x) * (1.0 - gun.ads_blend);
-    let swapped_sweep_x = sweep_x * (1.0 - 2.0 * gun.shoulder_blend);
-    let sweep_z = (GUN_OFFSET.z - GUN_ADS_OFFSET.z) * (1.0 - gun.ads_blend);
-    let sweep_y = SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend);
-
-    // Same recoil kick (X/Y/Z) and reload dip/tilt gun_view_animation stacks
-    // on top of that base position — GunPoseTimings peaks the same way it
-    // does there, so the whole view (not just position) wobbles along with
-    // the gun on every axis instead of holding rock-steady through recoil
-    // and reload.
-    let timings = gun_pose_timings(gun);
-    let recoil_and_reload = Vec3::new(
-        -RELOAD_LEFT_DIP * timings.dip,
-        RECOIL_KICK_UP * timings.recoil_t - RELOAD_DIP * timings.dip,
-        RECOIL_KICK * timings.recoil_t,
-    );
-
-    scope_transform.translation += local_to_world(Vec3::new(swapped_sweep_x, sweep_y, sweep_z))
-        + local_to_world(recoil_and_reload)
-        + local_to_world(Vec3::new(timings.bob_x, -timings.bob_y, 0.0))
-        + camera_transform.up() * SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend;
-    scope_transform.rotation *= gun_camera_tilt_rotation(&timings);
+    // The gun mesh's own already-computed local Transform.translation
+    // (gun_view_animation, this same frame) — shoulder-swap, ADS sweep,
+    // recoil kick, reload dip, walk-bob, wall-raise, all already baked
+    // in. Reused directly instead of a second, hand-written copy of that
+    // same formula (see GunPoseTimings' own doc comment for the
+    // shared-FORMULA-but-still-two-call-sites version of this that used
+    // to be here) — "the camera goes wherever the gun mesh goes" as
+    // literally as possible: it reads the gun's own real position result,
+    // not a parallel calculation that merely aims for the same numbers.
+    // Not literally ChildOf(Gun) — Gun's own rotation carries an extra
+    // GUN_ROTATION_Y_DEG model-facing correction that would wrongly spin
+    // the camera's view direction if inherited, so only translation is
+    // shared this way; rotation stays computed separately below.
+    scope_transform.translation += local_to_world(gun_transform.translation)
+        // The eye sits at a genuinely different height than wherever the
+        // gun mesh's own origin is (SCOPE_HIP_HEIGHT_OFFSET while not
+        // aiming, SCOPE_CAMERA_HEIGHT_OFFSET once ADS'd) — this isn't
+        // part of the gun's own translation, so it's still a separate
+        // additive term.
+        + camera_transform.up() * (SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend) + SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend);
+    // Full sync with ScopeLens's own rotation (was a tilt-only subset) —
+    // per request, ScopeCamera now matches every axis ScopeLens gets:
+    // sway, recoil yaw-kick, recoil roll-kick, and tilt.
+    // NOTE: the roll component (look_sway_roll + RECOIL_ROLL_DEG) is
+    // mathematically a no-op on the actual picture the player sees
+    // through the scope: ScopeCamera rolling by θ renders its captured
+    // texture rotated -θ, and ScopeLens (the quad displaying that
+    // texture) is rotated +θ on screen — they cancel to 0 net tilt in
+    // what the player actually perceives. Only the translate sync (above)
+    // and the yaw-kick/tilt rotation terms have any real visible effect
+    // on the scope picture; the roll term only still matters for
+    // ScopeCamera's OWN captured framing being self-consistent with the
+    // lens glass's shape, not for "the picture visibly tilting".
+    scope_transform.rotation *= gun_recoil_sway_rotation(gun, &gun_pose_timings(gun));
 }
 
 // Scroll wheel steps ScopeZoom up/down while aiming — ignored (and drained,

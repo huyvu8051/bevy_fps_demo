@@ -17,6 +17,7 @@
 		AD4B1FF426EB1B90008A6AEE /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AD4B1FF226EB1B90008A6AEE /* Main.storyboard */; };
 		AD4B1FF626EB1B91008A6AEE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AD4B1FF526EB1B91008A6AEE /* Assets.xcassets */; };
 		AD4B1FF926EB1B91008A6AEE /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AD4B1FF726EB1B91008A6AEE /* LaunchScreen.storyboard */; };
+		B9B242B6E8526CFA59A8A7D8 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C889BB9F59254A9465EC7A22 /* PrivacyInfo.xcprivacy */; };
 		AD4B200126EB1D32008A6AEE /* MetalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD4B200026EB1D31008A6AEE /* MetalView.swift */; };
 		AD6712AF2A6211F300CAA248 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = AD6712AE2A6211F300CAA248 /* assets */; };
 		AD6C6A82295400160079516D /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AD6C6A81295400160079516D /* CoreMotion.framework */; };
@@ -67,6 +68,7 @@
 		AD4B1FF526EB1B91008A6AEE /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AD4B1FF826EB1B91008A6AEE /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		AD4B1FFA26EB1B91008A6AEE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		C889BB9F59254A9465EC7A22 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		AD4B200026EB1D31008A6AEE /* MetalView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MetalView.swift; sourceTree = "<group>"; };
 		AD6712AE2A6211F300CAA248 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; name = assets; path = ../assets; sourceTree = "<group>"; };
 		AD6C6A81295400160079516D /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX13.1.sdk/System/Library/Frameworks/CoreMotion.framework; sourceTree = DEVELOPER_DIR; };
@@ -161,6 +163,7 @@
 			children = (
 				AD4B1FF726EB1B91008A6AEE /* LaunchScreen.storyboard */,
 				AD4B1FFA26EB1B91008A6AEE /* Info.plist */,
+				C889BB9F59254A9465EC7A22 /* PrivacyInfo.xcprivacy */,
 			);
 			path = bevy_in_iOS;
 			sourceTree = "<group>";
@@ -275,6 +278,7 @@
 				AD4B1FF626EB1B91008A6AEE /* Assets.xcassets in Resources */,
 				AD9EA281293B0CAF0079F1B4 /* libs in Resources */,
 				AD4B1FF426EB1B90008A6AEE /* Main.storyboard in Resources */,
+				B9B242B6E8526CFA59A8A7D8 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Privacy manifest — required by Apple since spring 2024 for any app using
+  a "required reason" API, even indirectly via a linked framework/library
+  (Rust's std file I/O, Bevy's asset loading, and standard Foundation/UIKit
+  calls all commonly touch these without any explicit Swift/Rust call site
+  in this repo to point at).
+
+  This declares the two categories most commonly flagged for apps doing
+  local file I/O (asset loading) and any settings/preference caching, using
+  Apple's own documented "app's own storage" reason codes so no user data
+  ever leaves the device via these APIs. This is a starting/minimal
+  declaration, not a full static audit of every dependency — if App Store
+  Connect's automated privacy-manifest check flags additional APIs at
+  submission time (e.g. disk space or system boot time, depending on what
+  Bevy/wgpu/renet2 end up calling on this specific build), add the matching
+  NSPrivacyAccessedAPIType entry then rather than guessing preemptively now.
+  Reference: https://developer.apple.com/documentation/bundleresources/privacy_manifest_files
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
