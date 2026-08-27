@@ -390,27 +390,56 @@ fn switchback_guard_walls(start: Vec3, end: Vec3, width: f32) -> [(Vec3, f32, f3
 /// nghỉ riêng. Trả về (4 nhịp dốc, 8 tường lan can) — người gọi tự
 /// `ramp_panel`/`wall_panel4` từng cái như mọi mảnh khác của map1.
 pub fn switchback_stairwell(shaft_x: f32, shaft_z: f32, from: &FloorLevel, to: &FloorLevel) -> (Vec<(Vec3, Quat, Vec3)>, Vec<(Vec3, f32, f32, f32)>) {
-    let inset = TOWER_SHAFT_HALF - TOWER_STAIR_WIDTH / 2.0;
     let rise_per_flight = (to.elevation - from.elevation) / 4.0;
-    // 5 góc = 4 cạnh, ngược chiều kim đồng hồ nhìn từ trên xuống, bắt đầu
-    // từ góc Tây Nam (trùng phía khoảng hở Bắc cũ của tầng dưới nên lối
-    // vào tự nhiên, không cần thêm gì).
-    let corners_xz = [
-        (shaft_x - inset, shaft_z + inset),
-        (shaft_x + inset, shaft_z + inset),
-        (shaft_x + inset, shaft_z - inset),
-        (shaft_x - inset, shaft_z - inset),
-        (shaft_x - inset, shaft_z + inset),
-    ];
-    let mut flights = Vec::with_capacity(4);
+    let s = TOWER_SHAFT_HALF;
+    let w = TOWER_STAIR_WIDTH;
+    // 5 góc = 4 cạnh, ngược chiều kim đồng hồ nhìn từ trên xuống, đúng
+    // MÉP giếng (không lùi vào theo width nữa — xem lý do bên dưới).
+    let corners_xz = [(shaft_x - s, shaft_z + s), (shaft_x + s, shaft_z + s), (shaft_x + s, shaft_z - s), (shaft_x - s, shaft_z - s), (shaft_x - s, shaft_z + s)];
+    // Hướng đi (dx,dz) của từng nhịp — luôn dọc trục X hoặc Z vì giếng
+    // vuông góc.
+    let dirs = [(1.0, 0.0), (0.0, -1.0), (-1.0, 0.0), (0.0, 1.0)];
+
+    let mut flights = Vec::with_capacity(7);
     let mut guards = Vec::with_capacity(8);
     for i in 0..4 {
         let (x0, z0) = corners_xz[i];
         let (x1, z1) = corners_xz[i + 1];
-        let start = Vec3::new(x0, from.elevation + rise_per_flight * i as f32, z0);
-        let end = Vec3::new(x1, from.elevation + rise_per_flight * (i as f32 + 1.0), z1);
-        flights.push(ramp_segment(start, end, TOWER_STAIR_WIDTH, ARENA_WALL_THICKNESS));
-        guards.extend(switchback_guard_walls(start, end, TOWER_STAIR_WIDTH));
+        let (dx, dz) = dirs[i];
+        // Mỗi nhịp dốc LÙI VÀO w/2 ở đầu nào tiếp giáp 1 góc RẼ (i>0 ở
+        // đầu, i<3 ở cuối) — góc bắt đầu (i=0) tiếp giáp sàn tầng dưới,
+        // góc kết thúc (i=3) tiếp giáp lỗ sàn tầng trên, cả 2 không cần
+        // lùi. Phần bị lùi ra đó nhường chỗ cho 1 tấm chiếu nghỉ PHẲNG
+        // (xem bên dưới) — nếu để 2 nhịp dốc vuông góc chạm thẳng vào
+        // nhau tại đúng 1 điểm góc như trước, phần bề rộng w của chúng
+        // xoè ra quanh góc đó ĐÈ LÊN NHAU (2 mặt nghiêng cắt nhau) — đây
+        // chính là lý do giếng "không đi được" đã báo: người chơi kẹt
+        // giữa 2 mặt dốc chồng chéo ở mỗi góc rẽ.
+        let x0b = if i > 0 { x0 + dx * (w / 2.0) } else { x0 };
+        let z0b = if i > 0 { z0 + dz * (w / 2.0) } else { z0 };
+        let x1b = if i < 3 { x1 - dx * (w / 2.0) } else { x1 };
+        let z1b = if i < 3 { z1 - dz * (w / 2.0) } else { z1 };
+        let start = Vec3::new(x0b, from.elevation + rise_per_flight * i as f32, z0b);
+        let end = Vec3::new(x1b, from.elevation + rise_per_flight * (i as f32 + 1.0), z1b);
+        flights.push(ramp_segment(start, end, w, ARENA_WALL_THICKNESS));
+        guards.extend(switchback_guard_walls(start, end, w));
+    }
+    // 3 chiếu nghỉ PHẲNG (không nghiêng) ở 3 góc rẽ giữa (không cần ở góc
+    // vào/ra) — vuông w×w, lấp đúng phần các nhịp dốc đã lùi ra, cho
+    // người chơi 1 chỗ đứng thẳng để xoay hướng thay vì rẽ ngay trên mặt
+    // dốc.
+    let landing_rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    for i in 1..4 {
+        let (cx, cz) = corners_xz[i];
+        // Lùi vào w/2 theo cả 2 trục, hướng về tâm giếng — đúng khớp mép
+        // 2 nhịp dốc liền kề đã lùi vào (xem vòng lặp trên), không thừa
+        // không thiếu.
+        let x = cx + (shaft_x - cx).signum() * (w / 2.0);
+        let z = cz + (shaft_z - cz).signum() * (w / 2.0);
+        let y = from.elevation + rise_per_flight * i as f32;
+        let centerline = Vec3::new(x, y, z);
+        let center = centerline - landing_rotation * Vec3::new(0.0, ARENA_WALL_THICKNESS / 2.0, 0.0);
+        flights.push((center, landing_rotation, Vec3::new(w, ARENA_WALL_THICKNESS, w)));
     }
     (flights, guards)
 }
