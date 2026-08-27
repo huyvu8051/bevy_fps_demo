@@ -53,22 +53,33 @@ impl LevelBox {
     }
 }
 
-/// 1 tấm phẳng mỏng trong map (vệt kẻ sàn, biển báo, mặt kính trang
-/// trí...) — nhẹ hơn LevelBox vì không có khối tích, chỉ 1 mặt chữ nhật
-/// (2 tam giác) và KHÔNG có collider (thuần trang trí, đi xuyên qua
-/// được). Dùng khi 1 thứ không cần là khối đặc — không phải cái gì
-/// trong map cũng nên là hình hộp.
+/// 1 tấm phẳng mỏng trong map (tường, sàn, dốc, vệt kẻ sàn, biển báo...)
+/// — nhẹ hơn LevelBox vì phần NHÌN THẤY chỉ là 1 mặt chữ nhật (2 tam
+/// giác) thay vì cả 6 mặt của 1 khối hộp. Collider là TÙY CHỌN qua
+/// `collider_thickness`:
+/// - `None` — thuần trang trí, đi xuyên qua được (vệt kẻ sàn, biển báo).
+/// - `Some(thickness)` — vẫn chặn người chơi như 1 bức tường/sàn thật,
+///   chỉ khác LevelBox ở chỗ MESH hiển thị phẳng (nhẹ hơn khi vẽ); dùng
+///   cho tường/sàn/dốc — những thứ chỉ cần nhìn thấy từ 1 phía (không ai
+///   đứng trong lòng tường để thấy mặt kia).
 #[derive(Component, Clone, Copy, Serialize, Deserialize)]
 pub struct LevelPanel {
     pub width: f32,
     pub height: f32,
     pub color: [f32; 3],
     pub roughness: f32,
+    pub collider_thickness: Option<f32>,
 }
 
 impl LevelPanel {
+    /// Tấm trang trí thuần — không cản đường.
     pub const fn new(width: f32, height: f32, color: [f32; 3], roughness: f32) -> Self {
-        Self { width, height, color, roughness }
+        Self { width, height, color, roughness, collider_thickness: None }
+    }
+
+    /// Tấm có cản đường — dùng cho tường/sàn/dốc thay cho LevelBox.
+    pub const fn solid(width: f32, height: f32, color: [f32; 3], roughness: f32, collider_thickness: f32) -> Self {
+        Self { width, height, color, roughness, collider_thickness: Some(collider_thickness) }
     }
 }
 

@@ -381,12 +381,62 @@ fn spawn_arena_colliders(mut commands: Commands) {
 // mesh + local collider purely from what shows up over the network — see
 // LevelBox's own doc comment (crates/shared/src/level_piece.rs) for why
 // this replaces both the old collider-only AND mesh-only functions.
+// (translation, rotation, width, height, color, roughness, collider_thickness)
+type PanelPiece = (Vec3, Quat, f32, f32, [f32; 3], f32, Option<f32>);
+
+/// Tường đứng trục X hoặc Z — mô tả bằng (center, size_x, size_z) như
+/// garage_walls()/lobby_walls()/office_walls()/f3_walls() vẫn trả về —
+/// thành 1 LevelPanel đứng đúng hướng: tự nhận diện trục nào là chiều
+/// dài tường (trục lớn hơn) để chọn giữ nguyên hướng mặc định của
+/// Rectangle (chạy dọc X) hay xoay 90° quanh Y (chạy dọc Z); trục còn
+/// lại (mỏng) trở thành độ dày collider — vẫn chặn người chơi y hệt khối
+/// hộp cũ, chỉ nhẹ hơn khi vẽ (1 mặt thay vì 6 mặt).
+fn wall_panel(center: Vec3, size_x: f32, size_z: f32, wall_height: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
+    if size_x >= size_z {
+        (center, Quat::IDENTITY, size_x, wall_height, color, roughness, Some(size_z))
+    } else {
+        (center, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), size_z, wall_height, color, roughness, Some(size_x))
+    }
+}
+
+/// Như wall_panel nhưng cho tường đã có sẵn chiều cao riêng (size_y) —
+/// dùng cho ramp_guard_walls()/*_room_walls() (4-tuple, đã có đúng
+/// (center, size_x, size_y, size_z)).
+fn wall_panel4(center: Vec3, size_x: f32, size_y: f32, size_z: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
+    if size_x >= size_z {
+        (center, Quat::IDENTITY, size_x, size_y, color, roughness, Some(size_z))
+    } else {
+        (center, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), size_z, size_y, color, roughness, Some(size_x))
+    }
+}
+
+/// 1 sàn nằm ngang — Rectangle mặc định dựng đứng (mặt phẳng XY) nên xoay
+/// -90° quanh X để nó nằm phẳng xuống (mặt phẳng XZ, ngửa lên +Y), giống
+/// vệt kẻ Khu A/Khu B đã làm trước đó.
+fn floor_panel(center: Vec3, size_x: f32, size_z: f32, thickness: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
+    (center, Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), size_x, size_z, color, roughness, Some(thickness))
+}
+
+/// 1 mặt dốc — ramp_between() trả về `rotation` vốn nghiêng 1 khối hộp
+/// (mặc định NẰM NGANG) theo đúng góc dốc; ghép thêm phép xoay "nằm
+/// ngang" của floor_panel TRƯỚC rotation đó để 1 tấm Rectangle (mặc định
+/// dựng đứng) có cùng hiệu ứng cuối cùng như khối hộp cũ.
+fn ramp_panel(center: Vec3, ramp_rotation: Quat, width: f32, thickness: f32, length: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
+    (center, ramp_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), width, length, color, roughness, Some(thickness))
+}
+
 fn spawn_map1_level_pieces(commands: &mut Commands) {
     // (translation, rotation, full-size, color, roughness) — color/
     // roughness now live here (not in shared) since the server is the
     // only process deciding what a level looks like; a client just
-    // displays whatever LevelBox it's handed.
+    // displays whatever LevelBox it's handed. Only genuinely volumetric
+    // furniture (cars, desks, staircase markers) stays a LevelBox now —
+    // every wall/floor/ramp piece below is a LevelPanel instead (see
+    // wall_panel/floor_panel/ramp_panel above), since those only ever
+    // need to be SEEN from one side and BLOCK movement, not have real
+    // volume.
     let mut pieces: Vec<(Vec3, Quat, Vec3, [f32; 3], f32)> = Vec::new();
+    let mut panels: Vec<PanelPiece> = Vec::new();
     let ident = Quat::IDENTITY;
 
     // --- B1 Garage ---
@@ -405,22 +455,24 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
     let floor_size_x = GARAGE_HALF_SIZE_X * 2.0;
     let khu_a_size_z = khu_boundary_z - -GARAGE_HALF_SIZE_Z;
     let khu_b_size_z = GARAGE_HALF_SIZE_Z - khu_boundary_z;
-    pieces.push((
+    panels.push(floor_panel(
         Vec3::new(0.0, -ARENA_WALL_THICKNESS / 2.0, -GARAGE_HALF_SIZE_Z + khu_a_size_z / 2.0),
-        ident,
-        Vec3::new(floor_size_x, ARENA_WALL_THICKNESS, khu_a_size_z),
+        floor_size_x,
+        khu_a_size_z,
+        ARENA_WALL_THICKNESS,
         khu_a_floor_color,
         0.9,
     ));
-    pieces.push((
+    panels.push(floor_panel(
         Vec3::new(0.0, -ARENA_WALL_THICKNESS / 2.0, khu_boundary_z + khu_b_size_z / 2.0),
-        ident,
-        Vec3::new(floor_size_x, ARENA_WALL_THICKNESS, khu_b_size_z),
+        floor_size_x,
+        khu_b_size_z,
+        ARENA_WALL_THICKNESS,
         khu_b_floor_color,
         0.9,
     ));
     for (center, size_x, size_z) in garage_walls() {
-        pieces.push((center, ident, Vec3::new(size_x, ARENA_WALL_HEIGHT, size_z), garage_wall_color, 0.85));
+        panels.push(wall_panel(center, size_x, size_z, ARENA_WALL_HEIGHT, garage_wall_color, 0.85));
     }
     let car_size = GARAGE_CAR_SIZE;
     for &(x, z) in &GARAGE_CAR_POSITIONS {
@@ -430,15 +482,21 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
 
     // --- G Lobby ---
     let lobby_wall_color = [0.6, 0.58, 0.52];
-    let lobby_floor_size = Vec3::new(LOBBY_HALF_SIZE_X * 2.0, ARENA_WALL_THICKNESS, LOBBY_HALF_SIZE_Z * 2.0);
-    pieces.push((Vec3::new(0.0, FLOOR_HEIGHT - ARENA_WALL_THICKNESS / 2.0, LOBBY_CENTER_Z), ident, lobby_floor_size, [0.42, 0.4, 0.36], 0.8));
+    panels.push(floor_panel(
+        Vec3::new(0.0, FLOOR_HEIGHT - ARENA_WALL_THICKNESS / 2.0, LOBBY_CENTER_Z),
+        LOBBY_HALF_SIZE_X * 2.0,
+        LOBBY_HALF_SIZE_Z * 2.0,
+        ARENA_WALL_THICKNESS,
+        [0.42, 0.4, 0.36],
+        0.8,
+    ));
     for (center, size_x, size_z) in lobby_walls() {
-        pieces.push((center, ident, Vec3::new(size_x, LOBBY_WALL_HEIGHT, size_z), lobby_wall_color, 0.7));
+        panels.push(wall_panel(center, size_x, size_z, LOBBY_WALL_HEIGHT, lobby_wall_color, 0.7));
     }
     let (ramp_center, ramp_rotation, ramp_size) = ramp_geometry();
-    pieces.push((ramp_center, ramp_rotation, ramp_size, [0.38, 0.36, 0.33], 0.9));
+    panels.push(ramp_panel(ramp_center, ramp_rotation, ramp_size.x, ramp_size.y, ramp_size.z, [0.38, 0.36, 0.33], 0.9));
     for (center, size_x, size_y, size_z) in ramp_guard_walls() {
-        pieces.push((center, ident, Vec3::new(size_x, size_y, size_z), lobby_wall_color, 0.7));
+        panels.push(wall_panel4(center, size_x, size_y, size_z, lobby_wall_color, 0.7));
     }
     let desk_size = LOBBY_DESK_SIZE;
     let (desk_x, desk_z) = LOBBY_DESK_POS;
@@ -452,22 +510,28 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
 
     // --- F2 Office ---
     let f2_wall_color = [0.72, 0.7, 0.64];
-    let f2_floor_size = Vec3::new(F2_HALF_SIZE_X * 2.0, ARENA_WALL_THICKNESS, F2_HALF_SIZE_Z * 2.0);
-    pieces.push((Vec3::new(0.0, F2_ELEVATION - ARENA_WALL_THICKNESS / 2.0, F2_CENTER_Z), ident, f2_floor_size, [0.5, 0.48, 0.44], 0.8));
+    panels.push(floor_panel(
+        Vec3::new(0.0, F2_ELEVATION - ARENA_WALL_THICKNESS / 2.0, F2_CENTER_Z),
+        F2_HALF_SIZE_X * 2.0,
+        F2_HALF_SIZE_Z * 2.0,
+        ARENA_WALL_THICKNESS,
+        [0.5, 0.48, 0.44],
+        0.8,
+    ));
     for (center, size_x, size_z) in office_walls() {
-        pieces.push((center, ident, Vec3::new(size_x, F2_WALL_HEIGHT, size_z), f2_wall_color, 0.7));
+        panels.push(wall_panel(center, size_x, size_z, F2_WALL_HEIGHT, f2_wall_color, 0.7));
     }
     let (ramp2_center, ramp2_rotation, ramp2_size) = ramp2_geometry();
-    pieces.push((ramp2_center, ramp2_rotation, ramp2_size, [0.4, 0.38, 0.35], 0.9));
+    panels.push(ramp_panel(ramp2_center, ramp2_rotation, ramp2_size.x, ramp2_size.y, ramp2_size.z, [0.4, 0.38, 0.35], 0.9));
     for (center, size_x, size_y, size_z) in ramp2_guard_walls() {
-        pieces.push((center, ident, Vec3::new(size_x, size_y, size_z), f2_wall_color, 0.7));
+        panels.push(wall_panel4(center, size_x, size_y, size_z, f2_wall_color, 0.7));
     }
     let f2_desk_size = F2_DESK_SIZE;
     for &(x, z) in &F2_DESK_POSITIONS {
         pieces.push((Vec3::new(x, F2_ELEVATION + f2_desk_size.y / 2.0, z), ident, f2_desk_size, [0.55, 0.4, 0.25], 0.6));
     }
     for (center, size_x, size_y, size_z) in office_room_walls().into_iter().chain(locker_room_walls()) {
-        pieces.push((center, ident, Vec3::new(size_x, size_y, size_z), [0.35, 0.5, 0.55], 0.65));
+        panels.push(wall_panel4(center, size_x, size_y, size_z, [0.35, 0.5, 0.55], 0.65));
     }
     let (f2_stair_x, f2_stair_z) = F2_STAIRCASE_POS;
     let f2_stair_size = Vec3::new(F2_STAIRCASE_RADIUS * 2.0, F2_STAIRCASE_HEIGHT, F2_STAIRCASE_RADIUS * 2.0);
@@ -475,25 +539,39 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
 
     // --- F3 Office (sustain peak) ---
     let f3_wall_color = [0.68, 0.62, 0.6];
-    let f3_floor_size = Vec3::new(F3_HALF_SIZE_X * 2.0, ARENA_WALL_THICKNESS, F3_HALF_SIZE_Z * 2.0);
-    pieces.push((Vec3::new(0.0, F3_ELEVATION - ARENA_WALL_THICKNESS / 2.0, F3_CENTER_Z), ident, f3_floor_size, [0.48, 0.46, 0.42], 0.8));
+    panels.push(floor_panel(
+        Vec3::new(0.0, F3_ELEVATION - ARENA_WALL_THICKNESS / 2.0, F3_CENTER_Z),
+        F3_HALF_SIZE_X * 2.0,
+        F3_HALF_SIZE_Z * 2.0,
+        ARENA_WALL_THICKNESS,
+        [0.48, 0.46, 0.42],
+        0.8,
+    ));
     for (center, size_x, size_z) in f3_walls() {
-        pieces.push((center, ident, Vec3::new(size_x, F3_WALL_HEIGHT, size_z), f3_wall_color, 0.7));
+        panels.push(wall_panel(center, size_x, size_z, F3_WALL_HEIGHT, f3_wall_color, 0.7));
     }
     let (ramp3_center, ramp3_rotation, ramp3_size) = ramp3_geometry();
-    pieces.push((ramp3_center, ramp3_rotation, ramp3_size, [0.4, 0.38, 0.35], 0.9));
+    panels.push(ramp_panel(ramp3_center, ramp3_rotation, ramp3_size.x, ramp3_size.y, ramp3_size.z, [0.4, 0.38, 0.35], 0.9));
     for (center, size_x, size_y, size_z) in ramp3_guard_walls() {
-        pieces.push((center, ident, Vec3::new(size_x, size_y, size_z), f3_wall_color, 0.7));
+        panels.push(wall_panel4(center, size_x, size_y, size_z, f3_wall_color, 0.7));
     }
     for (center, size_x, size_y, size_z) in meeting_room_walls() {
-        pieces.push((center, ident, Vec3::new(size_x, size_y, size_z), [0.55, 0.65, 0.7], 0.4));
+        panels.push(wall_panel4(center, size_x, size_y, size_z, [0.55, 0.65, 0.7], 0.4));
     }
     for (center, size_x, size_y, size_z) in office_a_walls().into_iter().chain(office_b_walls()) {
-        pieces.push((center, ident, Vec3::new(size_x, size_y, size_z), [0.55, 0.45, 0.35], 0.65));
+        panels.push(wall_panel4(center, size_x, size_y, size_z, [0.55, 0.45, 0.35], 0.65));
     }
     let (f3_stair_x, f3_stair_z) = F3_STAIRCASE_POS;
     let f3_stair_size = Vec3::new(F3_STAIRCASE_RADIUS * 2.0, F3_STAIRCASE_HEIGHT, F3_STAIRCASE_RADIUS * 2.0);
     pieces.push((Vec3::new(f3_stair_x, F3_ELEVATION + F3_STAIRCASE_HEIGHT / 2.0, f3_stair_z), ident, f3_stair_size, [0.35, 0.32, 0.3], 0.75));
+
+    // Vệt kẻ vàng đánh dấu ranh giới Khu A / Khu B trên sàn Gara — tấm
+    // trang trí thuần (không collider, đè lên sàn Khu A/B đã có collider
+    // riêng rồi nên không cần chặn gì thêm). Rectangle nằm mặc định
+    // trong mặt phẳng XY (thẳng đứng), nên xoay -90° quanh trục X để nó
+    // nằm PHẲNG xuống sàn (mặt phẳng XZ) thay vì dựng đứng như 1 tấm biển.
+    let flat_on_floor = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    panels.push((Vec3::new(0.0, 0.02, khu_boundary_z), flat_on_floor, GARAGE_HALF_SIZE_X * 2.0, 1.0, [1.0, 0.85, 0.1], 0.5, None));
 
     for (translation, rotation, size, color, roughness) in pieces {
         commands.spawn((
@@ -506,28 +584,12 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
         ));
     }
 
-    // (translation, rotation, width, height, color, roughness) — flat
-    // decorative markers, no collider. Vệt kẻ vàng đánh dấu ranh giới
-    // Khu A / Khu B trên sàn Gara — Rectangle nằm mặc định trong mặt
-    // phẳng XY (thẳng đứng), nên xoay -90° quanh trục X để nó nằm PHẲNG
-    // xuống sàn (mặt phẳng XZ) thay vì dựng đứng như 1 tấm biển.
-    let flat_on_floor = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-    let mut panels: Vec<(Vec3, Quat, f32, f32, [f32; 3], f32)> = Vec::new();
-    panels.push((
-        Vec3::new(0.0, 0.02, khu_boundary_z),
-        flat_on_floor,
-        GARAGE_HALF_SIZE_X * 2.0,
-        1.0,
-        [1.0, 0.85, 0.1],
-        0.5,
-    ));
-
-    for (translation, rotation, width, height, color, roughness) in panels {
-        commands.spawn((
-            LevelPanel::new(width, height, color, roughness),
-            LevelTransform::new(translation, rotation),
-            Replicated,
-        ));
+    for (translation, rotation, width, height, color, roughness, collider_thickness) in panels {
+        let panel = match collider_thickness {
+            Some(thickness) => LevelPanel::solid(width, height, color, roughness, thickness),
+            None => LevelPanel::new(width, height, color, roughness),
+        };
+        commands.spawn((panel, LevelTransform::new(translation, rotation), Replicated));
     }
 }
 

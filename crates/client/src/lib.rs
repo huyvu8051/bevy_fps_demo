@@ -4925,9 +4925,12 @@ fn spawn_level_box_visuals(
 }
 
 // Same reactive idea as spawn_level_box_visuals, for the other shape —
-// no Collider (LevelPanel is pure decoration, see its own doc comment)
-// and cull_mode: None so a thin flat panel doesn't disappear when seen
-// from its back side.
+// cull_mode: None so a thin flat panel doesn't disappear when seen from
+// its back side. Collider is conditional on panel.collider_thickness
+// (see LevelPanel's own doc comment): None stays pure decoration (walk
+// through it), Some(t) gets a thin cuboid collider so it still blocks
+// movement like a wall/floor — the flat mesh is only a rendering-cost
+// win, not a physics one.
 fn spawn_level_panel_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -4941,11 +4944,15 @@ fn spawn_level_panel_visuals(
             cull_mode: None,
             ..default()
         });
-        commands.entity(entity).insert((
+        let mut entity_commands = commands.entity(entity);
+        entity_commands.insert((
             Mesh3d(meshes.add(Rectangle::new(panel.width, panel.height))),
             MeshMaterial3d(material),
             Transform::from_translation(level_transform.translation).with_rotation(level_transform.rotation),
         ));
+        if let Some(thickness) = panel.collider_thickness {
+            entity_commands.insert((RigidBody::Static, Collider::cuboid(panel.width, panel.height, thickness)));
+        }
     }
 }
 
