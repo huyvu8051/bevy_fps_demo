@@ -3,10 +3,9 @@
 // mục "Tầng F2 — Văn phòng tầng 2" cho mockup ASCII đầy đủ) — chỉ tường +
 // vật cản tạm (bàn làm việc, 2 phòng nhỏ), CHƯA có texture/model thật.
 //
-// F2 hiện là tầng CAO NHẤT đã xây (F3 chưa xây) nên dùng
-// FloorLevel::walls_top_floor() — chỉ chừa khoảng hở cạnh Bắc (từ Sảnh
-// G lên); khi nào xây F3, đổi hàm này sang walls_mid_floor() và thêm
-// ramp_between(&F2_FLOOR, &F3_FLOOR).
+// F2 giờ là tầng TRUNG GIAN (có F3 bên trên, xem f3.rs) nên dùng
+// FloorLevel::walls_mid_floor() — chừa khoảng hở cả 2 cạnh Bắc (từ Sảnh
+// G lên) và Nam (lên F3).
 //
 // Đơn giản hoá: "Văn phòng riêng (cửa kính)" và "Phòng tủ đồ nhân viên"
 // trong mockup đều là phòng kín có cửa — bản test này dựng mỗi phòng
@@ -16,9 +15,8 @@
 
 use bevy::prelude::{Quat, Vec3};
 
-use crate::arena::ARENA_WALL_THICKNESS;
 use super::lobby::LOBBY_FLOOR;
-use super::{ramp_between, ramp_guard_walls_between, FloorLevel, FLOOR_HEIGHT};
+use super::{ramp_between, ramp_guard_walls_between, small_room_walls, FloorLevel, RoomDoor, FLOOR_HEIGHT};
 
 // Cao độ sàn F2 — 1 FLOOR_HEIGHT nữa so với Sảnh G (2 * FLOOR_HEIGHT so
 // với Gara B1 ở đáy).
@@ -66,8 +64,10 @@ pub const F2_LOCKER_ROOM_HALF: Vec3 = Vec3::new(3.0, F2_WALL_HEIGHT / 2.0, 2.5);
 pub const F2_LOCKER_ROOM_CENTER: (f32, f32) = (11.0, F2_NORTH_WALL_Z + 11.0);
 
 // "Chân cầu thang xoắn ốc" lên F3 — trụ placeholder gần cuối F2 (Med kit
-// theo mockup nằm ngay trước điểm này). Tường Nam F2 hiện CHƯA chừa
-// khoảng hở (F3 chưa xây) — trụ chỉ là mốc trực quan cho lần build tới.
+// theo mockup nằm ngay trước điểm này). Lệch sang Đông (X=6) để không
+// chặn khoảng hở tường Nam (X trong [-2,2]) — lối thật lên F3 giờ là
+// đường dốc ở đó (xem f3.rs's ramp3_geometry()); trụ chỉ là mốc trực
+// quan đánh dấu "đây là chỗ lên tầng trên".
 pub const F2_STAIRCASE_RADIUS: f32 = 2.2;
 pub const F2_STAIRCASE_HEIGHT: f32 = F2_WALL_HEIGHT;
 pub const F2_STAIRCASE_POS: (f32, f32) = (6.0, F2_SOUTH_WALL_Z - 3.0);
@@ -82,38 +82,21 @@ pub fn ramp2_guard_walls() -> [(Vec3, f32, f32, f32); 2] {
     ramp_guard_walls_between(&LOBBY_FLOOR, &F2_FLOOR)
 }
 
-/// (center, size_x, size_z) cho 5 bức tường quây quanh F2 — chỉ chừa
-/// khoảng hở tường Bắc (giáp chân dốc từ Sảnh); tường Nam liền mạch (F3
-/// chưa xây, xem walls_top_floor() doc comment).
+/// (center, size_x, size_z) cho 6 bức tường quây quanh F2 — chừa khoảng
+/// hở cả tường Bắc (giáp chân dốc từ Sảnh) và tường Nam (giáp chân dốc
+/// lên F3).
 pub fn office_walls() -> Vec<(Vec3, f32, f32)> {
-    F2_FLOOR.walls_top_floor()
-}
-
-/// 3 tường (Tây/Bắc/Nam) cho 1 phòng kín, mở về hướng Đông — dùng chung
-/// cho cả "Văn phòng riêng" và "Phòng tủ đồ nhân viên" (chỉ khác tâm +
-/// hướng mở, nên nhận `door_east: bool` để lật hướng mở khi cần).
-fn small_room_walls(center: (f32, f32), half: Vec3, door_east: bool) -> [(Vec3, f32, f32, f32); 3] {
-    let (cx, cz) = center;
-    let base_y = F2_ELEVATION + half.y;
-    let closed_x = if door_east { cx - half.x } else { cx + half.x };
-    [
-        // Tường kín (đối diện cửa)
-        (Vec3::new(closed_x, base_y, cz), ARENA_WALL_THICKNESS, half.y * 2.0, half.z * 2.0 + ARENA_WALL_THICKNESS),
-        // Bắc
-        (Vec3::new(cx, base_y, cz - half.z), half.x * 2.0, half.y * 2.0, ARENA_WALL_THICKNESS),
-        // Nam
-        (Vec3::new(cx, base_y, cz + half.z), half.x * 2.0, half.y * 2.0, ARENA_WALL_THICKNESS),
-    ]
+    F2_FLOOR.walls_mid_floor()
 }
 
 /// Tường phòng "Văn phòng riêng (cửa kính)" — mở về hướng Đông (vào khu
 /// cubicle).
 pub fn office_room_walls() -> [(Vec3, f32, f32, f32); 3] {
-    small_room_walls(F2_OFFICE_ROOM_CENTER, F2_OFFICE_ROOM_HALF, true)
+    small_room_walls(F2_OFFICE_ROOM_CENTER, F2_OFFICE_ROOM_HALF, F2_ELEVATION + F2_OFFICE_ROOM_HALF.y, RoomDoor::East)
 }
 
 /// Tường phòng "Phòng tủ đồ nhân viên" — mở về hướng Tây (vào khu
 /// cubicle).
 pub fn locker_room_walls() -> [(Vec3, f32, f32, f32); 3] {
-    small_room_walls(F2_LOCKER_ROOM_CENTER, F2_LOCKER_ROOM_HALF, false)
+    small_room_walls(F2_LOCKER_ROOM_CENTER, F2_LOCKER_ROOM_HALF, F2_ELEVATION + F2_LOCKER_ROOM_HALF.y, RoomDoor::West)
 }

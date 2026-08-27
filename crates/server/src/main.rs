@@ -27,6 +27,9 @@ use shared::{
     F2_HALF_SIZE_X, F2_HALF_SIZE_Z, F2_ELEVATION, F2_WALL_HEIGHT, F2_CENTER_Z, office_walls,
     ramp2_geometry, ramp2_guard_walls, F2_DESK_SIZE, F2_DESK_POSITIONS,
     office_room_walls, locker_room_walls, F2_STAIRCASE_RADIUS, F2_STAIRCASE_HEIGHT, F2_STAIRCASE_POS,
+    F3_HALF_SIZE_X, F3_HALF_SIZE_Z, F3_ELEVATION, F3_WALL_HEIGHT, F3_CENTER_Z, f3_walls,
+    ramp3_geometry, ramp3_guard_walls, meeting_room_walls, office_a_walls, office_b_walls,
+    F3_STAIRCASE_RADIUS, F3_STAIRCASE_HEIGHT, F3_STAIRCASE_POS,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     HitboxTestSlot, HITBOX_TEST_PLAYER_SPAWN, HITBOX_TEST_RESPAWN_DELAY, HITBOX_TEST_ZOMBIE_POSITIONS,
@@ -322,6 +325,7 @@ fn spawn_arena_colliders(mut commands: Commands) {
         spawn_map1_b1_garage_colliders(&mut commands);
         spawn_map1_g_lobby_colliders(&mut commands);
         spawn_map1_f2_office_colliders(&mut commands);
+        spawn_map1_f3_colliders(&mut commands);
         return;
     }
 
@@ -500,6 +504,58 @@ fn spawn_map1_f2_office_colliders(commands: &mut Commands) {
         Transform::from_xyz(stair_x, F2_ELEVATION + F2_STAIRCASE_HEIGHT / 2.0, stair_z),
         RigidBody::Static,
         Collider::cylinder(F2_STAIRCASE_RADIUS, F2_STAIRCASE_HEIGHT),
+    ));
+}
+
+// Collider-only mirror of crates/client's spawn_map1_f3 — same
+// floor/walls/room/staircase-placeholder geometry, read from
+// shared::map1::f3, so this floor stays physically in sync with what the
+// client draws (same discipline as the three floors below it).
+fn spawn_map1_f3_colliders(commands: &mut Commands) {
+    let floor_size_x = F3_HALF_SIZE_X * 2.0;
+    let floor_size_z = F3_HALF_SIZE_Z * 2.0;
+    commands.spawn((
+        Transform::from_xyz(0.0, F3_ELEVATION - ARENA_WALL_THICKNESS / 2.0, F3_CENTER_Z),
+        RigidBody::Static,
+        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
+    ));
+
+    for (center, size_x, size_z) in f3_walls() {
+        commands.spawn((
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, F3_WALL_HEIGHT, size_z),
+        ));
+    }
+
+    let (ramp_center, ramp_rotation, ramp_size) = ramp3_geometry();
+    commands.spawn((
+        Transform::from_translation(ramp_center).with_rotation(ramp_rotation),
+        RigidBody::Static,
+        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
+    ));
+
+    for (center, size_x, size_y, size_z) in ramp3_guard_walls() {
+        commands.spawn((
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, size_y, size_z),
+        ));
+    }
+
+    for (center, size_x, size_y, size_z) in meeting_room_walls().into_iter().chain(office_a_walls()).chain(office_b_walls()) {
+        commands.spawn((
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, size_y, size_z),
+        ));
+    }
+
+    let (stair_x, stair_z) = F3_STAIRCASE_POS;
+    commands.spawn((
+        Transform::from_xyz(stair_x, F3_ELEVATION + F3_STAIRCASE_HEIGHT / 2.0, stair_z),
+        RigidBody::Static,
+        Collider::cylinder(F3_STAIRCASE_RADIUS, F3_STAIRCASE_HEIGHT),
     ));
 }
 

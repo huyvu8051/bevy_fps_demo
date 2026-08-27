@@ -11,10 +11,12 @@ use bevy::prelude::{Quat, Vec3};
 
 use crate::arena::ARENA_WALL_THICKNESS;
 
+pub mod f3;
 pub mod garage;
 pub mod lobby;
 pub mod office;
 
+pub use f3::*;
 pub use garage::*;
 pub use lobby::*;
 pub use office::*;
@@ -161,4 +163,46 @@ pub fn ramp_guard_walls_between(from: &FloorLevel, to: &FloorLevel) -> [(Vec3, f
         (Vec3::new(-RAMP_WIDTH / 2.0, height / 2.0, center_z), ARENA_WALL_THICKNESS, height, RAMP_RUN),
         (Vec3::new(RAMP_WIDTH / 2.0, height / 2.0, center_z), ARENA_WALL_THICKNESS, height, RAMP_RUN),
     ]
+}
+
+/// Hướng mở (không có tường) của 1 phòng nhỏ hình hộp — xem
+/// small_room_walls().
+pub enum RoomDoor {
+    North,
+    South,
+    East,
+    West,
+}
+
+/// 3 tường cho 1 phòng kín hình chữ nhật, mở duy nhất 1 mặt theo `door` —
+/// dùng chung cho mọi phòng nhỏ kiểu "văn phòng riêng"/"phòng họp"/"phòng
+/// tủ đồ" xuất hiện lặp lại qua nhiều tầng Map 1 (F2's office/locker
+/// room, F3's meeting/side offices, v.v.) thay vì mỗi tầng tự viết lại 1
+/// bản `match`/if-else riêng cho đúng 1 hướng cửa của nó.
+pub fn small_room_walls(center: (f32, f32), half: Vec3, base_y: f32, door: RoomDoor) -> [(Vec3, f32, f32, f32); 3] {
+    let (cx, cz) = center;
+    let (size_x, size_z) = (half.x * 2.0, half.z * 2.0);
+    let size_y = half.y * 2.0;
+    match door {
+        RoomDoor::East => [
+            (Vec3::new(cx - half.x, base_y, cz), ARENA_WALL_THICKNESS, size_y, size_z + ARENA_WALL_THICKNESS),
+            (Vec3::new(cx, base_y, cz - half.z), size_x, size_y, ARENA_WALL_THICKNESS),
+            (Vec3::new(cx, base_y, cz + half.z), size_x, size_y, ARENA_WALL_THICKNESS),
+        ],
+        RoomDoor::West => [
+            (Vec3::new(cx + half.x, base_y, cz), ARENA_WALL_THICKNESS, size_y, size_z + ARENA_WALL_THICKNESS),
+            (Vec3::new(cx, base_y, cz - half.z), size_x, size_y, ARENA_WALL_THICKNESS),
+            (Vec3::new(cx, base_y, cz + half.z), size_x, size_y, ARENA_WALL_THICKNESS),
+        ],
+        RoomDoor::South => [
+            (Vec3::new(cx, base_y, cz - half.z), size_x, size_y, ARENA_WALL_THICKNESS),
+            (Vec3::new(cx - half.x, base_y, cz), ARENA_WALL_THICKNESS, size_y, size_z + ARENA_WALL_THICKNESS),
+            (Vec3::new(cx + half.x, base_y, cz), ARENA_WALL_THICKNESS, size_y, size_z + ARENA_WALL_THICKNESS),
+        ],
+        RoomDoor::North => [
+            (Vec3::new(cx, base_y, cz + half.z), size_x, size_y, ARENA_WALL_THICKNESS),
+            (Vec3::new(cx - half.x, base_y, cz), ARENA_WALL_THICKNESS, size_y, size_z + ARENA_WALL_THICKNESS),
+            (Vec3::new(cx + half.x, base_y, cz), ARENA_WALL_THICKNESS, size_y, size_z + ARENA_WALL_THICKNESS),
+        ],
+    }
 }

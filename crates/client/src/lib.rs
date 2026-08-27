@@ -650,7 +650,7 @@ const PRONE_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.15;
 // out to be, rather than guessing a spawn height that might be inside a wall.
 const PLAYER_SPAWN: Vec3 = if USE_MAP1_B1_GARAGE {
     // Map 1 B1 Garage greybox — "Khu A" spawn corner near the entrance,
-    // see shared::GARAGE_PLAYER_SPAWN / crates/shared/src/map1_b1_garage.rs.
+    // see shared::GARAGE_PLAYER_SPAWN / crates/shared/src/map1/garage.rs.
     shared::GARAGE_PLAYER_SPAWN
 } else if USE_TEST_ARENA {
     // Arena center — matches shared::player::PLAYER_SPAWN (used by the
@@ -2427,6 +2427,8 @@ fn setup(
         spawn_map1_g_lobby(&mut commands, &mut meshes, &mut materials);
         // F2 nối tiếp ngay phía Nam của Sảnh G qua đường dốc thứ 2.
         spawn_map1_f2_office(&mut commands, &mut meshes, &mut materials);
+        // F3 nối tiếp ngay phía Nam của F2 qua đường dốc thứ 3.
+        spawn_map1_f3(&mut commands, &mut meshes, &mut materials);
     } else if USE_TEST_ARENA {
         spawn_test_arena(&mut commands, &mut meshes, &mut materials);
     } else {
@@ -5128,6 +5130,137 @@ fn spawn_map1_f2_office(commands: &mut Commands, meshes: &mut Assets<Mesh>, mate
                 ..default()
             },
             Transform::from_xyz(lx, shared::F2_ELEVATION + shared::F2_WALL_HEIGHT - 0.3, lz),
+        ));
+    }
+}
+
+// Map 1 "Tòa nhà văn phòng" — Tầng F3 (Văn phòng, sustain peak) greybox,
+// nối tiếp F2 qua đường dốc thứ 3 (xem USE_MAP1_B1_GARAGE và
+// docs/maps/map01_highrise.md's "Tầng F3 — Văn phòng tầng 3" cho mockup
+// ASCII). Cùng cách dựng bằng primitives + StandardMaterial màu phẳng
+// như 3 tầng dưới — CHƯA texture, CHƯA logic trigger/horde thật (xem
+// shared::map1::f3's doc comment).
+fn spawn_map1_f3(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+    let floor_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.48, 0.46, 0.42),
+        perceptual_roughness: 0.8,
+        ..default()
+    });
+    let wall_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.68, 0.62, 0.6),
+        perceptual_roughness: 0.7,
+        ..default()
+    });
+    let ramp_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.4, 0.38, 0.35),
+        perceptual_roughness: 0.9,
+        ..default()
+    });
+    let meeting_room_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.55, 0.65, 0.7),
+        perceptual_roughness: 0.4, // phòng họp kính — bóng hơn tường thường
+        ..default()
+    });
+    let office_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.55, 0.45, 0.35),
+        perceptual_roughness: 0.65,
+        ..default()
+    });
+    let staircase_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.35, 0.32, 0.3),
+        perceptual_roughness: 0.75,
+        ..default()
+    });
+
+    let floor_size_x = shared::F3_HALF_SIZE_X * 2.0;
+    let floor_size_z = shared::F3_HALF_SIZE_Z * 2.0;
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z))),
+        MeshMaterial3d(floor_material),
+        Transform::from_xyz(0.0, shared::F3_ELEVATION - ARENA_WALL_THICKNESS / 2.0, shared::F3_CENTER_Z),
+        RigidBody::Static,
+        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
+    ));
+
+    for (center, size_x, size_z) in shared::f3_walls() {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size_x, shared::F3_WALL_HEIGHT, size_z))),
+            MeshMaterial3d(wall_material.clone()),
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, shared::F3_WALL_HEIGHT, size_z),
+        ));
+    }
+
+    // Đường dốc nối F2 lên F3.
+    let (ramp_center, ramp_rotation, ramp_size) = shared::ramp3_geometry();
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(ramp_size.x, ramp_size.y, ramp_size.z))),
+        MeshMaterial3d(ramp_material),
+        Transform::from_translation(ramp_center).with_rotation(ramp_rotation),
+        RigidBody::Static,
+        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
+    ));
+    for (center, size_x, size_y, size_z) in shared::ramp3_guard_walls() {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size_x, size_y, size_z))),
+            MeshMaterial3d(wall_material.clone()),
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, size_y, size_z),
+        ));
+    }
+
+    // "Phòng họp kính (đã nứt sẵn)" — bóng hơn tường thường để gợi cảm
+    // giác kính, dù collider vẫn là tường đặc như mọi phòng khác.
+    for (center, size_x, size_y, size_z) in shared::meeting_room_walls() {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size_x, size_y, size_z))),
+            MeshMaterial3d(meeting_room_material.clone()),
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, size_y, size_z),
+        ));
+    }
+
+    // "Văn phòng A" + "Văn phòng B" — 2 phòng bên hông hành lang chính.
+    for (center, size_x, size_y, size_z) in shared::office_a_walls().into_iter().chain(shared::office_b_walls()) {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size_x, size_y, size_z))),
+            MeshMaterial3d(office_material.clone()),
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size_x, size_y, size_z),
+        ));
+    }
+
+    // "Chân cầu thang xoắn ốc" lên F4 — trụ placeholder, chưa dẫn lên đâu.
+    let (stair_x, stair_z) = shared::F3_STAIRCASE_POS;
+    commands.spawn((
+        Mesh3d(meshes.add(Cylinder::new(shared::F3_STAIRCASE_RADIUS, shared::F3_STAIRCASE_HEIGHT))),
+        MeshMaterial3d(staircase_material),
+        Transform::from_xyz(stair_x, shared::F3_ELEVATION + shared::F3_STAIRCASE_HEIGHT / 2.0, stair_z),
+        RigidBody::Static,
+        Collider::cylinder(shared::F3_STAIRCASE_RADIUS, shared::F3_STAIRCASE_HEIGHT),
+    ));
+
+    // Hành lang dài hơn F2 → 4 đèn overhead thay vì 3 để phủ đều hết
+    // chiều dài (đúng tinh thần "hành lang chính, dài, mở" của mockup).
+    for &(lx, lz) in &[
+        (0.0, shared::F3_NORTH_WALL_Z + 5.0),
+        (0.0, shared::F3_NORTH_WALL_Z + 14.0),
+        (0.0, shared::F3_CENTER_Z + 4.0),
+        (0.0, shared::F3_SOUTH_WALL_Z - 5.0),
+    ] {
+        commands.spawn((
+            PointLight {
+                color: Color::srgb(0.95, 0.9, 0.85),
+                intensity: 2_500_000.0,
+                range: shared::F3_HALF_SIZE_X * 1.5,
+                shadows_enabled: true,
+                ..default()
+            },
+            Transform::from_xyz(lx, shared::F3_ELEVATION + shared::F3_WALL_HEIGHT - 0.3, lz),
         ));
     }
 }
