@@ -5355,7 +5355,7 @@ struct MapSelectButton(u8);
 // uppercase A-Z/digits/a handful of symbols — see glyph_index's own doc
 // comment.
 const MAP_SELECT_ENTRIES: [(u8, &str, &str); 4] = [
-    (0, "MAP 0", "NORMAL"),
+    (0, "GAME MAP", "OFFICE BUILDING (B1-F3)"),
     (1, "MAP 1", "HITBOX TEST - 5 STATIONARY ZOMBIES"),
     (2, "MAP 2", "STRESS TEST - 50 ZOMBIES, NOCLIP"),
     (3, "MAP 3", "RENDER COMPARE - 3 ZOMBIES, 3 POSES, AUTOPILOT OFF"),
