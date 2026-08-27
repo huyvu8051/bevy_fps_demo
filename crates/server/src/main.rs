@@ -589,7 +589,22 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
             Some(thickness) => LevelPanel::solid(width, height, color, roughness, thickness),
             None => LevelPanel::new(width, height, color, roughness),
         };
-        commands.spawn((panel, LevelTransform::new(translation, rotation), Replicated));
+        let transform = Transform::from_translation(translation).with_rotation(rotation);
+        let level_transform = LevelTransform::new(translation, rotation);
+        // collider_thickness == Some ⇒ tấm này phải cản người chơi
+        // (tường/sàn/dốc) — server là process CHẠY vật lý thật (trọng
+        // lực, va chạm), nên nó cần Collider của riêng nó y như LevelBox
+        // vẫn có, không thể chỉ dựa vào client tự dựng collider từ dữ
+        // liệu replicate (đó chỉ để client hiển thị + dự đoán cục bộ).
+        // Thiếu bước này là lý do người chơi/zombie rơi xuyên sàn/tường.
+        match collider_thickness {
+            Some(thickness) => {
+                commands.spawn((transform, RigidBody::Static, Collider::cuboid(width, height, thickness), panel, level_transform, Replicated));
+            }
+            None => {
+                commands.spawn((panel, level_transform, Replicated));
+            }
+        }
     }
 }
 
