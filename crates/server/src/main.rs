@@ -383,24 +383,8 @@ fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>) {
 // mesh + local collider purely from what shows up over the network — see
 // LevelBox's own doc comment (crates/shared/src/level_piece.rs) for why
 // this replaces both the old collider-only AND mesh-only functions.
-// (translation, rotation, width, height, color, roughness, collider_thickness)
-type PanelPiece = (Vec3, Quat, f32, f32, [f32; 3], f32, Option<f32>);
-
-/// `translation` cho 1 panel đặc (collider_thickness = Some) LUÔN là vị
-/// trí MẶT NHÌN THẤY được (nơi mesh phẳng thật sự nằm), không phải tâm
-/// độ dày như 1 khối hộp — panel không có khối tích để "có tâm". Hàm này
-/// dịch `center` (tâm độ dày kiểu LevelBox cũ) ra mặt đó: đi
-/// `thickness/2` theo trục Z cục bộ (trục mỏng của panel, sau khi xoay
-/// theo `rotation`). Nơi spawn collider (crates/client's
-/// spawn_level_panel_visuals, và bên dưới cho server) bù lại đúng
-/// thickness/2 đó theo hướng ngược lại trên 1 entity CON, nên collider
-/// vẫn luôn nằm đúng tâm `center` ban đầu — vật lý không đổi so với hồi
-/// còn là LevelBox, chỉ có mặt hiển thị là dịch ra đúng chỗ (không còn
-/// lơ lửng nửa độ dày dưới sàn/trong tường — đây chính là bug "bị hở"
-/// đã báo).
-fn panel_surface(center: Vec3, rotation: Quat, thickness: f32) -> Vec3 {
-    center + rotation * Vec3::new(0.0, 0.0, thickness / 2.0)
-}
+// (translation, rotation, width, height, color, roughness, collider_thickness, collider_offset)
+type PanelPiece = (Vec3, Quat, f32, f32, [f32; 3], f32, Option<f32>, bool);
 
 /// Tường đứng trục X hoặc Z — mô tả bằng (center, size_x, size_z) như
 /// garage_walls()/lobby_walls()/office_walls()/f3_walls() vẫn trả về —
@@ -409,13 +393,20 @@ fn panel_surface(center: Vec3, rotation: Quat, thickness: f32) -> Vec3 {
 /// Rectangle (chạy dọc X) hay xoay 90° quanh Y (chạy dọc Z); trục còn
 /// lại (mỏng) trở thành độ dày collider — vẫn chặn người chơi y hệt khối
 /// hộp cũ, chỉ nhẹ hơn khi vẽ (1 mặt thay vì 6 mặt).
+///
+/// `translation` = `center` NGUYÊN VẸN, không dịch mặt hiển thị (khác
+/// floor_panel/ramp_panel bên dưới) — mỗi tường chỉ có ĐÚNG 1 hướng "vào
+/// trong phòng" cần khít với sàn, nhưng hướng đó khác nhau tùy tường
+/// (Bắc/Nam/Đông/Tây), và hàm này không biết tường đang xây là hướng
+/// nào. Từng thử dịch tất cả tường cùng 1 hướng cục bộ +Z cho "đều tay"
+/// — hoá ra làm tường Nam/Đông trôi ra khỏi mép sàn (bug "chưa khít" đã
+/// báo ở B1) vì hướng đó với chúng lại là RA NGOÀI thay vì vào trong.
+/// Giữ nguyên tâm là lựa chọn AN TOÀN chung cho mọi hướng.
 fn wall_panel(center: Vec3, size_x: f32, size_z: f32, wall_height: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
     if size_x >= size_z {
-        let rotation = Quat::IDENTITY;
-        (panel_surface(center, rotation, size_z), rotation, size_x, wall_height, color, roughness, Some(size_z))
+        (center, Quat::IDENTITY, size_x, wall_height, color, roughness, Some(size_z), false)
     } else {
-        let rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
-        (panel_surface(center, rotation, size_x), rotation, size_z, wall_height, color, roughness, Some(size_x))
+        (center, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), size_z, wall_height, color, roughness, Some(size_x), false)
     }
 }
 
@@ -424,29 +415,40 @@ fn wall_panel(center: Vec3, size_x: f32, size_z: f32, wall_height: f32, color: [
 /// (center, size_x, size_y, size_z)).
 fn wall_panel4(center: Vec3, size_x: f32, size_y: f32, size_z: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
     if size_x >= size_z {
-        let rotation = Quat::IDENTITY;
-        (panel_surface(center, rotation, size_z), rotation, size_x, size_y, color, roughness, Some(size_z))
+        (center, Quat::IDENTITY, size_x, size_y, color, roughness, Some(size_z), false)
     } else {
-        let rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
-        (panel_surface(center, rotation, size_x), rotation, size_z, size_y, color, roughness, Some(size_x))
+        (center, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), size_z, size_y, color, roughness, Some(size_x), false)
     }
 }
 
 /// 1 sàn nằm ngang — Rectangle mặc định dựng đứng (mặt phẳng XY) nên xoay
 /// -90° quanh X để nó nằm phẳng xuống (mặt phẳng XZ, ngửa lên +Y), giống
 /// vệt kẻ Khu A/Khu B đã làm trước đó.
+///
+/// Khác wall_panel: `translation` dịch lên đúng MẶT TRÊN sàn (`center +
+/// rotation * (0,0,thickness/2)`) thay vì giữ tâm độ dày — sàn thì "lên"
+/// luôn là 1 hướng duy nhất (không như tường có 4 hướng khác nhau), nên
+/// dịch an toàn, không lặp lại vấn đề của wall_panel. Collider bù lại
+/// đúng nửa độ dày đó (collider_offset=true, xem LevelPanel's doc
+/// comment) nên vẫn nằm đúng tâm `center` gốc — vật lý không đổi so với
+/// LevelBox cũ, chỉ có mặt hiển thị dịch lên đúng chỗ chân người chơi
+/// đứng (đây chính là bug "hở dưới sàn" đã sửa trước đó).
 fn floor_panel(center: Vec3, size_x: f32, size_z: f32, thickness: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
     let rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-    (panel_surface(center, rotation, thickness), rotation, size_x, size_z, color, roughness, Some(thickness))
+    let translation = center + rotation * Vec3::new(0.0, 0.0, thickness / 2.0);
+    (translation, rotation, size_x, size_z, color, roughness, Some(thickness), true)
 }
 
 /// 1 mặt dốc — ramp_between() trả về `rotation` vốn nghiêng 1 khối hộp
 /// (mặc định NẰM NGANG) theo đúng góc dốc; ghép thêm phép xoay "nằm
 /// ngang" của floor_panel TRƯỚC rotation đó để 1 tấm Rectangle (mặc định
-/// dựng đứng) có cùng hiệu ứng cuối cùng như khối hộp cũ.
+/// dựng đứng) có cùng hiệu ứng cuối cùng như khối hộp cũ. Cùng lý do với
+/// floor_panel — "lên trên mặt dốc" là 1 hướng duy nhất — nên cũng dịch
+/// translation lên mặt + collider_offset=true.
 fn ramp_panel(center: Vec3, ramp_rotation: Quat, width: f32, thickness: f32, length: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
     let rotation = ramp_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-    (panel_surface(center, rotation, thickness), rotation, width, length, color, roughness, Some(thickness))
+    let translation = center + rotation * Vec3::new(0.0, 0.0, thickness / 2.0);
+    (translation, rotation, width, length, color, roughness, Some(thickness), true)
 }
 
 fn spawn_map1_level_pieces(commands: &mut Commands) {
@@ -595,7 +597,7 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
     // trong mặt phẳng XY (thẳng đứng), nên xoay -90° quanh trục X để nó
     // nằm PHẲNG xuống sàn (mặt phẳng XZ) thay vì dựng đứng như 1 tấm biển.
     let flat_on_floor = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-    panels.push((Vec3::new(0.0, 0.02, khu_boundary_z), flat_on_floor, GARAGE_HALF_SIZE_X * 2.0, 1.0, [1.0, 0.85, 0.1], 0.5, None));
+    panels.push((Vec3::new(0.0, 0.02, khu_boundary_z), flat_on_floor, GARAGE_HALF_SIZE_X * 2.0, 1.0, [1.0, 0.85, 0.1], 0.5, None, false));
 
     for (translation, rotation, size, color, roughness) in pieces {
         commands.spawn((
@@ -608,8 +610,9 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
         ));
     }
 
-    for (translation, rotation, width, height, color, roughness, collider_thickness) in panels {
+    for (translation, rotation, width, height, color, roughness, collider_thickness, collider_offset) in panels {
         let panel = match collider_thickness {
+            Some(thickness) if collider_offset => LevelPanel::solid_surface(width, height, color, roughness, thickness),
             Some(thickness) => LevelPanel::solid(width, height, color, roughness, thickness),
             None => LevelPanel::new(width, height, color, roughness),
         };
@@ -622,16 +625,16 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
         // liệu replicate (đó chỉ để client hiển thị + dự đoán cục bộ).
         // Thiếu bước này là lý do người chơi/zombie rơi xuyên sàn/tường.
         //
-        // Collider nằm trên 1 entity CON, lệch -thickness/2 theo trục Z
-        // cục bộ so với entity cha (nơi `translation` là MẶT NHÌN THẤY —
-        // xem panel_surface's doc comment) — bù lại đúng để collider vẫn
-        // nằm giữa `center` gốc, y hệt vị trí LevelBox hồi trước. Thiếu
-        // bù này là bug "bị hở": mesh và collider bị ghim chung 1 điểm
-        // đáng lẽ chỉ collider mới cần nằm ở tâm.
+        // Collider luôn nằm trên 1 entity CON — lệch -thickness/2 theo
+        // trục Z cục bộ khi collider_offset=true (sàn/dốc, translation là
+        // mặt nhìn thấy, xem floor_panel's doc comment), lệch 0 khi false
+        // (tường, translation đã là tâm collider rồi — xem wall_panel's
+        // doc comment). Collider luôn nằm đúng tâm gốc cả 2 trường hợp.
         match collider_thickness {
             Some(thickness) => {
+                let offset = if collider_offset { -thickness / 2.0 } else { 0.0 };
                 let parent = commands.spawn((transform, panel, level_transform, Replicated, RigidBody::Static)).id();
-                commands.spawn((ChildOf(parent), Transform::from_xyz(0.0, 0.0, -thickness / 2.0), Collider::cuboid(width, height, thickness)));
+                commands.spawn((ChildOf(parent), Transform::from_xyz(0.0, 0.0, offset), Collider::cuboid(width, height, thickness)));
             }
             None => {
                 commands.spawn((panel, level_transform, Replicated));

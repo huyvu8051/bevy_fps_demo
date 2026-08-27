@@ -4933,19 +4933,22 @@ fn spawn_level_box_visuals(
 // through it), Some(t) gets a thin cuboid collider so it still blocks
 // movement like a wall/floor.
 //
-// LevelTransform's translation/rotation place the VISIBLE face (where
-// the mesh renders — flush with whatever's adjacent, e.g. a floor's top
-// surface right where a player's feet/a wall's bottom actually are), not
-// the collider's center — a flat mesh has no volume to "be centered in",
-// unlike the old LevelBox. The collider instead goes on a CHILD entity
-// offset half a thickness INWARD (-thickness/2 along local Z, the
-// panel's own thin axis) so it ends up exactly where a LevelBox's
-// collider always was: centered on the piece's original footprint, not
-// hanging half a thickness above/below it. Skipping this was the earlier
-// bug report ("bị hở" — visible gaps under every floor/wall, floor
-// meshes floating half a thickness below where the player actually
-// stands) — the mesh and the collider were both pinned to the same
-// point when only the collider should be.
+// For a floor/ramp (panel.collider_offset == true), LevelTransform's
+// translation is the VISIBLE surface (flush with where the player's feet
+// actually are — "up" is always the same one direction, so this is safe
+// to shift) rather than the collider's center; the collider goes on a
+// CHILD entity offset -thickness/2 along local Z to land back where a
+// LevelBox's collider always was. Skipping this was an earlier bug
+// report ("bị hở" — floor meshes floating half a thickness below where
+// the player actually stands).
+//
+// For a wall (collider_offset == false), translation IS already the
+// collider's center, unshifted — a wall has exactly one side that needs
+// to sit flush with the floor, but WHICH side differs per wall
+// (north/south/east/west), so there's no single shift direction that's
+// safe for every one; an earlier attempt to shift walls the same way as
+// floors moved south/east walls off the floor's edge instead of onto it
+// (see LevelPanel's own doc comment for the fuller story).
 fn spawn_level_panel_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -4965,8 +4968,9 @@ fn spawn_level_panel_visuals(
             Transform::from_translation(level_transform.translation).with_rotation(level_transform.rotation),
         ));
         if let Some(thickness) = panel.collider_thickness {
+            let offset = if panel.collider_offset { -thickness / 2.0 } else { 0.0 };
             commands.entity(entity).insert(RigidBody::Static).with_children(|children| {
-                children.spawn((Transform::from_xyz(0.0, 0.0, -thickness / 2.0), Collider::cuboid(panel.width, panel.height, thickness)));
+                children.spawn((Transform::from_xyz(0.0, 0.0, offset), Collider::cuboid(panel.width, panel.height, thickness)));
             });
         }
     }

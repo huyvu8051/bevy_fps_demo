@@ -62,6 +62,19 @@ impl LevelBox {
 ///   chỉ khác LevelBox ở chỗ MESH hiển thị phẳng (nhẹ hơn khi vẽ); dùng
 ///   cho tường/sàn/dốc — những thứ chỉ cần nhìn thấy từ 1 phía (không ai
 ///   đứng trong lòng tường để thấy mặt kia).
+///
+/// `collider_offset` chỉ có ý nghĩa khi `collider_thickness` là `Some`:
+/// - `false` (tường) — `LevelTransform`'s translation ĐÃ LÀ tâm collider
+///   (giống hệt tâm 1 LevelBox trước đây) — không cần bù gì thêm. Bức
+///   tường nào cũng chỉ có 1 mặt "trong nhà" thật sự cần khít với sàn,
+///   nhưng KHÔNG có 1 hướng lùi vào chung đúng cho mọi tường (tường Bắc
+///   cần lùi khác hướng tường Nam) — nên tường ĐANG không tự dịch mặt
+///   hiển thị, tránh lặp lại đúng bug đã báo ("Nam chưa khít") theo
+///   hướng khác.
+/// - `true` (sàn/dốc) — translation là MẶT NHÌN THẤY (mặt trên sàn/mặt
+///   dốc), không phải tâm — vì "lên" luôn là 1 hướng duy nhất, không như
+///   tường, nên dịch được an toàn. Collider cần lùi lại
+///   `-collider_thickness/2` theo trục Z cục bộ để về đúng tâm gốc.
 #[derive(Component, Clone, Copy, Serialize, Deserialize)]
 pub struct LevelPanel {
     pub width: f32,
@@ -69,17 +82,25 @@ pub struct LevelPanel {
     pub color: [f32; 3],
     pub roughness: f32,
     pub collider_thickness: Option<f32>,
+    pub collider_offset: bool,
 }
 
 impl LevelPanel {
     /// Tấm trang trí thuần — không cản đường.
     pub const fn new(width: f32, height: f32, color: [f32; 3], roughness: f32) -> Self {
-        Self { width, height, color, roughness, collider_thickness: None }
+        Self { width, height, color, roughness, collider_thickness: None, collider_offset: false }
     }
 
-    /// Tấm có cản đường — dùng cho tường/sàn/dốc thay cho LevelBox.
+    /// Tấm có cản đường, translation = tâm collider luôn (tường) — dùng
+    /// thay cho LevelBox.
     pub const fn solid(width: f32, height: f32, color: [f32; 3], roughness: f32, collider_thickness: f32) -> Self {
-        Self { width, height, color, roughness, collider_thickness: Some(collider_thickness) }
+        Self { width, height, color, roughness, collider_thickness: Some(collider_thickness), collider_offset: false }
+    }
+
+    /// Như `solid`, nhưng translation = mặt nhìn thấy (sàn/dốc) — collider
+    /// tự lùi lại đúng tâm, xem doc comment của field `collider_offset`.
+    pub const fn solid_surface(width: f32, height: f32, color: [f32; 3], roughness: f32, collider_thickness: f32) -> Self {
+        Self { width, height, color, roughness, collider_thickness: Some(collider_thickness), collider_offset: true }
     }
 }
 
