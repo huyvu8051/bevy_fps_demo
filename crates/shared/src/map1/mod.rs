@@ -70,8 +70,16 @@ impl FloorLevel {
 
     /// Tường Tây/Đông — giống nhau ở mọi tầng, không phụ thuộc có chừa
     /// khoảng hở Bắc/Nam hay không.
+    ///
+    /// span_z KHÔNG cộng thêm ARENA_WALL_THICKNESS nữa (khác hồi còn là
+    /// LevelBox) — hồi đó walls là khối hộp, cần kéo dài thêm 1 chút để 2
+    /// khối chồng lên nhau ở góc, tránh lộ 1 khe tam giác nhỏ chưa được
+    /// khối nào phủ tới. Giờ walls là LevelPanel (mặt phẳng không có khối
+    /// tích) — 2 mặt phẳng vuông góc chỉ cần span tới ĐÚNG toạ độ góc là
+    /// tự khít nhau hoàn hảo, phần "thừa ra" trước đây chỉ còn là 1 mép
+    /// thừa vô ích (đã báo).
     fn side_walls(&self) -> [(Vec3, f32, f32); 2] {
-        let span_z = self.half_size_z * 2.0 + ARENA_WALL_THICKNESS;
+        let span_z = self.half_size_z * 2.0;
         [
             (Vec3::new(-self.half_size_x, self.half_y(), self.center_z()), ARENA_WALL_THICKNESS, span_z),
             (Vec3::new(self.half_size_x, self.half_y(), self.center_z()), ARENA_WALL_THICKNESS, span_z),
@@ -80,16 +88,18 @@ impl FloorLevel {
 
     /// 1 đoạn tường liền mạch dọc theo đường Z cho trước, phủ hết bề rộng
     /// tầng — dùng cho cạnh không có lối đi (chưa xây tầng kế/tầng dưới
-    /// cùng).
+    /// cùng). Xem side_walls's doc comment vì sao không cộng thêm
+    /// ARENA_WALL_THICKNESS nữa.
     fn solid_wall(&self, z: f32) -> (Vec3, f32, f32) {
-        let span_x = self.half_size_x * 2.0 + ARENA_WALL_THICKNESS;
+        let span_x = self.half_size_x * 2.0;
         (Vec3::new(0.0, self.half_y(), z), span_x, ARENA_WALL_THICKNESS)
     }
 
     /// 2 đoạn tường dọc theo đường Z cho trước, chừa khoảng hở rộng
-    /// RAMP_WIDTH ở giữa (X=0) — lối đi/cửa dốc.
+    /// RAMP_WIDTH ở giữa (X=0) — lối đi/cửa dốc. Xem side_walls's doc
+    /// comment vì sao không cộng thêm ARENA_WALL_THICKNESS nữa.
     fn gapped_wall(&self, z: f32) -> [(Vec3, f32, f32); 2] {
-        let span_x = self.half_size_x * 2.0 + ARENA_WALL_THICKNESS;
+        let span_x = self.half_size_x * 2.0;
         let gap_half = RAMP_WIDTH / 2.0;
         let seg = span_x / 2.0 - gap_half;
         [
