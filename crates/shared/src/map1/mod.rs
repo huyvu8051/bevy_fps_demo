@@ -37,6 +37,7 @@ pub const RAMP_WIDTH: f32 = 4.0;
 /// nhau (tầng sau lấy `north_wall_z` từ `next_north_wall_z()` của tầng
 /// trước) — không thể lệch cộng dồn qua nhiều tầng như khi mỗi file tự
 /// tính lại từ đầu.
+#[derive(Clone, Copy)]
 pub struct FloorLevel {
     pub half_size_x: f32,
     pub half_size_z: f32,
@@ -228,4 +229,36 @@ pub fn small_room_walls(center: (f32, f32), half: Vec3, base_y: f32, door: RoomD
             (Vec3::new(cx + half.x, base_y, cz), ARENA_WALL_THICKNESS, size_y, size_z + ARENA_WALL_THICKNESS),
         ],
     }
+}
+
+/// Rải 1 điểm spawn zombie lên 1 TRONG 4 TẦNG THẬT của Map 1, thay vì mù
+/// quáng dùng lại lưới của arena phẳng cũ (`shared::zombie::
+/// random_zombie_spawn_pos`, dựa trên `ARENA_HALF_SIZE=36` — không liên
+/// quan gì tới B1/G/F2/F3, khiến phần lớn zombie rơi vào khoảng trống
+/// giữa các tầng, xem map1 coordinate audit). Cùng cách R2
+/// low-discrepancy `random_zombie_spawn_pos` đã dùng (deterministic theo
+/// `seed`, không cần crate `rand`) — chỉ khác là CHỌN TẦNG trước (round-
+/// robin theo `seed % 4`) rồi mới rải trong đúng biên tầng đó.
+pub fn random_map1_zombie_spawn_pos(seed: usize) -> Vec3 {
+    const INV_G: f32 = 0.754_877_7; // 1/g, g = plastic number (R2 sequence)
+    const INV_G2: f32 = 0.569_840_3; // 1/g^2
+    // Lùi vào trong 1 chút so với tường, tránh spawn dính luôn vào tường/
+    // góc phòng — cùng tinh thần "half = ARENA_HALF_SIZE - 3.0" bên
+    // random_zombie_spawn_pos, chỉ nhỏ hơn vì các tầng Map 1 hẹp hơn
+    // nhiều so với arena test 72×72m.
+    const WALL_INSET: f32 = 2.0;
+
+    let floors: [FloorLevel; 4] = [GARAGE_FLOOR, LOBBY_FLOOR, F2_FLOOR, F3_FLOOR];
+    let floor = floors[seed % floors.len()];
+    // Seed riêng cho chuỗi R2 TRONG tầng đó — nếu dùng thẳng `seed` thì 4
+    // tầng sẽ lặp lại đúng 1/4 số điểm trong chuỗi chung, dễ trùng cụm;
+    // chia cho số tầng để mỗi tầng có chuỗi rải đều của riêng nó.
+    let in_floor_seed = (seed / floors.len()) as f32;
+
+    let half_x = (floor.half_size_x - WALL_INSET).max(0.5);
+    let half_z = (floor.half_size_z - WALL_INSET).max(0.5);
+    let x = (-1.0 + 2.0 * (in_floor_seed * INV_G).fract()) * half_x;
+    let z = floor.center_z() + (-1.0 + 2.0 * (in_floor_seed * INV_G2).fract()) * half_z;
+    let y = floor.elevation + crate::zombie::ZOMBIE_RADIUS + crate::zombie::ZOMBIE_LENGTH / 2.0;
+    Vec3::new(x, y, z)
 }

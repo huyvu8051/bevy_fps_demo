@@ -19,7 +19,7 @@ use shared::{
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount,
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
-    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos,
+    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, random_map1_zombie_spawn_pos,
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
     GARAGE_HALF_SIZE_X, GARAGE_HALF_SIZE_Z, GARAGE_PLAYER_SPAWN, GARAGE_CAR_SIZE, GARAGE_CAR_POSITIONS, garage_walls,
     LOBBY_HALF_SIZE_X, LOBBY_HALF_SIZE_Z, LOBBY_WALL_HEIGHT, LOBBY_CENTER_Z, LOBBY_DESK_SIZE, LOBBY_DESK_POS,
@@ -1140,9 +1140,24 @@ impl Default for AutoMaintainZombies {
 #[derive(Resource, Default)]
 struct NextZombieSpawnIndex(usize);
 
+// Picks the right per-scenario spawn scatter for `Scenario::Normal` —
+// Map 1's own 4 real floors when USE_MAP1_B1_GARAGE, the flat test
+// arena's generic grid otherwise. Every Normal-scenario zombie spawn
+// call site (initial spawn, tick-based respawn, manual SetZombieCount)
+// goes through this instead of calling random_zombie_spawn_pos directly,
+// so none of them can drift back to spawning zombies in the void between
+// Map 1's floors (see the map1 coordinate audit for how bad that was).
+fn zombie_spawn_pos_for_scenario(seed: usize) -> Vec3 {
+    if USE_MAP1_B1_GARAGE {
+        random_map1_zombie_spawn_pos(seed)
+    } else {
+        random_zombie_spawn_pos(seed)
+    }
+}
+
 fn spawn_initial_zombies(mut commands: Commands, target: Res<ZombieTargetCount>, mut next_spawn_index: ResMut<NextZombieSpawnIndex>) {
     let count = (target.0 as usize).min(ZOMBIE_SPAWNS.len());
-    let positions: Vec<Vec3> = (0..count).map(random_zombie_spawn_pos).collect();
+    let positions: Vec<Vec3> = (0..count).map(zombie_spawn_pos_for_scenario).collect();
     spawn_zombies(&mut commands, &positions, ZOMBIE_AI_ENABLED, false, false);
     next_spawn_index.0 = count;
 }
@@ -1165,7 +1180,7 @@ fn on_set_zombie_count(
     if current < target.0 {
         let to_spawn: Vec<Vec3> = (0..target.0 - current)
             .map(|_| {
-                let pos = random_zombie_spawn_pos(next_spawn_index.0);
+                let pos = zombie_spawn_pos_for_scenario(next_spawn_index.0);
                 next_spawn_index.0 += 1;
                 pos
             })
@@ -1977,7 +1992,7 @@ fn tick_respawns(
                 // whether it actually results in a new zombie depends on the
                 // toggle, so flipping auto-maintain back on later doesn't
                 // suddenly spawn a backlog of everything killed while it was off.
-                to_spawn.push(random_zombie_spawn_pos(next_spawn_index.0));
+                to_spawn.push(zombie_spawn_pos_for_scenario(next_spawn_index.0));
                 next_spawn_index.0 += 1;
             }
         } else {
