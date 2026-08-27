@@ -46,14 +46,6 @@ pub const LOBBY_TEST_SPAWN: Vec3 = Vec3::new(0.0, FLOOR_HEIGHT + 3.0, LOBBY_NORT
 pub const LOBBY_DESK_SIZE: Vec3 = Vec3::new(4.0, 1.1, 1.6);
 pub const LOBBY_DESK_POS: (f32, f32) = (-9.0, LOBBY_NORTH_WALL_Z + 4.0);
 
-// "Chân cầu thang xoắn ốc" — trụ placeholder đặt ngay cạnh khoảng hở
-// tường Nam (lối thật lên F2 là đường dốc ở đó, xem office.rs) — lệch
-// sang Đông để không chặn lối đi, chỉ là điểm mốc trực quan đánh dấu "đây
-// là chỗ lên tầng trên".
-pub const LOBBY_STAIRCASE_RADIUS: f32 = 2.2;
-pub const LOBBY_STAIRCASE_HEIGHT: f32 = LOBBY_WALL_HEIGHT;
-pub const LOBBY_STAIRCASE_POS: (f32, f32) = (6.0, LOBBY_SOUTH_WALL_Z - 3.0);
-
 /// Đường dốc nối Gara B1 lên Sảnh G.
 pub fn ramp_geometry() -> (Vec3, Quat, Vec3) {
     ramp_between(&GARAGE_FLOOR, &LOBBY_FLOOR)
@@ -64,9 +56,12 @@ pub fn ramp_guard_walls() -> [(Vec3, f32, f32, f32); 2] {
     ramp_guard_walls_between(&GARAGE_FLOOR, &LOBBY_FLOOR)
 }
 
-/// (center, size_x, size_z) cho 6 bức tường quây quanh Sảnh — chừa khoảng
-/// hở cả tường Bắc (giáp đỉnh dốc lên từ Gara) và tường Nam (giáp chân
-/// dốc lên F2), không hở khe lệch nhau.
+/// (center, size_x, size_z) cho các bức tường quây quanh Sảnh — chừa
+/// khoảng hở tường Bắc (giáp đỉnh dốc lên từ Gara, B1→G vẫn nằm xéo như
+/// cũ) nhưng tường Nam giờ LIỀN MẠCH — F2 chồng thật ngay phía trên
+/// (cùng tâm X/Z), lối lên F2 là giếng thang xuyên sàn (xem
+/// switchback_stairwell trong mod.rs), không còn đi qua khoảng hở tường
+/// Nam nữa.
 pub fn lobby_walls() -> Vec<(Vec3, f32, f32)> {
-    LOBBY_FLOOR.walls_mid_floor()
+    LOBBY_FLOOR.walls_gapped_north_only()
 }

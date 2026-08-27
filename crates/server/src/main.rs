@@ -23,14 +23,14 @@ use shared::{
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
     GARAGE_HALF_SIZE_X, GARAGE_HALF_SIZE_Z, GARAGE_PLAYER_SPAWN, GARAGE_CAR_SIZE, GARAGE_CAR_POSITIONS, garage_walls,
     LOBBY_HALF_SIZE_X, LOBBY_HALF_SIZE_Z, LOBBY_WALL_HEIGHT, LOBBY_CENTER_Z, LOBBY_DESK_SIZE, LOBBY_DESK_POS,
-    LOBBY_STAIRCASE_RADIUS, LOBBY_STAIRCASE_HEIGHT, LOBBY_STAIRCASE_POS, lobby_walls,
+    lobby_walls,
     FLOOR_HEIGHT, ramp_geometry, ramp_guard_walls,
-    F2_HALF_SIZE_X, F2_HALF_SIZE_Z, F2_ELEVATION, F2_WALL_HEIGHT, F2_CENTER_Z, office_walls,
-    ramp2_geometry, ramp2_guard_walls, F2_DESK_SIZE, F2_DESK_POSITIONS,
-    office_room_walls, locker_room_walls, F2_STAIRCASE_RADIUS, F2_STAIRCASE_HEIGHT, F2_STAIRCASE_POS,
-    F3_HALF_SIZE_X, F3_HALF_SIZE_Z, F3_ELEVATION, F3_WALL_HEIGHT, F3_CENTER_Z, f3_walls,
-    ramp3_geometry, ramp3_guard_walls, meeting_room_walls, office_a_walls, office_b_walls,
-    F3_STAIRCASE_RADIUS, F3_STAIRCASE_HEIGHT, F3_STAIRCASE_POS,
+    F2_ELEVATION, F2_WALL_HEIGHT, F2_FLOOR, F2_SHAFT_Z, office_walls,
+    stairwell_g_to_f2, F2_DESK_SIZE, F2_DESK_POSITIONS,
+    office_room_walls, locker_room_walls,
+    F3_WALL_HEIGHT, F3_FLOOR, F3_SHAFT_Z, f3_walls,
+    stairwell_f2_to_f3, meeting_room_walls, office_a_walls, office_b_walls,
+    TOWER_SHAFT_X, TOWER_SHAFT_HALF,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     HitboxTestSlot, HITBOX_TEST_PLAYER_SPAWN, HITBOX_TEST_RESPAWN_DELAY, HITBOX_TEST_ZOMBIE_POSITIONS,
@@ -527,29 +527,26 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
     let desk_size = LOBBY_DESK_SIZE;
     let (desk_x, desk_z) = LOBBY_DESK_POS;
     pieces.push((Vec3::new(desk_x, FLOOR_HEIGHT + desk_size.y / 2.0, desk_z), ident, desk_size, [0.25, 0.35, 0.45], 0.6));
-    // Staircase placeholder: a short block instead of the visual cylinder
-    // the old mesh-only version used — LevelBox only knows boxes (see its
-    // own doc comment), and this is a pure decorative marker anyway.
-    let (stair_x, stair_z) = LOBBY_STAIRCASE_POS;
-    let stair_size = Vec3::new(LOBBY_STAIRCASE_RADIUS * 2.0, LOBBY_STAIRCASE_HEIGHT, LOBBY_STAIRCASE_RADIUS * 2.0);
-    pieces.push((Vec3::new(stair_x, FLOOR_HEIGHT + LOBBY_STAIRCASE_HEIGHT / 2.0, stair_z), ident, stair_size, [0.35, 0.32, 0.3], 0.75));
+    // Không còn khối "chân cầu thang" trang trí ở đây nữa — giếng thang
+    // thật (stairwell_g_to_f2, xây ở đoạn F2 bên dưới vì nó xuyên từ G
+    // lên F2) đã thay thế nó.
 
-    // --- F2 Office ---
+    // --- F2 Office (chồng thật ngay trên G — xem F2_FLOOR's doc comment) ---
     let f2_wall_color = [0.72, 0.7, 0.64];
-    panels.push(floor_panel(
-        Vec3::new(0.0, F2_ELEVATION - ARENA_WALL_THICKNESS / 2.0, F2_CENTER_Z),
-        F2_HALF_SIZE_X * 2.0,
-        F2_HALF_SIZE_Z * 2.0,
-        ARENA_WALL_THICKNESS,
-        [0.5, 0.48, 0.44],
-        0.8,
-    ));
+    let stairwell_color = [0.4, 0.38, 0.35];
+    for (center, size_x, size_z) in F2_FLOOR.floor_slab_with_hole(TOWER_SHAFT_X, F2_SHAFT_Z, TOWER_SHAFT_HALF) {
+        panels.push(floor_panel(center, size_x, size_z, ARENA_WALL_THICKNESS, [0.5, 0.48, 0.44], 0.8));
+    }
     for (center, size_x, size_z) in office_walls() {
         panels.push(wall_panel(center, size_x, size_z, F2_WALL_HEIGHT, f2_wall_color, 0.7));
     }
-    let (ramp2_center, ramp2_rotation, ramp2_size) = ramp2_geometry();
-    panels.push(ramp_panel(ramp2_center, ramp2_rotation, ramp2_size.x, ramp2_size.y, ramp2_size.z, [0.4, 0.38, 0.35], 0.9));
-    for (center, size_x, size_y, size_z) in ramp2_guard_walls() {
+    // Giếng thang "4 góc cuộn" G→F2 — thay đường dốc nằm xéo cũ, xem
+    // stairwell_g_to_f2's doc comment.
+    let (g_to_f2_flights, g_to_f2_guards) = stairwell_g_to_f2();
+    for (center, rotation, size) in g_to_f2_flights {
+        panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stairwell_color, 0.9));
+    }
+    for (center, size_x, size_y, size_z) in g_to_f2_guards {
         panels.push(wall_panel4(center, size_x, size_y, size_z, f2_wall_color, 0.7));
     }
     let f2_desk_size = F2_DESK_SIZE;
@@ -559,26 +556,22 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
     for (center, size_x, size_y, size_z) in office_room_walls().into_iter().chain(locker_room_walls()) {
         panels.push(wall_panel4(center, size_x, size_y, size_z, [0.35, 0.5, 0.55], 0.65));
     }
-    let (f2_stair_x, f2_stair_z) = F2_STAIRCASE_POS;
-    let f2_stair_size = Vec3::new(F2_STAIRCASE_RADIUS * 2.0, F2_STAIRCASE_HEIGHT, F2_STAIRCASE_RADIUS * 2.0);
-    pieces.push((Vec3::new(f2_stair_x, F2_ELEVATION + F2_STAIRCASE_HEIGHT / 2.0, f2_stair_z), ident, f2_stair_size, [0.35, 0.32, 0.3], 0.75));
 
-    // --- F3 Office (sustain peak) ---
+    // --- F3 Office (sustain peak) — chồng thật ngay trên F2 ---
     let f3_wall_color = [0.68, 0.62, 0.6];
-    panels.push(floor_panel(
-        Vec3::new(0.0, F3_ELEVATION - ARENA_WALL_THICKNESS / 2.0, F3_CENTER_Z),
-        F3_HALF_SIZE_X * 2.0,
-        F3_HALF_SIZE_Z * 2.0,
-        ARENA_WALL_THICKNESS,
-        [0.48, 0.46, 0.42],
-        0.8,
-    ));
+    for (center, size_x, size_z) in F3_FLOOR.floor_slab_with_hole(TOWER_SHAFT_X, F3_SHAFT_Z, TOWER_SHAFT_HALF) {
+        panels.push(floor_panel(center, size_x, size_z, ARENA_WALL_THICKNESS, [0.48, 0.46, 0.42], 0.8));
+    }
     for (center, size_x, size_z) in f3_walls() {
         panels.push(wall_panel(center, size_x, size_z, F3_WALL_HEIGHT, f3_wall_color, 0.7));
     }
-    let (ramp3_center, ramp3_rotation, ramp3_size) = ramp3_geometry();
-    panels.push(ramp_panel(ramp3_center, ramp3_rotation, ramp3_size.x, ramp3_size.y, ramp3_size.z, [0.4, 0.38, 0.35], 0.9));
-    for (center, size_x, size_y, size_z) in ramp3_guard_walls() {
+    // Giếng thang F2→F3 — cùng 1 trục X/Z với đoạn G→F2 ở trên (1 giếng
+    // liên tục), chỉ khác đoạn cao độ.
+    let (f2_to_f3_flights, f2_to_f3_guards) = stairwell_f2_to_f3();
+    for (center, rotation, size) in f2_to_f3_flights {
+        panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stairwell_color, 0.9));
+    }
+    for (center, size_x, size_y, size_z) in f2_to_f3_guards {
         panels.push(wall_panel4(center, size_x, size_y, size_z, f3_wall_color, 0.7));
     }
     for (center, size_x, size_y, size_z) in meeting_room_walls() {
@@ -587,9 +580,6 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
     for (center, size_x, size_y, size_z) in office_a_walls().into_iter().chain(office_b_walls()) {
         panels.push(wall_panel4(center, size_x, size_y, size_z, [0.55, 0.45, 0.35], 0.65));
     }
-    let (f3_stair_x, f3_stair_z) = F3_STAIRCASE_POS;
-    let f3_stair_size = Vec3::new(F3_STAIRCASE_RADIUS * 2.0, F3_STAIRCASE_HEIGHT, F3_STAIRCASE_RADIUS * 2.0);
-    pieces.push((Vec3::new(f3_stair_x, F3_ELEVATION + F3_STAIRCASE_HEIGHT / 2.0, f3_stair_z), ident, f3_stair_size, [0.35, 0.32, 0.3], 0.75));
 
     // Vệt kẻ vàng đánh dấu ranh giới Khu A / Khu B trên sàn Gara — tấm
     // trang trí thuần (không collider, đè lên sàn Khu A/B đã có collider

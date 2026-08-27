@@ -138,6 +138,27 @@ impl FloorLevel {
         walls
     }
 
+    /// Tường quây quanh tầng có lối vào từ DƯỚI lên (khoảng hở Bắc, như
+    /// walls_mid_floor) nhưng KHÔNG có khoảng hở tường Nam nữa — dùng khi
+    /// tầng ngay trên nó chồng thật (cùng tâm X/Z) thay vì nằm xéo, nên
+    /// lối lên tầng trên giờ là 1 giếng thang xuyên sàn, không phải
+    /// khoảng hở tường.
+    pub fn walls_gapped_north_only(&self) -> Vec<(Vec3, f32, f32)> {
+        let mut walls = self.gapped_wall(self.north_wall_z).to_vec();
+        walls.push(self.solid_wall(self.south_wall_z()));
+        walls.extend(self.side_walls());
+        walls
+    }
+
+    /// Tường quây KÍN tầng — không khoảng hở nào cả. Dùng cho tầng chồng
+    /// thật lên tầng dưới VÀ có tầng trên (cũng chồng thật) — cả 2 lối
+    /// nối đều là giếng thang xuyên sàn, không đi qua tường.
+    pub fn walls_enclosed(&self) -> Vec<(Vec3, f32, f32)> {
+        let mut walls = vec![self.solid_wall(self.north_wall_z), self.solid_wall(self.south_wall_z())];
+        walls.extend(self.side_walls());
+        walls
+    }
+
     /// (center, size_x, size_z) cho tấm sàn của tầng — center.y đã trừ
     /// nửa độ dày, khớp quy ước "sàn dày ARENA_WALL_THICKNESS, mặt trên ở
     /// đúng elevation" dùng xuyên suốt Map 1.
@@ -145,6 +166,29 @@ impl FloorLevel {
         let size_x = self.half_size_x * 2.0;
         let size_z = self.half_size_z * 2.0;
         (Vec3::new(0.0, self.elevation - ARENA_WALL_THICKNESS / 2.0, self.center_z()), size_x, size_z)
+    }
+
+    /// 4 dải sàn bao quanh 1 lỗ vuông ở giữa (chỗ giếng thang xuyên qua từ
+    /// tầng dưới lên) — thay cho floor_slab() khi tầng này có 1 giếng
+    /// thang chồng thật xuyên qua. Cùng quy ước center.y với floor_slab().
+    /// Người gọi tự đảm bảo lỗ nằm trọn trong biên sàn — không tự kiểm
+    /// tra, chỉ là hình học thuần túy.
+    pub fn floor_slab_with_hole(&self, hole_center_x: f32, hole_center_z: f32, hole_half: f32) -> [(Vec3, f32, f32); 4] {
+        let y = self.elevation - ARENA_WALL_THICKNESS / 2.0;
+        let (hx0, hx1) = (hole_center_x - hole_half, hole_center_x + hole_half);
+        let (hz0, hz1) = (hole_center_z - hole_half, hole_center_z + hole_half);
+        let (fx0, fx1) = (-self.half_size_x, self.half_size_x);
+        let (fz0, fz1) = (self.north_wall_z, self.south_wall_z());
+        [
+            // Bắc: mép Bắc sàn → mép Bắc lỗ, đủ bề rộng X.
+            (Vec3::new(0.0, y, (fz0 + hz0) / 2.0), fx1 - fx0, hz0 - fz0),
+            // Nam: mép Nam lỗ → mép Nam sàn.
+            (Vec3::new(0.0, y, (hz1 + fz1) / 2.0), fx1 - fx0, fz1 - hz1),
+            // Tây: đúng dải Z của lỗ, mép Tây sàn → mép Tây lỗ.
+            (Vec3::new((fx0 + hx0) / 2.0, y, hole_center_z), hx0 - fx0, hz1 - hz0),
+            // Đông: đúng dải Z của lỗ, mép Đông lỗ → mép Đông sàn.
+            (Vec3::new((hx1 + fx1) / 2.0, y, hole_center_z), fx1 - hx1, hz1 - hz0),
+        ]
     }
 }
 
@@ -261,4 +305,112 @@ pub fn random_map1_zombie_spawn_pos(seed: usize) -> Vec3 {
     let z = floor.center_z() + (-1.0 + 2.0 * (in_floor_seed * INV_G2).fract()) * half_z;
     let y = floor.elevation + crate::zombie::ZOMBIE_RADIUS + crate::zombie::ZOMBIE_LENGTH / 2.0;
     Vec3::new(x, y, z)
+}
+
+// --- Giếng thang bộ "4 góc cuộn" — nối các tầng CHỒNG THẬT (cùng tâm
+// X/Z, chỉ khác cao độ) thay cho ramp_between() (vốn giả định 2 tầng nằm
+// xéo dọc Z, cách nhau đúng RAMP_RUN). G/F2/F3 giờ dùng chung 1
+// north_wall_z (xem doc comment ở office.rs/f3.rs) nên "khoảng hở tường
+// Nam nối sang tầng kế" không còn nghĩa gì — lối lên thật là 1 giếng
+// vuông xuyên qua lỗ sàn tầng trên, đi 1 vòng quanh 4 cạnh giếng (ngược
+// chiều kim đồng hồ) trong lúc leo hết 1 tầng cao — đúng tinh thần "cầu
+// thang xoắn ốc" trong GDD, chỉ là góc vuông thay vì cong tròn cho dễ
+// dựng bằng panel phẳng.
+
+/// Vị trí X của giếng — dùng chung cho mọi cặp tầng chồng thật (1 giếng
+/// liên tục xuyên suốt G→F2→F3→...), giữ nguyên quy ước X=6 các mốc
+/// "chân cầu thang xoắn ốc" cũ (LOBBY_STAIRCASE_POS/F2_STAIRCASE_POS...)
+/// đã dùng.
+pub const TOWER_SHAFT_X: f32 = 6.0;
+/// Nửa bề rộng giếng (hình vuông TOWER_SHAFT_HALF*2 mỗi cạnh).
+pub const TOWER_SHAFT_HALF: f32 = 2.0;
+/// Bề rộng mỗi nhịp thang (dải panel người chơi thật sự đi trên đó) —
+/// nhỏ hơn TOWER_SHAFT_HALF*2 để chừa 1 khoảng trống hình vuông ở giữa
+/// giếng (giống giếng trời/light-well của cầu thang xoắn ốc thật).
+pub const TOWER_STAIR_WIDTH: f32 = 1.6;
+/// Khoảng cách từ north_wall_z (chung của mọi tầng chồng thật) tới tâm Z
+/// giếng — chọn 16.5 vì đây là dải Z DUY NHẤT không đụng bất kỳ phòng
+/// nội thất nào đã có sẵn ở CẢ F2 (bàn ở +5, phòng riêng/tủ đồ ở 8.5-13.5)
+/// lẫn F3 (phòng họp 1-7, văn phòng A/B 34.5-44.5) cùng lúc — xem map1
+/// coordinate audit. Đổi số này thì phải kiểm tra lại cả 2 tầng.
+pub const TOWER_SHAFT_Z_OFFSET: f32 = 16.5;
+
+/// (center, rotation, full-size) cho 1 đoạn dốc thẳng nối 2 điểm bất kỳ
+/// trong không gian — tổng quát hoá ramp_between() (vốn chỉ chạy dọc
+/// trục Z) để dùng cho các nhịp switchback chạy dọc trục X hoặc Z tuỳ
+/// cạnh giếng. Cùng phép bù "centerline → mặt trên" ramp_between() đã có
+/// (xem doc comment của nó) để mặt dốc chạm khít cả 2 đầu, không lơ lửng.
+fn ramp_segment(start: Vec3, end: Vec3, width: f32, thickness: f32) -> (Vec3, Quat, Vec3) {
+    let delta = end - start;
+    let run = (delta.x * delta.x + delta.z * delta.z).sqrt();
+    let rise = delta.y;
+    // Quay quanh Y trước để local +Z hướng đúng theo (delta.x, delta.z)
+    // nằm ngang, RỒI mới nghiêng quanh trục X cục bộ (đã xoay) theo góc
+    // dốc — xem doc comment ramp_between() cho công thức Rx cơ sở.
+    let heading = delta.x.atan2(delta.z);
+    let slope_angle = rise.atan2(run);
+    let surface_len = (run * run + rise * rise).sqrt();
+    let rotation = Quat::from_rotation_y(heading) * Quat::from_rotation_x(-slope_angle);
+    let centerline = (start + end) / 2.0;
+    let center = centerline - rotation * Vec3::new(0.0, thickness / 2.0, 0.0);
+    (center, rotation, Vec3::new(width, thickness, surface_len))
+}
+
+/// (center, size_x, size_y, size_z) × 2 — lan can 2 bên 1 nhịp thang
+/// switchback (thẳng đứng, không nghiêng theo dốc, giống
+/// ramp_guard_walls_between nhưng chỉ cao GUARD_HEIGHT cục bộ quanh
+/// nhịp đó thay vì suốt chiều cao tầng — nhịp này nằm kín trong giếng
+/// riêng, không phải ngoài trời). `start`/`end` luôn thẳng theo trục X
+/// hoặc Z (giếng vuông góc), nên chỉ cần biết trục nào để chọn hướng
+/// lệch sang 2 bên.
+fn switchback_guard_walls(start: Vec3, end: Vec3, width: f32) -> [(Vec3, f32, f32, f32); 2] {
+    const GUARD_HEIGHT: f32 = 1.2;
+    let mid = (start + end) / 2.0;
+    let mid_y = mid.y + GUARD_HEIGHT / 2.0;
+    if (end.x - start.x).abs() >= (end.z - start.z).abs() {
+        let len = (end.x - start.x).abs();
+        [
+            (Vec3::new(mid.x, mid_y, mid.z - width / 2.0), len, GUARD_HEIGHT, ARENA_WALL_THICKNESS),
+            (Vec3::new(mid.x, mid_y, mid.z + width / 2.0), len, GUARD_HEIGHT, ARENA_WALL_THICKNESS),
+        ]
+    } else {
+        let len = (end.z - start.z).abs();
+        [
+            (Vec3::new(mid.x - width / 2.0, mid_y, mid.z), ARENA_WALL_THICKNESS, GUARD_HEIGHT, len),
+            (Vec3::new(mid.x + width / 2.0, mid_y, mid.z), ARENA_WALL_THICKNESS, GUARD_HEIGHT, len),
+        ]
+    }
+}
+
+/// 4 nhịp dốc + lan can cho 1 giếng thang "4 góc cuộn" nối `from` lên
+/// `to` (2 tầng CHỒNG THẬT, cùng tâm X/Z) — đi 1 vòng ngược chiều kim
+/// đồng hồ quanh giếng vuông tâm `(shaft_x, shaft_z)`, mỗi cạnh leo đúng
+/// 1/4 tổng độ cao. Điểm cuối nhịp N luôn trùng khít điểm đầu nhịp N+1
+/// (cùng toạ độ, cùng cao độ) nên 4 nhịp nối liền mạch không cần chiếu
+/// nghỉ riêng. Trả về (4 nhịp dốc, 8 tường lan can) — người gọi tự
+/// `ramp_panel`/`wall_panel4` từng cái như mọi mảnh khác của map1.
+pub fn switchback_stairwell(shaft_x: f32, shaft_z: f32, from: &FloorLevel, to: &FloorLevel) -> (Vec<(Vec3, Quat, Vec3)>, Vec<(Vec3, f32, f32, f32)>) {
+    let inset = TOWER_SHAFT_HALF - TOWER_STAIR_WIDTH / 2.0;
+    let rise_per_flight = (to.elevation - from.elevation) / 4.0;
+    // 5 góc = 4 cạnh, ngược chiều kim đồng hồ nhìn từ trên xuống, bắt đầu
+    // từ góc Tây Nam (trùng phía khoảng hở Bắc cũ của tầng dưới nên lối
+    // vào tự nhiên, không cần thêm gì).
+    let corners_xz = [
+        (shaft_x - inset, shaft_z + inset),
+        (shaft_x + inset, shaft_z + inset),
+        (shaft_x + inset, shaft_z - inset),
+        (shaft_x - inset, shaft_z - inset),
+        (shaft_x - inset, shaft_z + inset),
+    ];
+    let mut flights = Vec::with_capacity(4);
+    let mut guards = Vec::with_capacity(8);
+    for i in 0..4 {
+        let (x0, z0) = corners_xz[i];
+        let (x1, z1) = corners_xz[i + 1];
+        let start = Vec3::new(x0, from.elevation + rise_per_flight * i as f32, z0);
+        let end = Vec3::new(x1, from.elevation + rise_per_flight * (i as f32 + 1.0), z1);
+        flights.push(ramp_segment(start, end, TOWER_STAIR_WIDTH, ARENA_WALL_THICKNESS));
+        guards.extend(switchback_guard_walls(start, end, TOWER_STAIR_WIDTH));
+    }
+    (flights, guards)
 }

@@ -20,7 +20,7 @@
 use bevy::prelude::{Quat, Vec3};
 
 use super::office::F2_FLOOR;
-use super::{ramp_between, ramp_guard_walls_between, small_room_walls, FloorLevel, RoomDoor, FLOOR_HEIGHT};
+use super::{small_room_walls, switchback_stairwell, FloorLevel, RoomDoor, FLOOR_HEIGHT, TOWER_SHAFT_X, TOWER_SHAFT_Z_OFFSET};
 
 // Cao độ sàn F3 — 1 FLOOR_HEIGHT nữa so với F2 (3 * FLOOR_HEIGHT so với
 // Gara B1 ở đáy).
@@ -35,8 +35,10 @@ pub const F3_WALL_HEIGHT: f32 = 4.0;
 pub const F3_HALF_SIZE_X: f32 = 15.0;
 pub const F3_HALF_SIZE_Z: f32 = 17.0;
 
-pub const F3_FLOOR: FloorLevel =
-    FloorLevel::new(F3_HALF_SIZE_X, F3_HALF_SIZE_Z, F3_WALL_HEIGHT, F3_ELEVATION, F2_FLOOR.next_north_wall_z());
+// F3 giờ CHỒNG THẬT ngay trên F2 (cùng north_wall_z với F2_FLOOR, không
+// phải F2_FLOOR.next_north_wall_z() nữa) — cùng lý do với F2_FLOOR ở
+// office.rs, xem doc comment ở đó.
+pub const F3_FLOOR: FloorLevel = FloorLevel::new(F3_HALF_SIZE_X, F3_HALF_SIZE_Z, F3_WALL_HEIGHT, F3_ELEVATION, F2_FLOOR.north_wall_z);
 
 pub const F3_NORTH_WALL_Z: f32 = F3_FLOOR.north_wall_z;
 pub const F3_CENTER_Z: f32 = F3_FLOOR.center_z();
@@ -62,28 +64,24 @@ pub const F3_OFFICE_A_CENTER: (f32, f32) = (-10.5, F3_NORTH_WALL_Z + 22.0);
 pub const F3_OFFICE_B_HALF: Vec3 = Vec3::new(3.5, F3_WALL_HEIGHT / 2.0, 3.5);
 pub const F3_OFFICE_B_CENTER: (f32, f32) = (10.5, F3_NORTH_WALL_Z + 22.0);
 
-// "Chân cầu thang xoắn ốc" lên F4 — trụ placeholder gần cuối F3. Lệch
-// sang Đông để không chặn khoảng hở tường Nam (chưa xây, đây chỉ là mốc
-// trực quan cho lần build tới, giống F2_STAIRCASE_POS/LOBBY_STAIRCASE_POS).
-pub const F3_STAIRCASE_RADIUS: f32 = 2.2;
-pub const F3_STAIRCASE_HEIGHT: f32 = F3_WALL_HEIGHT;
-pub const F3_STAIRCASE_POS: (f32, f32) = (6.0, F3_SOUTH_WALL_Z - 3.0);
+// Tâm X/Z giếng thang F2→F3 — cùng 1 giếng liên tục xuyên suốt
+// G→F2→F3, xem TOWER_SHAFT_X/TOWER_SHAFT_Z_OFFSET's doc comment ở
+// mod.rs. Vị trí này cũng chính là "chân cầu thang xoắn ốc lên F4" cho
+// lần build tới (giếng vẫn tiếp tục thẳng lên, chỉ chưa có F4 để nối).
+pub const F3_SHAFT_Z: f32 = F3_NORTH_WALL_Z + TOWER_SHAFT_Z_OFFSET;
 
-/// Đường dốc nối F2 lên F3.
-pub fn ramp3_geometry() -> (Vec3, Quat, Vec3) {
-    ramp_between(&F2_FLOOR, &F3_FLOOR)
+/// Giếng thang "4 góc cuộn" nối F2 lên F3 — thay cho đường dốc nằm xéo cũ
+/// (ramp3_geometry/ramp3_guard_walls, đã xoá) vì F3 giờ chồng thật ngay
+/// trên F2.
+pub fn stairwell_f2_to_f3() -> (Vec<(Vec3, Quat, Vec3)>, Vec<(Vec3, f32, f32, f32)>) {
+    switchback_stairwell(TOWER_SHAFT_X, F3_SHAFT_Z, &F2_FLOOR, &F3_FLOOR)
 }
 
-/// 2 tường chắn 2 bên đường dốc F2→F3.
-pub fn ramp3_guard_walls() -> [(Vec3, f32, f32, f32); 2] {
-    ramp_guard_walls_between(&F2_FLOOR, &F3_FLOOR)
-}
-
-/// (center, size_x, size_z) cho 5 bức tường quây quanh F3 — chỉ chừa
-/// khoảng hở tường Bắc (giáp chân dốc từ F2); tường Nam liền mạch (F4
-/// chưa xây).
+/// (center, size_x, size_z) cho 4 bức tường quây KÍN F3 — không còn
+/// khoảng hở tường nào (lối vào từ F2 giờ là giếng thang xuyên sàn; F4
+/// chưa xây nên chưa có gì để chừa hở phía Nam nữa).
 pub fn f3_walls() -> Vec<(Vec3, f32, f32)> {
-    F3_FLOOR.walls_top_floor()
+    F3_FLOOR.walls_enclosed()
 }
 
 /// Tường phòng họp kính — mở về hướng Nam (vào hành lang chính).
