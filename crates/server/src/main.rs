@@ -14,6 +14,7 @@ use bevy_replicon_renet2::{
 use big_brain::prelude::*;
 use shared::{
     entity_phase, resolve_bone_world_positions, zombie_hit_damage_bones, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
+    LevelBox, LevelTransform,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount,
@@ -196,6 +197,8 @@ fn main() {
         .replicate::<Health>()
         .replicate::<LastProcessedInput>()
         .replicate::<DebugBot>()
+        .replicate::<LevelBox>()
+        .replicate::<LevelTransform>()
         .add_client_event::<ClientInput>(Channel::Unreliable)
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
         .add_client_event::<FireShot>(Channel::Ordered)
@@ -308,12 +311,19 @@ fn start_server(mut commands: Commands, channels: Res<RepliconChannels>, scenari
     info!("dedicated server listening on {public_addr}");
 }
 
-// Mirrors crates/client's USE_MAP1_B1_GARAGE dev flag — flip both together.
-// When true, this process's authoritative colliders/spawn point are the
-// Map 1 B1 Garage greybox instead of the generic test arena, so the two
-// processes' physical worlds stay in sync with whatever crates/client is
-// currently rendering (see spawn_arena_colliders' doc comment and
-// crates/shared/src/map1_b1_garage.rs for why this matters).
+// Toggles whether this process's authoritative world is the Map 1
+// greybox (garage/lobby/F2/F3, replicated out as LevelBox entities — see
+// spawn_map1_level_pieces) or the generic flat test arena. No longer
+// needs to be mirrored on the client side (USE_MAP1_B1_GARAGE there only
+// affects the client's own local pre-sync spawn guess now) — the SERVER
+// alone decides what the level looks like, and any connected client
+// (desktop or iOS, either renderer) builds it purely by reacting to
+// whatever LevelBox entities show up over the network. See LevelBox's
+// own doc comment (crates/shared/src/level_piece.rs) for why this is a
+// real improvement over the old "both processes read the same Rust
+// constants" scheme: editing the map now means editing
+// crates/shared/src/map1's code + restarting the SERVER — no client
+// rebuild, on any platform, needed for a map-only change.
 const USE_MAP1_B1_GARAGE: bool = true;
 
 // Same flat room as crates/client's USE_TEST_ARENA path (floor + 4 walls),
@@ -322,10 +332,7 @@ const USE_MAP1_B1_GARAGE: bool = true;
 // something to collide against.
 fn spawn_arena_colliders(mut commands: Commands) {
     if USE_MAP1_B1_GARAGE {
-        spawn_map1_b1_garage_colliders(&mut commands);
-        spawn_map1_g_lobby_colliders(&mut commands);
-        spawn_map1_f2_office_colliders(&mut commands);
-        spawn_map1_f3_colliders(&mut commands);
+        spawn_map1_level_pieces(&mut commands);
         return;
     }
 
@@ -363,200 +370,113 @@ fn spawn_arena_colliders(mut commands: Commands) {
     }
 }
 
-// Collider-only mirror of crates/client's spawn_map1_b1_garage — same
-// floor/walls/car-cover geometry, read from the same shared::map1_b1_garage
-// arrays/fn, so the two processes' physical worlds can't drift apart (same
-// discipline as spawn_arena_colliders above).
-fn spawn_map1_b1_garage_colliders(commands: &mut Commands) {
-    let floor_size_x = GARAGE_HALF_SIZE_X * 2.0;
-    let floor_size_z = GARAGE_HALF_SIZE_Z * 2.0;
-    commands.spawn((
-        Transform::from_xyz(0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0),
-        RigidBody::Static,
-        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
-    ));
+// Builds every Map 1 floor (garage/lobby/F2/F3) as (translation, rotation,
+// full-size, color, roughness) tuples using the exact same
+// shared::map1 geometry functions the old 4 collider-only + 4 mesh-only
+// functions each used to read independently, then spawns ONE entity per
+// piece: a real RigidBody::Static + Collider (this process's own
+// authoritative physics, unchanged from before) PLUS LevelBox +
+// LevelTransform + Replicated, so a connected client can build its own
+// mesh + local collider purely from what shows up over the network — see
+// LevelBox's own doc comment (crates/shared/src/level_piece.rs) for why
+// this replaces both the old collider-only AND mesh-only functions.
+fn spawn_map1_level_pieces(commands: &mut Commands) {
+    // (translation, rotation, full-size, color, roughness) — color/
+    // roughness now live here (not in shared) since the server is the
+    // only process deciding what a level looks like; a client just
+    // displays whatever LevelBox it's handed.
+    let mut pieces: Vec<(Vec3, Quat, Vec3, [f32; 3], f32)> = Vec::new();
+    let ident = Quat::IDENTITY;
 
+    // --- B1 Garage ---
+    let garage_wall_color = [0.55, 0.5, 0.45];
+    let garage_floor_size = Vec3::new(GARAGE_HALF_SIZE_X * 2.0, ARENA_WALL_THICKNESS, GARAGE_HALF_SIZE_Z * 2.0);
+    pieces.push((Vec3::new(0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0), ident, garage_floor_size, [0.35, 0.35, 0.38], 0.9));
     for (center, size_x, size_z) in garage_walls() {
-        commands.spawn((
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, ARENA_WALL_HEIGHT, size_z),
-        ));
+        pieces.push((center, ident, Vec3::new(size_x, ARENA_WALL_HEIGHT, size_z), garage_wall_color, 0.85));
     }
-
     let car_size = GARAGE_CAR_SIZE;
     for &(x, z) in &GARAGE_CAR_POSITIONS {
-        commands.spawn((
-            Transform::from_xyz(x, car_size.y / 2.0, z),
-            RigidBody::Static,
-            Collider::cuboid(car_size.x, car_size.y, car_size.z),
-        ));
+        pieces.push((Vec3::new(x, car_size.y / 2.0, z), ident, car_size, [0.65, 0.15, 0.15], 0.6));
     }
-}
 
-// Collider-only mirror of crates/client's spawn_map1_g_lobby — same
-// floor/walls/desk/staircase-placeholder geometry, read from
-// shared::map1_g_lobby, so this room stays physically in sync with what
-// the client draws (same discipline as the garage above).
-fn spawn_map1_g_lobby_colliders(commands: &mut Commands) {
-    let floor_size_x = LOBBY_HALF_SIZE_X * 2.0;
-    let floor_size_z = LOBBY_HALF_SIZE_Z * 2.0;
-    commands.spawn((
-        Transform::from_xyz(0.0, FLOOR_HEIGHT - ARENA_WALL_THICKNESS / 2.0, LOBBY_CENTER_Z),
-        RigidBody::Static,
-        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
-    ));
-
+    // --- G Lobby ---
+    let lobby_wall_color = [0.6, 0.58, 0.52];
+    let lobby_floor_size = Vec3::new(LOBBY_HALF_SIZE_X * 2.0, ARENA_WALL_THICKNESS, LOBBY_HALF_SIZE_Z * 2.0);
+    pieces.push((Vec3::new(0.0, FLOOR_HEIGHT - ARENA_WALL_THICKNESS / 2.0, LOBBY_CENTER_Z), ident, lobby_floor_size, [0.42, 0.4, 0.36], 0.8));
     for (center, size_x, size_z) in lobby_walls() {
-        commands.spawn((
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, LOBBY_WALL_HEIGHT, size_z),
-        ));
+        pieces.push((center, ident, Vec3::new(size_x, LOBBY_WALL_HEIGHT, size_z), lobby_wall_color, 0.7));
     }
-
     let (ramp_center, ramp_rotation, ramp_size) = ramp_geometry();
-    commands.spawn((
-        Transform::from_translation(ramp_center).with_rotation(ramp_rotation),
-        RigidBody::Static,
-        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
-    ));
-
+    pieces.push((ramp_center, ramp_rotation, ramp_size, [0.38, 0.36, 0.33], 0.9));
     for (center, size_x, size_y, size_z) in ramp_guard_walls() {
-        commands.spawn((
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, size_y, size_z),
-        ));
+        pieces.push((center, ident, Vec3::new(size_x, size_y, size_z), lobby_wall_color, 0.7));
     }
-
     let desk_size = LOBBY_DESK_SIZE;
     let (desk_x, desk_z) = LOBBY_DESK_POS;
-    commands.spawn((
-        Transform::from_xyz(desk_x, FLOOR_HEIGHT + desk_size.y / 2.0, desk_z),
-        RigidBody::Static,
-        Collider::cuboid(desk_size.x, desk_size.y, desk_size.z),
-    ));
-
+    pieces.push((Vec3::new(desk_x, FLOOR_HEIGHT + desk_size.y / 2.0, desk_z), ident, desk_size, [0.25, 0.35, 0.45], 0.6));
+    // Staircase placeholder: a short block instead of the visual cylinder
+    // the old mesh-only version used — LevelBox only knows boxes (see its
+    // own doc comment), and this is a pure decorative marker anyway.
     let (stair_x, stair_z) = LOBBY_STAIRCASE_POS;
-    commands.spawn((
-        Transform::from_xyz(stair_x, FLOOR_HEIGHT + LOBBY_STAIRCASE_HEIGHT / 2.0, stair_z),
-        RigidBody::Static,
-        Collider::cylinder(LOBBY_STAIRCASE_RADIUS, LOBBY_STAIRCASE_HEIGHT),
-    ));
-}
+    let stair_size = Vec3::new(LOBBY_STAIRCASE_RADIUS * 2.0, LOBBY_STAIRCASE_HEIGHT, LOBBY_STAIRCASE_RADIUS * 2.0);
+    pieces.push((Vec3::new(stair_x, FLOOR_HEIGHT + LOBBY_STAIRCASE_HEIGHT / 2.0, stair_z), ident, stair_size, [0.35, 0.32, 0.3], 0.75));
 
-// Collider-only mirror of crates/client's spawn_map1_f2_office — same
-// floor/walls/desk/room/staircase-placeholder geometry, read from
-// shared::map1_f2_office, so this floor stays physically in sync with
-// what the client draws (same discipline as the two floors below it).
-fn spawn_map1_f2_office_colliders(commands: &mut Commands) {
-    let floor_size_x = F2_HALF_SIZE_X * 2.0;
-    let floor_size_z = F2_HALF_SIZE_Z * 2.0;
-    commands.spawn((
-        Transform::from_xyz(0.0, F2_ELEVATION - ARENA_WALL_THICKNESS / 2.0, F2_CENTER_Z),
-        RigidBody::Static,
-        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
-    ));
-
+    // --- F2 Office ---
+    let f2_wall_color = [0.72, 0.7, 0.64];
+    let f2_floor_size = Vec3::new(F2_HALF_SIZE_X * 2.0, ARENA_WALL_THICKNESS, F2_HALF_SIZE_Z * 2.0);
+    pieces.push((Vec3::new(0.0, F2_ELEVATION - ARENA_WALL_THICKNESS / 2.0, F2_CENTER_Z), ident, f2_floor_size, [0.5, 0.48, 0.44], 0.8));
     for (center, size_x, size_z) in office_walls() {
-        commands.spawn((
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, F2_WALL_HEIGHT, size_z),
-        ));
+        pieces.push((center, ident, Vec3::new(size_x, F2_WALL_HEIGHT, size_z), f2_wall_color, 0.7));
     }
-
-    let (ramp_center, ramp_rotation, ramp_size) = ramp2_geometry();
-    commands.spawn((
-        Transform::from_translation(ramp_center).with_rotation(ramp_rotation),
-        RigidBody::Static,
-        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
-    ));
-
+    let (ramp2_center, ramp2_rotation, ramp2_size) = ramp2_geometry();
+    pieces.push((ramp2_center, ramp2_rotation, ramp2_size, [0.4, 0.38, 0.35], 0.9));
     for (center, size_x, size_y, size_z) in ramp2_guard_walls() {
-        commands.spawn((
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, size_y, size_z),
-        ));
+        pieces.push((center, ident, Vec3::new(size_x, size_y, size_z), f2_wall_color, 0.7));
     }
-
-    let desk_size = F2_DESK_SIZE;
+    let f2_desk_size = F2_DESK_SIZE;
     for &(x, z) in &F2_DESK_POSITIONS {
-        commands.spawn((
-            Transform::from_xyz(x, F2_ELEVATION + desk_size.y / 2.0, z),
-            RigidBody::Static,
-            Collider::cuboid(desk_size.x, desk_size.y, desk_size.z),
-        ));
+        pieces.push((Vec3::new(x, F2_ELEVATION + f2_desk_size.y / 2.0, z), ident, f2_desk_size, [0.55, 0.4, 0.25], 0.6));
     }
-
     for (center, size_x, size_y, size_z) in office_room_walls().into_iter().chain(locker_room_walls()) {
-        commands.spawn((
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, size_y, size_z),
-        ));
+        pieces.push((center, ident, Vec3::new(size_x, size_y, size_z), [0.35, 0.5, 0.55], 0.65));
     }
+    let (f2_stair_x, f2_stair_z) = F2_STAIRCASE_POS;
+    let f2_stair_size = Vec3::new(F2_STAIRCASE_RADIUS * 2.0, F2_STAIRCASE_HEIGHT, F2_STAIRCASE_RADIUS * 2.0);
+    pieces.push((Vec3::new(f2_stair_x, F2_ELEVATION + F2_STAIRCASE_HEIGHT / 2.0, f2_stair_z), ident, f2_stair_size, [0.35, 0.32, 0.3], 0.75));
 
-    let (stair_x, stair_z) = F2_STAIRCASE_POS;
-    commands.spawn((
-        Transform::from_xyz(stair_x, F2_ELEVATION + F2_STAIRCASE_HEIGHT / 2.0, stair_z),
-        RigidBody::Static,
-        Collider::cylinder(F2_STAIRCASE_RADIUS, F2_STAIRCASE_HEIGHT),
-    ));
-}
-
-// Collider-only mirror of crates/client's spawn_map1_f3 — same
-// floor/walls/room/staircase-placeholder geometry, read from
-// shared::map1::f3, so this floor stays physically in sync with what the
-// client draws (same discipline as the three floors below it).
-fn spawn_map1_f3_colliders(commands: &mut Commands) {
-    let floor_size_x = F3_HALF_SIZE_X * 2.0;
-    let floor_size_z = F3_HALF_SIZE_Z * 2.0;
-    commands.spawn((
-        Transform::from_xyz(0.0, F3_ELEVATION - ARENA_WALL_THICKNESS / 2.0, F3_CENTER_Z),
-        RigidBody::Static,
-        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
-    ));
-
+    // --- F3 Office (sustain peak) ---
+    let f3_wall_color = [0.68, 0.62, 0.6];
+    let f3_floor_size = Vec3::new(F3_HALF_SIZE_X * 2.0, ARENA_WALL_THICKNESS, F3_HALF_SIZE_Z * 2.0);
+    pieces.push((Vec3::new(0.0, F3_ELEVATION - ARENA_WALL_THICKNESS / 2.0, F3_CENTER_Z), ident, f3_floor_size, [0.48, 0.46, 0.42], 0.8));
     for (center, size_x, size_z) in f3_walls() {
-        commands.spawn((
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, F3_WALL_HEIGHT, size_z),
-        ));
+        pieces.push((center, ident, Vec3::new(size_x, F3_WALL_HEIGHT, size_z), f3_wall_color, 0.7));
     }
-
-    let (ramp_center, ramp_rotation, ramp_size) = ramp3_geometry();
-    commands.spawn((
-        Transform::from_translation(ramp_center).with_rotation(ramp_rotation),
-        RigidBody::Static,
-        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
-    ));
-
+    let (ramp3_center, ramp3_rotation, ramp3_size) = ramp3_geometry();
+    pieces.push((ramp3_center, ramp3_rotation, ramp3_size, [0.4, 0.38, 0.35], 0.9));
     for (center, size_x, size_y, size_z) in ramp3_guard_walls() {
+        pieces.push((center, ident, Vec3::new(size_x, size_y, size_z), f3_wall_color, 0.7));
+    }
+    for (center, size_x, size_y, size_z) in meeting_room_walls() {
+        pieces.push((center, ident, Vec3::new(size_x, size_y, size_z), [0.55, 0.65, 0.7], 0.4));
+    }
+    for (center, size_x, size_y, size_z) in office_a_walls().into_iter().chain(office_b_walls()) {
+        pieces.push((center, ident, Vec3::new(size_x, size_y, size_z), [0.55, 0.45, 0.35], 0.65));
+    }
+    let (f3_stair_x, f3_stair_z) = F3_STAIRCASE_POS;
+    let f3_stair_size = Vec3::new(F3_STAIRCASE_RADIUS * 2.0, F3_STAIRCASE_HEIGHT, F3_STAIRCASE_RADIUS * 2.0);
+    pieces.push((Vec3::new(f3_stair_x, F3_ELEVATION + F3_STAIRCASE_HEIGHT / 2.0, f3_stair_z), ident, f3_stair_size, [0.35, 0.32, 0.3], 0.75));
+
+    for (translation, rotation, size, color, roughness) in pieces {
         commands.spawn((
-            Transform::from_translation(center),
+            Transform::from_translation(translation).with_rotation(rotation),
             RigidBody::Static,
-            Collider::cuboid(size_x, size_y, size_z),
+            Collider::cuboid(size.x, size.y, size.z),
+            LevelBox::new(size, color, roughness),
+            LevelTransform::new(translation, rotation),
+            Replicated,
         ));
     }
-
-    for (center, size_x, size_y, size_z) in meeting_room_walls().into_iter().chain(office_a_walls()).chain(office_b_walls()) {
-        commands.spawn((
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, size_y, size_z),
-        ));
-    }
-
-    let (stair_x, stair_z) = F3_STAIRCASE_POS;
-    commands.spawn((
-        Transform::from_xyz(stair_x, F3_ELEVATION + F3_STAIRCASE_HEIGHT / 2.0, stair_z),
-        RigidBody::Static,
-        Collider::cylinder(F3_STAIRCASE_RADIUS, F3_STAIRCASE_HEIGHT),
-    ));
 }
 
 // Spawns the player's gameplay components directly onto its connection

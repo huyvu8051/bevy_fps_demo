@@ -1896,6 +1896,8 @@ fn build_game_common(app: &mut App) {
         .replicate::<Health>()
         .replicate::<LastProcessedInput>()
         .replicate::<DebugBot>()
+        .replicate::<shared::LevelBox>()
+        .replicate::<shared::LevelTransform>()
         .add_client_event::<ClientInput>(Channel::Unreliable)
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
         .add_client_event::<FireShot>(Channel::Ordered)
@@ -2111,6 +2113,7 @@ fn build_game_common(app: &mut App) {
                 wire_zombie_animations,
                 wire_zombie_hitbox_bones,
                 wire_gun_mesh,
+                spawn_level_box_visuals,
                 update_zombie_animation,
                 freeze_zombie_animations,
                 wire_player_model_animations,
@@ -2421,14 +2424,10 @@ fn setup(
     });
 
     if USE_MAP1_B1_GARAGE {
-        spawn_map1_b1_garage(&mut commands, &mut meshes, &mut materials);
-        // Sảnh G nối liền ngay phía Nam của Gara qua khoảng hở tường —
-        // spawn cùng lúc để đi bộ thẳng từ tầng này sang tầng kia.
-        spawn_map1_g_lobby(&mut commands, &mut meshes, &mut materials);
-        // F2 nối tiếp ngay phía Nam của Sảnh G qua đường dốc thứ 2.
-        spawn_map1_f2_office(&mut commands, &mut meshes, &mut materials);
-        // F3 nối tiếp ngay phía Nam của F2 qua đường dốc thứ 3.
-        spawn_map1_f3(&mut commands, &mut meshes, &mut materials);
+        // Sàn/tường/dốc/bàn/phòng giờ do SERVER quyết định và replicate
+        // xuống dưới dạng LevelBox (xem spawn_level_box_visuals) — client
+        // chỉ còn cần tự lo phần đèn tĩnh cục bộ của mình.
+        spawn_map1_lights(&mut commands);
     } else if USE_TEST_ARENA {
         spawn_test_arena(&mut commands, &mut meshes, &mut materials);
     } else {
@@ -4819,67 +4818,16 @@ fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
     ));
 }
 
-// Map 1 "Tòa nhà văn phòng" — Tầng B1 (Gara để xe) greybox, first walkable
-// test build of the real Map 1 layout (see USE_MAP1_B1_GARAGE and
-// docs/maps/map01_highrise.md for the ASCII mockup this is based on). Same
-// hand-built-primitives approach as spawn_test_arena (floor + walls +
-// obstacle cuboids, all with matching avian3d colliders) — CHƯA có
-// texture/model thật, chỉ để test đi lại + va chạm. Geometry itself lives
-// in shared::map1_b1_garage so crates/server's collider-only mirror can't
-// drift out of sync with what's drawn here (same discipline as
-// ARENA_HALF_SIZE/NAVMESH_COLUMN_OBSTACLES).
-fn spawn_map1_b1_garage(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
-    let floor_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.3, 0.3, 0.32),
-        perceptual_roughness: 0.95,
-        ..default()
-    });
-    let wall_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.5, 0.48, 0.45),
-        perceptual_roughness: 0.85,
-        ..default()
-    });
-    let car_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.65, 0.15, 0.15),
-        perceptual_roughness: 0.6,
-        ..default()
-    });
-
-    let floor_size_x = shared::GARAGE_HALF_SIZE_X * 2.0;
-    let floor_size_z = shared::GARAGE_HALF_SIZE_Z * 2.0;
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z))),
-        MeshMaterial3d(floor_material),
-        Transform::from_xyz(0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0),
-        RigidBody::Static,
-        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
-    ));
-
-    for (center, size_x, size_z) in shared::garage_walls() {
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size_x, ARENA_WALL_HEIGHT, size_z))),
-            MeshMaterial3d(wall_material.clone()),
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, ARENA_WALL_HEIGHT, size_z),
-        ));
-    }
-
-    // "Xe hơi đậu" — placeholder cover boxes, not real car meshes yet.
-    let car_size = shared::GARAGE_CAR_SIZE;
-    let car_mesh = meshes.add(Cuboid::new(car_size.x, car_size.y, car_size.z));
-    for &(x, z) in &shared::GARAGE_CAR_POSITIONS {
-        commands.spawn((
-            Mesh3d(car_mesh.clone()),
-            MeshMaterial3d(car_material.clone()),
-            Transform::from_xyz(x, car_size.y / 2.0, z),
-            RigidBody::Static,
-            Collider::cuboid(car_size.x, car_size.y, car_size.z),
-        ));
-    }
-
-    // Same reasoning as spawn_test_arena's overhead PointLight — a garage
-    // has no windows, so without this the room would be pitch black.
+// Map 1 "Tòa nhà văn phòng" — đèn tĩnh cho garage/lobby/F2/F3. Phần hình
+// học sàn/tường/dốc/bàn/phòng KHÔNG còn dựng ở đây nữa — SERVER quyết
+// định hết rồi replicate ra dưới dạng LevelBox (xem spawn_level_box_visuals
+// bên dưới và doc comment ở crates/shared/src/level_piece.rs). Đèn tĩnh
+// (PointLight) không nằm trong LevelBox (không có lý do gameplay/va chạm
+// gì để gửi qua mạng), nên vẫn dựng ở client, đọc cùng hằng số vị trí
+// shared::map1 mà server dùng để sinh hình học — thuần cosmetic, để ở
+// local là an toàn.
+fn spawn_map1_lights(commands: &mut Commands) {
+    // B1 Garage — không cửa sổ, cần 1 đèn overhead sáng hoặc phòng sẽ tối om.
     commands.spawn((
         PointLight {
             color: Color::srgb(0.85, 0.88, 1.0),
@@ -4890,106 +4838,8 @@ fn spawn_map1_b1_garage(commands: &mut Commands, meshes: &mut Assets<Mesh>, mate
         },
         Transform::from_xyz(0.0, ARENA_WALL_HEIGHT - 0.2, 0.0),
     ));
-}
 
-// Map 1 "Tòa nhà văn phòng" — Tầng G (Sảnh chính) greybox, nối liền phía
-// Nam của B1 Garage qua khoảng hở đã chừa sẵn trong garage_walls() (xem
-// USE_MAP1_B1_GARAGE và docs/maps/map01_highrise.md's "Tầng G — Sảnh
-// chính" cho mockup ASCII). Trần cao hơn Gara (LOBBY_WALL_HEIGHT) đúng
-// tinh thần "không gian mở" của mockup. Cùng cách dựng bằng primitives +
-// StandardMaterial màu phẳng như spawn_map1_b1_garage — CHƯA texture.
-fn spawn_map1_g_lobby(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
-    let floor_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.42, 0.4, 0.36),
-        perceptual_roughness: 0.8,
-        ..default()
-    });
-    let wall_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.6, 0.58, 0.52),
-        perceptual_roughness: 0.7,
-        ..default()
-    });
-    let desk_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.25, 0.35, 0.45),
-        perceptual_roughness: 0.6,
-        ..default()
-    });
-    let staircase_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.35, 0.32, 0.3),
-        perceptual_roughness: 0.75,
-        ..default()
-    });
-    let ramp_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.38, 0.36, 0.33),
-        perceptual_roughness: 0.9,
-        ..default()
-    });
-
-    let floor_size_x = shared::LOBBY_HALF_SIZE_X * 2.0;
-    let floor_size_z = shared::LOBBY_HALF_SIZE_Z * 2.0;
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z))),
-        MeshMaterial3d(floor_material),
-        Transform::from_xyz(0.0, shared::FLOOR_HEIGHT - ARENA_WALL_THICKNESS / 2.0, shared::LOBBY_CENTER_Z),
-        RigidBody::Static,
-        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
-    ));
-
-    for (center, size_x, size_z) in shared::lobby_walls() {
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size_x, shared::LOBBY_WALL_HEIGHT, size_z))),
-            MeshMaterial3d(wall_material.clone()),
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, shared::LOBBY_WALL_HEIGHT, size_z),
-        ));
-    }
-
-    // Đường dốc nối Gara B1 (Y=0) lên Sảnh G (Y=FLOOR_HEIGHT) — xem
-    // shared::ramp_geometry() cho lý do chọn mặt dốc thay vì bậc thang.
-    let (ramp_center, ramp_rotation, ramp_size) = shared::ramp_geometry();
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(ramp_size.x, ramp_size.y, ramp_size.z))),
-        MeshMaterial3d(ramp_material),
-        Transform::from_translation(ramp_center).with_rotation(ramp_rotation),
-        RigidBody::Static,
-        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
-    ));
-
-    // Tường chắn 2 bên đường dốc, tránh rơi ra ngoài khi lên/xuống.
-    for (center, size_x, size_y, size_z) in shared::ramp_guard_walls() {
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size_x, size_y, size_z))),
-            MeshMaterial3d(wall_material.clone()),
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, size_y, size_z),
-        ));
-    }
-
-    // "Quầy lễ tân" — cover box, đặt trên mặt sàn đã nâng cao.
-    let desk_size = shared::LOBBY_DESK_SIZE;
-    let (desk_x, desk_z) = shared::LOBBY_DESK_POS;
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(desk_size.x, desk_size.y, desk_size.z))),
-        MeshMaterial3d(desk_material),
-        Transform::from_xyz(desk_x, shared::FLOOR_HEIGHT + desk_size.y / 2.0, desk_z),
-        RigidBody::Static,
-        Collider::cuboid(desk_size.x, desk_size.y, desk_size.z),
-    ));
-
-    // "Chân cầu thang xoắn ốc" — trụ placeholder, chưa dẫn lên F2.
-    let (stair_x, stair_z) = shared::LOBBY_STAIRCASE_POS;
-    commands.spawn((
-        Mesh3d(meshes.add(Cylinder::new(shared::LOBBY_STAIRCASE_RADIUS, shared::LOBBY_STAIRCASE_HEIGHT))),
-        MeshMaterial3d(staircase_material),
-        Transform::from_xyz(stair_x, shared::FLOOR_HEIGHT + shared::LOBBY_STAIRCASE_HEIGHT / 2.0, stair_z),
-        RigidBody::Static,
-        Collider::cylinder(shared::LOBBY_STAIRCASE_RADIUS, shared::LOBBY_STAIRCASE_HEIGHT),
-    ));
-
-    // Trần cao hơn Gara → cần 2 đèn overhead thay vì 1 để phủ đều không
-    // gian mở rộng hơn.
+    // G Lobby — trần cao, không gian mở → 2 đèn thay vì 1.
     for &(lx, lz) in &[(-6.0, shared::LOBBY_CENTER_Z - 4.0), (6.0, shared::LOBBY_CENTER_Z + 4.0)] {
         commands.spawn((
             PointLight {
@@ -5002,120 +4852,8 @@ fn spawn_map1_g_lobby(commands: &mut Commands, meshes: &mut Assets<Mesh>, materi
             Transform::from_xyz(lx, shared::FLOOR_HEIGHT + shared::LOBBY_WALL_HEIGHT - 0.3, lz),
         ));
     }
-}
 
-// Map 1 "Tòa nhà văn phòng" — Tầng F2 (Văn phòng) greybox, nối tiếp Sảnh
-// G qua đường dốc thứ 2 (xem USE_MAP1_B1_GARAGE và
-// docs/maps/map01_highrise.md's "Tầng F2 — Văn phòng tầng 2" cho mockup
-// ASCII). Cùng cách dựng bằng primitives + StandardMaterial màu phẳng
-// như 2 tầng dưới — CHƯA texture.
-fn spawn_map1_f2_office(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
-    let floor_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.5, 0.48, 0.44),
-        perceptual_roughness: 0.8,
-        ..default()
-    });
-    let wall_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.72, 0.7, 0.64),
-        perceptual_roughness: 0.7,
-        ..default()
-    });
-    let ramp_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.4, 0.38, 0.35),
-        perceptual_roughness: 0.9,
-        ..default()
-    });
-    let desk_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.55, 0.4, 0.25),
-        perceptual_roughness: 0.6,
-        ..default()
-    });
-    let room_wall_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.35, 0.5, 0.55),
-        perceptual_roughness: 0.65,
-        ..default()
-    });
-    let staircase_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.35, 0.32, 0.3),
-        perceptual_roughness: 0.75,
-        ..default()
-    });
-
-    let floor_size_x = shared::F2_HALF_SIZE_X * 2.0;
-    let floor_size_z = shared::F2_HALF_SIZE_Z * 2.0;
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z))),
-        MeshMaterial3d(floor_material),
-        Transform::from_xyz(0.0, shared::F2_ELEVATION - ARENA_WALL_THICKNESS / 2.0, shared::F2_CENTER_Z),
-        RigidBody::Static,
-        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
-    ));
-
-    for (center, size_x, size_z) in shared::office_walls() {
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size_x, shared::F2_WALL_HEIGHT, size_z))),
-            MeshMaterial3d(wall_material.clone()),
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, shared::F2_WALL_HEIGHT, size_z),
-        ));
-    }
-
-    // Đường dốc nối Sảnh G lên F2.
-    let (ramp_center, ramp_rotation, ramp_size) = shared::ramp2_geometry();
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(ramp_size.x, ramp_size.y, ramp_size.z))),
-        MeshMaterial3d(ramp_material),
-        Transform::from_translation(ramp_center).with_rotation(ramp_rotation),
-        RigidBody::Static,
-        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
-    ));
-    for (center, size_x, size_y, size_z) in shared::ramp2_guard_walls() {
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size_x, size_y, size_z))),
-            MeshMaterial3d(wall_material.clone()),
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, size_y, size_z),
-        ));
-    }
-
-    // "Dãy bàn làm việc" — cover thấp, dễ bắn qua đầu.
-    let desk_size = shared::F2_DESK_SIZE;
-    let desk_mesh = meshes.add(Cuboid::new(desk_size.x, desk_size.y, desk_size.z));
-    for &(x, z) in &shared::F2_DESK_POSITIONS {
-        commands.spawn((
-            Mesh3d(desk_mesh.clone()),
-            MeshMaterial3d(desk_material.clone()),
-            Transform::from_xyz(x, shared::F2_ELEVATION + desk_size.y / 2.0, z),
-            RigidBody::Static,
-            Collider::cuboid(desk_size.x, desk_size.y, desk_size.z),
-        ));
-    }
-
-    // "Văn phòng riêng" + "Phòng tủ đồ nhân viên" — mỗi phòng 3 tường,
-    // chừa 1 mặt mở làm lối vào (xem shared::small_room_walls doc comment).
-    for (center, size_x, size_y, size_z) in shared::office_room_walls().into_iter().chain(shared::locker_room_walls()) {
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size_x, size_y, size_z))),
-            MeshMaterial3d(room_wall_material.clone()),
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, size_y, size_z),
-        ));
-    }
-
-    // "Chân cầu thang xoắn ốc" lên F3 — trụ placeholder, chưa dẫn lên đâu.
-    let (stair_x, stair_z) = shared::F2_STAIRCASE_POS;
-    commands.spawn((
-        Mesh3d(meshes.add(Cylinder::new(shared::F2_STAIRCASE_RADIUS, shared::F2_STAIRCASE_HEIGHT))),
-        MeshMaterial3d(staircase_material),
-        Transform::from_xyz(stair_x, shared::F2_ELEVATION + shared::F2_STAIRCASE_HEIGHT / 2.0, stair_z),
-        RigidBody::Static,
-        Collider::cylinder(shared::F2_STAIRCASE_RADIUS, shared::F2_STAIRCASE_HEIGHT),
-    ));
-
-    // Trần thấp hơn Sảnh → đèn overhead dày hơn để phủ đều dãy cubicle.
+    // F2 Office — trần thấp hơn Sảnh → 3 đèn dọc dãy cubicle để phủ đều.
     for &(lx, lz) in &[
         (0.0, shared::F2_NORTH_WALL_Z + 5.0),
         (0.0, shared::F2_CENTER_Z),
@@ -5132,120 +4870,9 @@ fn spawn_map1_f2_office(commands: &mut Commands, meshes: &mut Assets<Mesh>, mate
             Transform::from_xyz(lx, shared::F2_ELEVATION + shared::F2_WALL_HEIGHT - 0.3, lz),
         ));
     }
-}
 
-// Map 1 "Tòa nhà văn phòng" — Tầng F3 (Văn phòng, sustain peak) greybox,
-// nối tiếp F2 qua đường dốc thứ 3 (xem USE_MAP1_B1_GARAGE và
-// docs/maps/map01_highrise.md's "Tầng F3 — Văn phòng tầng 3" cho mockup
-// ASCII). Cùng cách dựng bằng primitives + StandardMaterial màu phẳng
-// như 3 tầng dưới — CHƯA texture, CHƯA logic trigger/horde thật (xem
-// shared::map1::f3's doc comment).
-fn spawn_map1_f3(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
-    let floor_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.48, 0.46, 0.42),
-        perceptual_roughness: 0.8,
-        ..default()
-    });
-    let wall_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.68, 0.62, 0.6),
-        perceptual_roughness: 0.7,
-        ..default()
-    });
-    let ramp_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.4, 0.38, 0.35),
-        perceptual_roughness: 0.9,
-        ..default()
-    });
-    let meeting_room_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.55, 0.65, 0.7),
-        perceptual_roughness: 0.4, // phòng họp kính — bóng hơn tường thường
-        ..default()
-    });
-    let office_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.55, 0.45, 0.35),
-        perceptual_roughness: 0.65,
-        ..default()
-    });
-    let staircase_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.35, 0.32, 0.3),
-        perceptual_roughness: 0.75,
-        ..default()
-    });
-
-    let floor_size_x = shared::F3_HALF_SIZE_X * 2.0;
-    let floor_size_z = shared::F3_HALF_SIZE_Z * 2.0;
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z))),
-        MeshMaterial3d(floor_material),
-        Transform::from_xyz(0.0, shared::F3_ELEVATION - ARENA_WALL_THICKNESS / 2.0, shared::F3_CENTER_Z),
-        RigidBody::Static,
-        Collider::cuboid(floor_size_x, ARENA_WALL_THICKNESS, floor_size_z),
-    ));
-
-    for (center, size_x, size_z) in shared::f3_walls() {
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size_x, shared::F3_WALL_HEIGHT, size_z))),
-            MeshMaterial3d(wall_material.clone()),
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, shared::F3_WALL_HEIGHT, size_z),
-        ));
-    }
-
-    // Đường dốc nối F2 lên F3.
-    let (ramp_center, ramp_rotation, ramp_size) = shared::ramp3_geometry();
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(ramp_size.x, ramp_size.y, ramp_size.z))),
-        MeshMaterial3d(ramp_material),
-        Transform::from_translation(ramp_center).with_rotation(ramp_rotation),
-        RigidBody::Static,
-        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
-    ));
-    for (center, size_x, size_y, size_z) in shared::ramp3_guard_walls() {
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size_x, size_y, size_z))),
-            MeshMaterial3d(wall_material.clone()),
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, size_y, size_z),
-        ));
-    }
-
-    // "Phòng họp kính (đã nứt sẵn)" — bóng hơn tường thường để gợi cảm
-    // giác kính, dù collider vẫn là tường đặc như mọi phòng khác.
-    for (center, size_x, size_y, size_z) in shared::meeting_room_walls() {
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size_x, size_y, size_z))),
-            MeshMaterial3d(meeting_room_material.clone()),
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, size_y, size_z),
-        ));
-    }
-
-    // "Văn phòng A" + "Văn phòng B" — 2 phòng bên hông hành lang chính.
-    for (center, size_x, size_y, size_z) in shared::office_a_walls().into_iter().chain(shared::office_b_walls()) {
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size_x, size_y, size_z))),
-            MeshMaterial3d(office_material.clone()),
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size_x, size_y, size_z),
-        ));
-    }
-
-    // "Chân cầu thang xoắn ốc" lên F4 — trụ placeholder, chưa dẫn lên đâu.
-    let (stair_x, stair_z) = shared::F3_STAIRCASE_POS;
-    commands.spawn((
-        Mesh3d(meshes.add(Cylinder::new(shared::F3_STAIRCASE_RADIUS, shared::F3_STAIRCASE_HEIGHT))),
-        MeshMaterial3d(staircase_material),
-        Transform::from_xyz(stair_x, shared::F3_ELEVATION + shared::F3_STAIRCASE_HEIGHT / 2.0, stair_z),
-        RigidBody::Static,
-        Collider::cylinder(shared::F3_STAIRCASE_RADIUS, shared::F3_STAIRCASE_HEIGHT),
-    ));
-
-    // Hành lang dài hơn F2 → 4 đèn overhead thay vì 3 để phủ đều hết
-    // chiều dài (đúng tinh thần "hành lang chính, dài, mở" của mockup).
+    // F3 Office — hành lang dài hơn F2 → 4 đèn để phủ đều hết chiều dài
+    // ("hành lang chính, dài, mở" theo mockup).
     for &(lx, lz) in &[
         (0.0, shared::F3_NORTH_WALL_Z + 5.0),
         (0.0, shared::F3_NORTH_WALL_Z + 14.0),
@@ -5261,6 +4888,36 @@ fn spawn_map1_f3(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: 
                 ..default()
             },
             Transform::from_xyz(lx, shared::F3_ELEVATION + shared::F3_WALL_HEIGHT - 0.3, lz),
+        ));
+    }
+}
+
+// Phản ứng với bất kỳ LevelBox nào server replicate xuống (xem doc
+// comment của component đó ở crates/shared/src/level_piece.rs) bằng cách
+// tự dựng mesh + collider cục bộ cho nó — đây chính là điểm mấu chốt của
+// LevelBox: CHỈ 1 hệ thống này lo hết mọi tầng Map 1 (và bất kỳ tầng nào
+// sau này), nên sửa map không bao giờ cần build lại client trên bất kỳ
+// nền tảng nào nữa. Mỗi box tạo 1 StandardMaterial riêng (tốn hơn dùng
+// chung, vì nhiều box trùng màu) nhưng đơn giản và đúng — đáng cân nhắc
+// lại nếu sau này scale lên nhiều hơn 1 map test.
+fn spawn_level_box_visuals(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    boxes: Query<(Entity, &shared::LevelBox, &shared::LevelTransform), Added<shared::LevelBox>>,
+) {
+    for (entity, level_box, level_transform) in &boxes {
+        let material = materials.add(StandardMaterial {
+            base_color: Color::srgb(level_box.color[0], level_box.color[1], level_box.color[2]),
+            perceptual_roughness: level_box.roughness,
+            ..default()
+        });
+        commands.entity(entity).insert((
+            Mesh3d(meshes.add(Cuboid::new(level_box.size.x, level_box.size.y, level_box.size.z))),
+            MeshMaterial3d(material),
+            Transform::from_translation(level_transform.translation).with_rotation(level_transform.rotation),
+            RigidBody::Static,
+            Collider::cuboid(level_box.size.x, level_box.size.y, level_box.size.z),
         ));
     }
 }
