@@ -142,12 +142,25 @@ impl FloorLevel {
 /// Rotation quanh trục X là góc ÂM của góc dốc vì Bevy's Rx(φ) đưa local
 /// +Z thành world (0, -sin φ, cos φ) — cần φ = -góc_dốc để mặt dốc nghiêng
 /// LÊN khi Z tăng.
+///
+/// `center` là tâm ĐƯỜNG TÂM (centerline) của khối, không phải mặt trên
+/// (mặt người chơi thật sự đi trên đó) — mặt trên lệch khỏi centerline
+/// đúng `ARENA_WALL_THICKNESS/2` theo PHÁP TUYẾN của mặt dốc (vuông góc
+/// mặt nghiêng), không phải thẳng đứng. Với 1 mặt phẳng nghiêng, "lệch
+/// theo pháp tuyến" ăn bớt 1 phần theo trục đứng (nhân cos góc dốc) và
+/// thêm 1 chút theo trục ngang (nhân sin góc dốc) — nên nếu cứ đặt tâm
+/// centerline đúng ngay từ.elevation/to.elevation, MẶT TRÊN sẽ nằm cao
+/// hơn hẳn 2 mặt sàn ở cả 2 đầu dốc (đúng bug "cầu thang cao hơn floor"
+/// đã báo — lỗi có sẵn từ trước, không phải do panel gây ra). Dịch tâm
+/// lùi lại đúng nửa độ dày theo pháp tuyến (xuống dưới) để bù trừ, mặt
+/// trên mới thật sự chạm khít cả 2 đầu sàn.
 pub fn ramp_between(from: &FloorLevel, to: &FloorLevel) -> (Vec3, Quat, Vec3) {
     let rise = to.elevation - from.elevation;
     let slope_angle = rise.atan2(RAMP_RUN);
     let surface_len = (RAMP_RUN * RAMP_RUN + rise * rise).sqrt();
-    let center = Vec3::new(0.0, from.elevation + rise / 2.0, from.south_wall_z() + RAMP_RUN / 2.0);
     let rotation = Quat::from_rotation_x(-slope_angle);
+    let centerline = Vec3::new(0.0, from.elevation + rise / 2.0, from.south_wall_z() + RAMP_RUN / 2.0);
+    let center = centerline - rotation * Vec3::new(0.0, ARENA_WALL_THICKNESS / 2.0, 0.0);
     let size = Vec3::new(RAMP_WIDTH, ARENA_WALL_THICKNESS, surface_len);
     (center, rotation, size)
 }
