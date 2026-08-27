@@ -14,7 +14,7 @@ use bevy_replicon_renet2::{
 use big_brain::prelude::*;
 use shared::{
     entity_phase, resolve_bone_world_positions, zombie_hit_damage_bones, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
-    LevelBox, LevelTransform,
+    LevelBox, LevelPanel, LevelTransform,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount,
@@ -198,6 +198,7 @@ fn main() {
         .replicate::<LastProcessedInput>()
         .replicate::<DebugBot>()
         .replicate::<LevelBox>()
+        .replicate::<LevelPanel>()
         .replicate::<LevelTransform>()
         .add_client_event::<ClientInput>(Channel::Unreliable)
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
@@ -389,15 +390,42 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
     let ident = Quat::IDENTITY;
 
     // --- B1 Garage ---
+    // Tô 2 màu khác nhau cho Khu A (gần lối vào/spawn) và Khu B (sâu
+    // hơn) để phân biệt trực quan — Khu B tối hơn hẳn (sàn lẫn xe), đúng
+    // tinh thần "sâu hơn, tối hơn" của mockup (docs/maps/map01_highrise.md).
+    // Ranh giới đặt ở Z=1.5 — giữa hàng xe cuối Khu A (z=0) và hàng xe
+    // đầu Khu B (z=3), xem GARAGE_CAR_POSITIONS.
     let garage_wall_color = [0.55, 0.5, 0.45];
-    let garage_floor_size = Vec3::new(GARAGE_HALF_SIZE_X * 2.0, ARENA_WALL_THICKNESS, GARAGE_HALF_SIZE_Z * 2.0);
-    pieces.push((Vec3::new(0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0), ident, garage_floor_size, [0.35, 0.35, 0.38], 0.9));
+    let khu_boundary_z = 1.5;
+    let khu_a_floor_color = [0.42, 0.42, 0.46];
+    let khu_b_floor_color = [0.18, 0.18, 0.21];
+    let khu_a_car_color = [0.65, 0.15, 0.15]; // đỏ
+    let khu_b_car_color = [0.15, 0.25, 0.55]; // xanh dương đậm
+
+    let floor_size_x = GARAGE_HALF_SIZE_X * 2.0;
+    let khu_a_size_z = khu_boundary_z - -GARAGE_HALF_SIZE_Z;
+    let khu_b_size_z = GARAGE_HALF_SIZE_Z - khu_boundary_z;
+    pieces.push((
+        Vec3::new(0.0, -ARENA_WALL_THICKNESS / 2.0, -GARAGE_HALF_SIZE_Z + khu_a_size_z / 2.0),
+        ident,
+        Vec3::new(floor_size_x, ARENA_WALL_THICKNESS, khu_a_size_z),
+        khu_a_floor_color,
+        0.9,
+    ));
+    pieces.push((
+        Vec3::new(0.0, -ARENA_WALL_THICKNESS / 2.0, khu_boundary_z + khu_b_size_z / 2.0),
+        ident,
+        Vec3::new(floor_size_x, ARENA_WALL_THICKNESS, khu_b_size_z),
+        khu_b_floor_color,
+        0.9,
+    ));
     for (center, size_x, size_z) in garage_walls() {
         pieces.push((center, ident, Vec3::new(size_x, ARENA_WALL_HEIGHT, size_z), garage_wall_color, 0.85));
     }
     let car_size = GARAGE_CAR_SIZE;
     for &(x, z) in &GARAGE_CAR_POSITIONS {
-        pieces.push((Vec3::new(x, car_size.y / 2.0, z), ident, car_size, [0.65, 0.15, 0.15], 0.6));
+        let car_color = if z < khu_boundary_z { khu_a_car_color } else { khu_b_car_color };
+        pieces.push((Vec3::new(x, car_size.y / 2.0, z), ident, car_size, car_color, 0.6));
     }
 
     // --- G Lobby ---
@@ -473,6 +501,30 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
             RigidBody::Static,
             Collider::cuboid(size.x, size.y, size.z),
             LevelBox::new(size, color, roughness),
+            LevelTransform::new(translation, rotation),
+            Replicated,
+        ));
+    }
+
+    // (translation, rotation, width, height, color, roughness) — flat
+    // decorative markers, no collider. Vệt kẻ vàng đánh dấu ranh giới
+    // Khu A / Khu B trên sàn Gara — Rectangle nằm mặc định trong mặt
+    // phẳng XY (thẳng đứng), nên xoay -90° quanh trục X để nó nằm PHẲNG
+    // xuống sàn (mặt phẳng XZ) thay vì dựng đứng như 1 tấm biển.
+    let flat_on_floor = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    let mut panels: Vec<(Vec3, Quat, f32, f32, [f32; 3], f32)> = Vec::new();
+    panels.push((
+        Vec3::new(0.0, 0.02, khu_boundary_z),
+        flat_on_floor,
+        GARAGE_HALF_SIZE_X * 2.0,
+        1.0,
+        [1.0, 0.85, 0.1],
+        0.5,
+    ));
+
+    for (translation, rotation, width, height, color, roughness) in panels {
+        commands.spawn((
+            LevelPanel::new(width, height, color, roughness),
             LevelTransform::new(translation, rotation),
             Replicated,
         ));

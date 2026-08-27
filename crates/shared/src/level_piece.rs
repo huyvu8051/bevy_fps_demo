@@ -10,13 +10,18 @@
 //
 // LevelBox flips that around: the server is now the only process that
 // decides what a level looks like. It spawns one Replicated entity per
-// box (see crates/server's spawn_map1_level_pieces), and any already-
+// piece (see crates/server's spawn_map1_level_pieces), and any already-
 // connected client — desktop or iOS, the normal Bevy/wgpu renderer or
 // the native Metal one — builds its own local mesh + collider purely by
-// reacting to LevelBox showing up over the network (see crates/client's
-// spawn_level_box_visuals). Editing a map now means editing
-// crates/shared/src/map1's Rust code and restarting the SERVER — no
-// client rebuild, on any platform, ever needed for a map-only change.
+// reacting to LevelBox/LevelPanel showing up over the network (see
+// crates/client's spawn_level_box_visuals/spawn_level_panel_visuals).
+// Editing a map now means editing crates/shared/src/map1's Rust code and
+// restarting the SERVER — no client rebuild, on any platform, ever
+// needed for a map-only change.
+//
+// Two shapes so far — LevelBox (a solid cuboid, real collider) and
+// LevelPanel (a thin flat rectangle, no collider) — not everything in a
+// level is a box; a floor stripe or a sign doesn't need volume.
 //
 // A real "edit a .ron file, no Mac rebuild either" version is a natural
 // next step (the server would load the file at Startup instead of
@@ -45,6 +50,25 @@ pub struct LevelBox {
 impl LevelBox {
     pub const fn new(size: Vec3, color: [f32; 3], roughness: f32) -> Self {
         Self { size, color, roughness }
+    }
+}
+
+/// 1 tấm phẳng mỏng trong map (vệt kẻ sàn, biển báo, mặt kính trang
+/// trí...) — nhẹ hơn LevelBox vì không có khối tích, chỉ 1 mặt chữ nhật
+/// (2 tam giác) và KHÔNG có collider (thuần trang trí, đi xuyên qua
+/// được). Dùng khi 1 thứ không cần là khối đặc — không phải cái gì
+/// trong map cũng nên là hình hộp.
+#[derive(Component, Clone, Copy, Serialize, Deserialize)]
+pub struct LevelPanel {
+    pub width: f32,
+    pub height: f32,
+    pub color: [f32; 3],
+    pub roughness: f32,
+}
+
+impl LevelPanel {
+    pub const fn new(width: f32, height: f32, color: [f32; 3], roughness: f32) -> Self {
+        Self { width, height, color, roughness }
     }
 }
 

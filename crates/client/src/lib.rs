@@ -1897,6 +1897,7 @@ fn build_game_common(app: &mut App) {
         .replicate::<LastProcessedInput>()
         .replicate::<DebugBot>()
         .replicate::<shared::LevelBox>()
+        .replicate::<shared::LevelPanel>()
         .replicate::<shared::LevelTransform>()
         .add_client_event::<ClientInput>(Channel::Unreliable)
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
@@ -2114,6 +2115,7 @@ fn build_game_common(app: &mut App) {
                 wire_zombie_hitbox_bones,
                 wire_gun_mesh,
                 spawn_level_box_visuals,
+                spawn_level_panel_visuals,
                 update_zombie_animation,
                 freeze_zombie_animations,
                 wire_player_model_animations,
@@ -4918,6 +4920,31 @@ fn spawn_level_box_visuals(
             Transform::from_translation(level_transform.translation).with_rotation(level_transform.rotation),
             RigidBody::Static,
             Collider::cuboid(level_box.size.x, level_box.size.y, level_box.size.z),
+        ));
+    }
+}
+
+// Same reactive idea as spawn_level_box_visuals, for the other shape —
+// no Collider (LevelPanel is pure decoration, see its own doc comment)
+// and cull_mode: None so a thin flat panel doesn't disappear when seen
+// from its back side.
+fn spawn_level_panel_visuals(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    panels: Query<(Entity, &shared::LevelPanel, &shared::LevelTransform), Added<shared::LevelPanel>>,
+) {
+    for (entity, panel, level_transform) in &panels {
+        let material = materials.add(StandardMaterial {
+            base_color: Color::srgb(panel.color[0], panel.color[1], panel.color[2]),
+            perceptual_roughness: panel.roughness,
+            cull_mode: None,
+            ..default()
+        });
+        commands.entity(entity).insert((
+            Mesh3d(meshes.add(Rectangle::new(panel.width, panel.height))),
+            MeshMaterial3d(material),
+            Transform::from_translation(level_transform.translation).with_rotation(level_transform.rotation),
         ));
     }
 }
