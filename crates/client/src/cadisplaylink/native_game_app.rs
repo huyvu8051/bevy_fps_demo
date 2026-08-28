@@ -152,7 +152,7 @@ pub fn build_headless_game_ecs_app() -> App {
     app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
     app.add_plugins(bevy_replicon::prelude::RepliconPlugins);
     app.add_plugins(bevy_replicon_renet2::RepliconRenetPlugins);
-    crate::build_game_common(&mut app);
+    app.add_plugins(crate::GamePlugin);
 
     // Step 3 (input): several of the game's own input systems
     // (`touch_move_axis`, `touch_look`, `mouse_look`'s `CursorOptions` gate)

@@ -1095,7 +1095,7 @@ pub fn main() {
     if std::env::var("EDITOR").is_ok() {
         app.add_plugins(bevy_editor_pls::EditorPlugin::default());
     }
-    build_game_common(&mut app);
+    app.add_plugins(GamePlugin);
     app.run();
 }
 
@@ -1106,7 +1106,23 @@ pub fn main() {
 // TaskPoolPlugin/WinitSettings stay in each entry point's own setup since
 // they genuinely differ (WinitPlugin disabled + no WinitSettings on the
 // CADisplayLink path), everything else is identical.
-fn build_game_common(app: &mut App) {
+//
+// A real `Plugin`, not just a free function — wraps the ~90-system
+// master Update chain built up across the 7-phase lib.rs file split
+// (see chat/commit history: lib.rs was one 8688-line file; each phase
+// moved a topic's systems into its own file — touch_input/settings_menu/
+// movement_combat/zombie_client/vfx/hud/network_setup — but the
+// REGISTRATION below stays in exactly this one place, in exactly this
+// order). Splitting that registration itself across N independent
+// Plugins would NOT be safe: Bevy doesn't guarantee relative ordering
+// between separate `add_systems` calls, and this pipeline's correctness
+// depends on running in this precise sequence (e.g. camera sync must
+// see this frame's already-applied movement prediction, not next
+// frame's). One `GamePlugin` = one place that owns the order.
+pub(crate) struct GamePlugin;
+
+impl Plugin for GamePlugin {
+    fn build(&self, app: &mut App) {
     app.replicate::<NetworkId>()
         .replicate::<NetPlayer>()
         .replicate::<NetTransform>()
@@ -1374,6 +1390,7 @@ fn build_game_common(app: &mut App) {
         )
             .chain(),
     );
+    }
 }
 
 
