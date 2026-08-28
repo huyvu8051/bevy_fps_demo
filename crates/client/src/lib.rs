@@ -1787,9 +1787,12 @@ fn build_game_common(app: &mut App) {
         .replicate::<Health>()
         .replicate::<LastProcessedInput>()
         .replicate::<DebugBot>()
-        .replicate::<shared::LevelBox>()
-        .replicate::<shared::LevelPanel>()
-        .replicate::<shared::LevelTransform>()
+        // LevelBox/LevelPanel/LevelTransform used to be registered here —
+        // no longer replicated (see level_piece.rs's own doc comment):
+        // this process now builds its own local copy of the map from
+        // shared::map1_level_pieces/item_gallery_level_pieces (see
+        // setup()), same data the server independently builds its
+        // colliders from.
         .add_client_event::<ClientInput>(Channel::Unreliable)
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
         .add_client_event::<FireShot>(Channel::Ordered)
@@ -2317,10 +2320,21 @@ fn setup(
         }),
     });
 
-    if USE_MAP1_B1_GARAGE {
-        // Sàn/tường/dốc/bàn/phòng giờ do SERVER quyết định và replicate
-        // xuống dưới dạng LevelBox (xem spawn_level_box_visuals) — client
-        // chỉ còn cần tự lo phần đèn tĩnh cục bộ của mình.
+    if current_scenario() == Scenario::ItemGallery {
+        // Flat scale-reference rig (crates/shared/src/item_gallery.rs) —
+        // checked before USE_MAP1_B1_GARAGE below since that constant is
+        // always true regardless of scenario.
+        let (pieces, panels) = shared::item_gallery_level_pieces();
+        spawn_level_pieces(&mut commands, pieces, panels);
+    } else if USE_MAP1_B1_GARAGE {
+        // Sàn/tường/dốc/bàn/phòng: build cục bộ từ đúng
+        // shared::map1_level_pieces() server cũng gọi để dựng collider
+        // của nó — xem level_piece.rs's module doc comment cho lý do
+        // không còn replicate nữa. spawn_level_box_visuals/
+        // spawn_level_panel_visuals bên dưới tự phản ứng với
+        // Added<LevelBox>/Added<LevelPanel> để dựng mesh+collider.
+        let (pieces, panels) = shared::map1_level_pieces();
+        spawn_level_pieces(&mut commands, pieces, panels);
         spawn_map1_lights(&mut commands);
     } else if USE_TEST_ARENA {
         spawn_test_arena(&mut commands, &mut meshes, &mut materials);
@@ -4726,6 +4740,28 @@ fn spawn_level_panel_visuals(
                 children.spawn((Transform::from_xyz(0.0, 0.0, offset), Collider::cuboid(panel.width, panel.height, thickness)));
             });
         }
+    }
+}
+
+/// Spawns 1 LOCAL (no Replicated) `LevelBox`/`LevelPanel` entity per
+/// piece from `shared::map1_level_pieces()`/`item_gallery_level_pieces()`
+/// — the exact same data the server independently builds its colliders
+/// from (see level_piece.rs's own doc comment). spawn_level_box_visuals/
+/// spawn_level_panel_visuals above react to `Added<LevelBox>`/
+/// `Added<LevelPanel>` regardless of where the entity came from, so they
+/// pick these up and build mesh+collider the same way they used to for
+/// server-replicated ones — no changes needed there.
+fn spawn_level_pieces(commands: &mut Commands, pieces: Vec<shared::BoxPiece>, panels: Vec<shared::PanelPiece>) {
+    for (translation, rotation, size, color, roughness) in pieces {
+        commands.spawn((shared::LevelBox::new(size, color, roughness), shared::LevelTransform::new(translation, rotation)));
+    }
+    for (translation, rotation, width, height, color, roughness, collider_thickness, collider_offset) in panels {
+        let panel = match collider_thickness {
+            Some(thickness) if collider_offset => shared::LevelPanel::solid_surface(width, height, color, roughness, thickness),
+            Some(thickness) => shared::LevelPanel::solid(width, height, color, roughness, thickness),
+            None => shared::LevelPanel::new(width, height, color, roughness),
+        };
+        commands.spawn((panel, shared::LevelTransform::new(translation, rotation)));
     }
 }
 

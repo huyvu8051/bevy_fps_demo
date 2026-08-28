@@ -10,6 +10,7 @@
 use bevy::prelude::{Quat, Vec3};
 
 use crate::arena::ARENA_WALL_THICKNESS;
+use crate::level_piece::{floor_panel, ramp_panel, wall_panel, wall_panel4, BoxPiece, PanelPiece};
 
 pub mod f3;
 pub mod garage;
@@ -392,4 +393,136 @@ pub fn simple_stairwell(shaft_x: f32, shaft_z: f32, from: &FloorLevel, to: &Floo
 /// sàn tầng trên đúng khớp (xem FloorLevel::floor_slab_with_hole).
 pub const fn simple_stairwell_half_len() -> f32 {
     TOWER_STAIR_RUN + TOWER_STAIR_LANDING_RUN / 2.0
+}
+
+/// Toàn bộ hình học Map 1 (B1 Gara → G Sảnh → F2 → F3) dưới dạng dữ liệu
+/// thuần — (BoxPiece cho nội thất đặc như xe/bàn, PanelPiece cho tường/
+/// sàn/dốc) — KHÔNG tự spawn gì cả. Gọi từ CẢ client lẫn server (xem
+/// level_piece.rs's module doc comment cho lý do): server dùng để spawn
+/// Collider-only cho vật lý thật, client dùng để spawn LevelBox/
+/// LevelPanel cục bộ (không Replicated) rồi để spawn_level_box_visuals/
+/// spawn_level_panel_visuals tự dựng mesh — cùng 1 hàm này đảm bảo 2 bên
+/// không bao giờ lệch hình học.
+pub fn map1_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
+    let mut pieces: Vec<BoxPiece> = Vec::new();
+    let mut panels: Vec<PanelPiece> = Vec::new();
+    let ident = Quat::IDENTITY;
+
+    // --- B1 Garage ---
+    // Tô 2 màu khác nhau cho Khu A (gần lối vào/spawn) và Khu B (sâu
+    // hơn) để phân biệt trực quan — Khu B tối hơn hẳn (sàn lẫn xe), đúng
+    // tinh thần "sâu hơn, tối hơn" của mockup (docs/maps/map01_highrise.md).
+    // Ranh giới đặt ở Z=1.5 — giữa hàng xe cuối Khu A (z=0) và hàng xe
+    // đầu Khu B (z=3), xem GARAGE_CAR_POSITIONS.
+    let garage_wall_color = [0.55, 0.5, 0.45];
+    let khu_boundary_z = 1.5;
+    let khu_a_floor_color = [0.42, 0.42, 0.46];
+    let khu_b_floor_color = [0.18, 0.18, 0.21];
+    let khu_a_car_color = [0.65, 0.15, 0.15]; // đỏ
+    let khu_b_car_color = [0.15, 0.25, 0.55]; // xanh dương đậm
+
+    let floor_size_x = GARAGE_HALF_SIZE_X * 2.0;
+    let khu_a_size_z = khu_boundary_z - -GARAGE_HALF_SIZE_Z;
+    let khu_b_size_z = GARAGE_HALF_SIZE_Z - khu_boundary_z;
+    panels.push(floor_panel(
+        Vec3::new(0.0, -ARENA_WALL_THICKNESS / 2.0, -GARAGE_HALF_SIZE_Z + khu_a_size_z / 2.0),
+        floor_size_x,
+        khu_a_size_z,
+        ARENA_WALL_THICKNESS,
+        khu_a_floor_color,
+        0.9,
+    ));
+    panels.push(floor_panel(
+        Vec3::new(0.0, -ARENA_WALL_THICKNESS / 2.0, khu_boundary_z + khu_b_size_z / 2.0),
+        floor_size_x,
+        khu_b_size_z,
+        ARENA_WALL_THICKNESS,
+        khu_b_floor_color,
+        0.9,
+    ));
+    for (center, size_x, size_z) in garage_walls() {
+        panels.push(wall_panel(center, size_x, size_z, crate::arena::ARENA_WALL_HEIGHT, garage_wall_color, 0.85));
+    }
+    let car_size = GARAGE_CAR_SIZE;
+    for &(x, z) in &GARAGE_CAR_POSITIONS {
+        let car_color = if z < khu_boundary_z { khu_a_car_color } else { khu_b_car_color };
+        pieces.push((Vec3::new(x, car_size.y / 2.0, z), ident, car_size, car_color, 0.6));
+    }
+
+    // --- G Lobby ---
+    let lobby_wall_color = [0.6, 0.58, 0.52];
+    panels.push(floor_panel(
+        Vec3::new(0.0, FLOOR_HEIGHT - ARENA_WALL_THICKNESS / 2.0, LOBBY_CENTER_Z),
+        LOBBY_HALF_SIZE_X * 2.0,
+        LOBBY_HALF_SIZE_Z * 2.0,
+        ARENA_WALL_THICKNESS,
+        [0.42, 0.4, 0.36],
+        0.8,
+    ));
+    for (center, size_x, size_z) in lobby_walls() {
+        panels.push(wall_panel(center, size_x, size_z, LOBBY_WALL_HEIGHT, lobby_wall_color, 0.7));
+    }
+    let (ramp_center, ramp_rotation, ramp_size) = ramp_geometry();
+    panels.push(ramp_panel(ramp_center, ramp_rotation, ramp_size.x, ramp_size.y, ramp_size.z, [0.38, 0.36, 0.33], 0.9));
+    for (center, size_x, size_y, size_z) in ramp_guard_walls() {
+        panels.push(wall_panel4(center, size_x, size_y, size_z, lobby_wall_color, 0.7));
+    }
+    let desk_size = LOBBY_DESK_SIZE;
+    let (desk_x, desk_z) = LOBBY_DESK_POS;
+    pieces.push((Vec3::new(desk_x, FLOOR_HEIGHT + desk_size.y / 2.0, desk_z), ident, desk_size, [0.25, 0.35, 0.45], 0.6));
+    // Không còn khối "chân cầu thang" trang trí ở đây nữa — giếng thang
+    // thật (stairwell_g_to_f2, xây ở đoạn F2 bên dưới vì nó xuyên từ G
+    // lên F2) đã thay thế nó.
+
+    // --- F2 Office (chồng thật ngay trên G — xem F2_FLOOR's doc comment) ---
+    let f2_wall_color = [0.72, 0.7, 0.64];
+    let stairwell_color = [0.4, 0.38, 0.35];
+    for (center, size_x, size_z) in F2_FLOOR.floor_slab_with_hole(TOWER_SHAFT_X, F2_SHAFT_Z, TOWER_STAIR_WIDTH / 2.0, simple_stairwell_half_len()) {
+        panels.push(floor_panel(center, size_x, size_z, ARENA_WALL_THICKNESS, [0.5, 0.48, 0.44], 0.8));
+    }
+    for (center, size_x, size_z) in office_walls() {
+        panels.push(wall_panel(center, size_x, size_z, F2_WALL_HEIGHT, f2_wall_color, 0.7));
+    }
+    // Cầu thang đơn giản G→F2 — thay đường dốc nằm xéo cũ, xem
+    // stairwell_g_to_f2's doc comment.
+    for (center, rotation, size) in stairwell_g_to_f2() {
+        panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stairwell_color, 0.9));
+    }
+    let f2_desk_size = F2_DESK_SIZE;
+    for &(x, z) in &F2_DESK_POSITIONS {
+        pieces.push((Vec3::new(x, F2_ELEVATION + f2_desk_size.y / 2.0, z), ident, f2_desk_size, [0.55, 0.4, 0.25], 0.6));
+    }
+    for (center, size_x, size_y, size_z) in office_room_walls().into_iter().chain(locker_room_walls()) {
+        panels.push(wall_panel4(center, size_x, size_y, size_z, [0.35, 0.5, 0.55], 0.65));
+    }
+
+    // --- F3 Office (sustain peak) — chồng thật ngay trên F2 ---
+    let f3_wall_color = [0.68, 0.62, 0.6];
+    for (center, size_x, size_z) in F3_FLOOR.floor_slab_with_hole(TOWER_SHAFT_X, F3_SHAFT_Z, TOWER_STAIR_WIDTH / 2.0, simple_stairwell_half_len()) {
+        panels.push(floor_panel(center, size_x, size_z, ARENA_WALL_THICKNESS, [0.48, 0.46, 0.42], 0.8));
+    }
+    for (center, size_x, size_z) in f3_walls() {
+        panels.push(wall_panel(center, size_x, size_z, F3_WALL_HEIGHT, f3_wall_color, 0.7));
+    }
+    // Cầu thang F2→F3 — cùng 1 trục X/Z với đoạn G→F2 ở trên (1 đường đi
+    // liên tục), chỉ khác đoạn cao độ.
+    for (center, rotation, size) in stairwell_f2_to_f3() {
+        panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stairwell_color, 0.9));
+    }
+    for (center, size_x, size_y, size_z) in meeting_room_walls() {
+        panels.push(wall_panel4(center, size_x, size_y, size_z, [0.55, 0.65, 0.7], 0.4));
+    }
+    for (center, size_x, size_y, size_z) in office_a_walls().into_iter().chain(office_b_walls()) {
+        panels.push(wall_panel4(center, size_x, size_y, size_z, [0.55, 0.45, 0.35], 0.65));
+    }
+
+    // Vệt kẻ vàng đánh dấu ranh giới Khu A / Khu B trên sàn Gara — tấm
+    // trang trí thuần (không collider, đè lên sàn Khu A/B đã có collider
+    // riêng rồi nên không cần chặn gì thêm). Rectangle nằm mặc định
+    // trong mặt phẳng XY (thẳng đứng), nên xoay -90° quanh trục X để nó
+    // nằm PHẲNG xuống sàn (mặt phẳng XZ) thay vì dựng đứng như 1 tấm biển.
+    let flat_on_floor = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    panels.push((Vec3::new(0.0, 0.02, khu_boundary_z), flat_on_floor, GARAGE_HALF_SIZE_X * 2.0, 1.0, [1.0, 0.85, 0.1], 0.5, None, false));
+
+    (pieces, panels)
 }

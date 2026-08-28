@@ -9,12 +9,16 @@
 // way too small in-engine" here than after a whole floor is built around
 // wrong numbers.
 //
-// Each entry becomes 1 LevelBox (server's spawn_item_gallery_level_pieces,
-// crates/server/src/main.rs) — a plain cuboid at the item's stated
-// (width, height, depth), no attempt at a real mesh/shape. Good enough to
-// judge footprint and height; not meant to look like the real prop.
+// Each entry becomes 1 LevelBox (item_gallery_level_pieces below, called
+// by both client and server — see level_piece.rs's module doc comment)
+// — a plain cuboid at the item's stated (width, height, depth), no
+// attempt at a real mesh/shape. Good enough to judge footprint and
+// height; not meant to look like the real prop.
 
-use bevy::prelude::Vec3;
+use bevy::prelude::{Quat, Vec3};
+
+use crate::arena::ARENA_WALL_THICKNESS;
+use crate::level_piece::{floor_panel, wall_panel, BoxPiece, PanelPiece};
 
 /// (label, size) — label is for code-reading only (this crate has no text
 /// rendering); it also becomes each box's line in the console log the
@@ -56,3 +60,41 @@ pub fn item_gallery_positions() -> Vec<(f32, f32)> {
 // gameplay gì khác — rig này chỉ để đi lại quan sát bằng camera người
 // chơi bình thường (+ editor F2 nếu cần), không phải 1 scenario chơi được.
 pub const ITEM_GALLERY_PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 3.0, ITEM_GALLERY_HALF_SIZE_Z - 2.0);
+
+/// Flat floor + 4 walls + 1 LevelBox per ITEM_GALLERY_ENTRIES — pure
+/// data, no spawning (see map1_level_pieces's own doc comment for why:
+/// same function, called by both client and server).
+pub fn item_gallery_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
+    let half_x = ITEM_GALLERY_HALF_SIZE_X;
+    let half_z = ITEM_GALLERY_HALF_SIZE_Z;
+    let floor_color = [0.35, 0.35, 0.38];
+    let wall_color = [0.5, 0.5, 0.52];
+
+    let mut pieces: Vec<BoxPiece> = Vec::new();
+    let mut panels: Vec<PanelPiece> = Vec::new();
+
+    panels.push(floor_panel(Vec3::ZERO, half_x * 2.0, half_z * 2.0, ARENA_WALL_THICKNESS, floor_color, 0.9));
+
+    let wall_span_x = half_x * 2.0 + ARENA_WALL_THICKNESS;
+    let wall_span_z = half_z * 2.0 + ARENA_WALL_THICKNESS;
+    let walls = [
+        (Vec3::new(0.0, ITEM_GALLERY_WALL_HEIGHT / 2.0, -half_z), wall_span_x, ARENA_WALL_THICKNESS),
+        (Vec3::new(0.0, ITEM_GALLERY_WALL_HEIGHT / 2.0, half_z), wall_span_x, ARENA_WALL_THICKNESS),
+        (Vec3::new(-half_x, ITEM_GALLERY_WALL_HEIGHT / 2.0, 0.0), ARENA_WALL_THICKNESS, wall_span_z),
+        (Vec3::new(half_x, ITEM_GALLERY_WALL_HEIGHT / 2.0, 0.0), ARENA_WALL_THICKNESS, wall_span_z),
+    ];
+    for (center, size_x, size_z) in walls {
+        panels.push(wall_panel(center, size_x, size_z, ITEM_GALLERY_WALL_HEIGHT, wall_color, 0.8));
+    }
+
+    let ident = Quat::IDENTITY;
+    for (i, (_label, size)) in ITEM_GALLERY_ENTRIES.iter().enumerate() {
+        let (x, z) = item_gallery_positions()[i];
+        // Đổi màu xen kẽ theo chỉ số — không mang ý nghĩa gì, chỉ để dễ
+        // phân biệt item liền kề nhau bằng mắt khi đứng xa.
+        let color = if i % 2 == 0 { [0.75, 0.55, 0.2] } else { [0.25, 0.45, 0.75] };
+        pieces.push((Vec3::new(x, size.y / 2.0, z), ident, *size, color, 0.6));
+    }
+
+    (pieces, panels)
+}

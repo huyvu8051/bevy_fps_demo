@@ -1,36 +1,110 @@
-// --- Replicated level geometry ---
-// Static level pieces (walls, floors, ramps, cover boxes...) used to be
-// built independently by both the server (collider-only) and the client
-// (mesh + collider), each reading the exact same shared::map1 Rust
-// constants — correct, but it means the CLIENT needs a rebuild any time
-// the map's Rust code changes. That's a real problem for testing on a
-// phone over a network: editing crates/shared on a dev Mac did nothing
-// for an already-installed iOS build until you rebuilt + reinstalled it
-// through Xcode.
+// --- Level geometry: compiled into BOTH client and server ---
+// Static level pieces (walls, floors, ramps, cover boxes...) are built
+// independently by both the server (collider-only, for its own
+// authoritative physics) and the client (mesh + collider, for rendering
+// + local movement prediction), each reading the exact same shared
+// piece-building functions below (map1_level_pieces/
+// item_gallery_level_pieces) — which in turn read the same
+// shared::map1/item_gallery Rust constants everything else does. No
+// network round-trip decides what a map looks like; it's baked into
+// both binaries at compile time.
 //
-// LevelBox flips that around: the server is now the only process that
-// decides what a level looks like. It spawns one Replicated entity per
-// piece (see crates/server's spawn_map1_level_pieces), and any already-
-// connected client — desktop or iOS, the normal Bevy/wgpu renderer or
-// the native Metal one — builds its own local mesh + collider purely by
-// reacting to LevelBox/LevelPanel showing up over the network (see
-// crates/client's spawn_level_box_visuals/spawn_level_panel_visuals).
-// Editing a map now means editing crates/shared/src/map1's Rust code and
-// restarting the SERVER — no client rebuild, on any platform, ever
-// needed for a map-only change.
+// (This crate briefly went the other way — server-authoritative,
+// replicated LevelBox/LevelPanel entities, so an already-installed
+// client could pick up a map change without a rebuild — see git history
+// around "replicate level geometry to client" if that's ever worth
+// resurrecting. Reverted: for mobile specifically, "rebuild to see a
+// map change" was judged less of a problem than "the map simply
+// doesn't appear if the app can't reach a live server process".)
 //
-// Two shapes so far — LevelBox (a solid cuboid, real collider) and
-// LevelPanel (a thin flat rectangle, no collider) — not everything in a
-// level is a box; a floor stripe or a sign doesn't need volume.
-//
-// A real "edit a .ron file, no Mac rebuild either" version is a natural
-// next step (the server would load the file at Startup instead of
-// calling map1's Rust builder functions) — not done yet; today the data
-// source is still Rust code, just spawned once on the server and
-// replicated out instead of duplicated per-process.
+// LevelBox (a solid cuboid) and LevelPanel (a thin flat rectangle, no
+// real volume) stay as components — not everything in a level needs 6
+// faces; a floor slab or a wall only needs 1. The client still builds
+// its mesh+collider REACTIVELY off these (Added<LevelBox>/
+// Added<LevelPanel>, see spawn_level_box_visuals/
+// spawn_level_panel_visuals) — that reactive pattern doesn't care
+// whether the entity came from the network or a local Startup spawn,
+// so it needed no changes for this revert; only who calls
+// `commands.spawn` and with which components changed.
 
 use bevy::prelude::{Component, Quat, Vec3};
 use serde::{Deserialize, Serialize};
+
+/// (translation, rotation, full-size, color, roughness) — 1 solid
+/// LevelBox worth of data, before it's actually spawned. Vec'd up by
+/// map1_level_pieces/item_gallery_level_pieces so the caller (client:
+/// spawn LevelBox+LevelTransform; server: spawn Collider only) decides
+/// what to attach, without duplicating the geometry math itself.
+pub type BoxPiece = (Vec3, Quat, Vec3, [f32; 3], f32);
+
+/// (translation, rotation, width, height, color, roughness,
+/// collider_thickness, collider_offset) — same idea as BoxPiece, for a
+/// LevelPanel. See LevelPanel's own doc comment for what the last 2
+/// fields mean.
+pub type PanelPiece = (Vec3, Quat, f32, f32, [f32; 3], f32, Option<f32>, bool);
+
+/// Tường đứng trục X hoặc Z — mô tả bằng (center, size_x, size_z) như
+/// garage_walls()/lobby_walls()/office_walls()/f3_walls() vẫn trả về —
+/// thành 1 LevelPanel đứng đúng hướng: tự nhận diện trục nào là chiều
+/// dài tường (trục lớn hơn) để chọn giữ nguyên hướng mặc định của
+/// Rectangle (chạy dọc X) hay xoay 90° quanh Y (chạy dọc Z); trục còn
+/// lại (mỏng) trở thành độ dày collider — vẫn chặn người chơi y hệt khối
+/// hộp cũ, chỉ nhẹ hơn khi vẽ (1 mặt thay vì 6 mặt).
+///
+/// `translation` = `center` NGUYÊN VẸN, không dịch mặt hiển thị (khác
+/// floor_panel/ramp_panel bên dưới) — mỗi tường chỉ có ĐÚNG 1 hướng "vào
+/// trong phòng" cần khít với sàn, nhưng hướng đó khác nhau tùy tường
+/// (Bắc/Nam/Đông/Tây), và hàm này không biết tường đang xây là hướng
+/// nào. Từng thử dịch tất cả tường cùng 1 hướng cục bộ +Z cho "đều tay"
+/// — hoá ra làm tường Nam/Đông trôi ra khỏi mép sàn (bug "chưa khít" đã
+/// báo ở B1) vì hướng đó với chúng lại là RA NGOÀI thay vì vào trong.
+/// Giữ nguyên tâm là lựa chọn AN TOÀN chung cho mọi hướng.
+pub fn wall_panel(center: Vec3, size_x: f32, size_z: f32, wall_height: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
+    if size_x >= size_z {
+        (center, Quat::IDENTITY, size_x, wall_height, color, roughness, Some(size_z), false)
+    } else {
+        (center, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), size_z, wall_height, color, roughness, Some(size_x), false)
+    }
+}
+
+/// Như wall_panel nhưng cho tường đã có sẵn chiều cao riêng (size_y) —
+/// dùng cho ramp_guard_walls()/*_room_walls() (4-tuple, đã có đúng
+/// (center, size_x, size_y, size_z)).
+pub fn wall_panel4(center: Vec3, size_x: f32, size_y: f32, size_z: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
+    if size_x >= size_z {
+        (center, Quat::IDENTITY, size_x, size_y, color, roughness, Some(size_z), false)
+    } else {
+        (center, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), size_z, size_y, color, roughness, Some(size_x), false)
+    }
+}
+
+/// 1 sàn nằm ngang — Rectangle mặc định dựng đứng (mặt phẳng XY) nên xoay
+/// -90° quanh X để nó nằm PHẲNG xuống sàn (mặt phẳng XZ, ngửa lên +Y),
+/// giống vệt kẻ Khu A/Khu B đã làm.
+///
+/// Khác wall_panel: `translation` dịch lên đúng MẶT TRÊN sàn (`center +
+/// rotation * (0,0,thickness/2)`) thay vì giữ tâm độ dày — sàn thì "lên"
+/// luôn là 1 hướng duy nhất (không như tường có 4 hướng khác nhau), nên
+/// dịch an toàn, không lặp lại vấn đề của wall_panel. Collider bù lại
+/// đúng nửa độ dày đó (collider_offset=true) nên vẫn nằm đúng tâm
+/// `center` gốc.
+pub fn floor_panel(center: Vec3, size_x: f32, size_z: f32, thickness: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
+    let rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    let translation = center + rotation * Vec3::new(0.0, 0.0, thickness / 2.0);
+    (translation, rotation, size_x, size_z, color, roughness, Some(thickness), true)
+}
+
+/// 1 mặt dốc — ramp_between() trả về `rotation` vốn nghiêng 1 khối hộp
+/// (mặc định NẰM NGANG) theo đúng góc dốc; ghép thêm phép xoay "nằm
+/// ngang" của floor_panel TRƯỚC rotation đó để 1 tấm Rectangle (mặc định
+/// dựng đứng) có cùng hiệu ứng cuối cùng như khối hộp cũ. Cùng lý do với
+/// floor_panel — "lên trên mặt dốc" là 1 hướng duy nhất — nên cũng dịch
+/// translation lên mặt + collider_offset=true.
+pub fn ramp_panel(center: Vec3, ramp_rotation: Quat, width: f32, thickness: f32, length: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
+    let rotation = ramp_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    let translation = center + rotation * Vec3::new(0.0, 0.0, thickness / 2.0);
+    (translation, rotation, width, length, color, roughness, Some(thickness), true)
+}
 
 /// 1 khối hộp tĩnh trong map (tường, sàn, dốc, bàn, vật cản...) — dữ liệu
 /// đủ để dựng cả phần nhìn thấy được (mesh + material) lẫn collider,

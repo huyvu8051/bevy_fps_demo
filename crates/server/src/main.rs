@@ -14,28 +14,17 @@ use bevy_replicon_renet2::{
 use big_brain::prelude::*;
 use shared::{
     entity_phase, resolve_bone_world_positions, zombie_hit_damage_bones, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
-    LevelBox, LevelPanel, LevelTransform,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount,
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
     ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, random_map1_zombie_spawn_pos,
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
-    GARAGE_HALF_SIZE_X, GARAGE_HALF_SIZE_Z, GARAGE_PLAYER_SPAWN, GARAGE_CAR_SIZE, GARAGE_CAR_POSITIONS, garage_walls,
-    LOBBY_HALF_SIZE_X, LOBBY_HALF_SIZE_Z, LOBBY_WALL_HEIGHT, LOBBY_CENTER_Z, LOBBY_DESK_SIZE, LOBBY_DESK_POS,
-    lobby_walls,
-    FLOOR_HEIGHT, ramp_geometry, ramp_guard_walls,
-    F2_ELEVATION, F2_WALL_HEIGHT, F2_FLOOR, F2_SHAFT_Z, office_walls,
-    stairwell_g_to_f2, F2_DESK_SIZE, F2_DESK_POSITIONS,
-    office_room_walls, locker_room_walls,
-    F3_WALL_HEIGHT, F3_FLOOR, F3_SHAFT_Z, f3_walls,
-    stairwell_f2_to_f3, meeting_room_walls, office_a_walls, office_b_walls,
-    TOWER_SHAFT_X, TOWER_STAIR_WIDTH, simple_stairwell_half_len,
+    GARAGE_PLAYER_SPAWN,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     HitboxTestSlot, HITBOX_TEST_PLAYER_SPAWN, HITBOX_TEST_RESPAWN_DELAY, HITBOX_TEST_ZOMBIE_POSITIONS,
-    ITEM_GALLERY_ENTRIES, ITEM_GALLERY_HALF_SIZE_X, ITEM_GALLERY_HALF_SIZE_Z, ITEM_GALLERY_PLAYER_SPAWN,
-    ITEM_GALLERY_WALL_HEIGHT, item_gallery_positions,
+    ITEM_GALLERY_PLAYER_SPAWN,
     MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PILLAR_RADIUS,
     PLAYER_LENGTH, PLAYER_RADIUS, PLAYER_SPAWN, Scenario,
     RENDER_COMPARE_PLAYER_SPAWN, RENDER_COMPARE_ZOMBIE_POSITIONS,
@@ -199,9 +188,12 @@ fn main() {
         .replicate::<Health>()
         .replicate::<LastProcessedInput>()
         .replicate::<DebugBot>()
-        .replicate::<LevelBox>()
-        .replicate::<LevelPanel>()
-        .replicate::<LevelTransform>()
+        // LevelBox/LevelPanel/LevelTransform used to be registered here —
+        // no longer replicated at all (see level_piece.rs's own doc
+        // comment): both client and server build the exact same map
+        // geometry locally from shared::map1_level_pieces/
+        // item_gallery_level_pieces, so there's nothing for the network
+        // to carry for it anymore.
         .add_client_event::<ClientInput>(Channel::Unreliable)
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
         .add_client_event::<FireShot>(Channel::Ordered)
@@ -394,294 +386,46 @@ fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>) {
 // LevelBox's own doc comment (crates/shared/src/level_piece.rs) for why
 // this replaces both the old collider-only AND mesh-only functions.
 // (translation, rotation, width, height, color, roughness, collider_thickness, collider_offset)
-type PanelPiece = (Vec3, Quat, f32, f32, [f32; 3], f32, Option<f32>, bool);
-
-/// Tường đứng trục X hoặc Z — mô tả bằng (center, size_x, size_z) như
-/// garage_walls()/lobby_walls()/office_walls()/f3_walls() vẫn trả về —
-/// thành 1 LevelPanel đứng đúng hướng: tự nhận diện trục nào là chiều
-/// dài tường (trục lớn hơn) để chọn giữ nguyên hướng mặc định của
-/// Rectangle (chạy dọc X) hay xoay 90° quanh Y (chạy dọc Z); trục còn
-/// lại (mỏng) trở thành độ dày collider — vẫn chặn người chơi y hệt khối
-/// hộp cũ, chỉ nhẹ hơn khi vẽ (1 mặt thay vì 6 mặt).
-///
-/// `translation` = `center` NGUYÊN VẸN, không dịch mặt hiển thị (khác
-/// floor_panel/ramp_panel bên dưới) — mỗi tường chỉ có ĐÚNG 1 hướng "vào
-/// trong phòng" cần khít với sàn, nhưng hướng đó khác nhau tùy tường
-/// (Bắc/Nam/Đông/Tây), và hàm này không biết tường đang xây là hướng
-/// nào. Từng thử dịch tất cả tường cùng 1 hướng cục bộ +Z cho "đều tay"
-/// — hoá ra làm tường Nam/Đông trôi ra khỏi mép sàn (bug "chưa khít" đã
-/// báo ở B1) vì hướng đó với chúng lại là RA NGOÀI thay vì vào trong.
-/// Giữ nguyên tâm là lựa chọn AN TOÀN chung cho mọi hướng.
-fn wall_panel(center: Vec3, size_x: f32, size_z: f32, wall_height: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
-    if size_x >= size_z {
-        (center, Quat::IDENTITY, size_x, wall_height, color, roughness, Some(size_z), false)
-    } else {
-        (center, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), size_z, wall_height, color, roughness, Some(size_x), false)
-    }
-}
-
-/// Như wall_panel nhưng cho tường đã có sẵn chiều cao riêng (size_y) —
-/// dùng cho ramp_guard_walls()/*_room_walls() (4-tuple, đã có đúng
-/// (center, size_x, size_y, size_z)).
-fn wall_panel4(center: Vec3, size_x: f32, size_y: f32, size_z: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
-    if size_x >= size_z {
-        (center, Quat::IDENTITY, size_x, size_y, color, roughness, Some(size_z), false)
-    } else {
-        (center, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), size_z, size_y, color, roughness, Some(size_x), false)
-    }
-}
-
-/// 1 sàn nằm ngang — Rectangle mặc định dựng đứng (mặt phẳng XY) nên xoay
-/// -90° quanh X để nó nằm phẳng xuống (mặt phẳng XZ, ngửa lên +Y), giống
-/// vệt kẻ Khu A/Khu B đã làm trước đó.
-///
-/// Khác wall_panel: `translation` dịch lên đúng MẶT TRÊN sàn (`center +
-/// rotation * (0,0,thickness/2)`) thay vì giữ tâm độ dày — sàn thì "lên"
-/// luôn là 1 hướng duy nhất (không như tường có 4 hướng khác nhau), nên
-/// dịch an toàn, không lặp lại vấn đề của wall_panel. Collider bù lại
-/// đúng nửa độ dày đó (collider_offset=true, xem LevelPanel's doc
-/// comment) nên vẫn nằm đúng tâm `center` gốc — vật lý không đổi so với
-/// LevelBox cũ, chỉ có mặt hiển thị dịch lên đúng chỗ chân người chơi
-/// đứng (đây chính là bug "hở dưới sàn" đã sửa trước đó).
-fn floor_panel(center: Vec3, size_x: f32, size_z: f32, thickness: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
-    let rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-    let translation = center + rotation * Vec3::new(0.0, 0.0, thickness / 2.0);
-    (translation, rotation, size_x, size_z, color, roughness, Some(thickness), true)
-}
-
-/// 1 mặt dốc — ramp_between() trả về `rotation` vốn nghiêng 1 khối hộp
-/// (mặc định NẰM NGANG) theo đúng góc dốc; ghép thêm phép xoay "nằm
-/// ngang" của floor_panel TRƯỚC rotation đó để 1 tấm Rectangle (mặc định
-/// dựng đứng) có cùng hiệu ứng cuối cùng như khối hộp cũ. Cùng lý do với
-/// floor_panel — "lên trên mặt dốc" là 1 hướng duy nhất — nên cũng dịch
-/// translation lên mặt + collider_offset=true.
-fn ramp_panel(center: Vec3, ramp_rotation: Quat, width: f32, thickness: f32, length: f32, color: [f32; 3], roughness: f32) -> PanelPiece {
-    let rotation = ramp_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-    let translation = center + rotation * Vec3::new(0.0, 0.0, thickness / 2.0);
-    (translation, rotation, width, length, color, roughness, Some(thickness), true)
-}
-
+// Both these now just call the shared piece-building functions (see
+// level_piece.rs's module doc comment — same function client also
+// calls) and spawn COLLIDER-ONLY entities from the result: this process
+// runs the real authoritative physics, but no longer decides/replicates
+// what a level LOOKS like — the client builds that independently from
+// the exact same shared data.
 fn spawn_map1_level_pieces(commands: &mut Commands) {
-    // (translation, rotation, full-size, color, roughness) — color/
-    // roughness now live here (not in shared) since the server is the
-    // only process deciding what a level looks like; a client just
-    // displays whatever LevelBox it's handed. Only genuinely volumetric
-    // furniture (cars, desks, staircase markers) stays a LevelBox now —
-    // every wall/floor/ramp piece below is a LevelPanel instead (see
-    // wall_panel/floor_panel/ramp_panel above), since those only ever
-    // need to be SEEN from one side and BLOCK movement, not have real
-    // volume.
-    let mut pieces: Vec<(Vec3, Quat, Vec3, [f32; 3], f32)> = Vec::new();
-    let mut panels: Vec<PanelPiece> = Vec::new();
-    let ident = Quat::IDENTITY;
-
-    // --- B1 Garage ---
-    // Tô 2 màu khác nhau cho Khu A (gần lối vào/spawn) và Khu B (sâu
-    // hơn) để phân biệt trực quan — Khu B tối hơn hẳn (sàn lẫn xe), đúng
-    // tinh thần "sâu hơn, tối hơn" của mockup (docs/maps/map01_highrise.md).
-    // Ranh giới đặt ở Z=1.5 — giữa hàng xe cuối Khu A (z=0) và hàng xe
-    // đầu Khu B (z=3), xem GARAGE_CAR_POSITIONS.
-    let garage_wall_color = [0.55, 0.5, 0.45];
-    let khu_boundary_z = 1.5;
-    let khu_a_floor_color = [0.42, 0.42, 0.46];
-    let khu_b_floor_color = [0.18, 0.18, 0.21];
-    let khu_a_car_color = [0.65, 0.15, 0.15]; // đỏ
-    let khu_b_car_color = [0.15, 0.25, 0.55]; // xanh dương đậm
-
-    let floor_size_x = GARAGE_HALF_SIZE_X * 2.0;
-    let khu_a_size_z = khu_boundary_z - -GARAGE_HALF_SIZE_Z;
-    let khu_b_size_z = GARAGE_HALF_SIZE_Z - khu_boundary_z;
-    panels.push(floor_panel(
-        Vec3::new(0.0, -ARENA_WALL_THICKNESS / 2.0, -GARAGE_HALF_SIZE_Z + khu_a_size_z / 2.0),
-        floor_size_x,
-        khu_a_size_z,
-        ARENA_WALL_THICKNESS,
-        khu_a_floor_color,
-        0.9,
-    ));
-    panels.push(floor_panel(
-        Vec3::new(0.0, -ARENA_WALL_THICKNESS / 2.0, khu_boundary_z + khu_b_size_z / 2.0),
-        floor_size_x,
-        khu_b_size_z,
-        ARENA_WALL_THICKNESS,
-        khu_b_floor_color,
-        0.9,
-    ));
-    for (center, size_x, size_z) in garage_walls() {
-        panels.push(wall_panel(center, size_x, size_z, ARENA_WALL_HEIGHT, garage_wall_color, 0.85));
-    }
-    let car_size = GARAGE_CAR_SIZE;
-    for &(x, z) in &GARAGE_CAR_POSITIONS {
-        let car_color = if z < khu_boundary_z { khu_a_car_color } else { khu_b_car_color };
-        pieces.push((Vec3::new(x, car_size.y / 2.0, z), ident, car_size, car_color, 0.6));
-    }
-
-    // --- G Lobby ---
-    let lobby_wall_color = [0.6, 0.58, 0.52];
-    panels.push(floor_panel(
-        Vec3::new(0.0, FLOOR_HEIGHT - ARENA_WALL_THICKNESS / 2.0, LOBBY_CENTER_Z),
-        LOBBY_HALF_SIZE_X * 2.0,
-        LOBBY_HALF_SIZE_Z * 2.0,
-        ARENA_WALL_THICKNESS,
-        [0.42, 0.4, 0.36],
-        0.8,
-    ));
-    for (center, size_x, size_z) in lobby_walls() {
-        panels.push(wall_panel(center, size_x, size_z, LOBBY_WALL_HEIGHT, lobby_wall_color, 0.7));
-    }
-    let (ramp_center, ramp_rotation, ramp_size) = ramp_geometry();
-    panels.push(ramp_panel(ramp_center, ramp_rotation, ramp_size.x, ramp_size.y, ramp_size.z, [0.38, 0.36, 0.33], 0.9));
-    for (center, size_x, size_y, size_z) in ramp_guard_walls() {
-        panels.push(wall_panel4(center, size_x, size_y, size_z, lobby_wall_color, 0.7));
-    }
-    let desk_size = LOBBY_DESK_SIZE;
-    let (desk_x, desk_z) = LOBBY_DESK_POS;
-    pieces.push((Vec3::new(desk_x, FLOOR_HEIGHT + desk_size.y / 2.0, desk_z), ident, desk_size, [0.25, 0.35, 0.45], 0.6));
-    // Không còn khối "chân cầu thang" trang trí ở đây nữa — giếng thang
-    // thật (stairwell_g_to_f2, xây ở đoạn F2 bên dưới vì nó xuyên từ G
-    // lên F2) đã thay thế nó.
-
-    // --- F2 Office (chồng thật ngay trên G — xem F2_FLOOR's doc comment) ---
-    let f2_wall_color = [0.72, 0.7, 0.64];
-    let stairwell_color = [0.4, 0.38, 0.35];
-    for (center, size_x, size_z) in F2_FLOOR.floor_slab_with_hole(TOWER_SHAFT_X, F2_SHAFT_Z, TOWER_STAIR_WIDTH / 2.0, simple_stairwell_half_len()) {
-        panels.push(floor_panel(center, size_x, size_z, ARENA_WALL_THICKNESS, [0.5, 0.48, 0.44], 0.8));
-    }
-    for (center, size_x, size_z) in office_walls() {
-        panels.push(wall_panel(center, size_x, size_z, F2_WALL_HEIGHT, f2_wall_color, 0.7));
-    }
-    // Cầu thang đơn giản G→F2 — thay đường dốc nằm xéo cũ, xem
-    // stairwell_g_to_f2's doc comment.
-    for (center, rotation, size) in stairwell_g_to_f2() {
-        panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stairwell_color, 0.9));
-    }
-    let f2_desk_size = F2_DESK_SIZE;
-    for &(x, z) in &F2_DESK_POSITIONS {
-        pieces.push((Vec3::new(x, F2_ELEVATION + f2_desk_size.y / 2.0, z), ident, f2_desk_size, [0.55, 0.4, 0.25], 0.6));
-    }
-    for (center, size_x, size_y, size_z) in office_room_walls().into_iter().chain(locker_room_walls()) {
-        panels.push(wall_panel4(center, size_x, size_y, size_z, [0.35, 0.5, 0.55], 0.65));
-    }
-
-    // --- F3 Office (sustain peak) — chồng thật ngay trên F2 ---
-    let f3_wall_color = [0.68, 0.62, 0.6];
-    for (center, size_x, size_z) in F3_FLOOR.floor_slab_with_hole(TOWER_SHAFT_X, F3_SHAFT_Z, TOWER_STAIR_WIDTH / 2.0, simple_stairwell_half_len()) {
-        panels.push(floor_panel(center, size_x, size_z, ARENA_WALL_THICKNESS, [0.48, 0.46, 0.42], 0.8));
-    }
-    for (center, size_x, size_z) in f3_walls() {
-        panels.push(wall_panel(center, size_x, size_z, F3_WALL_HEIGHT, f3_wall_color, 0.7));
-    }
-    // Cầu thang F2→F3 — cùng 1 trục X/Z với đoạn G→F2 ở trên (1 đường đi
-    // liên tục), chỉ khác đoạn cao độ.
-    for (center, rotation, size) in stairwell_f2_to_f3() {
-        panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stairwell_color, 0.9));
-    }
-    for (center, size_x, size_y, size_z) in meeting_room_walls() {
-        panels.push(wall_panel4(center, size_x, size_y, size_z, [0.55, 0.65, 0.7], 0.4));
-    }
-    for (center, size_x, size_y, size_z) in office_a_walls().into_iter().chain(office_b_walls()) {
-        panels.push(wall_panel4(center, size_x, size_y, size_z, [0.55, 0.45, 0.35], 0.65));
-    }
-
-    // Vệt kẻ vàng đánh dấu ranh giới Khu A / Khu B trên sàn Gara — tấm
-    // trang trí thuần (không collider, đè lên sàn Khu A/B đã có collider
-    // riêng rồi nên không cần chặn gì thêm). Rectangle nằm mặc định
-    // trong mặt phẳng XY (thẳng đứng), nên xoay -90° quanh trục X để nó
-    // nằm PHẲNG xuống sàn (mặt phẳng XZ) thay vì dựng đứng như 1 tấm biển.
-    let flat_on_floor = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-    panels.push((Vec3::new(0.0, 0.02, khu_boundary_z), flat_on_floor, GARAGE_HALF_SIZE_X * 2.0, 1.0, [1.0, 0.85, 0.1], 0.5, None, false));
-
-    for (translation, rotation, size, color, roughness) in pieces {
-        spawn_level_box(commands, translation, rotation, size, color, roughness);
-    }
-    for piece in panels {
-        spawn_level_panel(commands, piece);
-    }
+    let (pieces, panels) = shared::map1_level_pieces();
+    spawn_collider_pieces(commands, pieces, panels);
 }
 
-/// 1 `LevelBox` (khối hộp đặc, xem `pieces` trong `spawn_map1_level_pieces`)
-/// — tách ra để dùng chung với `spawn_item_gallery_level_pieces`.
-fn spawn_level_box(commands: &mut Commands, translation: Vec3, rotation: Quat, size: Vec3, color: [f32; 3], roughness: f32) {
-    commands.spawn((
-        Transform::from_translation(translation).with_rotation(rotation),
-        RigidBody::Static,
-        Collider::cuboid(size.x, size.y, size.z),
-        LevelBox::new(size, color, roughness),
-        LevelTransform::new(translation, rotation),
-        Replicated,
-    ));
-}
-
-/// 1 `LevelPanel` (tấm mỏng — tường/sàn/dốc, xem `panels` trong
-/// `spawn_map1_level_pieces`'s doc comment cho ý nghĩa từng field) — tách
-/// ra để dùng chung với `spawn_item_gallery_level_pieces`.
-fn spawn_level_panel(commands: &mut Commands, piece: PanelPiece) {
-    let (translation, rotation, width, height, color, roughness, collider_thickness, collider_offset) = piece;
-    let panel = match collider_thickness {
-        Some(thickness) if collider_offset => LevelPanel::solid_surface(width, height, color, roughness, thickness),
-        Some(thickness) => LevelPanel::solid(width, height, color, roughness, thickness),
-        None => LevelPanel::new(width, height, color, roughness),
-    };
-    let transform = Transform::from_translation(translation).with_rotation(rotation);
-    let level_transform = LevelTransform::new(translation, rotation);
-    // collider_thickness == Some ⇒ tấm này phải cản người chơi (tường/
-    // sàn/dốc) — server là process CHẠY vật lý thật (trọng lực, va
-    // chạm), nên nó cần Collider của riêng nó y như LevelBox vẫn có,
-    // không thể chỉ dựa vào client tự dựng collider từ dữ liệu replicate
-    // (đó chỉ để client hiển thị + dự đoán cục bộ). Thiếu bước này là lý
-    // do người chơi/zombie rơi xuyên sàn/tường.
-    //
-    // Collider luôn nằm trên 1 entity CON — lệch -thickness/2 theo trục
-    // Z cục bộ khi collider_offset=true (sàn/dốc, translation là mặt
-    // nhìn thấy, xem floor_panel's doc comment), lệch 0 khi false
-    // (tường, translation đã là tâm collider rồi — xem wall_panel's doc
-    // comment). Collider luôn nằm đúng tâm gốc cả 2 trường hợp.
-    match collider_thickness {
-        Some(thickness) => {
-            let offset = if collider_offset { -thickness / 2.0 } else { 0.0 };
-            let parent = commands.spawn((transform, panel, level_transform, Replicated, RigidBody::Static)).id();
-            commands.spawn((ChildOf(parent), Transform::from_xyz(0.0, 0.0, offset), Collider::cuboid(width, height, thickness)));
-        }
-        None => {
-            commands.spawn((panel, level_transform, Replicated));
-        }
-    }
-}
-
-// Scenario::ItemGallery — flat floor + 4 walls + 1 LevelBox per
-// ITEM_GALLERY_ENTRIES, laid out in a row via item_gallery_positions().
-// See crates/shared/src/item_gallery.rs's own doc comment for intent.
 fn spawn_item_gallery_level_pieces(commands: &mut Commands) {
-    let half_x = ITEM_GALLERY_HALF_SIZE_X;
-    let half_z = ITEM_GALLERY_HALF_SIZE_Z;
-    let floor_color = [0.35, 0.35, 0.38];
-    let wall_color = [0.5, 0.5, 0.52];
+    let (pieces, panels) = shared::item_gallery_level_pieces();
+    spawn_collider_pieces(commands, pieces, panels);
+}
 
-    spawn_level_panel(
-        commands,
-        floor_panel(Vec3::ZERO, half_x * 2.0, half_z * 2.0, ARENA_WALL_THICKNESS, floor_color, 0.9),
-    );
-
-    let wall_span_x = half_x * 2.0 + ARENA_WALL_THICKNESS;
-    let wall_span_z = half_z * 2.0 + ARENA_WALL_THICKNESS;
-    let walls = [
-        (Vec3::new(0.0, ITEM_GALLERY_WALL_HEIGHT / 2.0, -half_z), wall_span_x, ARENA_WALL_THICKNESS),
-        (Vec3::new(0.0, ITEM_GALLERY_WALL_HEIGHT / 2.0, half_z), wall_span_x, ARENA_WALL_THICKNESS),
-        (Vec3::new(-half_x, ITEM_GALLERY_WALL_HEIGHT / 2.0, 0.0), ARENA_WALL_THICKNESS, wall_span_z),
-        (Vec3::new(half_x, ITEM_GALLERY_WALL_HEIGHT / 2.0, 0.0), ARENA_WALL_THICKNESS, wall_span_z),
-    ];
-    for (center, size_x, size_z) in walls {
-        spawn_level_panel(commands, wall_panel(center, size_x, size_z, ITEM_GALLERY_WALL_HEIGHT, wall_color, 0.8));
+/// Spawns ONLY the avian3d colliders for a set of pieces — no LevelBox/
+/// LevelPanel/Transform-for-rendering, since this process never renders
+/// anything (see spawn_arena_colliders's own doc comment). A LevelBox
+/// piece is just 1 static cuboid collider; a LevelPanel piece is a thin
+/// cuboid collider only if it has collider_thickness (decorative panels
+/// like the garage's yellow floor stripe get none — nothing to block).
+fn spawn_collider_pieces(commands: &mut Commands, pieces: Vec<shared::BoxPiece>, panels: Vec<shared::PanelPiece>) {
+    for (translation, rotation, size, _color, _roughness) in pieces {
+        commands.spawn((
+            Transform::from_translation(translation).with_rotation(rotation),
+            RigidBody::Static,
+            Collider::cuboid(size.x, size.y, size.z),
+        ));
     }
-
-    let ident = Quat::IDENTITY;
-    for (i, (label, size)) in ITEM_GALLERY_ENTRIES.iter().enumerate() {
-        let (x, z) = item_gallery_positions()[i];
-        // Đổi màu xen kẽ theo chỉ số — không mang ý nghĩa gì, chỉ để dễ
-        // phân biệt item liền kề nhau bằng mắt khi đứng xa.
-        let color = if i % 2 == 0 { [0.75, 0.55, 0.2] } else { [0.25, 0.45, 0.75] };
-        spawn_level_box(commands, Vec3::new(x, size.y / 2.0, z), ident, *size, color, 0.6);
-        info!("ItemGallery: [{i}] {label} = {size:?} at ({x}, {z})");
+    for (translation, rotation, width, height, _color, _roughness, collider_thickness, collider_offset) in panels {
+        let Some(thickness) = collider_thickness else { continue };
+        let offset = if collider_offset { -thickness / 2.0 } else { 0.0 };
+        let rotation_applied = Transform::from_translation(translation).with_rotation(rotation);
+        let local_offset = rotation_applied.rotation * Vec3::new(0.0, 0.0, offset);
+        commands.spawn((
+            Transform::from_translation(translation + local_offset).with_rotation(rotation),
+            RigidBody::Static,
+            Collider::cuboid(width, height, thickness),
+        ));
     }
 }
 
