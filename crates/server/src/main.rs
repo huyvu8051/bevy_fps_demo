@@ -34,6 +34,8 @@ use shared::{
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     HitboxTestSlot, HITBOX_TEST_PLAYER_SPAWN, HITBOX_TEST_RESPAWN_DELAY, HITBOX_TEST_ZOMBIE_POSITIONS,
+    ITEM_GALLERY_ENTRIES, ITEM_GALLERY_HALF_SIZE_X, ITEM_GALLERY_HALF_SIZE_Z, ITEM_GALLERY_PLAYER_SPAWN,
+    ITEM_GALLERY_WALL_HEIGHT, item_gallery_positions,
     MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PILLAR_RADIUS,
     PLAYER_LENGTH, PLAYER_RADIUS, PLAYER_SPAWN, Scenario,
     RENDER_COMPARE_PLAYER_SPAWN, RENDER_COMPARE_ZOMBIE_POSITIONS,
@@ -332,6 +334,14 @@ const USE_MAP1_B1_GARAGE: bool = true;
 // anything, it only needs the avian3d colliders so move_players has
 // something to collide against.
 fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>) {
+    // ItemGallery is neither the real Map 1 nor the legacy flat arena —
+    // its own dedicated flat scale-reference room, checked first so it
+    // doesn't fall into either branch below.
+    if *scenario == Scenario::ItemGallery {
+        spawn_item_gallery_level_pieces(&mut commands);
+        return;
+    }
+
     // LegacyArena always forces the old flat arena below, regardless of
     // USE_MAP1_B1_GARAGE — see Scenario::LegacyArena's own doc comment.
     if USE_MAP1_B1_GARAGE && *scenario != Scenario::LegacyArena {
@@ -582,46 +592,96 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
     panels.push((Vec3::new(0.0, 0.02, khu_boundary_z), flat_on_floor, GARAGE_HALF_SIZE_X * 2.0, 1.0, [1.0, 0.85, 0.1], 0.5, None, false));
 
     for (translation, rotation, size, color, roughness) in pieces {
-        commands.spawn((
-            Transform::from_translation(translation).with_rotation(rotation),
-            RigidBody::Static,
-            Collider::cuboid(size.x, size.y, size.z),
-            LevelBox::new(size, color, roughness),
-            LevelTransform::new(translation, rotation),
-            Replicated,
-        ));
+        spawn_level_box(commands, translation, rotation, size, color, roughness);
+    }
+    for piece in panels {
+        spawn_level_panel(commands, piece);
+    }
+}
+
+/// 1 `LevelBox` (khối hộp đặc, xem `pieces` trong `spawn_map1_level_pieces`)
+/// — tách ra để dùng chung với `spawn_item_gallery_level_pieces`.
+fn spawn_level_box(commands: &mut Commands, translation: Vec3, rotation: Quat, size: Vec3, color: [f32; 3], roughness: f32) {
+    commands.spawn((
+        Transform::from_translation(translation).with_rotation(rotation),
+        RigidBody::Static,
+        Collider::cuboid(size.x, size.y, size.z),
+        LevelBox::new(size, color, roughness),
+        LevelTransform::new(translation, rotation),
+        Replicated,
+    ));
+}
+
+/// 1 `LevelPanel` (tấm mỏng — tường/sàn/dốc, xem `panels` trong
+/// `spawn_map1_level_pieces`'s doc comment cho ý nghĩa từng field) — tách
+/// ra để dùng chung với `spawn_item_gallery_level_pieces`.
+fn spawn_level_panel(commands: &mut Commands, piece: PanelPiece) {
+    let (translation, rotation, width, height, color, roughness, collider_thickness, collider_offset) = piece;
+    let panel = match collider_thickness {
+        Some(thickness) if collider_offset => LevelPanel::solid_surface(width, height, color, roughness, thickness),
+        Some(thickness) => LevelPanel::solid(width, height, color, roughness, thickness),
+        None => LevelPanel::new(width, height, color, roughness),
+    };
+    let transform = Transform::from_translation(translation).with_rotation(rotation);
+    let level_transform = LevelTransform::new(translation, rotation);
+    // collider_thickness == Some ⇒ tấm này phải cản người chơi (tường/
+    // sàn/dốc) — server là process CHẠY vật lý thật (trọng lực, va
+    // chạm), nên nó cần Collider của riêng nó y như LevelBox vẫn có,
+    // không thể chỉ dựa vào client tự dựng collider từ dữ liệu replicate
+    // (đó chỉ để client hiển thị + dự đoán cục bộ). Thiếu bước này là lý
+    // do người chơi/zombie rơi xuyên sàn/tường.
+    //
+    // Collider luôn nằm trên 1 entity CON — lệch -thickness/2 theo trục
+    // Z cục bộ khi collider_offset=true (sàn/dốc, translation là mặt
+    // nhìn thấy, xem floor_panel's doc comment), lệch 0 khi false
+    // (tường, translation đã là tâm collider rồi — xem wall_panel's doc
+    // comment). Collider luôn nằm đúng tâm gốc cả 2 trường hợp.
+    match collider_thickness {
+        Some(thickness) => {
+            let offset = if collider_offset { -thickness / 2.0 } else { 0.0 };
+            let parent = commands.spawn((transform, panel, level_transform, Replicated, RigidBody::Static)).id();
+            commands.spawn((ChildOf(parent), Transform::from_xyz(0.0, 0.0, offset), Collider::cuboid(width, height, thickness)));
+        }
+        None => {
+            commands.spawn((panel, level_transform, Replicated));
+        }
+    }
+}
+
+// Scenario::ItemGallery — flat floor + 4 walls + 1 LevelBox per
+// ITEM_GALLERY_ENTRIES, laid out in a row via item_gallery_positions().
+// See crates/shared/src/item_gallery.rs's own doc comment for intent.
+fn spawn_item_gallery_level_pieces(commands: &mut Commands) {
+    let half_x = ITEM_GALLERY_HALF_SIZE_X;
+    let half_z = ITEM_GALLERY_HALF_SIZE_Z;
+    let floor_color = [0.35, 0.35, 0.38];
+    let wall_color = [0.5, 0.5, 0.52];
+
+    spawn_level_panel(
+        commands,
+        floor_panel(Vec3::ZERO, half_x * 2.0, half_z * 2.0, ARENA_WALL_THICKNESS, floor_color, 0.9),
+    );
+
+    let wall_span_x = half_x * 2.0 + ARENA_WALL_THICKNESS;
+    let wall_span_z = half_z * 2.0 + ARENA_WALL_THICKNESS;
+    let walls = [
+        (Vec3::new(0.0, ITEM_GALLERY_WALL_HEIGHT / 2.0, -half_z), wall_span_x, ARENA_WALL_THICKNESS),
+        (Vec3::new(0.0, ITEM_GALLERY_WALL_HEIGHT / 2.0, half_z), wall_span_x, ARENA_WALL_THICKNESS),
+        (Vec3::new(-half_x, ITEM_GALLERY_WALL_HEIGHT / 2.0, 0.0), ARENA_WALL_THICKNESS, wall_span_z),
+        (Vec3::new(half_x, ITEM_GALLERY_WALL_HEIGHT / 2.0, 0.0), ARENA_WALL_THICKNESS, wall_span_z),
+    ];
+    for (center, size_x, size_z) in walls {
+        spawn_level_panel(commands, wall_panel(center, size_x, size_z, ITEM_GALLERY_WALL_HEIGHT, wall_color, 0.8));
     }
 
-    for (translation, rotation, width, height, color, roughness, collider_thickness, collider_offset) in panels {
-        let panel = match collider_thickness {
-            Some(thickness) if collider_offset => LevelPanel::solid_surface(width, height, color, roughness, thickness),
-            Some(thickness) => LevelPanel::solid(width, height, color, roughness, thickness),
-            None => LevelPanel::new(width, height, color, roughness),
-        };
-        let transform = Transform::from_translation(translation).with_rotation(rotation);
-        let level_transform = LevelTransform::new(translation, rotation);
-        // collider_thickness == Some ⇒ tấm này phải cản người chơi
-        // (tường/sàn/dốc) — server là process CHẠY vật lý thật (trọng
-        // lực, va chạm), nên nó cần Collider của riêng nó y như LevelBox
-        // vẫn có, không thể chỉ dựa vào client tự dựng collider từ dữ
-        // liệu replicate (đó chỉ để client hiển thị + dự đoán cục bộ).
-        // Thiếu bước này là lý do người chơi/zombie rơi xuyên sàn/tường.
-        //
-        // Collider luôn nằm trên 1 entity CON — lệch -thickness/2 theo
-        // trục Z cục bộ khi collider_offset=true (sàn/dốc, translation là
-        // mặt nhìn thấy, xem floor_panel's doc comment), lệch 0 khi false
-        // (tường, translation đã là tâm collider rồi — xem wall_panel's
-        // doc comment). Collider luôn nằm đúng tâm gốc cả 2 trường hợp.
-        match collider_thickness {
-            Some(thickness) => {
-                let offset = if collider_offset { -thickness / 2.0 } else { 0.0 };
-                let parent = commands.spawn((transform, panel, level_transform, Replicated, RigidBody::Static)).id();
-                commands.spawn((ChildOf(parent), Transform::from_xyz(0.0, 0.0, offset), Collider::cuboid(width, height, thickness)));
-            }
-            None => {
-                commands.spawn((panel, level_transform, Replicated));
-            }
-        }
+    let ident = Quat::IDENTITY;
+    for (i, (label, size)) in ITEM_GALLERY_ENTRIES.iter().enumerate() {
+        let (x, z) = item_gallery_positions()[i];
+        // Đổi màu xen kẽ theo chỉ số — không mang ý nghĩa gì, chỉ để dễ
+        // phân biệt item liền kề nhau bằng mắt khi đứng xa.
+        let color = if i % 2 == 0 { [0.75, 0.55, 0.2] } else { [0.25, 0.45, 0.75] };
+        spawn_level_box(commands, Vec3::new(x, size.y / 2.0, z), ident, *size, color, 0.6);
+        info!("ItemGallery: [{i}] {label} = {size:?} at ({x}, {z})");
     }
 }
 
@@ -639,6 +699,7 @@ fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands, scena
         Scenario::StressTest => STRESS_TEST_PLAYER_SPAWN,
         Scenario::RenderCompare => RENDER_COMPARE_PLAYER_SPAWN,
         Scenario::LegacyArena => PLAYER_SPAWN,
+        Scenario::ItemGallery => ITEM_GALLERY_PLAYER_SPAWN,
     };
     commands.entity(entity).insert((
         Transform::from_translation(spawn_pos),
@@ -1422,6 +1483,7 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], ai_enabled: bool, dir
 fn spawn_hitbox_test_zombies(mut commands: Commands) {
     spawn_zombies(&mut commands, &HITBOX_TEST_ZOMBIE_POSITIONS, false, false, true);
 }
+
 
 // Scenario::StressTest's Startup spawn — STRESS_TEST_ZOMBIE_COUNT zombies
 // with normal chase AI, taken from the front of the same ZOMBIE_SPAWNS
@@ -2351,6 +2413,8 @@ fn on_request_restart(
             spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, ZOMBIE_AI_ENABLED, false, false);
             PLAYER_SPAWN
         }
+        // No zombies/gameplay — pure walk-around scale-reference rig.
+        Scenario::ItemGallery => ITEM_GALLERY_PLAYER_SPAWN,
     };
 
     for (entity, mut transform, mut player, mut net_transform) in &mut players {

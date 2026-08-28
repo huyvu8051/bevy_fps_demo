@@ -62,6 +62,15 @@ pub enum Scenario {
     /// arena is still reachable from the map-select menu for quick
     /// combat/AI testing without the office building's geometry involved.
     LegacyArena,
+    /// Map 5: flat floor with ONE of every standard map-item size laid
+    /// out in a grid (cars, desks, cubicles, lockers, reception counter,
+    /// doors, stairwell footprint — see `crate::item_gallery` and
+    /// `docs/maps/map01_dimensions.md` section 1, its source of truth).
+    /// No real room/floor design here, purely a scale-reference rig: open
+    /// it in the dev editor (`EDITOR=1`, F2) to eyeball whether each
+    /// item's real-world-derived size actually reads right in-engine
+    /// before committing it into an actual map floor.
+    ItemGallery,
 }
 
 impl Scenario {
@@ -71,6 +80,7 @@ impl Scenario {
             2 => Scenario::StressTest,
             3 => Scenario::RenderCompare,
             4 => Scenario::LegacyArena,
+            5 => Scenario::ItemGallery,
             _ => Scenario::Normal,
         }
     }
@@ -82,6 +92,7 @@ impl Scenario {
             Scenario::StressTest => 2,
             Scenario::RenderCompare => 3,
             Scenario::LegacyArena => 4,
+            Scenario::ItemGallery => 5,
         }
     }
 
