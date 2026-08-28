@@ -6732,6 +6732,10 @@ fn grab_cursor(
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     pending: Res<MapSelectionPending>,
     menu: Res<SettingsMenuVisible>,
+    // `Option` because this resource only exists when EDITOR=1 actually
+    // added bevy_editor_pls::EditorPlugin (see main()) — the client always
+    // depends on the crate, but the plugin/resource is opt-in at runtime.
+    editor: Option<Res<bevy_editor_pls::editor::Editor>>,
 ) {
     let Ok(mut cursor) = cursor.single_mut() else {
         return;
@@ -6748,11 +6752,29 @@ fn grab_cursor(
         }
     }
 
+    // While the dev editor (EDITOR=1, F2) is active, clicking its egui
+    // panels (Hierarchy/Inspector/viewport gizmos/...) used to also count
+    // as "click into the game window" below and re-grab+hide the cursor
+    // mid-click — fighting the editor's own pointer handling and making it
+    // feel like every click "swallows" the mouse. Suppress the game's own
+    // auto-grab entirely while the editor is active; F2 to close it (or `)
+    // still work to get mouse-look back.
+    let editor_active = editor.is_some_and(|e| e.active());
+
+    // Also cover the case where F2 opens the editor while the cursor was
+    // already grabbed from mouse-look — force it back to a free, visible
+    // cursor immediately rather than waiting for a manual ` press.
+    if editor_active && cursor.grab_mode != CursorGrabMode::None {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
+    }
+
     // Left click only grabs the cursor if no menu is open/pending
     if mouse.just_pressed(MouseButton::Left)
         && cursor.grab_mode == CursorGrabMode::None
         && !pending.0
         && !menu.0
+        && !editor_active
     {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
