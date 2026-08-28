@@ -3948,6 +3948,15 @@ fn map_select_button(
     mut noclip: ResMut<Noclip>,
     mut autopilot: ResMut<Autopilot>,
     channels: Res<RepliconChannels>,
+    // Every currently-spawned level-geometry entity — despawned + rebuilt
+    // below for whichever scenario was just picked. Needed because level
+    // geometry is now built LOCALLY at Startup (see setup()) instead of
+    // replicated from the server (see level_piece.rs's own doc comment)
+    // — Startup only runs once, at the DEFAULT scenario (MAP_ID unset),
+    // so picking a different map from this in-game menu used to leave the
+    // stale default geometry on screen forever (reported bug: picking
+    // ITEM GALLERY still showed the B1 garage) unless re-spawned here.
+    existing_geometry: Query<Entity, Or<(With<shared::LevelBox>, With<shared::LevelPanel>)>>,
 ) {
     for (interaction, button) in &buttons {
         if *interaction != Interaction::Pressed {
@@ -3964,16 +3973,38 @@ fn map_select_button(
             commands.entity(root).despawn();
         }
         pending.0 = false;
+        let scenario = Scenario::from_map_id(button.0);
         // Mirrors the App-build-time `Noclip(current_scenario() ==
         // StressTest)` default (see its own comment) — that default gets
         // baked in before any map is actually picked (MAP_ID isn't set
         // yet), so a StressTest pick needs to apply the same auto-enable
         // itself now that the choice is real.
-        noclip.0 = Scenario::from_map_id(button.0) == Scenario::StressTest;
+        noclip.0 = scenario == Scenario::StressTest;
         // Same reasoning — Autopilot::default() also baked in before any
         // map was picked (see autopilot_enabled_by_default's own doc
         // comment), needs re-applying now that the choice is real.
-        autopilot.0 = autopilot_enabled_by_default(Scenario::from_map_id(button.0));
+        autopilot.0 = autopilot_enabled_by_default(scenario);
+
+        for entity in &existing_geometry {
+            commands.entity(entity).despawn();
+        }
+        if scenario == Scenario::ItemGallery {
+            let (pieces, panels) = shared::item_gallery_level_pieces();
+            spawn_level_pieces(&mut commands, pieces, panels);
+        } else if USE_MAP1_B1_GARAGE && scenario != Scenario::LegacyArena {
+            let (pieces, panels) = shared::map1_level_pieces();
+            spawn_level_pieces(&mut commands, pieces, panels);
+            // Static lights (spawn_map1_lights) aren't re-spawned here —
+            // they're already up from Startup and every non-ItemGallery,
+            // non-LegacyArena scenario reuses the same map1 geometry, so
+            // there's nothing stale to replace for the common case this
+            // menu is actually used for. Switching TO LegacyArena/GLTF
+            // from here would leave both map1's lights AND its own
+            // never-spawned geometry stale — pre-existing gap, not
+            // touched by this fix (this menu's own switch matrix always
+            // routed through USE_MAP1_B1_GARAGE's else-branches before
+            // ItemGallery existed too).
+        }
         spawn_client_connection(&mut commands, &channels);
     }
 }
