@@ -37,16 +37,17 @@ use bevy::prelude::*;
 use crate::{FpsCamera, Player, TouchAiming};
 use shared::{random_aim_point, resolve_bone_world_positions, Health, NetPlayer, Zombie, ZombieHitboxBones, PLAYER_MAX_HEALTH};
 
-/// Master on/off switch — ON by default, see the module doc comment. OFF by
-/// default for Scenario::RenderCompare specifically: that map exists to
-/// compare desktop/iOS rendering of 3 stationary zombies, which needs the
-/// player standing still and looking at them, not autopilot driving them
-/// around — mirrors Noclip's own scenario-conditional Default (lib.rs).
+/// Master on/off switch — ON by default, see the module doc comment. OFF
+/// by default for scenarios where an AI target-seeking, auto-firing
+/// player would fight the reason that scenario exists — see
+/// `crate::autopilot_enabled_by_default`'s own doc comment for the full
+/// list and why (mirrors Noclip's own scenario-conditional Default,
+/// lib.rs).
 #[derive(Resource)]
 pub(crate) struct Autopilot(pub(crate) bool);
 impl Default for Autopilot {
     fn default() -> Self {
-        Autopilot(crate::current_scenario() != shared::Scenario::RenderCompare)
+        Autopilot(crate::autopilot_enabled_by_default(crate::current_scenario()))
     }
 }
 
