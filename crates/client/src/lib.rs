@@ -1620,6 +1620,23 @@ fn setup(
         // always true regardless of scenario.
         let (pieces, panels) = shared::item_gallery_level_pieces();
         spawn_level_pieces(&mut commands, pieces, panels);
+
+        // First real meshy.ai asset test — see docs/PROP_IMPORT_CHECKLIST.md.
+        // Spawned 6m in front of the procedural "Sedan" box (item index 0,
+        // same X, offset -Z so it doesn't overlap) for eyeballing scale/
+        // texture side by side; not wired into gameplay/collision at all
+        // yet. scale/offset below were measured by hand against a 1.8m
+        // reference box (since removed) — this file was downloaded BEFORE
+        // discovering the download dialog's own Resize+Origin:Bottom
+        // option (see checklist mục 1 step 4), which bakes in correct
+        // real-world scale/pivot directly, no in-engine correction
+        // needed. Next prop import should use that instead of repeating
+        // this by-eye process.
+        let (car_x, car_z) = shared::item_gallery_positions()[0];
+        commands.spawn((
+            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("props/car_sedan/mesh/car_sedan.glb"))),
+            Transform::from_xyz(car_x, 1.5, car_z - 6.0).with_scale(Vec3::splat(2.2)),
+        ));
     } else if USE_MAP1_B1_GARAGE {
         // Sàn/tường/dốc/bàn/phòng: build cục bộ từ đúng
         // shared::map1_level_pieces() server cũng gọi để dựng collider

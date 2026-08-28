@@ -35,3 +35,10 @@ crates/client/gen/apple_winit_legacy/Sources/*-apple-ios*/
 # with its own target/ (a separate cargo workspace, not a member of the
 # root one), kept around for future CPU/FPS comparisons.
 experiments/cadisplaylink_probe/target/
+
+# First meshy.ai prop test (docs/PROP_IMPORT_CHECKLIST.md) — 116MB
+# High Detail export, not yet Remeshed down to game-usable size. Not
+# committed on purpose (huge binary would live in git history forever
+# even after replacement); re-add this ignore removal once a properly
+# sized (Smart Topology or Remeshed) version replaces it.
+crates/client/assets/props/car_sedan/mesh/car_sedan.glb
