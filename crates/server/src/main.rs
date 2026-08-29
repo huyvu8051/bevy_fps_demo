@@ -399,6 +399,32 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
 fn spawn_item_gallery_level_pieces(commands: &mut Commands) {
     let (pieces, panels) = shared::item_gallery_level_pieces();
     spawn_collider_pieces(commands, pieces, panels);
+    spawn_item_gallery_car_colliders(commands);
+}
+
+// Collider-only copy of the client's meshy.ai car test props (see
+// crate client's spawn_item_gallery_test_props) — same
+// shared::item_gallery_car_physics() data so hit registration
+// (handle_fire_shot's SpatialQuery) and movement blocking (move_players'
+// MoveAndSlide) agree with what the client actually draws/simulates.
+// RigidBody::Static here (not Dynamic like the client's) on purpose: the
+// gravity-drop-then-shake-on-hit behavior is a purely cosmetic client-side
+// effect nobody watches this process's own physics world for — this
+// process only needs a fixed collider at each car's REST position (no
+// drop margin), which Static gives for free without an unnecessary
+// physics-settle each Startup.
+fn spawn_item_gallery_car_colliders(commands: &mut Commands) {
+    for physics in shared::item_gallery_car_physics() {
+        commands.spawn((
+            Transform::from_xyz(physics.x, physics.y, physics.z).with_scale(Vec3::splat(physics.scale)),
+            RigidBody::Static,
+            Collider::compound(vec![(
+                Vec3::new(0.0, physics.collider_local_y, 0.0),
+                Quat::IDENTITY,
+                Collider::cuboid(physics.collider_size.x, physics.collider_size.y, physics.collider_size.z),
+            )]),
+        ));
+    }
 }
 
 /// Spawns ONLY the avian3d colliders for a set of pieces — no LevelBox/

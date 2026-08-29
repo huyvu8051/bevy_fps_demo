@@ -52,3 +52,18 @@ crates/client/assets/props/car_pickup/mesh/car_pickup.glb
 # Same story: 66MB Meshy Text-to-3D export of the VF3-inspired car (8192px
 # texture), local-only source for car_vf3_light.glb.
 crates/client/assets/props/car_vf3/mesh/car_vf3.glb
+# Same story: 12 more Text-to-3D exports (High Detail + 8K texture,
+# Resize+Origin:Bottom already baked in at download time), local-only
+# sources for their own *_light.glb.
+crates/client/assets/props/car_suv/mesh/car_suv.glb
+crates/client/assets/props/car_hatchback/mesh/car_hatchback.glb
+crates/client/assets/props/car_sports/mesh/car_sports.glb
+crates/client/assets/props/car_taxi/mesh/car_taxi.glb
+crates/client/assets/props/car_police/mesh/car_police.glb
+crates/client/assets/props/car_ambulance/mesh/car_ambulance.glb
+crates/client/assets/props/car_delivery/mesh/car_delivery.glb
+crates/client/assets/props/car_towtruck/mesh/car_towtruck.glb
+crates/client/assets/props/car_wagon/mesh/car_wagon.glb
+crates/client/assets/props/car_motorcycle/mesh/car_motorcycle.glb
+crates/client/assets/props/car_muscle/mesh/car_muscle.glb
+crates/client/assets/props/car_minivan/mesh/car_minivan.glb

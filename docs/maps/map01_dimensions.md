@@ -54,6 +54,21 @@ tròn dễ nhớ là đủ.
 | Player | Capsule | radius 0.35, length 0.9 (đã code, giữ nguyên) | `PLAYER_RADIUS`/`PLAYER_LENGTH` |
 | Player | Khoảng đứng chờ spawn | 1.0 x — x 1.0 /người | đủ không đè lên nhau |
 | Xe | Sedan (gara) | (1.9, 1.5, 4.6) | sedan thật ~1.8m ngang, ~1.45m cao, ~4.5m dài |
+| Xe | Cargo Van | (2.0, 2.3, 5.5) | van chở hàng cỡ trung |
+| Xe | Pickup Truck | (2.6, 2.2, 5.3) | đo trực tiếp từ bbox mesh (đã đúng tỉ lệ mét thật sẵn) |
+| Xe | VF3-inspired EV (compact) | (1.68, 1.6, 3.19) | xe điện mini boxy |
+| Xe | SUV | (1.9, 1.8, 4.6) | SUV off-road cỡ trung |
+| Xe | Hatchback | (1.7, 1.45, 3.9) | xe nhỏ đô thị |
+| Xe | Sports car | (1.85, 1.25, 4.5) | 2 cửa, gầm thấp |
+| Xe | Taxi (sedan) | (1.8, 1.5, 4.8) | |
+| Xe | Police cruiser | (1.85, 1.45, 5.0) | sedan + light bar |
+| Xe | Ambulance | (2.1, 2.6, 6.0) | van boxy + module cứu thương |
+| Xe | Delivery box truck | (2.2, 2.5, 6.5) | thùng hộp sau cabin |
+| Xe | Tow truck | (2.3, 2.3, 6.5) | flatbed + winch |
+| Xe | Station wagon | (1.8, 1.5, 4.8) | |
+| Xe | Motorcycle | (0.8, 1.15, 2.2) | tính tới tay lái |
+| Xe | Muscle car | (1.9, 1.35, 5.0) | vintage, thân rộng |
+| Xe | Minivan | (1.95, 1.75, 5.1) | cửa trượt 2 bên |
 | Xe | 1 ô đậu xe (kể cả biên) | 2.5 x — x 5.0 | tiêu chuẩn VN/US |
 | Xe | Aisle xe ra vào (2 chiều) | rộng 6.0 | đủ xe lùi/quay |
 | Nội thất | Bàn làm việc đơn | (1.4, 0.75, 0.7) | bàn có màn hình |
@@ -70,6 +85,11 @@ tròn dễ nhớ là đủ.
 | Kiến trúc | Tường/vách nội thất (panel) | dày 0.15 | `LevelPanel` |
 | Kiến trúc | Trần | Gara 2.6 / Văn phòng 2.8 / Sảnh chính (thông tầng) 6.0 | |
 | Kiến trúc | Tầng-tầng | 3.0 | `FLOOR_HEIGHT` — hằng số toàn cục, giữ nguyên |
+
+Các dòng **Xe** (trừ Sedan/Pickup, đo trực tiếp từ mesh) là số ước lượng
+theo xe thật ngoài đời — dùng để điền vào ô **Height** ở dialog Download
+của Meshy (bật **Resize** + **Origin: Bottom**) trước khi tải mesh về,
+xem quy trình đầy đủ ở `docs/PROP_IMPORT_CHECKLIST.md`.
 
 ---
 

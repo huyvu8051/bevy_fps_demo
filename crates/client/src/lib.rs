@@ -94,6 +94,13 @@ use hud::*;
 mod network_setup;
 use network_setup::*;
 
+// Meshy.ai car test props (Scenario::ItemGallery) — spawn + collision +
+// physics, split out of lib.rs/vfx.rs into its own plugin since it's
+// genuinely orthogonal to the rest of gameplay (see this module's own doc
+// comment for why that's safe re: GamePlugin's master `.chain()`).
+mod item_gallery_cars;
+use item_gallery_cars::*;
+
 // Downloaded once into assets/models/ so the app doesn't depend on a network
 // request (and a remote repo's file layout) every time it starts.
 // To load from a URL instead, add the WebAssetPlugin back (see bevy::asset::io::web)
@@ -1182,6 +1189,7 @@ impl Plugin for GamePlugin {
         .add_observer(on_player_fired_fx)
         .add_observer(on_player_died_fx)
         .add_observer(on_game_state_event)
+        .add_plugins(ItemGalleryCarsPlugin)
         // Scenario::StressTest (Map 2) auto-enables noclip — the player
         // spawns high above the arena specifically to observe a full
         // zombie horde from a safe distance, no manual toggle needed. Every
@@ -1457,82 +1465,6 @@ fn log_window_resolution(windows: Query<&Window, With<PrimaryWindow>>) {
         window.resolution.height(),
         window.resolution.scale_factor(),
     );
-}
-
-/// Marks the 3 meshy.ai car test props spawned into Scenario::ItemGallery
-/// (see spawn_item_gallery_test_props) so map_select_button can despawn
-/// them on scenario switch same as LevelBox/LevelPanel — without this tag
-/// they'd either never appear (menu-picked ItemGallery never runs setup()'s
-/// Startup-only spawn) or linger forever after switching to another map.
-#[derive(Component)]
-pub(crate) struct ItemGalleryTestProp;
-
-/// Spawns the meshy.ai car test props (docs/PROP_IMPORT_CHECKLIST.md) into
-/// Scenario::ItemGallery — called from both setup() (MAP_ID=5 at process
-/// start) and map_select_button (ItemGallery picked from the in-game menu
-/// after starting on a different map), so either path shows the same
-/// props. Per-prop scale/offset notes live with each entry below.
-pub(crate) fn spawn_item_gallery_test_props(commands: &mut Commands, asset_server: &AssetServer) {
-    // First real meshy.ai asset test — see docs/PROP_IMPORT_CHECKLIST.md.
-    // Spawned 6m in front of the procedural "Sedan" box (item index 0,
-    // same X, offset -Z so it doesn't overlap) for eyeballing scale/
-    // texture side by side; not wired into gameplay/collision at all yet.
-    // scale/offset below were measured by hand against a 1.8m reference
-    // box (since removed) — this file was downloaded BEFORE discovering
-    // the download dialog's own Resize+Origin:Bottom option (see
-    // checklist mục 1 step 4), which bakes in correct real-world
-    // scale/pivot directly, no in-engine correction needed. Next prop
-    // import should use that instead of repeating this by-eye process.
-    let (car_x, car_z) = shared::item_gallery_positions()[0];
-    commands.spawn((
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("props/car_sedan/mesh/car_sedan_light.glb"))),
-        Transform::from_xyz(car_x, 1.5, car_z - 6.0).with_scale(Vec3::splat(2.2)),
-        ItemGalleryTestProp,
-    ));
-
-    // Second meshy.ai prop test (cargo van) — 6m in front of item index 1
-    // this time, same -Z-offset convention as the sedan above so the two
-    // test props don't overlap. This file's raw mesh bbox is tiny
-    // (~0.049 x 0.02 x 0.022 units — Meshy did NOT bake real-world scale
-    // in on this export, same untrustworthy-native-scale issue as the
-    // sedan) but ITS OWN MIN-Y IS ALREADY 0, i.e. it sits on its own base
-    // already — unlike the sedan this needed no Y offset, only a scale
-    // guess (~115, assuming a ~2.3m cargo-van roof height) pending
-    // eyeball correction via REVIEW_SPAWN/REVIEW_YAW/REVIEW_PITCH (see
-    // shared::item_gallery_player_spawn and review_yaw_pitch() in setup()).
-    let (van_x, van_z) = shared::item_gallery_positions()[1];
-    commands.spawn((
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("props/car_van/mesh/car_van_light.glb"))),
-        Transform::from_xyz(van_x, 0.0, van_z - 6.0).with_scale(Vec3::splat(115.0)),
-        ItemGalleryTestProp,
-    ));
-
-    // Third meshy.ai prop test (pickup truck) — 6m in front of item index
-    // 2. Unlike the sedan/van above, this export's mesh bbox is already
-    // real-world scaled (5.27m long x 2.2m tall x 2.6m wide, min-Y ~= 0)
-    // — no scale/offset correction needed, scale 1.0 drops it straight
-    // onto the floor at the right size.
-    let (pickup_x, pickup_z) = shared::item_gallery_positions()[2];
-    commands.spawn((
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("props/car_pickup/mesh/car_pickup_light.glb"))),
-        Transform::from_xyz(pickup_x, 0.0, pickup_z - 6.0),
-        ItemGalleryTestProp,
-    ));
-
-    // Fourth meshy.ai prop test (VF3-inspired compact EV, Text-to-3D) — 6m
-    // in front of item index 3. Raw bbox min-Y ~= 0 again (sits on its own
-    // base) but the 3 axes don't agree on one consistent real-world scale
-    // (implying length ~3.5m, width ~3.9m, height ~3.4m if fit
-    // independently to the real VF3's 3.19m x 1.68m x 1.62m spec) — a
-    // Text-to-3D generation, less geometrically consistent than the
-    // Image-to-3D props above. Scale 100 is a rough middle-ground guess
-    // pending eyeball correction via REVIEW_SPAWN/REVIEW_YAW/REVIEW_PITCH.
-    let (vf3_x, vf3_z) = shared::item_gallery_positions()[3];
-    commands.spawn((
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("props/car_vf3/mesh/car_vf3_light.glb"))),
-        Transform::from_xyz(vf3_x, 0.0, vf3_z - 6.0).with_scale(Vec3::splat(100.0)),
-        ItemGalleryTestProp,
-    ));
 }
 
 fn setup(

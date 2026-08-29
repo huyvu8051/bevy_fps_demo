@@ -43,7 +43,10 @@ pub const ITEM_GALLERY_ENTRIES: [(&str, Vec3); 10] = [
 pub const ITEM_GALLERY_SPACING: f32 = 7.0;
 pub const ITEM_GALLERY_HALF_SIZE_X: f32 =
     (ITEM_GALLERY_ENTRIES.len() as f32) * ITEM_GALLERY_SPACING / 2.0 + 5.0;
-pub const ITEM_GALLERY_HALF_SIZE_Z: f32 = 10.0;
+// 20 (was 10) — the flat floor needs to reach the 2nd row of meshy.ai
+// test cars (client's spawn_item_gallery_test_props) at z=-14; 6m of
+// margin left to the north wall.
+pub const ITEM_GALLERY_HALF_SIZE_Z: f32 = 20.0;
 pub const ITEM_GALLERY_WALL_HEIGHT: f32 = 4.0;
 
 /// Toạ độ (x, z) tâm từng item — cùng thứ tự `ITEM_GALLERY_ENTRIES`, hàng
@@ -115,4 +118,93 @@ pub fn item_gallery_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
     }
 
     (pieces, panels)
+}
+
+// --- meshy.ai car test props — collision/physics layout -------------------
+//
+// Shared so client (visual mesh + collider, docs/PROP_IMPORT_CHECKLIST.md)
+// and server (collider only — hit registration via SpatialQuery, movement
+// blocking via MoveAndSlide) agree on where each car's collider actually
+// is; drifting the two independently would silently break "bullets stop
+// registering" or "player walks through" on whichever side didn't get the
+// update.
+
+/// (entity scale, entity Y translation, real width, height, depth in
+/// meters) per car, same order/count as client's `ITEM_GALLERY_CARS`
+/// (which zips this 1:1 by index for its own asset paths). scale/Y match
+/// each SceneRoot's own Transform exactly (see that array's own comments
+/// for why the first 4 need a scale/Y hack and the rest don't) — the
+/// collider size below is pre-divided by scale so it comes out to the
+/// stated real-world size once avian3d applies the entity's Transform.scale
+/// to it (confirmed behavior: colliders scale with ancestor Transform).
+/// Real sizes match docs/maps/map01_dimensions.md mục 1's "Xe" rows.
+pub const ITEM_GALLERY_CAR_PHYSICS: [(f32, f32, f32, f32, f32); 16] = [
+    (2.2, 1.5, 1.9, 1.5, 4.6),     // sedan
+    (115.0, 0.0, 2.0, 2.3, 5.5),   // van
+    (1.0, 0.0, 2.6, 2.2, 5.3),     // pickup
+    (100.0, 0.0, 1.68, 1.6, 3.19), // vf3
+    (1.0, 0.0, 1.9, 1.8, 4.6),     // suv
+    (1.0, 0.0, 1.7, 1.45, 3.9),    // hatchback
+    (1.0, 0.0, 1.85, 1.25, 4.5),   // sports
+    (1.0, 0.0, 1.8, 1.5, 4.8),     // taxi
+    (1.0, 0.0, 1.85, 1.45, 5.0),   // police
+    (1.0, 0.0, 2.1, 2.6, 6.0),     // ambulance
+    (1.0, 0.0, 2.2, 2.5, 6.5),     // delivery
+    (1.0, 0.0, 2.3, 2.3, 6.5),     // towtruck
+    (1.0, 0.0, 1.8, 1.5, 4.8),     // wagon
+    (1.0, 0.0, 0.8, 1.15, 2.2),    // motorcycle
+    (1.0, 0.0, 1.9, 1.35, 5.0),    // muscle
+    (1.0, 0.0, 1.95, 1.75, 5.1),   // minivan
+];
+
+// 2 rows of 8, 6m apart on both axes — independent of
+// item_gallery_positions() (only 10 slots, tied 1:1 to
+// ITEM_GALLERY_ENTRIES) since 16 cars no longer fits that grid.
+const ITEM_GALLERY_CAR_ROW_SPACING: f32 = 6.0;
+const ITEM_GALLERY_CAR_ROW_LEN: usize = 8;
+const ITEM_GALLERY_CAR_ROW_Z: [f32; 2] = [-6.0, -14.0];
+
+/// (x, z) grid position for `ITEM_GALLERY_CAR_PHYSICS[i]`/client's
+/// `ITEM_GALLERY_CARS[i]` — same index, same order.
+pub fn item_gallery_car_positions() -> Vec<(f32, f32)> {
+    let start_x = -(ITEM_GALLERY_CAR_ROW_LEN as f32 - 1.0) * ITEM_GALLERY_CAR_ROW_SPACING / 2.0;
+    (0..ITEM_GALLERY_CAR_PHYSICS.len())
+        .map(|i| {
+            let row = i / ITEM_GALLERY_CAR_ROW_LEN;
+            let col = i % ITEM_GALLERY_CAR_ROW_LEN;
+            (start_x + col as f32 * ITEM_GALLERY_CAR_ROW_SPACING, ITEM_GALLERY_CAR_ROW_Z[row])
+        })
+        .collect()
+}
+
+/// Resolved per-car collider placement — everything a collider-only spawn
+/// (server) or a collider+visual spawn (client) needs, already divided by
+/// `scale` so `Collider::cuboid(size.x, size.y, size.z)` on a child at
+/// local Y `collider_local_y` comes out to the real-world box once avian3d
+/// re-multiplies by the parent entity's Transform.scale.
+pub struct ItemGalleryCarPhysics {
+    pub x: f32,
+    pub z: f32,
+    pub scale: f32,
+    /// Rest-height Y translation for the entity itself (matches the
+    /// SceneRoot's own Transform.y on the client — NOT the collider
+    /// center).
+    pub y: f32,
+    pub collider_size: Vec3,
+    pub collider_local_y: f32,
+}
+
+pub fn item_gallery_car_physics() -> Vec<ItemGalleryCarPhysics> {
+    ITEM_GALLERY_CAR_PHYSICS
+        .iter()
+        .zip(item_gallery_car_positions())
+        .map(|(&(scale, y, w, h, d), (x, z))| ItemGalleryCarPhysics {
+            x,
+            z,
+            scale,
+            y,
+            collider_size: Vec3::new(w, h, d) / scale,
+            collider_local_y: (h / 2.0) / scale,
+        })
+        .collect()
 }
