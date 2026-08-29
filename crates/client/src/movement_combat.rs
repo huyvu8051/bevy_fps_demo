@@ -489,11 +489,14 @@ pub(crate) fn send_player_input(
     // Tuples of SystemParams are themselves valid SystemParams, so nesting
     // sidesteps the limit without restructuring anything else — Autopilot/
     // AutopilotIntent are folded into the same tuple for the same reason.
-    (mut local_moving, mut local_sprinting, autopilot, intent): (
+    (mut local_moving, mut local_sprinting, autopilot, intent, editor): (
         ResMut<LocalPlayerMoving>,
         ResMut<LocalPlayerSprinting>,
         Res<Autopilot>,
         Res<AutopilotIntent>,
+        // Same `Option` reasoning as grab_cursor's own editor param — only
+        // present when EDITOR=1 actually added bevy_editor_pls::EditorPlugin.
+        Option<Res<bevy_editor_pls::editor::Editor>>,
     ),
     mover: MoveAndSlide,
     // Local prediction below still runs every single Update tick (up to
@@ -518,9 +521,19 @@ pub(crate) fn send_player_input(
 
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch.aiming.0));
 
+    // While the dev editor (EDITOR=1, F2) is active, WASD is bevy_editor_pls'
+    // own free-fly camera input (camera_3d_free.rs, right-click + WASD) —
+    // same reasoning grab_cursor already applies to mouse-look, just missed
+    // here originally. Without this, WASD drove the real Player alongside
+    // (and fighting) the editor's own camera, since this system reads raw
+    // KeyCode presses unconditionally.
+    let editor_active = editor.is_some_and(|e| e.active());
+
     // Real input, or this module's own AutopilotIntent while Autopilot is on.
     let (move_axis, sprinting) = if autopilot.0 {
         (intent.move_axis, intent.sprint)
+    } else if editor_active {
+        (Vec2::ZERO, false)
     } else {
         let sprinting = (keys.pressed(KeyCode::ShiftLeft) || touch.sprint.0) && stance == PlayerStance::Standing;
         let mut move_axis = Vec2::ZERO;

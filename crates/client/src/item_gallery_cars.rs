@@ -14,6 +14,7 @@
 // here since the two don't touch the same components).
 
 use bevy::prelude::*;
+use bevy::render::render_resource::Face;
 use crate::*;
 
 /// Marks the 16 meshy.ai car test props spawned into Scenario::ItemGallery
@@ -28,7 +29,8 @@ pub(crate) struct ItemGalleryCarsPlugin;
 
 impl Plugin for ItemGalleryCarsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(shake_item_gallery_car_on_hit);
+        app.add_observer(shake_item_gallery_car_on_hit)
+            .add_systems(Update, force_backface_culling_on_car_materials);
     }
 }
 
@@ -140,6 +142,46 @@ fn shake_item_gallery_car_on_hit(
         if let Ok(mut forces) = item_gallery_cars.get_mut(body) {
             forces.apply_linear_impulse_at_point(-normal.normalize_or_zero() * ITEM_GALLERY_CAR_HIT_IMPULSE, point);
             break;
+        }
+    }
+}
+
+/// Meshy exports every car material with glTF's `doubleSided: true`, which
+/// Bevy's glTF loader turns into `cull_mode: None` — every triangle gets
+/// rasterized from both sides, including the far half of the mesh that's
+/// always fully occluded by the near half on a closed car body anyway (no
+/// open cabins/cockpits among these 16 — see PROP_IMPORT_CHECKLIST.md).
+/// That's backface culling (a free ~2x fragment-shading win per car)
+/// turned OFF for no benefit — this forces it back on for every material
+/// that ends up on one of our car meshes specifically, without touching
+/// doubleSided materials elsewhere (zombies/player/level geometry) that
+/// might actually need both sides rendered.
+///
+/// Runs every frame (not once at spawn) because the glTF scene's mesh
+/// entities — and their materials — don't exist yet the instant
+/// spawn_item_gallery_test_props() returns; they stream in over the
+/// following frames as the asset finishes loading, same reason
+/// wire_zombie_hitbox_bones (crates/shared/src/zombie.rs) polls
+/// Added<Name> instead of doing this once at spawn time.
+fn force_backface_culling_on_car_materials(
+    child_of: Query<&ChildOf>,
+    item_gallery_cars: Query<(), With<ItemGalleryTestProp>>,
+    new_materials: Query<(Entity, &MeshMaterial3d<StandardMaterial>), Added<MeshMaterial3d<StandardMaterial>>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    'material: for (mesh_entity, material_handle) in &new_materials {
+        let mut current = mesh_entity;
+        for _ in 0..20 {
+            if item_gallery_cars.contains(current) {
+                if let Some(material) = materials.get_mut(&material_handle.0) {
+                    material.cull_mode = Some(Face::Back);
+                }
+                continue 'material;
+            }
+            let Ok(parent) = child_of.get(current) else {
+                continue 'material;
+            };
+            current = parent.0;
         }
     }
 }
