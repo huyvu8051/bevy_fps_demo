@@ -24,7 +24,6 @@ use shared::{
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     HitboxTestSlot, HITBOX_TEST_PLAYER_SPAWN, HITBOX_TEST_RESPAWN_DELAY, HITBOX_TEST_ZOMBIE_POSITIONS,
-    ITEM_GALLERY_PLAYER_SPAWN,
     MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PILLAR_RADIUS,
     PLAYER_LENGTH, PLAYER_RADIUS, PLAYER_SPAWN, Scenario,
     RENDER_COMPARE_PLAYER_SPAWN, RENDER_COMPARE_ZOMBIE_POSITIONS,
@@ -443,7 +442,7 @@ fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands, scena
         Scenario::StressTest => STRESS_TEST_PLAYER_SPAWN,
         Scenario::RenderCompare => RENDER_COMPARE_PLAYER_SPAWN,
         Scenario::LegacyArena => PLAYER_SPAWN,
-        Scenario::ItemGallery => ITEM_GALLERY_PLAYER_SPAWN,
+        Scenario::ItemGallery => shared::item_gallery_player_spawn(),
     };
     commands.entity(entity).insert((
         Transform::from_translation(spawn_pos),
@@ -2158,7 +2157,7 @@ fn on_request_restart(
             PLAYER_SPAWN
         }
         // No zombies/gameplay — pure walk-around scale-reference rig.
-        Scenario::ItemGallery => ITEM_GALLERY_PLAYER_SPAWN,
+        Scenario::ItemGallery => shared::item_gallery_player_spawn(),
     };
 
     for (entity, mut transform, mut player, mut net_transform) in &mut players {

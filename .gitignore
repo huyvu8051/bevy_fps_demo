@@ -42,3 +42,13 @@ experiments/cadisplaylink_probe/target/
 # even after replacement); re-add this ignore removal once a properly
 # sized (Smart Topology or Remeshed) version replaces it.
 crates/client/assets/props/car_sedan/mesh/car_sedan.glb
+# Same story: 140MB Meshy High Detail export of the cargo van (8192px
+# textures), local-only source for car_van_light.glb (gltfpack + resized
+# textures, see PROP_IMPORT_CHECKLIST.md).
+crates/client/assets/props/car_van/mesh/car_van.glb
+# Same story: 105MB Meshy High Detail export of the pickup truck (8192px
+# texture), local-only source for car_pickup_light.glb.
+crates/client/assets/props/car_pickup/mesh/car_pickup.glb
+# Same story: 66MB Meshy Text-to-3D export of the VF3-inspired car (8192px
+# texture), local-only source for car_vf3_light.glb.
+crates/client/assets/props/car_vf3/mesh/car_vf3.glb

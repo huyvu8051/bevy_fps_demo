@@ -1459,6 +1459,82 @@ fn log_window_resolution(windows: Query<&Window, With<PrimaryWindow>>) {
     );
 }
 
+/// Marks the 3 meshy.ai car test props spawned into Scenario::ItemGallery
+/// (see spawn_item_gallery_test_props) so map_select_button can despawn
+/// them on scenario switch same as LevelBox/LevelPanel — without this tag
+/// they'd either never appear (menu-picked ItemGallery never runs setup()'s
+/// Startup-only spawn) or linger forever after switching to another map.
+#[derive(Component)]
+pub(crate) struct ItemGalleryTestProp;
+
+/// Spawns the meshy.ai car test props (docs/PROP_IMPORT_CHECKLIST.md) into
+/// Scenario::ItemGallery — called from both setup() (MAP_ID=5 at process
+/// start) and map_select_button (ItemGallery picked from the in-game menu
+/// after starting on a different map), so either path shows the same
+/// props. Per-prop scale/offset notes live with each entry below.
+pub(crate) fn spawn_item_gallery_test_props(commands: &mut Commands, asset_server: &AssetServer) {
+    // First real meshy.ai asset test — see docs/PROP_IMPORT_CHECKLIST.md.
+    // Spawned 6m in front of the procedural "Sedan" box (item index 0,
+    // same X, offset -Z so it doesn't overlap) for eyeballing scale/
+    // texture side by side; not wired into gameplay/collision at all yet.
+    // scale/offset below were measured by hand against a 1.8m reference
+    // box (since removed) — this file was downloaded BEFORE discovering
+    // the download dialog's own Resize+Origin:Bottom option (see
+    // checklist mục 1 step 4), which bakes in correct real-world
+    // scale/pivot directly, no in-engine correction needed. Next prop
+    // import should use that instead of repeating this by-eye process.
+    let (car_x, car_z) = shared::item_gallery_positions()[0];
+    commands.spawn((
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("props/car_sedan/mesh/car_sedan_light.glb"))),
+        Transform::from_xyz(car_x, 1.5, car_z - 6.0).with_scale(Vec3::splat(2.2)),
+        ItemGalleryTestProp,
+    ));
+
+    // Second meshy.ai prop test (cargo van) — 6m in front of item index 1
+    // this time, same -Z-offset convention as the sedan above so the two
+    // test props don't overlap. This file's raw mesh bbox is tiny
+    // (~0.049 x 0.02 x 0.022 units — Meshy did NOT bake real-world scale
+    // in on this export, same untrustworthy-native-scale issue as the
+    // sedan) but ITS OWN MIN-Y IS ALREADY 0, i.e. it sits on its own base
+    // already — unlike the sedan this needed no Y offset, only a scale
+    // guess (~115, assuming a ~2.3m cargo-van roof height) pending
+    // eyeball correction via REVIEW_SPAWN/REVIEW_YAW/REVIEW_PITCH (see
+    // shared::item_gallery_player_spawn and review_yaw_pitch() in setup()).
+    let (van_x, van_z) = shared::item_gallery_positions()[1];
+    commands.spawn((
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("props/car_van/mesh/car_van_light.glb"))),
+        Transform::from_xyz(van_x, 0.0, van_z - 6.0).with_scale(Vec3::splat(115.0)),
+        ItemGalleryTestProp,
+    ));
+
+    // Third meshy.ai prop test (pickup truck) — 6m in front of item index
+    // 2. Unlike the sedan/van above, this export's mesh bbox is already
+    // real-world scaled (5.27m long x 2.2m tall x 2.6m wide, min-Y ~= 0)
+    // — no scale/offset correction needed, scale 1.0 drops it straight
+    // onto the floor at the right size.
+    let (pickup_x, pickup_z) = shared::item_gallery_positions()[2];
+    commands.spawn((
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("props/car_pickup/mesh/car_pickup_light.glb"))),
+        Transform::from_xyz(pickup_x, 0.0, pickup_z - 6.0),
+        ItemGalleryTestProp,
+    ));
+
+    // Fourth meshy.ai prop test (VF3-inspired compact EV, Text-to-3D) — 6m
+    // in front of item index 3. Raw bbox min-Y ~= 0 again (sits on its own
+    // base) but the 3 axes don't agree on one consistent real-world scale
+    // (implying length ~3.5m, width ~3.9m, height ~3.4m if fit
+    // independently to the real VF3's 3.19m x 1.68m x 1.62m spec) — a
+    // Text-to-3D generation, less geometrically consistent than the
+    // Image-to-3D props above. Scale 100 is a rough middle-ground guess
+    // pending eyeball correction via REVIEW_SPAWN/REVIEW_YAW/REVIEW_PITCH.
+    let (vf3_x, vf3_z) = shared::item_gallery_positions()[3];
+    commands.spawn((
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("props/car_vf3/mesh/car_vf3_light.glb"))),
+        Transform::from_xyz(vf3_x, 0.0, vf3_z - 6.0).with_scale(Vec3::splat(100.0)),
+        ItemGalleryTestProp,
+    ));
+}
+
 fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -1614,29 +1690,27 @@ fn setup(
         }),
     });
 
+    // Quick-review look-direction override, paired with server-side
+    // REVIEW_SPAWN (shared::item_gallery_player_spawn) — set env
+    // `REVIEW_YAW`/`REVIEW_PITCH` (degrees) so a freshly imported prop is
+    // already in frame on connect instead of turning to find it by hand
+    // every time. Only applied in ItemGallery; other scenarios always
+    // start facing forward (yaw 0, pitch 0) as before.
+    fn review_yaw_pitch() -> (f32, f32) {
+        if current_scenario() != Scenario::ItemGallery {
+            return (0.0, 0.0);
+        }
+        let deg = |var: &str| std::env::var(var).ok().and_then(|s| s.trim().parse::<f32>().ok()).unwrap_or(0.0);
+        (deg("REVIEW_YAW").to_radians(), deg("REVIEW_PITCH").to_radians())
+    }
+
     if current_scenario() == Scenario::ItemGallery {
         // Flat scale-reference rig (crates/shared/src/item_gallery.rs) —
         // checked before USE_MAP1_B1_GARAGE below since that constant is
         // always true regardless of scenario.
         let (pieces, panels) = shared::item_gallery_level_pieces();
         spawn_level_pieces(&mut commands, pieces, panels);
-
-        // First real meshy.ai asset test — see docs/PROP_IMPORT_CHECKLIST.md.
-        // Spawned 6m in front of the procedural "Sedan" box (item index 0,
-        // same X, offset -Z so it doesn't overlap) for eyeballing scale/
-        // texture side by side; not wired into gameplay/collision at all
-        // yet. scale/offset below were measured by hand against a 1.8m
-        // reference box (since removed) — this file was downloaded BEFORE
-        // discovering the download dialog's own Resize+Origin:Bottom
-        // option (see checklist mục 1 step 4), which bakes in correct
-        // real-world scale/pivot directly, no in-engine correction
-        // needed. Next prop import should use that instead of repeating
-        // this by-eye process.
-        let (car_x, car_z) = shared::item_gallery_positions()[0];
-        commands.spawn((
-            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("props/car_sedan/mesh/car_sedan.glb"))),
-            Transform::from_xyz(car_x, 1.5, car_z - 6.0).with_scale(Vec3::splat(2.2)),
-        ));
+        spawn_item_gallery_test_props(&mut commands, &asset_server);
     } else if USE_MAP1_B1_GARAGE {
         // Sàn/tường/dốc/bàn/phòng: build cục bộ từ đúng
         // shared::map1_level_pieces() server cũng gọi để dựng collider
@@ -1742,6 +1816,7 @@ fn setup(
         death: player_model_nodes[4],
     });
 
+    let (review_yaw, review_pitch) = review_yaw_pitch();
     let camera = commands
         .spawn((
             Camera3d::default(),
@@ -1750,7 +1825,7 @@ fn setup(
                 ..default()
             }),
             Transform::from_translation(PLAYER_SPAWN + Vec3::Y * EYE_HEIGHT_OFFSET),
-            FpsCamera { yaw: 0.0, pitch: 0.0 },
+            FpsCamera { yaw: review_yaw, pitch: review_pitch },
             ViewRecoil::default(),
             Lean::default(),
             AmbientLight {
@@ -2411,12 +2486,19 @@ fn count_local_kills(
 // through native_metal_probe.rs's bitmap font on iOS too, which only has
 // uppercase A-Z/digits/a handful of symbols — see glyph_index's own doc
 // comment.
-const MAP_SELECT_ENTRIES: [(u8, &str, &str); 6] = [
+//
+// MAP 1/2/3 (HitboxTest/StressTest/RenderCompare) and TEST ARENA
+// (LegacyArena) were dropped from this menu — map_select_button's
+// geometry-rebuild only special-cases ItemGallery vs. "everything else
+// that isn't LegacyArena gets map1 B1 garage pieces", so picking any of
+// those 4 from here just rebuilt the same B1 garage regardless of which
+// one was picked (indistinguishable from GAME MAP once connected). They
+// still work as dedicated test rigs when launched directly with
+// `MAP_ID=1..4` (own server process, own port — see Scenario::port) for
+// e.g. isolated hit-registration testing; only the in-game menu path was
+// broken/redundant.
+const MAP_SELECT_ENTRIES: [(u8, &str, &str); 2] = [
     (0, "GAME MAP", "OFFICE BUILDING (B1-F3)"),
-    (1, "MAP 1", "HITBOX TEST - 5 STATIONARY ZOMBIES"),
-    (2, "MAP 2", "STRESS TEST - 50 ZOMBIES, NOCLIP"),
-    (3, "MAP 3", "RENDER COMPARE - 3 ZOMBIES, 3 POSES, AUTOPILOT OFF"),
-    (4, "TEST ARENA", "LEGACY FLAT ARENA + PILLARS"),
     (5, "ITEM GALLERY", "ALL STANDARD ITEM SIZES ON FLAT FLOOR"),
 ];
 

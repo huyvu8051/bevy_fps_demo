@@ -61,6 +61,24 @@ pub fn item_gallery_positions() -> Vec<(f32, f32)> {
 // chơi bình thường (+ editor F2 nếu cần), không phải 1 scenario chơi được.
 pub const ITEM_GALLERY_PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 3.0, ITEM_GALLERY_HALF_SIZE_Z - 2.0);
 
+/// Quick-review override for ITEM_GALLERY_PLAYER_SPAWN — set env
+/// `REVIEW_SPAWN="x,y,z"` (server-side, before starting `MAP_ID=5`) to
+/// spawn directly next to whichever prop is being eyeballed instead of
+/// walking/noclipping there from the default south-end spawn every time.
+/// Falls back to ITEM_GALLERY_PLAYER_SPAWN if unset or malformed. See also
+/// the client's REVIEW_YAW/REVIEW_PITCH (crates/client/src/lib.rs) for the
+/// matching initial look-direction override.
+pub fn item_gallery_player_spawn() -> Vec3 {
+    let Ok(raw) = std::env::var("REVIEW_SPAWN") else {
+        return ITEM_GALLERY_PLAYER_SPAWN;
+    };
+    let parts: Vec<f32> = raw.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    match parts[..] {
+        [x, y, z] => Vec3::new(x, y, z),
+        _ => ITEM_GALLERY_PLAYER_SPAWN,
+    }
+}
+
 /// Flat floor + 4 walls + 1 LevelBox per ITEM_GALLERY_ENTRIES — pure
 /// data, no spawning (see map1_level_pieces's own doc comment for why:
 /// same function, called by both client and server).

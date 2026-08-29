@@ -531,21 +531,28 @@ pub(crate) fn spawn_map_select_ui_if_pending(mut commands: Commands, pending: Re
 // separate "first connect" code path needed.
 pub(crate) fn map_select_button(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     buttons: Query<(&Interaction, &MapSelectButton), Changed<Interaction>>,
     root: Query<Entity, With<MapSelectRoot>>,
     mut pending: ResMut<MapSelectionPending>,
     mut noclip: ResMut<Noclip>,
     mut autopilot: ResMut<Autopilot>,
     channels: Res<RepliconChannels>,
-    // Every currently-spawned level-geometry entity — despawned + rebuilt
-    // below for whichever scenario was just picked. Needed because level
-    // geometry is now built LOCALLY at Startup (see setup()) instead of
-    // replicated from the server (see level_piece.rs's own doc comment)
-    // — Startup only runs once, at the DEFAULT scenario (MAP_ID unset),
-    // so picking a different map from this in-game menu used to leave the
-    // stale default geometry on screen forever (reported bug: picking
-    // ITEM GALLERY still showed the B1 garage) unless re-spawned here.
-    existing_geometry: Query<Entity, Or<(With<shared::LevelBox>, With<shared::LevelPanel>)>>,
+    // Every currently-spawned level-geometry entity (+ the ItemGallery car
+    // test props, same reasoning) — despawned + rebuilt below for whichever
+    // scenario was just picked. Needed because level geometry is now built
+    // LOCALLY at Startup (see setup()) instead of replicated from the
+    // server (see level_piece.rs's own doc comment) — Startup only runs
+    // once, at the DEFAULT scenario (MAP_ID unset), so picking a different
+    // map from this in-game menu used to leave the stale default geometry
+    // on screen forever (reported bug: picking ITEM GALLERY still showed
+    // the B1 garage) unless re-spawned here. The car props hit the same
+    // bug from the other direction too: picking ItemGallery from this menu
+    // never ran setup()'s Startup-only spawn, so they just never appeared.
+    existing_geometry: Query<
+        Entity,
+        Or<(With<shared::LevelBox>, With<shared::LevelPanel>, With<ItemGalleryTestProp>)>,
+    >,
 ) {
     for (interaction, button) in &buttons {
         if *interaction != Interaction::Pressed {
@@ -580,6 +587,7 @@ pub(crate) fn map_select_button(
         if scenario == Scenario::ItemGallery {
             let (pieces, panels) = shared::item_gallery_level_pieces();
             spawn_level_pieces(&mut commands, pieces, panels);
+            spawn_item_gallery_test_props(&mut commands, &asset_server);
         } else if USE_MAP1_B1_GARAGE && scenario != Scenario::LegacyArena {
             let (pieces, panels) = shared::map1_level_pieces();
             spawn_level_pieces(&mut commands, pieces, panels);
