@@ -113,35 +113,52 @@ before spending a Text-to-Motion generation — a close-enough stock motion
 is free, these prompts are the fallback for the ones the library doesn't
 have verbatim (mainly Reload, Aim, and anything weapon-specific).
 
-**Player — Crouch Idle**
+**Duration** isn't a code constraint — the game just plays whichever clip
+is at that index, looping or one-shot depending on the pose (see
+`PlayerModelPose`/`ZombiePose` dispatch), so it's purely a Meshy
+generation setting. Set Meshy's duration slider per clip's actual use:
+
+| Clip | Loop or one-shot | Suggested length | Why |
+|---|---|---|---|
+| Crouch Idle | loop | 2–3s | idle poses need a full breathing-cycle before the loop seam repeats, same as the existing Idle clip |
+| Crouch Walk | loop | 1–1.2s | one full step cycle (L-R-L) — matches the existing Walk clip's cycle length, so playback speed scaling stays consistent |
+| Prone Idle | loop | 2–3s | same reasoning as Crouch Idle |
+| Prone Crawl | loop | 1.5–2s | crawl cycles read slower than a walk cycle — too short reads as a jittery loop |
+| Reload | one-shot | 2–2.5s | has to cover the full mag-out → mag-in → charging-handle sequence described in the prompt; cutting it short truncates the motion mid-action |
+| Aim/ADS pose | loop | 1.5–2s | mostly a held pose — short loop with subtle sway/breathing, not a long unique motion |
+| Jump/Fall | one-shot | 0.8–1.2s | matches actual airtime at this game's jump height — longer just adds hang-time that doesn't line up with `vertical_velocity` |
+| Lean left/right | one-shot (hold last frame) | 0.6–1s | fast transition into the leaned pose; the pose itself gets held by code, not by the clip looping |
+| Zombie Death | one-shot | 1.5–2s | long enough for a full collapse arc, short enough that despawn (§2) doesn't wait around once decided on |
+
+**Player — Crouch Idle** (loop, ~2–3s)
 ```
 Character crouches down and holds a stationary crouching idle pose,
 weight balanced on both feet, knees bent, torso upright, alert ready
 stance, holding a rifle at the chest.
 ```
 
-**Player — Crouch Walk**
+**Player — Crouch Walk** (loop, ~1–1.2s)
 ```
 Character walks forward while crouching low, knees bent, staying low
 to the ground, cautious tactical crouch-walk cycle, holding a rifle
 raised at the chest.
 ```
 
-**Player — Prone Idle**
+**Player — Prone Idle** (loop, ~2–3s)
 ```
 Character lies flat on the stomach in a prone position, elbows propped
 forward on the ground, holding a rifle aimed forward, stationary prone
 ready pose.
 ```
 
-**Player — Prone Crawl**
+**Player — Prone Crawl** (loop, ~1.5–2s)
 ```
 Character crawls forward slowly while lying prone on the stomach,
 pulling with elbows and forearms, legs dragging behind, military low
 crawl, holding a rifle in front.
 ```
 
-**Player — Reload**
+**Player — Reload** (one-shot, ~2–2.5s)
 ```
 Character reloads a rifle: pulls out the empty magazine downward with
 one hand, drops it, inserts a new magazine up into the weapon, pulls
@@ -149,28 +166,30 @@ the charging handle back and releases it, quick tactical reload, weapon
 held at chest height.
 ```
 
-**Player — Aim/ADS pose**
+**Player — Aim/ADS pose** (loop, ~1.5–2s)
 ```
 Character raises a rifle to shoulder height and aims down the sights,
 steady standing aiming stance, weapon held close to the face, elbows
 tucked in, minimal sway.
 ```
 
-**Player — Jump/Fall**
+**Player — Jump/Fall** (one-shot, ~0.8–1.2s)
 ```
 Character jumps upward from a standing position, arms swinging up for
 momentum, then transitions into a mid-air falling pose with knees
 slightly bent, landing in a soft recovery crouch.
 ```
 
-**Player — Lean left/right** (bonus, from the PUBG/L4D notes in §3)
+**Player — Lean left/right** (bonus, from the PUBG/L4D notes in §3;
+one-shot, ~0.6–1s)
 ```
 Character leans sideways from the waist while standing still, upper
 body tilts out to peek around a corner, feet planted, weapon still
 raised and aimed.
 ```
 
-**Zombie — Death** (only if the design decision in §2 is "yes, add it")
+**Zombie — Death** (only if the design decision in §2 is "yes, add it";
+one-shot, ~1.5–2s)
 ```
 Zombie is shot and collapses backward, losing balance and falling
 limply to the ground, ragdoll-like uncontrolled death fall, no
