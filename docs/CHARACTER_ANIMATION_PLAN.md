@@ -113,6 +113,23 @@ before spending a Text-to-Motion generation — a close-enough stock motion
 is free, these prompts are the fallback for the ones the library doesn't
 have verbatim (mainly Reload, Aim, and anything weapon-specific).
 
+**Root motion: must be OFF (in-place only).** Character position is driven
+entirely by server-side movement code (`movement_combat.rs`, velocity →
+`Transform`) — the skinning path (`compute_joint_matrices` in
+`cadisplaylink/skinned_gltf.rs`) only computes joint matrices to pose the
+mesh, it never reads the root bone's translation back onto the entity.
+If a generated clip has baked-in root motion (the hips/pelvis actually
+translating through world space, e.g. a walk cycle that "travels"), the
+mesh will double-move: code moves the entity via velocity *and* the
+animation drags the root bone forward inside it, causing foot sliding or
+the visible mesh drifting off the actual collider position. This matters
+most for the clips that involve real movement — Crouch Walk, Prone Crawl,
+Jump — since those are exactly the ones a generator defaults to giving
+root motion. When exporting from Meshy, use the **in-place** / **no root
+motion** option if offered; when writing a Text-to-Motion prompt, add "in
+place" explicitly (see each prompt below) so the character's hips stay
+centered over the same spot for the whole clip and only the limbs cycle.
+
 **Duration** isn't a code constraint — the game just plays whichever clip
 is at that index, looping or one-shot depending on the pose (see
 `PlayerModelPose`/`ZombiePose` dispatch), so it's purely a Meshy
@@ -137,11 +154,12 @@ weight balanced on both feet, knees bent, torso upright, alert ready
 stance, holding a rifle at the chest.
 ```
 
-**Player — Crouch Walk** (loop, ~1–1.2s)
+**Player — Crouch Walk** (loop, ~1–1.2s, **in place — no root motion**)
 ```
-Character walks forward while crouching low, knees bent, staying low
+Character walks in place while crouching low, knees bent, staying low
 to the ground, cautious tactical crouch-walk cycle, holding a rifle
-raised at the chest.
+raised at the chest. In place, hips stay centered, no forward travel —
+only legs and arms cycle.
 ```
 
 **Player — Prone Idle** (loop, ~2–3s)
@@ -151,11 +169,12 @@ forward on the ground, holding a rifle aimed forward, stationary prone
 ready pose.
 ```
 
-**Player — Prone Crawl** (loop, ~1.5–2s)
+**Player — Prone Crawl** (loop, ~1.5–2s, **in place — no root motion**)
 ```
-Character crawls forward slowly while lying prone on the stomach,
-pulling with elbows and forearms, legs dragging behind, military low
-crawl, holding a rifle in front.
+Character crawls in place while lying prone on the stomach, pulling
+with elbows and forearms, legs dragging behind, military low crawl,
+holding a rifle in front. In place, torso stays centered, no forward
+travel — only arms and legs cycle.
 ```
 
 **Player — Reload** (one-shot, ~2–2.5s)
@@ -173,11 +192,16 @@ steady standing aiming stance, weapon held close to the face, elbows
 tucked in, minimal sway.
 ```
 
-**Player — Jump/Fall** (one-shot, ~0.8–1.2s)
+**Player — Jump/Fall** (one-shot, ~0.8–1.2s, **in place — no root
+motion**; vertical height here is already driven by `vertical_velocity`
+in code, so a clip that also lifts the root off the ground doubles up —
+this one specifically needs "in place" called out since jump is the
+clip most likely to get baked-in vertical root motion by default)
 ```
-Character jumps upward from a standing position, arms swinging up for
-momentum, then transitions into a mid-air falling pose with knees
-slightly bent, landing in a soft recovery crouch.
+Character jumps in place from a standing position, arms swinging up
+for momentum, then transitions into a mid-air falling pose with knees
+slightly bent, landing in a soft recovery crouch. In place, no forward
+or vertical root travel — pose only.
 ```
 
 **Player — Lean left/right** (bonus, from the PUBG/L4D notes in §3;
