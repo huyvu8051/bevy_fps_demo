@@ -237,9 +237,20 @@ pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &Replic
         .filter(|h| !h.is_empty())
         .unwrap_or_else(|| "127.0.0.1".to_string());
     let server_url = url::Url::parse(&format!("ws://{host}:{ws_port}")).expect("ws:// URL built from page hostname should always parse");
+    // WebSocketClientConfig::server_address() only understands an IP-literal
+    // host (Ipv4/Ipv6) — it errors on a domain name, and "localhost" IS a
+    // domain name (not an IP), which panicked here every time this page
+    // was opened via http://localhost:... instead of a literal IP (found
+    // live: "url is a domain but a SocketAddr was expected"). This
+    // SocketAddr is only netcode's own bookkeeping (goes into the
+    // ConnectToken's address list) — the actual WebSocket connection
+    // always routes through `server_url` itself, which the browser's own
+    // WebSocket API resolves fine including real domains — so a
+    // non-IP host falls back to a harmless loopback placeholder here
+    // instead of failing to connect at all.
     let server_addr = WebSocketClientConfig { server_url: server_url.clone() }
         .server_address()
-        .expect("page hostname should always resolve to a SocketAddr");
+        .unwrap_or_else(|_| std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), ws_port));
 
     let client = RenetClient::new(
         ConnectionConfig::from_channels(channels.server_configs(), channels.client_configs()),
