@@ -8,16 +8,19 @@ shared = { path = "../shared" }
 avian3d = "0.6"
 big-brain = { path = "../../vendor/big-brain" }
 vleue_navigator = { path = "../../vendor/vleue_navigator", default-features = false, features = ["avian3d"] }
-# "png": zombie.glb embeds PNG textures — the server never renders them
-# (no RenderPlugin at all here), but bevy_gltf's loader still tries to
-# decode every embedded image while loading the scene, and aborts the
-# whole load (skeleton included) if it hits a format with no decoder
-# compiled in. Cheapest fix: just let it decode the pixels we'll ignore.
+# "png" / "jpeg": zombie.glb embeds PNG textures, the item-gallery car
+# .glb files (also loaded here for their convex-hull colliders — see
+# spawn_item_gallery_car_colliders) embed JPEG ones. The server never
+# renders either (no RenderPlugin at all here), but bevy_gltf's loader
+# still tries to decode every embedded image while loading the scene, and
+# aborts the whole load (skeleton / mesh included) if it hits a format
+# with no decoder compiled in. Cheapest fix: just let it decode the
+# pixels we'll ignore.
 # "gltf_animation" (distinct from "bevy_animation"!) is what actually
 # makes bevy_gltf's loader convert the file's animation curves into
 # AnimationClip assets at all — without it, zombie.glb loaded with zero
 # "AnimationN" labeled sub-assets even though bevy_animation itself was
 # already enabled.
-bevy = { version = "0.18", default-features = false, features = ["bevy_log", "bevy_render", "bevy_gltf", "bevy_animation", "gltf_animation", "png", "bevy_pbr", "debug"] }
+bevy = { version = "0.18", default-features = false, features = ["bevy_log", "bevy_render", "bevy_gltf", "bevy_animation", "gltf_animation", "png", "jpeg", "bevy_pbr", "debug"] }
 bevy_replicon = "0.38"
 bevy_replicon_renet2 = { version = "0.13", features = ["native_transport"] }
