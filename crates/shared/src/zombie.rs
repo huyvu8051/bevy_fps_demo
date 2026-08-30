@@ -314,7 +314,14 @@ pub const ZOMBIE_LENGTH: f32 = ZOMBIE_WORLD_HEIGHT - 2.0 * ZOMBIE_RADIUS;
 // any) damage actually lands from where the ray actually goes; a shot that
 // only reaches this outer shell and no real bone region is a genuine miss
 // (see zombie_hit_damage_ray's own doc comment), not a graze.
-pub const ZOMBIE_OUTER_RADIUS: f32 = ZOMBIE_RADIUS * 4.0;
+//
+// Also the radius of the MoveAndSlide cylinder move_zombies pushes the
+// zombie around with, and (as of the car-gap fix) the navmesh agent_radius
+// obstacles are inflated by — so a gap narrower than a zombie is closed in
+// the navmesh and the pathfinder routes around it instead of wedging the
+// zombie at the entrance. Was `ZOMBIE_RADIUS * 4.0` (~0.85); pinned to a
+// flat 0.8 so that agent_radius is a clean, stable number.
+pub const ZOMBIE_OUTER_RADIUS: f32 = 0.8;
 pub const ZOMBIE_OUTER_HEIGHT: f32 = ZOMBIE_WORLD_HEIGHT;
 
 // How far below the zombie root's own Transform/NetTransform.translation
