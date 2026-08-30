@@ -200,6 +200,11 @@ pub struct ItemGalleryCarPhysics {
     pub y: f32,
     pub collider_size: Vec3,
     pub collider_local_y: f32,
+    /// Real-world (width, height, depth) in meters straight from the RON
+    /// file — i.e. `collider_size` before the `/ scale` pre-division. The
+    /// editor-driven save (client's F9 handler) writes these back
+    /// unchanged; they can't be recovered from a live Transform.
+    pub real_size: Vec3,
 }
 
 pub fn item_gallery_car_physics() -> Vec<ItemGalleryCarPhysics> {
@@ -213,6 +218,7 @@ pub fn item_gallery_car_physics() -> Vec<ItemGalleryCarPhysics> {
             y,
             collider_size: Vec3::new(w, h, d) / scale,
             collider_local_y: (h / 2.0) / scale,
+            real_size: Vec3::new(w, h, d),
         })
         .collect()
 }

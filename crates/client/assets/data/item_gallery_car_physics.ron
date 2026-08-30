@@ -6,13 +6,15 @@
 // depth in meters). Same order/count as client's ITEM_GALLERY_CAR_PATHS
 // (crates/client/src/item_gallery_cars.rs) — index i here is car i there.
 //
-// Why RON and not still a Rust const: this file is meant to be hand-tuned
-// by eyeballing each car in the dev editor (F2) and nudging scale/position
-// — moving that loop from "edit code, recompile, retest" to "edit this
-// file, rerun" is the whole point. bevy_editor_pls's own Scenes window
-// (Save button) writes generic Transform-per-entity RON, not this
-// tuple-array shape, so for now this file is still hand-edited directly;
-// wiring the editor's Save into this exact shape is a separate follow-up.
+// Why RON and not still a Rust const: this file is meant to be tuned by
+// eyeballing each car in the dev editor (F2) and nudging scale/position —
+// moving that loop from "edit code, recompile, retest" to "edit this file,
+// rerun" is the whole point. With EDITOR=1 in Scenario::ItemGallery,
+// pressing F9 writes every car's live scale + Y back into this file (see
+// save_item_gallery_car_physics_on_key in
+// crates/client/src/item_gallery_cars.rs); the width/height/depth columns
+// and this header are preserved as-is. Hand-editing still works fine too.
+// Grid x/z is NOT stored here (item_gallery_car_positions() computes it).
 [
     (2.2, 1.5, 1.9, 1.5, 4.6),     // sedan
     (115.0, 0.0, 2.0, 2.3, 5.5),   // van

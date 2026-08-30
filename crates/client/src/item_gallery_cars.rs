@@ -31,6 +31,16 @@ impl Plugin for ItemGalleryCarsPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(shake_item_gallery_car_on_hit)
             .add_systems(Update, force_backface_culling_on_car_materials);
+        // Dev-only: F9 writes every car's live scale/Y back into
+        // crates/client/assets/data/item_gallery_car_physics.ron so the
+        // "nudge in the editor, eyeball, repeat" loop ends with a real
+        // save instead of copying numbers out of the Inspector by hand.
+        // Gated on EDITOR=1 like the bevy_editor_pls plugin itself
+        // (crates/client/src/lib.rs) — no key handler at all in a normal
+        // player build.
+        if std::env::var("EDITOR").is_ok() {
+            app.add_systems(Update, save_item_gallery_car_physics_on_key);
+        }
     }
 }
 
@@ -117,6 +127,10 @@ pub(crate) fn spawn_item_gallery_test_props(commands: &mut Commands, asset_serve
             ))
             .with_children(|p| {
                 p.spawn((
+                    // Named for the same reason the parent is (see above) —
+                    // otherwise the Hierarchy shows a bare "Entity (Nv0)" for
+                    // the invisible collider box under each car.
+                    Name::new(format!("{name}_collider")),
                     Transform::from_xyz(0.0, physics.collider_local_y, 0.0),
                     Collider::cuboid(physics.collider_size.x, physics.collider_size.y, physics.collider_size.z),
                 ));
@@ -193,5 +207,116 @@ fn force_backface_culling_on_car_materials(
             };
             current = parent.0;
         }
+    }
+}
+
+// --- F9: save live car scale/Y back to the RON file (EDITOR=1 only) ------
+//
+// The RON tuple is (scale, y, width, height, depth). Only `scale` and `y`
+// are things you tune by eyeballing a car in the editor, so those are the
+// only two this reads off the live Transform; width/height/depth are the
+// real-world collider size (shared::ItemGalleryCarPhysics::real_size) and
+// get written straight back unchanged. Grid x/z isn't in the file at all
+// (item_gallery_car_positions() computes it) — if a car has been dragged
+// sideways in the editor that offset is logged and dropped, not saved.
+//
+// The file's header comment block is preserved verbatim (everything up to
+// and including the lone `[` line); only the array body is regenerated,
+// with the same `// name` trailing comments and column alignment the
+// hand-written file had.
+
+const ITEM_GALLERY_CAR_PHYSICS_RON: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/data/item_gallery_car_physics.ron");
+
+fn round4(v: f32) -> f32 {
+    (v * 1.0e4).round() / 1.0e4
+}
+
+/// f32 -> RON float literal: shortest form, but always with a decimal
+/// point (`1` is an int in RON and won't parse into an f32 field).
+fn ron_f32(v: f32) -> String {
+    let s = format!("{}", round4(v));
+    if s.contains('.') { s } else { format!("{s}.0") }
+}
+
+fn save_item_gallery_car_physics_on_key(
+    keys: Res<ButtonInput<KeyCode>>,
+    cars: Query<(&Name, &Transform), With<ItemGalleryTestProp>>,
+) {
+    if !keys.just_pressed(KeyCode::F9) {
+        return;
+    }
+
+    let live: std::collections::HashMap<&str, &Transform> =
+        cars.iter().map(|(name, t)| (name.as_str(), t)).collect();
+
+    // Same index order as the RON file and ITEM_GALLERY_CAR_PATHS.
+    let defaults = shared::item_gallery_car_physics();
+    let mut rows: Vec<(String, String)> = Vec::with_capacity(ITEM_GALLERY_CAR_PATHS.len());
+    for (&path, phys) in ITEM_GALLERY_CAR_PATHS.iter().zip(&defaults) {
+        let name = path.split('/').nth(1).unwrap_or(path);
+        let Some(t) = live.get(name).copied() else {
+            error!(
+                "F9 save aborted: car '{name}' not in the scene \
+                 (are you on Scenario::ItemGallery / MAP_ID=5?) — nothing written"
+            );
+            return;
+        };
+
+        let scale = t.scale.x;
+        if (t.scale.y - scale).abs() > 1.0e-3 || (t.scale.z - scale).abs() > 1.0e-3 {
+            warn!("car '{name}': non-uniform scale {:?} in editor — saving x ({scale}) only", t.scale);
+        }
+        if (t.translation.x - phys.x).abs() > 0.05 || (t.translation.z - phys.z).abs() > 0.05 {
+            warn!(
+                "car '{name}': moved to x/z ({:.2}, {:.2}) in editor, but grid x/z is \
+                 computed (shared::item_gallery_car_positions), not stored — ignoring",
+                t.translation.x, t.translation.z
+            );
+        }
+
+        // Undo the spawn-time drop margin so the value round-trips: spawn
+        // adds ITEM_GALLERY_CAR_DROP_MARGIN back on next run.
+        let y = t.translation.y - ITEM_GALLERY_CAR_DROP_MARGIN;
+        let sz = phys.real_size;
+        let short = name.strip_prefix("car_").unwrap_or(name);
+        rows.push((
+            format!(
+                "({}, {}, {}, {}, {}),",
+                ron_f32(scale),
+                ron_f32(y),
+                ron_f32(sz.x),
+                ron_f32(sz.y),
+                ron_f32(sz.z),
+            ),
+            short.to_string(),
+        ));
+    }
+
+    // Preserve the header: keep every line up to and including the lone `[`.
+    let existing = match std::fs::read_to_string(ITEM_GALLERY_CAR_PHYSICS_RON) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("F9 save aborted: can't read {ITEM_GALLERY_CAR_PHYSICS_RON}: {e}");
+            return;
+        }
+    };
+    let header: String = existing
+        .lines()
+        .take_while(|l| l.trim() != "[")
+        .map(|l| format!("{l}\n"))
+        .collect();
+
+    let width = rows.iter().map(|(core, _)| core.len()).max().unwrap_or(0);
+    let mut out = header;
+    out.push_str("[\n");
+    for (core, short) in &rows {
+        out.push_str(&format!("    {core:<width$} // {short}\n"));
+    }
+    out.push_str("]\n");
+
+    match std::fs::write(ITEM_GALLERY_CAR_PHYSICS_RON, out) {
+        Ok(()) => info!("saved {} cars -> {ITEM_GALLERY_CAR_PHYSICS_RON}", rows.len()),
+        Err(e) => error!("F9 save failed writing {ITEM_GALLERY_CAR_PHYSICS_RON}: {e}"),
     }
 }
