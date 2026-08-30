@@ -14,8 +14,10 @@
 // the server picks each zombie's target by threat score, not nearest, and
 // adds separation / obstacle-steering on top. It's meant for "does the
 // navmesh route around the pillars / cars like I expect", not a
-// frame-exact replay. Car footprints ARE carved on the server but not
-// here (client cars are RigidBody::Dynamic and settle differently).
+// frame-exact replay. Parked cars ARE carved here too (their colliders
+// get ClientNavObstacle via tag_client_car_colliders), but the client
+// copies are RigidBody::Dynamic so a hole can sit a little off from the
+// server's, which uses Static cars at the exact RON rest pose.
 //
 // Only MapKind::Arena has a per-map navmesh; other maps get nothing.
 // Toggle: the "NavDbg" button in the settings menu Cheats section (debug
@@ -57,6 +59,7 @@ impl Plugin for NavDebugPlugin {
                 nav_debug_toggle_button,
                 update_nav_debug_button_color,
                 sync_client_navmesh,
+                tag_client_car_colliders,
                 apply_nav_debug_visibility,
                 draw_zombie_path_traces,
             ),
@@ -116,12 +119,33 @@ fn sync_client_navmesh(mut commands: Commands, existing: Query<Entity, With<Mana
                     build_timeout: Some(1.0),
                     ..default()
                 },
-                NavMeshUpdateMode::Direct,
+                // Debounced, not Direct: the client cars are Dynamic and
+                // jiggle when shot, and a retriangulation every frame while
+                // one settles is wasteful for a debug overlay.
+                NavMeshUpdateMode::Debounced(0.3),
                 navmesh_plane(),
             ));
         }
         (false, Some(entity)) => commands.entity(entity).despawn(),
         _ => {}
+    }
+}
+
+// The car colliders are convex hulls ColliderConstructorHierarchy builds
+// on descendant entities once the glTF loads — same problem the server's
+// tag_car_colliders_as_nav_obstacles solves. Forward ClientNavObstacle
+// onto each collider that descends from an ItemGalleryTestProp root so the
+// updater carves the car footprint too. Idle once the scenes have loaded.
+fn tag_client_car_colliders(
+    mut commands: Commands,
+    new_colliders: Query<Entity, Added<Collider>>,
+    child_of: Query<&ChildOf>,
+    car_roots: Query<(), With<ItemGalleryTestProp>>,
+) {
+    for entity in &new_colliders {
+        if find_animation_root(entity, &child_of, |e| car_roots.contains(e)).is_some() {
+            commands.entity(entity).insert(ClientNavObstacle);
+        }
     }
 }
 
