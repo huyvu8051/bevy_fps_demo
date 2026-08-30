@@ -6,5 +6,6 @@ edition = "2024"
 [dependencies]
 bevy = { version = "0.18", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
+ron = "0.8"
 renet2_netcode = { version = "0.13", features = ["native_transport"] }
 avian3d = "0.6"

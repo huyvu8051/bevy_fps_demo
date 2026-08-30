@@ -1,0 +1,33 @@
+// Ported from shared::item_gallery::ITEM_GALLERY_CAR_PHYSICS (was a hard-
+// coded Rust const array) — see that fn's doc comment in
+// crates/shared/src/item_gallery.rs for the full field meaning.
+//
+// Each entry: (entity scale, entity Y translation, real width, height,
+// depth in meters). Same order/count as client's ITEM_GALLERY_CAR_PATHS
+// (crates/client/src/item_gallery_cars.rs) — index i here is car i there.
+//
+// Why RON and not still a Rust const: this file is meant to be hand-tuned
+// by eyeballing each car in the dev editor (F2) and nudging scale/position
+// — moving that loop from "edit code, recompile, retest" to "edit this
+// file, rerun" is the whole point. bevy_editor_pls's own Scenes window
+// (Save button) writes generic Transform-per-entity RON, not this
+// tuple-array shape, so for now this file is still hand-edited directly;
+// wiring the editor's Save into this exact shape is a separate follow-up.
+[
+    (2.2, 1.5, 1.9, 1.5, 4.6),     // sedan
+    (115.0, 0.0, 2.0, 2.3, 5.5),   // van
+    (1.0, 0.0, 2.6, 2.2, 5.3),     // pickup
+    (100.0, 0.0, 1.68, 1.6, 3.19), // vf3
+    (1.0, 0.0, 1.9, 1.8, 4.6),     // suv
+    (1.0, 0.0, 1.7, 1.45, 3.9),    // hatchback
+    (1.0, 0.0, 1.85, 1.25, 4.5),   // sports
+    (1.0, 0.0, 1.8, 1.5, 4.8),     // taxi
+    (1.0, 0.0, 1.85, 1.45, 5.0),   // police
+    (1.0, 0.0, 2.1, 2.6, 6.0),     // ambulance
+    (1.0, 0.0, 2.2, 2.5, 6.5),     // delivery
+    (1.0, 0.0, 2.3, 2.3, 6.5),     // towtruck
+    (1.0, 0.0, 1.8, 1.5, 4.8),     // wagon
+    (1.0, 0.0, 0.8, 1.15, 2.2),    // motorcycle
+    (1.0, 0.0, 1.9, 1.35, 5.0),    // muscle
+    (1.0, 0.0, 1.95, 1.75, 5.1),   // minivan
+]

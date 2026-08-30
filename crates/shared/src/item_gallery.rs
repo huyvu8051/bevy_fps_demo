@@ -138,24 +138,32 @@ pub fn item_gallery_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
 /// stated real-world size once avian3d applies the entity's Transform.scale
 /// to it (confirmed behavior: colliders scale with ancestor Transform).
 /// Real sizes match docs/maps/map01_dimensions.md mục 1's "Xe" rows.
-pub const ITEM_GALLERY_CAR_PHYSICS: [(f32, f32, f32, f32, f32); 16] = [
-    (2.2, 1.5, 1.9, 1.5, 4.6),     // sedan
-    (115.0, 0.0, 2.0, 2.3, 5.5),   // van
-    (1.0, 0.0, 2.6, 2.2, 5.3),     // pickup
-    (100.0, 0.0, 1.68, 1.6, 3.19), // vf3
-    (1.0, 0.0, 1.9, 1.8, 4.6),     // suv
-    (1.0, 0.0, 1.7, 1.45, 3.9),    // hatchback
-    (1.0, 0.0, 1.85, 1.25, 4.5),   // sports
-    (1.0, 0.0, 1.8, 1.5, 4.8),     // taxi
-    (1.0, 0.0, 1.85, 1.45, 5.0),   // police
-    (1.0, 0.0, 2.1, 2.6, 6.0),     // ambulance
-    (1.0, 0.0, 2.2, 2.5, 6.5),     // delivery
-    (1.0, 0.0, 2.3, 2.3, 6.5),     // towtruck
-    (1.0, 0.0, 1.8, 1.5, 4.8),     // wagon
-    (1.0, 0.0, 0.8, 1.15, 2.2),    // motorcycle
-    (1.0, 0.0, 1.9, 1.35, 5.0),    // muscle
-    (1.0, 0.0, 1.95, 1.75, 5.1),   // minivan
-];
+///
+/// Loaded from `crates/client/assets/data/item_gallery_car_physics.ron`
+/// (was a hardcoded const array here) instead of compiled in, so
+/// hand-tuning a car's scale/position after eyeballing it in the dev
+/// editor (F2) is "edit the file, rerun" instead of "edit code, rebuild".
+/// Read once per process and cached — both client and server call
+/// `item_gallery_car_physics()` at Startup, and the file never changes
+/// mid-run.
+///
+/// Path is resolved from this crate's own `CARGO_MANIFEST_DIR` (baked in
+/// at shared's compile time), NOT the process's CWD or either binary's
+/// own Bevy `AssetPlugin.file_path` — those two differ between client and
+/// server (see server/src/main.rs's own comment on why), but shared's
+/// manifest dir is fixed regardless of which binary links it in, so this
+/// one path works unchanged for both.
+fn item_gallery_car_physics_raw() -> &'static [(f32, f32, f32, f32, f32)] {
+    static DATA: std::sync::OnceLock<Vec<(f32, f32, f32, f32, f32)>> = std::sync::OnceLock::new();
+    DATA.get_or_init(|| {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../client/assets/data/item_gallery_car_physics.ron");
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("failed to read item gallery car physics data at {path}: {e}"));
+        ron::de::from_str(&text)
+            .unwrap_or_else(|e| panic!("failed to parse item gallery car physics data at {path}: {e}"))
+    })
+    .as_slice()
+}
 
 // 2 rows of 8, 6m apart on both axes — independent of
 // item_gallery_positions() (only 10 slots, tied 1:1 to
@@ -168,7 +176,7 @@ const ITEM_GALLERY_CAR_ROW_Z: [f32; 2] = [-6.0, -14.0];
 /// `ITEM_GALLERY_CARS[i]` — same index, same order.
 pub fn item_gallery_car_positions() -> Vec<(f32, f32)> {
     let start_x = -(ITEM_GALLERY_CAR_ROW_LEN as f32 - 1.0) * ITEM_GALLERY_CAR_ROW_SPACING / 2.0;
-    (0..ITEM_GALLERY_CAR_PHYSICS.len())
+    (0..item_gallery_car_physics_raw().len())
         .map(|i| {
             let row = i / ITEM_GALLERY_CAR_ROW_LEN;
             let col = i % ITEM_GALLERY_CAR_ROW_LEN;
@@ -195,7 +203,7 @@ pub struct ItemGalleryCarPhysics {
 }
 
 pub fn item_gallery_car_physics() -> Vec<ItemGalleryCarPhysics> {
-    ITEM_GALLERY_CAR_PHYSICS
+    item_gallery_car_physics_raw()
         .iter()
         .zip(item_gallery_car_positions())
         .map(|(&(scale, y, w, h, d), (x, z))| ItemGalleryCarPhysics {

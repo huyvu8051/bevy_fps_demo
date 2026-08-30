@@ -35,9 +35,10 @@ impl Plugin for ItemGalleryCarsPlugin {
 }
 
 // Asset paths only — scale/Y/collider size all live in
-// shared::ITEM_GALLERY_CAR_PHYSICS now (server needs those too, for its
-// own collider-only copy; asset loading is client-only so the paths stay
-// here). Same order/count as that array — zipped by index below. The
+// crates/client/assets/data/item_gallery_car_physics.ron now (loaded via
+// shared::item_gallery_car_physics(); server needs those too, for its own
+// collider-only copy; asset loading is client-only so the paths stay
+// here). Same order/count as that data file — zipped by index below. The
 // first 4 are early tests done BEFORE discovering the Meshy download
 // dialog's own Resize+Origin:Bottom option (docs/PROP_IMPORT_CHECKLIST.md
 // mục 1 step 4), hence their scale/Y hack in the shared array; every entry
