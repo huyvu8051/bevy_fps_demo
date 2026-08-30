@@ -418,7 +418,10 @@ const AIM_DOF_APERTURE_F_STOPS: f32 = 11.0;
 // exposed in the UI. MIN_TEXTURE_PX guards against a degenerate/zero-size
 // render target on a tiny window at a low scale.
 const RESOLUTION_SCALE_PRESETS: [f32; 7] = [0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0];
-const RESOLUTION_SCALE_DEFAULT: f32 = 1.0;
+// Default 40% — the 3D scene renders into a 0.4x offscreen target and gets
+// upscaled to fill the window. Override per-run with RENDER_SCALE, or live
+// via the settings-menu presets.
+const RESOLUTION_SCALE_DEFAULT: f32 = 0.4;
 const RESOLUTION_SCALE_MIN_TEXTURE_PX: u32 = 64;
 
 /// Startup value for `RenderResolutionScale` — `RESOLUTION_SCALE_DEFAULT`
