@@ -212,17 +212,55 @@ pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &Replic
     info!("connecting to server at {server_addr}");
 }
 
-/// wasm32 stub — no WebTransport client wired up yet (see
-/// `spawn_client_connection`'s own doc comment above for the real one's
-/// full requirements). Deliberately does NOT insert `RenetClient`/
-/// `NetcodeClientTransport`/`MyClientId`, so the rest of the game (menu,
-/// rendering, local scenarios like ItemGallery that don't need a live
-/// server) still runs — it just never connects, same observable behavior
-/// as pointing a native build at an unreachable `SERVER_ADDR`, instead of
-/// panicking the whole app on web.
+/// wasm32 path: `ws_client_transport` (plain WebSocket) instead of real
+/// UDP, which a browser sandbox can't open at all — see
+/// `spawn_client_connection`'s own doc comment above and
+/// `shared::Scenario::ws_port`'s for the matching server side (socket_id 1
+/// there, same index used in `ClientAuthentication` below).
+///
+/// Host is hard-coded to 127.0.0.1 for now (no `SERVER_ADDR`/`LOCAL`/
+/// `SERVER_HOST` env-var routing here — wasm32 has no env vars at all, see
+/// shared::read_ron_data_file!'s doc comment for the same limitation
+/// elsewhere) — fine for local dev/testing, which is what a browser build
+/// running off a local static server needs anyway. Reading the page's own
+/// origin (`web_sys::window().location()`) to support a real remote
+/// deployment is real follow-up work, not done here.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn spawn_client_connection(_commands: &mut Commands, _channels: &RepliconChannels) {
-    warn!("web build: no network transport implemented yet (needs renet2 WebTransport) — staying disconnected");
+pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &RepliconChannels) {
+    use bevy_replicon_renet2::netcode::{WebSocketClient, WebSocketClientConfig};
+
+    let ws_port = current_scenario().ws_port();
+    let server_url = url::Url::parse(&format!("ws://127.0.0.1:{ws_port}")).expect("hard-coded ws:// URL should always parse");
+    let server_addr = WebSocketClientConfig { server_url: server_url.clone() }
+        .server_address()
+        .expect("127.0.0.1 host should always resolve to a SocketAddr");
+
+    let client = RenetClient::new(
+        ConnectionConfig::from_channels(channels.server_configs(), channels.client_configs()),
+        false,
+    );
+
+    // web_time (not std::time) — see this crate's Cargo.toml comment on
+    // why: std::time::SystemTime::now() panics outright on wasm32.
+    let current_time = web_time::SystemTime::now()
+        .duration_since(web_time::SystemTime::UNIX_EPOCH)
+        .expect("system clock should be after the unix epoch");
+    let client_id = current_time.as_millis() as u64;
+    let authentication = ClientAuthentication::Unsecure {
+        client_id,
+        protocol_id: PROTOCOL_ID,
+        socket_id: 1,
+        server_addr,
+        user_data: None,
+    };
+    let socket = WebSocketClient::new(WebSocketClientConfig { server_url }).expect("failed to set up ws_client_transport");
+    let transport = NetcodeClientTransport::new(current_time, authentication, socket)
+        .expect("failed to set up netcode client transport");
+
+    commands.insert_resource(client);
+    commands.insert_resource(transport);
+    commands.insert_resource(MyClientId(client_id));
+    info!("connecting to server via ws://127.0.0.1:{ws_port}");
 }
 
 // The renet2 netcode client_id chosen in connect_to_server — also what the

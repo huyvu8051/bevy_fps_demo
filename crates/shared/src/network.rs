@@ -19,6 +19,7 @@ use crate::player::PLAYER_SPAWN;
 // `shared` so client and server can't drift on the port <-> scenario
 // mapping.
 pub const SERVER_PORT_BASE: u16 = 5031;
+pub const WS_PORT_OFFSET: u16 = 1000;
 
 // Was two separately-declared `const PROTOCOL_ID: u64 = 0;` (one in each of
 // crates/client and crates/server) — renet2 rejects a connection whose
@@ -97,6 +98,23 @@ impl Scenario {
 
     pub fn port(self) -> u16 {
         SERVER_PORT_BASE + self.map_id() as u16
+    }
+
+    /// The server's WebSocket listener port for this scenario — a real UDP
+    /// socket and a WebSocket (TCP) listener are different address spaces,
+    /// so they can't share `port()`'s number even though nothing else
+    /// about them conflicts. Native clients (`native_transport`, real UDP)
+    /// use `port()`; a wasm32 web client can't open a raw UDP socket at
+    /// all (browser sandbox), so it connects here instead via
+    /// `ws_client_transport` — see network_setup.rs's wasm
+    /// spawn_client_connection and server/main.rs's start_server (the
+    /// server runs both sockets at once, socket_id 0 = native, 1 = ws, so
+    /// one dedicated server instance serves both native and web clients).
+    /// +1000 keeps it visually distinct from the UDP port in logs/configs
+    /// without any real collision risk (SERVER_PORT_BASE..+6 is nowhere
+    /// near it).
+    pub fn ws_port(self) -> u16 {
+        self.port() + WS_PORT_OFFSET
     }
 
     /// The one place that decides which level geometry a scenario runs on —

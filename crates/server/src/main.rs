@@ -7,7 +7,10 @@ use bevy::state::app::StatesPlugin;
 use bevy_replicon::prelude::*;
 use bevy_replicon::shared::backend::connected_client::NetworkId;
 use bevy_replicon_renet2::{
-    netcode::{NativeSocket, NetcodeServerTransport, ServerAuthentication, ServerSetupConfig},
+    netcode::{
+        BoxedSocket, NativeSocket, NetcodeServerTransport, ServerAuthentication, ServerSetupConfig, WebSocketAcceptor,
+        WebSocketServer, WebSocketServerConfig,
+    },
     renet2::{ConnectionConfig, RenetServer},
     RenetChannelsExt, RepliconRenetPlugins,
 };
@@ -296,21 +299,45 @@ fn start_server(mut commands: Commands, channels: Res<RepliconChannels>, scenari
     let current_time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("system clock should be after the unix epoch");
+
+    // Socket 0: real UDP, for every native client (desktop/iOS) — unchanged
+    // from before this ran two sockets.
     let public_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), scenario.port());
-    let socket = UdpSocket::bind(public_addr).expect("failed to bind server UDP socket");
+    let udp_socket = UdpSocket::bind(public_addr).expect("failed to bind server UDP socket");
+    let native_socket = LaggedSocket::new(NativeSocket::new(udp_socket).unwrap(), sim_latency_from_env());
+
+    // Socket 1: plain WebSocket (no TLS — see WebSocketAcceptor::Plain's own
+    // doc comment: renetcode2's own encryption covers this, TLS here would
+    // just be redundant for a dev/LAN server), for wasm32 web clients —
+    // see shared::Scenario::ws_port's doc comment for why this needs its
+    // own port and socket_id. Needs a tokio runtime to spawn its
+    // reader/writer tasks on; leaked deliberately (see Cargo.toml comment).
+    let tokio_rt = Box::leak(Box::new(tokio::runtime::Runtime::new().expect("failed to start tokio runtime for ws_server_transport")));
+    let ws_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), scenario.ws_port());
+    let ws_config = WebSocketServerConfig {
+        acceptor: WebSocketAcceptor::Plain { has_tls_proxy: false },
+        listen: ws_addr,
+        max_clients: MAX_CLIENTS,
+    };
+    let ws_socket = WebSocketServer::new(ws_config, tokio_rt.handle().clone()).expect("failed to set up ws_server_transport");
+
     let server_config = ServerSetupConfig {
         current_time,
         max_clients: MAX_CLIENTS,
         protocol_id: PROTOCOL_ID,
         authentication: ServerAuthentication::Unsecure,
-        socket_addresses: vec![vec![public_addr]],
+        // Index i here is socket_id i on the client's ClientAuthentication
+        // (native_transport connects with socket_id 0, ws_client_transport
+        // with socket_id 1 — see network_setup.rs's two
+        // spawn_client_connection impls).
+        socket_addresses: vec![vec![public_addr], vec![ws_addr]],
     };
-    let socket = LaggedSocket::new(NativeSocket::new(socket).unwrap(), sim_latency_from_env());
-    let transport = NetcodeServerTransport::new(server_config, socket).expect("failed to set up netcode server transport");
+    let transport = NetcodeServerTransport::new_with_sockets(server_config, vec![BoxedSocket::new(native_socket), BoxedSocket::new(ws_socket)])
+        .expect("failed to set up netcode server transport");
 
     commands.insert_resource(server);
     commands.insert_resource(transport);
-    info!("dedicated server listening on {public_addr}");
+    info!("dedicated server listening on {public_addr} (native) / ws://{ws_addr} (web)");
 }
 
 
