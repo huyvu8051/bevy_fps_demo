@@ -94,8 +94,17 @@ const ITEM_GALLERY_CAR_HIT_IMPULSE: f32 = 1.0;
 /// blocking agree with what's actually drawn here.
 pub(crate) fn spawn_item_gallery_test_props(commands: &mut Commands, asset_server: &AssetServer) {
     for (path, physics) in ITEM_GALLERY_CAR_PATHS.iter().zip(shared::item_gallery_car_physics()) {
+        // "props/car_sedan/mesh/car_sedan_light.glb" -> "car_sedan" — so the
+        // dev editor's Hierarchy panel (bevy_editor_pls, F2) shows a real
+        // label per car instead of an anonymous Entity id; picking-by-click
+        // in the viewport is disabled in this vendored bevy_editor_pls
+        // (hierarchy/picking.rs is commented out), so Name + scrolling the
+        // Hierarchy list is the only way to find a specific car to focus
+        // (select it, press F) without guessing entity ids.
+        let name = path.split('/').nth(1).unwrap_or(path);
         commands
             .spawn((
+                Name::new(name.to_string()),
                 SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(*path))),
                 Transform::from_xyz(physics.x, physics.y + ITEM_GALLERY_CAR_DROP_MARGIN, physics.z)
                     .with_scale(Vec3::splat(physics.scale)),
