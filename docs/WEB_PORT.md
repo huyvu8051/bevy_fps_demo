@@ -1,9 +1,12 @@
 # Web port (wasm32)
 
-Status: **works** — a release build compiles, boots, renders, loads real
-assets, and connects to a real dedicated server over the network, verified
-live in Chrome. Not yet: a public deployment, a `.wasm` size pass, or a
-non-localhost server address. See §6 for what's actually left.
+Status: **works, full parity with desktop** — a release build compiles,
+boots, renders, loads real assets, and plays real multiplayer against the
+same dedicated server desktop/iOS clients use: stays connected (real
+measured Ping, e.g. 31ms, not a placeholder), zombies spawn/take
+damage/bleed, ammo drops on fire — verified live in Chrome, and over LAN
+from a phone. Not yet: a public (non-LAN) deployment or a `.wasm` size
+pass. See §6 for what's actually left.
 
 ## 1. Why this needed its own crate (`crates/web/`)
 
@@ -107,26 +110,68 @@ both native and web clients with shared game state:
 **Client** (`crates/client/src/network_setup.rs`,
 `spawn_client_connection`): two implementations behind
 `#[cfg(target_arch = "wasm32")]` — the native one is unchanged (real UDP,
-`socket_id: 0`); the wasm32 one builds a `WebSocketClientConfig` from a
-**hard-coded `ws://127.0.0.1:<ws_port>`** URL and connects with
-`socket_id: 1`, matching the server's second socket. No env-var-based host
-routing (`SERVER_ADDR`/`LOCAL`/`SERVER_HOST`, like the native path has) —
-wasm32 has no env vars at all. Fine for local dev; reading the page's own
-origin (`window.location`) for a real remote deployment is follow-up work
-(§6).
+`socket_id: 0`); the wasm32 one builds a `WebSocketClientConfig` from
+`ws://<page-hostname>:<ws_port>` (host read from `window.location.hostname`
+via `web_sys`, not hard-coded — a phone on the same LAN opens
+`http://<dev-machine-ip>:8765` and the client connects back to that same
+IP) and connects with `socket_id: 1`, matching the server's second socket.
+No env-var-based host routing (`SERVER_ADDR`/`LOCAL`/`SERVER_HOST`, like
+the native path has) — wasm32 has no env vars at all.
+
+### 4.1 The bug that actually blocked multiplayer: `has_reliable_socket`
+
+Everything above sounds like it should just work once wired up — it
+doesn't, and the failure mode is brutal to diagnose: the client reaches
+`Connected` for a moment, then the **server** immediately disconnects it
+with `received message with invalid channel 1` and despawns its
+`ConnectedClient` entity. `auto_reconnect` retries every 2s, forever, so
+the whole thing looks like a permanently broken handshake — Ping/Loss
+never move off `0`/`0%`, no replicated entity (including zombies) ever
+shows up, and every naive theory ("wrong port", "wrong host", "menu
+click landed on the wrong scenario") is a red herring since the
+connection genuinely does complete at the netcode level before dying.
+
+**Real cause**: `RenetClient::new(config, has_reliable_socket)` needs to
+be told by hand whether the underlying socket already guarantees
+reliability/ordering (`true` for WebSocket/TCP, `false` for real UDP) —
+it does not introspect the `socket` argument to figure this out itself.
+The **server** side gets this right automatically
+(`renet2_netcode::server::add_connection` calls
+`sockets[socket_id].is_reliable()` — `WebSocketServer::is_reliable()` is
+hard-coded `true`) and downgrades that one connection's channels
+server-side via `renet2::ConnectionConfig::downgrade_to_unreliable()`
+(changes every channel's `SendType` to `Unreliable { ordered_reliable_
+substrate: true }` — channel *count* is untouched, only the wire framing
+per channel). The wasm32 client's own `RenetClient::new` call was
+copy-pasted from the native path and kept the native path's `false`. With
+only the server downgrading, client and server packet framing diverge
+the instant any post-handshake message is sent — the server parses the
+mismatched bytes as a bogus channel id and disconnects. Fix is one word:
+pass `true` instead of `false` on the wasm32 path.
+
+This one took a long investigation to find (documented in full for
+next time): confirmed it wasn't the menu/scenario click (forced `MAP_ID`
+directly, same result), confirmed it wasn't a stale/cached build,
+checked whether it was an already-fixed upstream bug and bumped
+`renet2_netcode`/`bevy_replicon_renet2`/`bevy_replicon` 0.13/0.13/0.38 →
+0.14-0.15/0.15/0.39 to rule that out (no change — left the bump in place
+since it's a working, harmless newer resolution, but it wasn't the fix),
+then read `renet2`'s actual channel-downgrade source
+(`remote_connection.rs`) end to end to find the asymmetry.
 
 Cargo feature wiring (all additive — native builds are unaffected):
 
 ```toml
 # crates/server/Cargo.toml
-bevy_replicon_renet2 = { version = "0.13", features = ["native_transport", "ws_server_transport"] }
+bevy_replicon_renet2 = { version = "0.15", features = ["native_transport", "ws_server_transport"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
 # crates/client/Cargo.toml — wasm32-only target table, placed at the END
 # of the file (see the sharp edge below)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-bevy_replicon_renet2 = { version = "0.13", features = ["ws_client_transport"] }
+bevy_replicon_renet2 = { version = "0.15", features = ["ws_client_transport"] }
 url = "2"
+web-sys = { version = "0.3", features = ["Window", "Location"] }
 ```
 
 **Sharp edge hit and fixed**: a `[target.'cfg(...)'.dependencies]` table
@@ -172,15 +217,14 @@ cd target/web_dist && python3 -m http.server 8765
 MAP_ID=2 cargo run -p server
 ```
 
-Open `http://localhost:8765/index.html`, pick a map from the menu. Ping/
-Loss in the HUD should read real numbers (`0ms`/`0%` on localhost), not
-`--`/`--`, once connected.
+Open `http://localhost:8765/index.html` (or `http://<lan-ip>:8765/...`
+from another device on the same network — the client reads the page's own
+hostname, see §4.1), pick a map from the menu. Ping/Loss in the HUD
+should read real, moving numbers once connected (e.g. `31ms`/`0%`), not
+stuck at `0ms`/`0%` forever or `--`/`--`.
 
 ## 6. What's left (not done here)
 
-- **Remote/public deployment.** Host is hard-coded to `127.0.0.1` — needs
-  `window.location`-based (or query-string override) host resolution to
-  work from anywhere but localhost.
 - **`.wasm` size.** The release build is ~97MB uncompressed. No
   `wasm-opt`, no gzip/brotli compression, no texture/asset trimming for
   web specifically. Fine for local testing, not for shipping.
