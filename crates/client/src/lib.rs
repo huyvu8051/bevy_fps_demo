@@ -1707,7 +1707,10 @@ fn setup(
                 spawn_map1_lights(&mut commands);
             }
         }
-        MapKind::Arena => spawn_test_arena(&mut commands, &mut meshes, &mut materials),
+        MapKind::Arena => {
+            spawn_test_arena(&mut commands, &mut meshes, &mut materials);
+            spawn_item_gallery_test_props(&mut commands, &asset_server);
+        }
     }
 
     // spawn_test_arena carries its own overhead light; Building gets

@@ -612,7 +612,10 @@ pub(crate) fn map_select_button(
                 let (pieces, panels) = shared::map1_level_pieces();
                 spawn_level_pieces(&mut commands, pieces, panels);
             }
-            MapKind::Arena => spawn_test_arena(&mut commands, &mut meshes, &mut materials),
+            MapKind::Arena => {
+                spawn_test_arena(&mut commands, &mut meshes, &mut materials);
+                spawn_item_gallery_test_props(&mut commands, &asset_server);
+            }
         }
         spawn_client_connection(&mut commands, &channels);
     }

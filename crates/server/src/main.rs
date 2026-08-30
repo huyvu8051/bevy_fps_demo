@@ -314,7 +314,10 @@ fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_
     match scenario.map_kind() {
         MapKind::ItemGallery => spawn_item_gallery_level_pieces(&mut commands, &asset_server),
         MapKind::Building => spawn_map1_level_pieces(&mut commands),
-        MapKind::Arena => spawn_flat_arena_colliders(&mut commands),
+        MapKind::Arena => {
+            spawn_flat_arena_colliders(&mut commands);
+            spawn_item_gallery_car_colliders(&mut commands, &asset_server);
+        }
     }
 }
 
