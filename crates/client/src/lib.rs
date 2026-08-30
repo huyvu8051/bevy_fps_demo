@@ -18,8 +18,15 @@ use bevy::window::{CursorGrabMode, CursorOptions, MonitorSelection, PrimaryWindo
 use bevy::winit::{UpdateMode, WinitSettings};
 use bevy_replicon::prelude::*;
 use bevy_replicon::shared::backend::connected_client::NetworkId;
+// NativeSocket only exists under renet2's "native_transport" feature — real
+// UDP sockets, which don't exist in a browser sandbox at all. Only used by
+// network_setup.rs's native spawn_client_connection (wasm32 gets its own
+// stub there that doesn't need it) — see that fn's own doc comment for the
+// full wasm networking story.
+#[cfg(not(target_arch = "wasm32"))]
+use bevy_replicon_renet2::netcode::NativeSocket;
 use bevy_replicon_renet2::{
-    netcode::{ClientAuthentication, NativeSocket, NetcodeClientTransport},
+    netcode::{ClientAuthentication, NetcodeClientTransport},
     renet2::{ConnectionConfig, RenetClient},
     RenetChannelsExt, RepliconRenetPlugins,
 };

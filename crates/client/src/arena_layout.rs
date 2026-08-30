@@ -26,7 +26,9 @@ impl Plugin for ArenaLayoutPlugin {
         // Gated on EDITOR=1 exactly like ItemGalleryCarsPlugin's own F9
         // saver — F9SaveToast / spawn_f9_toast_ui / tick_f9_toast are only
         // registered there under the same guard, so this system must not
-        // exist without them (it reads ResMut<F9SaveToast>).
+        // exist without them (it reads ResMut<F9SaveToast>). Also wasm32-
+        // gated for the same reason as that plugin — see its own comment.
+        #[cfg(not(target_arch = "wasm32"))]
         if std::env::var("EDITOR").is_ok() {
             app.add_systems(Update, save_arena_layout_on_key);
         }

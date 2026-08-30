@@ -382,11 +382,11 @@ fn zombie_meshy_transform_raw() -> (f32, f32, f32, f32, f32) {
     *DATA.get_or_init(|| {
         // Same CARGO_MANIFEST_DIR-relative resolution as the item-gallery
         // car physics RON — see its own comment for why not CWD.
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../client/assets/data/zombie_meshy_transform.ron");
-        let text = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("failed to read meshy zombie transform at {path}: {e}"));
-        ron::de::from_str(&text)
-            .unwrap_or_else(|e| panic!("failed to parse meshy zombie transform at {path}: {e}"))
+        let text = crate::read_ron_data_file!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../client/assets/data/zombie_meshy_transform.ron"
+        ));
+        ron::de::from_str(&text).unwrap_or_else(|e| panic!("failed to parse meshy zombie transform: {e}"))
     })
 }
 

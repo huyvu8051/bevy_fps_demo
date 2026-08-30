@@ -118,6 +118,17 @@ pub(crate) fn autopilot_enabled_by_default(scenario: Scenario) -> bool {
     !matches!(scenario, Scenario::RenderCompare | Scenario::ItemGallery)
 }
 
+/// Native desktop/iOS path: real UDP via renet2's `native_transport`
+/// feature. Not available on `wasm32` — browsers can't open raw UDP
+/// sockets at all, and `bevy_replicon_renet2::netcode::NativeSocket`
+/// simply doesn't exist for that target (confirmed: `cargo check --target
+/// wasm32-unknown-unknown` fails on the `NativeSocket` import otherwise).
+/// A web build needs renet2's WebTransport-based transport instead — a
+/// real implementation (client AND a WebTransport-capable server listener,
+/// which needs TLS even in dev) is tracked as follow-up work, not done
+/// here; see `spawn_client_connection`'s wasm32 stub below for the current
+/// state (compiles, does nothing, doesn't crash).
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &RepliconChannels) {
     // to_socket_addrs (not parse::<SocketAddr>) so this also accepts a DNS
     // hostname, not just a literal IP — needed for e.g. playit.gg's
@@ -172,6 +183,19 @@ pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &Replic
     commands.insert_resource(transport);
     commands.insert_resource(MyClientId(client_id));
     info!("connecting to server at {server_addr}");
+}
+
+/// wasm32 stub — no WebTransport client wired up yet (see
+/// `spawn_client_connection`'s own doc comment above for the real one's
+/// full requirements). Deliberately does NOT insert `RenetClient`/
+/// `NetcodeClientTransport`/`MyClientId`, so the rest of the game (menu,
+/// rendering, local scenarios like ItemGallery that don't need a live
+/// server) still runs — it just never connects, same observable behavior
+/// as pointing a native build at an unreachable `SERVER_ADDR`, instead of
+/// panicking the whole app on web.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn spawn_client_connection(_commands: &mut Commands, _channels: &RepliconChannels) {
+    warn!("web build: no network transport implemented yet (needs renet2 WebTransport) — staying disconnected");
 }
 
 // The renet2 netcode client_id chosen in connect_to_server — also what the

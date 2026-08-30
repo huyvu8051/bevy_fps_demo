@@ -37,7 +37,13 @@ impl Plugin for ItemGalleryCarsPlugin {
         // save instead of copying numbers out of the Inspector by hand.
         // Gated on EDITOR=1 like the bevy_editor_pls plugin itself
         // (crates/client/src/lib.rs) — no key handler at all in a normal
-        // player build.
+        // player build. Also fully compiled out on wasm32: there's no
+        // persistent filesystem to write back to in a browser sandbox (see
+        // shared::read_ron_data_file!'s doc comment), so a web build ships
+        // the RON files' contents frozen at build time regardless of
+        // EDITOR — this system would just fail every save with an error
+        // toast there, so it doesn't exist at all instead.
+        #[cfg(not(target_arch = "wasm32"))]
         if std::env::var("EDITOR").is_ok() {
             app.init_resource::<F9SaveToast>()
                 .add_systems(Startup, spawn_f9_toast_ui)

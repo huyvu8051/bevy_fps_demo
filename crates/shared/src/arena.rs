@@ -101,14 +101,28 @@ fn load_arena_layout(map_id: u8) -> Vec<ArenaBox> {
     // CARGO_MANIFEST_DIR-relative (baked in at shared's compile time) — see
     // item_gallery_car_physics_raw's doc comment for why this path form
     // works unchanged from both the client and the server binary.
-    let path = format!(
-        "{}/../client/assets/data/arena_layout_map{map_id}.ron",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read arena layout data at {path}: {e}"));
-    let rows: Vec<ArenaLayoutRow> = ron::de::from_str(&text)
-        .unwrap_or_else(|e| panic!("failed to parse arena layout data at {path}: {e}"));
+    //
+    // Unlike the other RON data files, this one's path depends on a
+    // runtime value (map_id) — read_ron_data_file! needs a compile-time
+    // string literal (its wasm arm expands to include_str!, which can't
+    // take a computed path), so wasm32 gets its own match arm per known
+    // map id instead of routing through that macro. Adding a new arena
+    // map's RON file means adding a match arm here too — the native arm
+    // has no such restriction and stays fully dynamic.
+    #[cfg(target_arch = "wasm32")]
+    let text = match map_id {
+        2 => include_str!("../../client/assets/data/arena_layout_map2.ron"),
+        4 => include_str!("../../client/assets/data/arena_layout_map4.ron"),
+        other => panic!("no wasm-embedded arena layout RON for map_id {other} — add a match arm in load_arena_layout"),
+    }
+    .to_string();
+    #[cfg(not(target_arch = "wasm32"))]
+    let text = {
+        let path = format!("{}/../client/assets/data/arena_layout_map{map_id}.ron", env!("CARGO_MANIFEST_DIR"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read arena layout data at {path}: {e}"))
+    };
+    let rows: Vec<ArenaLayoutRow> =
+        ron::de::from_str(&text).unwrap_or_else(|e| panic!("failed to parse arena layout data for map {map_id}: {e}"));
     rows.into_iter()
         .map(|(shape, sx, sy, sz, x, y, z, rx, ry, rz)| ArenaBox {
             shape,
