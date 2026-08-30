@@ -264,7 +264,6 @@ fn main() {
                 // spawns the child scene) for the other half.
                 wire_server_zombie_animations,
                 wire_zombie_hitbox_bones,
-                tag_car_colliders_as_nav_obstacles,
             ),
         )
         .add_observer(spawn_player)
@@ -411,36 +410,14 @@ fn spawn_item_gallery_car_colliders(commands: &mut Commands, asset_server: &Asse
                 .with_scale(Vec3::splat(physics.scale)),
             RigidBody::Static,
             ColliderConstructorHierarchy::new(ColliderConstructor::ConvexHullFromMesh),
-            // The convex-hull colliders land on descendant entities once the
-            // glTF loads; tag_car_colliders_as_nav_obstacles walks up to this
-            // marker and forwards ArenaObstacle onto each so the auto-navmesh
-            // (Arena maps) carves the car footprint out too.
-            CarNavObstacle,
         ));
     }
-}
-
-/// On the car SceneRoot only — see spawn_item_gallery_car_colliders.
-#[derive(Component)]
-struct CarNavObstacle;
-
-// ColliderConstructorHierarchy builds the car colliders on child entities
-// asynchronously (glTF load), and it can't attach an arbitrary marker to
-// them — so this catches each collider as it appears and, if it descends
-// from a CarNavObstacle root, adds ArenaObstacle so NavmeshUpdaterPlugin
-// treats it as a hole. Idle once the scenes have finished loading (the
-// Added<Collider> filter matches nothing after that).
-fn tag_car_colliders_as_nav_obstacles(
-    mut commands: Commands,
-    new_colliders: Query<Entity, Added<Collider>>,
-    child_of: Query<&ChildOf>,
-    car_roots: Query<(), With<CarNavObstacle>>,
-) {
-    for entity in &new_colliders {
-        if find_animation_root(entity, &child_of, |e| car_roots.contains(e)).is_some() {
-            commands.entity(entity).insert(ArenaObstacle);
-        }
-    }
+    // NOTE: the cars are intentionally NOT fed to the navmesh. Tagging each
+    // car's ~15 per-primitive convex hulls as obstacles pushed hundreds of
+    // heavily-overlapping constraint polygons into polyanya's triangulation
+    // — it ballooned RAM into the tens of GB. If car footprints need to be
+    // carved, do it with ONE simple box per car (from the combined AABB),
+    // not the raw hulls.
 }
 
 /// Spawns ONLY the avian3d colliders for a set of pieces — no LevelBox/
@@ -905,26 +882,22 @@ fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<Nav
 
     if scenario.map_kind() == MapKind::Arena {
         // Auto-generated: NavmeshUpdaterPlugin::<Collider, ArenaObstacle>
-        // triangulates the outer boundary minus each obstacle collider's
-        // footprint (the pillars, plus the item-gallery cars' convex
-        // hulls), and rebuilds if one ever moves.
-        //
-        // simplify is deliberately coarse: each car .glb is many mesh
-        // primitives -> many hull polygons, and feeding all their raw
-        // points into the constrained triangulation blew past a 1s
-        // build_timeout. 0.5 (m^2) collapses each hull to a rough quad,
-        // which is plenty for AI pathing. NOT blocking — a multi-second
-        // stall at startup would hold up connecting clients; move_zombies
-        // already tolerates the navmesh being absent for the first frames.
+        // triangulates the outer boundary minus every pillar collider's
+        // footprint, and rebuilds if one ever moves. Blocking so the mesh
+        // exists by the end of the first update (zombies spawn at Startup
+        // too) — a one-shot cost on a static scene, not a per-frame one.
+        // Only the 8 pillars are obstacles here (see
+        // spawn_item_gallery_car_colliders for why the cars are not).
         commands.spawn((
             ManagedNavMesh::single(),
             NavMeshSettings {
                 fixed: Triangulation::from_outer_edges(&shared::arena_navmesh_outer_edges(scenario.map_id())),
-                simplify: 0.5,
-                build_timeout: Some(15.0),
+                simplify: 0.005,
+                build_timeout: Some(1.0),
                 ..default()
             },
             NavMeshUpdateMode::Direct,
+            NavMeshUpdateModeBlocking,
             plane,
         ));
         return;

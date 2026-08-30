@@ -13,11 +13,11 @@
 // The path is an APPROXIMATION of the server's route: same navmesh, but
 // the server picks each zombie's target by threat score, not nearest, and
 // adds separation / obstacle-steering on top. It's meant for "does the
-// navmesh route around the pillars / cars like I expect", not a
-// frame-exact replay. Parked cars ARE carved here too (their colliders
-// get ClientNavObstacle via tag_client_car_colliders), but the client
-// copies are RigidBody::Dynamic so a hole can sit a little off from the
-// server's, which uses Static cars at the exact RON rest pose.
+// navmesh route around the pillars like I expect", not a frame-exact
+// replay. Only the pillars are carved — the parked cars are not fed to
+// the navmesh on either side (see spawn_item_gallery_car_colliders on the
+// server for why: their per-primitive convex hulls blow up the
+// triangulation).
 //
 // Only MapKind::Arena has a per-map navmesh; other maps get nothing.
 // Toggle: the "NavDbg" button in the settings menu Cheats section (debug
@@ -59,7 +59,6 @@ impl Plugin for NavDebugPlugin {
                 nav_debug_toggle_button,
                 update_nav_debug_button_color,
                 sync_client_navmesh,
-                tag_client_car_colliders,
                 apply_nav_debug_visibility,
                 draw_zombie_path_traces,
             ),
@@ -115,40 +114,17 @@ fn sync_client_navmesh(mut commands: Commands, existing: Query<Entity, With<Mana
                     fixed: Triangulation::from_outer_edges(&shared::arena_navmesh_outer_edges(
                         current_scenario().map_id(),
                     )),
-                    // Coarse on purpose — matches the server (see its
-                    // spawn_zombie_navmesh comment): the car .glb hulls are
-                    // many-sided and a fine simplify times the build out.
-                    simplify: 0.5,
-                    build_timeout: Some(15.0),
+                    simplify: 0.005,
+                    build_timeout: Some(1.0),
                     ..default()
                 },
-                // Debounced, not Direct: the client cars are Dynamic and
-                // jiggle when shot, and a retriangulation every frame while
-                // one settles is wasteful for a debug overlay.
-                NavMeshUpdateMode::Debounced(0.3),
+                // Pillars are RigidBody::Static, so Direct never churns.
+                NavMeshUpdateMode::Direct,
                 navmesh_plane(),
             ));
         }
         (false, Some(entity)) => commands.entity(entity).despawn(),
         _ => {}
-    }
-}
-
-// The car colliders are convex hulls ColliderConstructorHierarchy builds
-// on descendant entities once the glTF loads — same problem the server's
-// tag_car_colliders_as_nav_obstacles solves. Forward ClientNavObstacle
-// onto each collider that descends from an ItemGalleryTestProp root so the
-// updater carves the car footprint too. Idle once the scenes have loaded.
-fn tag_client_car_colliders(
-    mut commands: Commands,
-    new_colliders: Query<Entity, Added<Collider>>,
-    child_of: Query<&ChildOf>,
-    car_roots: Query<(), With<ItemGalleryTestProp>>,
-) {
-    for entity in &new_colliders {
-        if find_animation_root(entity, &child_of, |e| car_roots.contains(e)).is_some() {
-            commands.entity(entity).insert(ClientNavObstacle);
-        }
     }
 }
 
