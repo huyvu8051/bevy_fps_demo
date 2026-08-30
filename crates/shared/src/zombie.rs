@@ -295,30 +295,31 @@ pub const ZOMBIE_RADIUS: f32 = ZOMBIE_MESH_REFERENCE_TORSO_WIDTH * ZOMBIE_SCALE 
 pub const ZOMBIE_LENGTH: f32 = ZOMBIE_WORLD_HEIGHT - 2.0 * ZOMBIE_RADIUS;
 
 // The broad-phase shape ("did this shot even reach the zombie AT ALL" —
-// handle_fire_shot's first pass, debug_bot_fire's own fire branch,
-// shoot()'s local prediction, and the zombie's own attached
-// physics Collider used for generic SpatialQuery casts like handle_fire_
-// shot's live_hit fallback) — deliberately WIDER than ZOMBIE_RADIUS,
-// requested to make that first pass more forgiving. Was a capsule (rounded
-// hemispherical end caps); now a plain cylinder (Collider::cylinder/
-// Cylinder gizmo — flat top/bottom, no caps), per request. A cylinder's
-// own "height" parameter is the full straight height with no cap
-// contribution to subtract (unlike a capsule, where total height =
-// length + 2*radius) — so ZOMBIE_OUTER_HEIGHT is just ZOMBIE_WORLD_HEIGHT
-// directly, keeping the same "still covers the mesh's real height"
-// invariant ZOMBIE_LENGTH/ZOMBIE_OUTER_LENGTH (its capsule-era equivalent)
-// kept. Was `ZOMBIE_RADIUS * 4.0` (~0.85, itself a 2x widen doubled);
-// pinned to a flat 0.2 — basically the accurate ZOMBIE_RADIUS, so the
-// zombie's move footprint (this is also the MoveAndSlide cylinder in
-// move_zombies) hugs the real torso and the shot broad-phase no longer
-// grazes. Does NOT affect the real per-bone damage regions
+// handle_fire_shot's first pass + lag-comp rewind, debug_bot_fire's own
+// fire branch, shoot()'s local prediction, and the zombie's own attached
+// physics Collider used for generic SpatialQuery casts). Deliberately
+// WIDER than ZOMBIE_RADIUS to make that first pass forgiving. A plain
+// cylinder (flat top/bottom, no caps), so ZOMBIE_OUTER_HEIGHT is just
+// ZOMBIE_WORLD_HEIGHT directly (no end-cap contribution to subtract like a
+// capsule). Does NOT affect the real per-bone damage regions
 // (HEAD/TORSO/LIMB_HITBOX_RADIUS still derive from the accurate
 // ZOMBIE_RADIUS above) — zombie_hit_damage_ray still decides how much (if
-// any) damage actually lands from where the ray actually goes; a shot that
-// only reaches this outer shell and no real bone region is a genuine miss
-// (see zombie_hit_damage_ray's own doc comment), not a graze.
-pub const ZOMBIE_OUTER_RADIUS: f32 = 0.2;
+// any) damage actually lands; a shot that only reaches this outer shell
+// and no real bone region is a genuine miss, not a graze.
+//
+// This is HIT-DETECTION only. The cylinder move_zombies pushes the zombie
+// around with is ZOMBIE_MOVE_RADIUS below — kept separate so the shot
+// broad-phase can stay generous while the physical footprint is small
+// enough to fit gaps a player clears.
+pub const ZOMBIE_OUTER_RADIUS: f32 = ZOMBIE_RADIUS * 4.0;
 pub const ZOMBIE_OUTER_HEIGHT: f32 = ZOMBIE_WORLD_HEIGHT;
+
+/// Radius of the MoveAndSlide cylinder in `move_zombies` — the zombie's
+/// physical footprint for walking / colliding with level geometry. Small
+/// (≈ the accurate torso half-width) so zombies fit the same gaps a player
+/// does; unrelated to the shooting broad-phase (ZOMBIE_OUTER_RADIUS).
+/// Height is still ZOMBIE_OUTER_HEIGHT (full body).
+pub const ZOMBIE_MOVE_RADIUS: f32 = 0.2;
 
 // How far below the zombie root's own Transform/NetTransform.translation
 // (capsule center) the mesh's own local origin needs to sit so its feet
