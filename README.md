@@ -32,6 +32,44 @@ SERVER_ADDR=127.0.0.1:5031 cargo run -p client
 
 Có thể chạy nhiều client cùng lúc (nhiều terminal) để test multiplayer trên 1 máy.
 
+### Env vars hữu ích khi test
+
+| Env | Ở đâu | Ý nghĩa |
+|---|---|---|
+| `LOCAL=1` | client | Nối tới `127.0.0.1` (port theo scenario) thay vì IP Tailscale mặc định. Thay cho `SERVER_ADDR=127.0.0.1:<port>`. |
+| `SERVER_ADDR=host:port` | client | Override toàn bộ host **và** port. Ưu tiên cao nhất. |
+| `MAP_ID=0..5` | server + client | Chọn scenario (0 = game thật; 2 = arena + zombie; 5 = ItemGallery). Port server = `5031 + MAP_ID`; client tự tính khớp. Không set ở client → hiện menu chọn map. |
+| `RENDER_SCALE=0.1..1.0` | client | Scale render 3D (mặc định 0.4). Chỉnh live được trong Settings menu. |
+| `EDITOR=1` | client | Bật `bevy_editor_pls` (F2). Desktop-only. |
+| `SIM_LATENCY_MS=<ms>` | server và/hoặc client | Giả lập độ trễ 1 chiều (delay chiều gửi). Set 2 bên → RTT ≈ 2× giá trị. |
+| `SIM_LATENCY_JITTER_MS=<ms>` | server và/hoặc client | Random `0..=jitter` cộng thêm mỗi gói (mô phỏng jitter mạng thật). |
+
+### Test lag / độ trễ mạng
+
+`SIM_LATENCY_MS` là delay **một chiều** mỗi bên, nên đặt ở cả server lẫn client để có RTT đầy đủ (`RTT ≈ 2 × SIM_LATENCY_MS + jitter`). Các mốc tham chiếu theo CS:GO:
+
+**~150 ms RTT** — mức tệ nhất matchmaking chính chủ còn xếp người vào (nấc cuối slider "Max Acceptable Matchmaking Ping"):
+```bash
+SIM_LATENCY_MS=75 SIM_LATENCY_JITTER_MS=20 MAP_ID=2 cargo run -p server
+SIM_LATENCY_MS=75 SIM_LATENCY_JITTER_MS=20 EDITOR=1 MAP_ID=2 RENDER_SCALE=0.5 LOCAL=1 cargo run -p client
+```
+
+**~350 ms RTT** — biên cứng của convar `mm_dedicated_search_maxping`:
+```bash
+SIM_LATENCY_MS=175 SIM_LATENCY_JITTER_MS=40 MAP_ID=2 cargo run -p server
+SIM_LATENCY_MS=175 SIM_LATENCY_JITTER_MS=40 EDITOR=1 MAP_ID=2 RENDER_SCALE=0.5 LOCAL=1 cargo run -p client
+```
+
+**~1000 ms RTT** — trần lag-compensation (`sv_maxunlag 1.0`, khớp `LAG_COMPENSATION_MAX_SECS` của game này); quá mức này hit-reg hỏng kể cả có rewind:
+```bash
+SIM_LATENCY_MS=500 SIM_LATENCY_JITTER_MS=60 MAP_ID=2 cargo run -p server
+SIM_LATENCY_MS=500 SIM_LATENCY_JITTER_MS=60 EDITOR=1 MAP_ID=2 RENDER_SCALE=0.5 LOCAL=1 cargo run -p client
+```
+
+Cần chú ý khi test: di chuyển vẫn mượt (client prediction), reconcile snap chỉ khi lệch > `RECONCILE_POS_THRESHOLD` rồi camera lướt vào qua `RECONCILE_SMOOTH_SECS` — tune 2 const đó trong `crates/client/src/lib.rs` nếu ở lag cao thấy giật/trôi. Tick rate server/client là `SERVER_TICK_HZ` / `INPUT_SEND_HZ` (phải bằng nhau, hiện 32).
+
+Chỉ giả lập 1 chiều: set env chỉ ở client (server để trống) → chỉ delay client→server.
+
 ## Điều khiển (desktop)
 
 - **WASD**: di chuyển, **Shift**: chạy (sprint), **Space**: nhảy
