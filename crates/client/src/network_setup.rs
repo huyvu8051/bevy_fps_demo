@@ -123,15 +123,22 @@ pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &Replic
     // hostname, not just a literal IP — needed for e.g. playit.gg's
     // assigned tunnel domain (foo.tun.ply.gg:PORT), which a plain
     // SocketAddr parse rejects outright since it never resolves DNS.
-    // TEMPORARY — default host is this Mac's Tailscale IP for an on-device
-    // test build. Only reachable while the test phone is on the same
-    // Tailscale network. Port comes from current_scenario() — see its own
-    // doc comment and shared::Scenario's for the map-select-menu ->
-    // port-per-scenario routing this implements. SERVER_ADDR (full
-    // host:port), if set, overrides both host AND scenario-based port
-    // entirely — the explicit escape hatch for custom testing.
+    // Host resolution, in precedence order:
+    //   SERVER_ADDR=host:port  — full override, host AND port (skips the
+    //                            scenario-port routing); the escape hatch.
+    //   LOCAL=1                — host 127.0.0.1 (local dev on this machine).
+    //   SERVER_HOST=host       — custom host, scenario port.
+    //   (nothing)              — this Mac's Tailscale IP, for the on-device
+    //                            test build (only reachable on that network).
+    // Port for the last three comes from current_scenario().port() — see
+    // its own doc comment and shared::Scenario's for the map-select-menu ->
+    // port-per-scenario routing.
     let server_addr_str = std::env::var("SERVER_ADDR").unwrap_or_else(|_| {
-        let host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "100.97.13.68".to_string());
+        let host = if std::env::var("LOCAL").is_ok() {
+            "127.0.0.1".to_string()
+        } else {
+            std::env::var("SERVER_HOST").unwrap_or_else(|_| "100.97.13.68".to_string())
+        };
         format!("{host}:{}", current_scenario().port())
     });
     let server_addr: std::net::SocketAddr = std::net::ToSocketAddrs::to_socket_addrs(&server_addr_str)
