@@ -403,15 +403,21 @@ pub fn zombie_meshy_rot_deg() -> Vec3 {
     Vec3::new(x, y, z)
 }
 
-/// Which of the two zombie meshes an entity uses. Only ItemGallery's
-/// showcase rig ever sets it to `Meshy`; every networked/gameplay zombie is
-/// `Classic` (and usually carries no `ZombieKind` at all — absence == Classic,
-/// see `zombie_hitbox_bone_slots` / client's `zombie_mesh_bundle`).
-#[derive(Component, Clone, Copy, PartialEq, Eq, Default, Debug)]
+/// Which of the two zombie meshes an entity uses. Replicated on gameplay
+/// zombies (server picks per-spawn, ~50/50 — see crates/server's
+/// spawn_zombies); the ItemGallery showcase rig sets it locally. Absence
+/// still means `Classic` (older call sites / client's `spawn_local_zombie`).
+#[derive(Component, Clone, Copy, PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 pub enum ZombieKind {
     #[default]
     Classic,
     Meshy,
+}
+
+/// Deterministic ~50/50 pick from an entity's own `entity_phase` hash — the
+/// server tags each spawning zombie with this so a horde shows both rigs.
+pub fn zombie_kind_for_phase(phase: f32) -> ZombieKind {
+    if phase < 0.5 { ZombieKind::Classic } else { ZombieKind::Meshy }
 }
 
 impl std::fmt::Display for ZombieKind {
@@ -479,6 +485,41 @@ pub fn zombie_kind_showcase_root_y(kind: ZombieKind) -> f32 {
     match kind {
         ZombieKind::Classic => -ZOMBIE_MODEL_Y_OFFSET,
         ZombieKind::Meshy => 0.0,
+    }
+}
+
+/// Mesh-child transform for a networked GAMEPLAY zombie of this kind — like
+/// `zombie_kind_mesh_transform` but with the meshy Y shifted so the feet
+/// land right when the root sits at the zombie's grounded rest height
+/// (move_zombies keeps it there) rather than the showcase's fixed Y. For
+/// Classic the two are identical (its showcase root Y already equals the
+/// grounded height).
+pub fn zombie_kind_gameplay_mesh_transform(kind: ZombieKind) -> Transform {
+    match kind {
+        ZombieKind::Classic => zombie_kind_mesh_transform(ZombieKind::Classic),
+        ZombieKind::Meshy => {
+            let mut t = zombie_kind_mesh_transform(ZombieKind::Meshy);
+            t.translation.y = zombie_meshy_mesh_y() + ZOMBIE_MODEL_Y_OFFSET;
+            t
+        }
+    }
+}
+
+/// Clip indices into a kind's glTF for the 5 gameplay poses, in order
+/// `[idle, walk, run, crawl, bite]`. Classic maps 1:1 to its named
+/// `ZOMBIE_ANIM_*`; Meshy only has real Walking (6) / Running (5) clips, so
+/// idle/crawl/bite fall back to its first Text-to-Motion clip until more
+/// are generated.
+pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; 5] {
+    match kind {
+        ZombieKind::Classic => [
+            ZOMBIE_ANIM_IDLE,
+            ZOMBIE_ANIM_WALK,
+            ZOMBIE_ANIM_RUN,
+            ZOMBIE_ANIM_CRAWL,
+            ZOMBIE_ANIM_BITE,
+        ],
+        ZombieKind::Meshy => [0, 6, 5, 0, 0],
     }
 }
 

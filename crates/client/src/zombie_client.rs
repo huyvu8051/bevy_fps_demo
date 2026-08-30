@@ -144,14 +144,63 @@ pub(crate) struct Gun {
 #[derive(Component)]
 pub(crate) struct GunMesh;
 
+// One AnimationGraph per ZombieKind for the 5 gameplay poses — mirrors the
+// server's ServerZombieAnim so client and server pick the same clip for a
+// pose. Meshy only has real Walking/Running clips; the rest fall back per
+// zombie_kind_pose_clips.
+pub(crate) struct ZombieKindGameplayAnim {
+    pub(crate) graph: Handle<AnimationGraph>,
+    // [idle, walk, run, crawl, bite] — order of zombie_kind_pose_clips.
+    poses: [AnimationNodeIndex; 5],
+}
+
+impl ZombieKindGameplayAnim {
+    pub(crate) fn node(&self, pose: ZombiePose) -> AnimationNodeIndex {
+        self.poses[match pose {
+            ZombiePose::Idle => 0,
+            ZombiePose::Walk => 1,
+            ZombiePose::Run => 2,
+            ZombiePose::Crawl => 3,
+            ZombiePose::Bite => 4,
+        }]
+    }
+    pub(crate) fn idle(&self) -> AnimationNodeIndex {
+        self.poses[0]
+    }
+}
+
 #[derive(Resource)]
 pub(crate) struct ZombieAnim {
-    pub(crate) graph: Handle<AnimationGraph>,
-    pub(crate) idle: AnimationNodeIndex,
-    pub(crate) walk: AnimationNodeIndex,
-    pub(crate) run: AnimationNodeIndex,
-    pub(crate) crawl: AnimationNodeIndex,
-    pub(crate) bite: AnimationNodeIndex,
+    classic: ZombieKindGameplayAnim,
+    meshy: ZombieKindGameplayAnim,
+}
+
+impl ZombieAnim {
+    pub(crate) fn slot(&self, kind: ZombieKind) -> &ZombieKindGameplayAnim {
+        match kind {
+            ZombieKind::Classic => &self.classic,
+            ZombieKind::Meshy => &self.meshy,
+        }
+    }
+}
+
+pub(crate) fn build_zombie_anim(asset_server: &AssetServer, graphs: &mut Assets<AnimationGraph>) -> ZombieAnim {
+    let mut build = |kind: ZombieKind| {
+        let path = zombie_kind_mesh_path(kind);
+        let clips: Vec<Handle<AnimationClip>> = zombie_kind_pose_clips(kind)
+            .into_iter()
+            .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(path)))
+            .collect();
+        let (graph, nodes) = AnimationGraph::from_clips(clips);
+        ZombieKindGameplayAnim {
+            graph: graphs.add(graph),
+            poses: [nodes[0], nodes[1], nodes[2], nodes[3], nodes[4]],
+        }
+    };
+    ZombieAnim {
+        classic: build(ZombieKind::Classic),
+        meshy: build(ZombieKind::Meshy),
+    }
 }
 
 // Per-kind graph holding EVERY clip in the file, indexed by clip number —
@@ -212,10 +261,9 @@ pub(crate) struct PlayerModelAnim {
 pub(crate) fn on_zombie_replicated(
     trigger: On<Add, Zombie>,
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     // ItemGallery showcase zombies also carry `Zombie` but build their own
-    // mesh/kind in spawn_item_gallery_zombie_showcase — don't stack a second
-    // (classic) mesh + a health bar on top of them here.
+    // mesh/kind in spawn_item_gallery_zombie_showcase — don't stack a health
+    // bar on top of them here.
     showcase: Query<(), With<ZombieShowcaseClip>>,
 ) {
     let entity = trigger.event().entity;
@@ -223,8 +271,30 @@ pub(crate) fn on_zombie_replicated(
         return;
     }
     commands.entity(entity).insert(zombie_cosmetic_bundle());
-    commands.entity(entity).with_child(zombie_mesh_bundle(&asset_server, ZombieKind::Classic));
     spawn_zombie_health_bar(&mut commands, entity);
+    // The mesh child is spawned by on_zombie_kind_replicated instead — the
+    // server replicates ZombieKind on every networked zombie, and it may
+    // arrive in the same tick as Zombie or just after.
+}
+
+// Separate from on_zombie_replicated so the mesh is built from the real
+// replicated kind, not a guess. Every server zombie carries ZombieKind
+// (Classic default in spawn_zombies / render-compare rig), so this always
+// fires for a networked zombie.
+pub(crate) fn on_zombie_kind_replicated(
+    trigger: On<Add, ZombieKind>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    kinds: Query<&ZombieKind>,
+    // showcase rig builds its own mesh in spawn_item_gallery_zombie_showcase.
+    showcase: Query<(), With<ZombieShowcaseClip>>,
+) {
+    let entity = trigger.event().entity;
+    if showcase.contains(entity) {
+        return;
+    }
+    let Ok(&kind) = kinds.get(entity) else { return };
+    commands.entity(entity).with_child(zombie_mesh_bundle(&asset_server, kind, true));
 }
 
 // Debug-only: spawns a brand new, non-networked zombie purely on this
@@ -244,7 +314,7 @@ pub(crate) fn spawn_local_zombie(commands: &mut Commands, asset_server: &AssetSe
             Health(ZOMBIE_MAX_HEALTH),
             zombie_cosmetic_bundle(),
         ))
-        .with_child(zombie_mesh_bundle(asset_server, ZombieKind::Classic))
+        .with_child(zombie_mesh_bundle(asset_server, ZombieKind::Classic, true))
         .id();
     spawn_zombie_health_bar(commands, zombie_entity);
 }
@@ -276,7 +346,7 @@ pub(crate) fn spawn_item_gallery_zombie_showcase(commands: &mut Commands, asset_
                     Health(ZOMBIE_MAX_HEALTH),
                     zombie_cosmetic_bundle(),
                 ))
-                .with_child(zombie_mesh_bundle(asset_server, kind));
+                .with_child(zombie_mesh_bundle(asset_server, kind, false));
         }
     }
 }
@@ -363,10 +433,19 @@ pub(crate) fn zombie_cosmetic_bundle() -> impl Bundle {
 // wire_zombie_hitbox_bones walk back up through ChildOf to find the Zombie
 // ancestor regardless of how many hops that takes, so this extra nesting
 // level doesn't break either of them.
-pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer, kind: ZombieKind) -> impl Bundle {
+// `for_gameplay`: networked zombies (root at the grounded rest height
+// move_zombies keeps it at) need zombie_kind_gameplay_mesh_transform; the
+// ItemGallery showcase (fixed showcase root Y) needs the plain one. Same
+// for Classic either way.
+pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer, kind: ZombieKind, for_gameplay: bool) -> impl Bundle {
+    let transform = if for_gameplay {
+        zombie_kind_gameplay_mesh_transform(kind)
+    } else {
+        zombie_kind_mesh_transform(kind)
+    };
     (
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(zombie_kind_mesh_path(kind)))),
-        zombie_kind_mesh_transform(kind),
+        transform,
     )
 }
 
@@ -668,10 +747,11 @@ pub(crate) fn wire_zombie_animations(
                 player.play(node).repeat();
             }
         } else {
+            let slot = anim.slot(kind.unwrap_or_default());
             commands
                 .entity(player_entity)
-                .try_insert(AnimationGraphHandle(anim.graph.clone()));
-            player.play(anim.idle).repeat();
+                .try_insert(AnimationGraphHandle(slot.graph.clone()));
+            player.play(slot.idle()).repeat();
         }
         commands.entity(root).try_insert(ZombieAnimationPlayer(player_entity));
     }
@@ -840,7 +920,7 @@ pub(crate) fn update_zombie_animation(
     // to the single clip wire_zombie_animations gave them (they also carry
     // no NetTransform, so this query would skip them anyway — belt and braces).
     mut zombies: Query<
-        (&Transform, &NetTransform, &Health, &ZombieAnimationPlayer, &mut ZombiePose),
+        (&Transform, &NetTransform, &Health, &ZombieAnimationPlayer, Option<&ZombieKind>, &mut ZombiePose),
         (With<Zombie>, Without<ZombieShowcaseClip>),
     >,
     mut players: Query<&mut AnimationPlayer>,
@@ -848,7 +928,7 @@ pub(crate) fn update_zombie_animation(
     let Ok(player_transform) = player.single() else {
         return;
     };
-    for (zombie_transform, net_transform, health, link, mut pose) in &mut zombies {
+    for (zombie_transform, net_transform, health, link, kind, mut pose) in &mut zombies {
         let distance = zombie_transform.translation.distance(player_transform.translation);
         let new_pose = zombie_pose_for(distance, health.0 / ZOMBIE_MAX_HEALTH, net_transform.moving);
         if new_pose == *pose {
@@ -857,14 +937,7 @@ pub(crate) fn update_zombie_animation(
         *pose = new_pose;
         if let Ok(mut player) = players.get_mut(link.0) {
             player.stop_all();
-            let node = match new_pose {
-                ZombiePose::Idle => anim.idle,
-                ZombiePose::Walk => anim.walk,
-                ZombiePose::Run => anim.run,
-                ZombiePose::Crawl => anim.crawl,
-                ZombiePose::Bite => anim.bite,
-            };
-            player.play(node).repeat();
+            player.play(anim.slot(kind.copied().unwrap_or_default()).node(new_pose)).repeat();
         }
     }
 }

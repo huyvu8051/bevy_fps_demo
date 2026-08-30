@@ -32,12 +32,13 @@ use shared::{
     MapKind, scenario_player_spawn,
     PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieMotion, ZombieShowcaseClip, wire_zombie_hitbox_bones,
-    zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_mesh_transform, zombie_kind_showcase_root_y,
+    zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_mesh_transform, zombie_kind_gameplay_mesh_transform,
+    zombie_kind_pose_clips, zombie_kind_showcase_root_y,
     INTERP_DELAY_SECS, MAX_SHOT_DISTANCE,
     HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
     resolve_bone_world_positions, zombie_hit_damage_ray,
-    PROTOCOL_ID, ZOMBIE_ANIM_BITE, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_WALK,
-    ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_PATH,
+    PROTOCOL_ID,
+    ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS,
     zombie_pose_for, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT,
 };
@@ -1193,6 +1194,7 @@ impl Plugin for GamePlugin {
         .replicate::<NetPlayer>()
         .replicate::<NetTransform>()
         .replicate::<Zombie>()
+        .replicate::<ZombieKind>()
         .replicate::<Health>()
         .replicate::<LastProcessedInput>()
         .replicate::<DebugBot>()
@@ -1241,6 +1243,7 @@ impl Plugin for GamePlugin {
         .add_systems(OnExit(ClientState::Connected), despawn_replicated_on_disconnect)
         .add_observer(mark_local_player)
         .add_observer(on_zombie_replicated)
+        .add_observer(on_zombie_kind_replicated)
         .add_observer(on_net_transform_replicated)
         .add_observer(on_net_player_replicated)
         .add_observer(on_shot_fx)
@@ -1769,24 +1772,10 @@ fn setup(
         PlayerModelAnimRoot,
     ));
 
-    let zombie_clips: Vec<Handle<AnimationClip>> =
-        [ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_WALK, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_BITE]
-            .into_iter()
-            .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(ZOMBIE_PATH)))
-            .collect();
-    let (zombie_graph, zombie_nodes) = AnimationGraph::from_clips(zombie_clips);
-    let zombie_anim = ZombieAnim {
-        graph: graphs.add(zombie_graph),
-        idle: zombie_nodes[0],
-        walk: zombie_nodes[1],
-        run: zombie_nodes[2],
-        crawl: zombie_nodes[3],
-        bite: zombie_nodes[4],
-    };
-
-    // No local zombie spawning here anymore — zombies are server-spawned
-    // and replicated; see the on_zombie_replicated observer.
-    commands.insert_resource(zombie_anim);
+    // Per-kind 5-pose gameplay graphs (mirrors the server's
+    // ServerZombieAnim). Zombies are server-spawned + replicated now — no
+    // local spawning here; see the on_zombie_replicated observer.
+    commands.insert_resource(build_zombie_anim(&asset_server, &mut graphs));
     // Per-kind full-clip graphs — only the ItemGallery showcase rig uses
     // these (one zombie pinned per clip); harmless everywhere else.
     commands.insert_resource(build_zombie_kind_anims(&asset_server, &mut graphs));

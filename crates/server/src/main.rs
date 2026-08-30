@@ -33,8 +33,9 @@ use shared::{
     DIRECTOR_CALM_DURATION_SECS, DIRECTOR_CALM_PRESSURE_THRESHOLD, DIRECTOR_HORDE_SIZE,
     DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, INTERP_DELAY_SECS,
     LAG_COMPENSATION_MAX_SECS, PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
-    PROTOCOL_ID, ZOMBIE_ANIM_BITE, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_WALK, ZOMBIE_PATH,
-    ZOMBIE_MODEL_Y_OFFSET, ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SCALE, ZOMBIE_SEPARATION_RADIUS,
+    PROTOCOL_ID,
+    ZombieKind, zombie_kind_for_phase, zombie_kind_mesh_path, zombie_kind_gameplay_mesh_transform, zombie_kind_pose_clips,
+    ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
     ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
     ZOMBIE_TURN_RATE_DEG,
 };
@@ -189,6 +190,7 @@ fn main() {
         .replicate::<NetPlayer>()
         .replicate::<NetTransform>()
         .replicate::<Zombie>()
+        .replicate::<ZombieKind>()
         .replicate::<Health>()
         .replicate::<LastProcessedInput>()
         .replicate::<DebugBot>()
@@ -1270,6 +1272,10 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], ai_enabled: bool, dir
         zombie.insert((
             Transform::from_translation(spawn_pos),
             Zombie,
+            // ~50/50 Classic/Meshy from the same per-entity hash the
+            // path-recalc stagger uses — replicated, so the client builds
+            // the matching mesh (on_zombie_replicated / on_zombie_kind).
+            zombie_kind_for_phase(phase),
             ZombieMotion {
                 path_recalc_timer: phase * ZOMBIE_PATH_RECALC_INTERVAL,
                 ..default()
@@ -1358,6 +1364,10 @@ fn spawn_render_compare_zombies(commands: &mut Commands) {
         zombie.insert((
             Transform::from_translation(spawn_pos),
             Zombie,
+            // RenderCompare is a classic-rig visual test — pin it, don't
+            // randomise. Present so the client's on_zombie_kind_replicated
+            // still fires and builds the mesh.
+            ZombieKind::Classic,
             ZombieMotion::default(),
             KnockbackVelocity::default(),
             ZombieAttackTimer::default(),
@@ -1425,18 +1435,44 @@ fn assign_render_compare_bite_target(
 // server needs to actually cycle through real poses now, not sit frozen
 // on Idle forever.
 
-// Built once at Startup (one AnimationGraph asset, shared by every
-// zombie's AnimationPlayer — same one-graph-many-players pattern as the
-// client's own ZombieAnim) rather than per-zombie, since every server
-// zombie plays from the same clip set.
+// Built once at Startup — one AnimationGraph asset per ZombieKind (shared
+// by every zombie of that kind's AnimationPlayer, same one-graph-many-
+// players pattern as the client's own ZombieKindGameplayAnim), since a
+// zombie plays from its kind's own clip set.
+struct ServerZombieKindAnim {
+    graph: Handle<AnimationGraph>,
+    // [idle, walk, run, crawl, bite] — same order as zombie_kind_pose_clips.
+    poses: [AnimationNodeIndex; 5],
+}
+
+impl ServerZombieKindAnim {
+    fn node(&self, pose: ZombiePose) -> AnimationNodeIndex {
+        self.poses[match pose {
+            ZombiePose::Idle => 0,
+            ZombiePose::Walk => 1,
+            ZombiePose::Run => 2,
+            ZombiePose::Crawl => 3,
+            ZombiePose::Bite => 4,
+        }]
+    }
+    fn idle(&self) -> AnimationNodeIndex {
+        self.poses[0]
+    }
+}
+
 #[derive(Resource)]
 struct ServerZombieAnim {
-    graph: Handle<AnimationGraph>,
-    idle: AnimationNodeIndex,
-    walk: AnimationNodeIndex,
-    run: AnimationNodeIndex,
-    crawl: AnimationNodeIndex,
-    bite: AnimationNodeIndex,
+    classic: ServerZombieKindAnim,
+    meshy: ServerZombieKindAnim,
+}
+
+impl ServerZombieAnim {
+    fn slot(&self, kind: ZombieKind) -> &ServerZombieKindAnim {
+        match kind {
+            ZombieKind::Classic => &self.classic,
+            ZombieKind::Meshy => &self.meshy,
+        }
+    }
 }
 
 fn setup_server_zombie_anim(
@@ -1444,24 +1480,21 @@ fn setup_server_zombie_anim(
     asset_server: Res<AssetServer>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
-    let clips: Vec<Handle<AnimationClip>> = [
-        ZOMBIE_ANIM_BITE,
-        ZOMBIE_ANIM_CRAWL,
-        ZOMBIE_ANIM_IDLE,
-        ZOMBIE_ANIM_RUN,
-        ZOMBIE_ANIM_WALK,
-    ]
-    .into_iter()
-    .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(ZOMBIE_PATH)))
-    .collect();
-    let (graph, nodes) = AnimationGraph::from_clips(clips);
+    let mut build = |kind: ZombieKind| {
+        let path = zombie_kind_mesh_path(kind);
+        let clips: Vec<Handle<AnimationClip>> = zombie_kind_pose_clips(kind)
+            .into_iter()
+            .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(path)))
+            .collect();
+        let (graph, nodes) = AnimationGraph::from_clips(clips);
+        ServerZombieKindAnim {
+            graph: graphs.add(graph),
+            poses: [nodes[0], nodes[1], nodes[2], nodes[3], nodes[4]],
+        }
+    };
     commands.insert_resource(ServerZombieAnim {
-        graph: graphs.add(graph),
-        bite: nodes[0],
-        crawl: nodes[1],
-        idle: nodes[2],
-        run: nodes[3],
-        walk: nodes[4],
+        classic: build(ZombieKind::Classic),
+        meshy: build(ZombieKind::Meshy),
     });
 }
 
@@ -1469,18 +1502,23 @@ fn setup_server_zombie_anim(
 // spawned — mirrors crates/client's on_zombie_replicated (Add<Zombie>
 // observer spawning the exact same SceneRoot as a cosmetic child), just
 // server-side and for hit detection instead of rendering.
-fn on_zombie_spawned(trigger: On<Add, Zombie>, mut commands: Commands, asset_server: Res<AssetServer>) {
-    let scene = asset_server.load(GltfAssetLabel::Scene(0).from_asset(ZOMBIE_PATH));
-    commands.entity(trigger.event().entity).with_child((
-        // Was Transform::default() — left this skeleton at raw unscaled
-        // mesh size (~4x too big at the current ZOMBIE_SCALE) and un-offset
-        // from the root, so real bone positions ended up nowhere near the
-        // outer capsule/visible mesh a shot is actually aimed at (only
-        // whichever bones happened to still land close by sheer geometric
-        // coincidence — the legs, in practice — ever registered a hit at
-        // all). See ZOMBIE_MODEL_Y_OFFSET's own doc comment — this must
-        // exactly match crates/client's own zombie_mesh_bundle transform.
-        Transform::from_xyz(0.0, ZOMBIE_MODEL_Y_OFFSET, 0.0).with_scale(Vec3::splat(ZOMBIE_SCALE)),
+fn on_zombie_spawned(
+    trigger: On<Add, Zombie>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    kinds: Query<&ZombieKind>,
+) {
+    let entity = trigger.event().entity;
+    // Inserted in the same spawn bundle, so it's here already; default
+    // Classic for any spawn path that skips it (render-compare rig).
+    let kind = kinds.get(entity).copied().unwrap_or_default();
+    let scene = asset_server.load(GltfAssetLabel::Scene(0).from_asset(zombie_kind_mesh_path(kind)));
+    commands.entity(entity).with_child((
+        // Per-kind child transform — MUST match crates/client's own
+        // zombie_mesh_bundle so the server's hit-detection skeleton lines
+        // up with what the client draws. See ZOMBIE_MODEL_Y_OFFSET /
+        // zombie_kind_gameplay_mesh_transform.
+        zombie_kind_gameplay_mesh_transform(kind),
         Visibility::default(),
         SceneRoot(scene),
     ));
@@ -1495,19 +1533,22 @@ fn wire_server_zombie_animations(
     mut commands: Commands,
     anim: Res<ServerZombieAnim>,
     child_of: Query<&ChildOf>,
-    zombies: Query<(), With<Zombie>>,
+    zombies: Query<Option<&ZombieKind>, With<Zombie>>,
     mut new_players: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
 ) {
     for (player_entity, mut player) in &mut new_players {
-        commands.entity(player_entity).try_insert(AnimationGraphHandle(anim.graph.clone()));
-        player.play(anim.idle).repeat();
+        let Some(root) = find_animation_root(player_entity, &child_of, |e| zombies.get(e).is_ok()) else {
+            continue;
+        };
+        let kind = zombies.get(root).ok().flatten().copied().unwrap_or_default();
+        let slot = anim.slot(kind);
+        commands.entity(player_entity).try_insert(AnimationGraphHandle(slot.graph.clone()));
+        player.play(slot.idle()).repeat();
         // Recorded on the zombie ROOT (not this AnimationPlayer entity
         // itself) so update_server_zombie_pose can look it up the same way
         // crates/client's update_zombie_animation does — see
         // ZombieAnimationPlayer's own doc comment.
-        if let Some(root) = find_animation_root(player_entity, &child_of, |e| zombies.contains(e)) {
-            commands.entity(root).try_insert(ZombieAnimationPlayer(player_entity));
-        }
+        commands.entity(root).try_insert(ZombieAnimationPlayer(player_entity));
     }
 }
 
@@ -1522,10 +1563,13 @@ fn wire_server_zombie_animations(
 fn update_server_zombie_pose(
     anim: Res<ServerZombieAnim>,
     players: Query<&Transform, (With<NetPlayer>, Without<Zombie>)>,
-    mut zombies: Query<(&Transform, &NetTransform, &Health, &ChaseTarget, &ZombieAnimationPlayer, &mut ZombiePose), With<Zombie>>,
+    mut zombies: Query<
+        (&Transform, &NetTransform, &Health, &ChaseTarget, &ZombieAnimationPlayer, Option<&ZombieKind>, &mut ZombiePose),
+        With<Zombie>,
+    >,
     mut anim_players: Query<&mut AnimationPlayer>,
 ) {
-    for (transform, net_transform, health, chase_target, link, mut pose) in &mut zombies {
+    for (transform, net_transform, health, chase_target, link, kind, mut pose) in &mut zombies {
         let distance = chase_target
             .entity
             .and_then(|target| players.get(target).ok())
@@ -1537,14 +1581,7 @@ fn update_server_zombie_pose(
         *pose = new_pose;
         if let Ok(mut player) = anim_players.get_mut(link.0) {
             player.stop_all();
-            let node = match new_pose {
-                ZombiePose::Idle => anim.idle,
-                ZombiePose::Walk => anim.walk,
-                ZombiePose::Run => anim.run,
-                ZombiePose::Crawl => anim.crawl,
-                ZombiePose::Bite => anim.bite,
-            };
-            player.play(node).repeat();
+            player.play(anim.slot(kind.copied().unwrap_or_default()).node(new_pose)).repeat();
         }
     }
 }
