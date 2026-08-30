@@ -319,7 +319,7 @@ pub const ZOMBIE_OUTER_HEIGHT: f32 = ZOMBIE_WORLD_HEIGHT;
 /// (≈ the accurate torso half-width) so zombies fit the same gaps a player
 /// does; unrelated to the shooting broad-phase (ZOMBIE_OUTER_RADIUS).
 /// Height is still ZOMBIE_OUTER_HEIGHT (full body).
-pub const ZOMBIE_MOVE_RADIUS: f32 = 0.2;
+pub const ZOMBIE_MOVE_RADIUS: f32 = 0.3;
 
 // How far below the zombie root's own Transform/NetTransform.translation
 // (capsule center) the mesh's own local origin needs to sit so its feet
