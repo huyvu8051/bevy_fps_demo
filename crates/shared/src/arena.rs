@@ -136,7 +136,11 @@ pub fn arena_layout(map_id: u8) -> &'static [ArenaBox] {
     slice
 }
 
-pub const NAVMESH_HEIGHT: f32 = 1.0;
+// Y of the navmesh sampling plane. Obstacle colliders are carved where
+// they cross this height, so it sits low enough to catch a short parked
+// car (some are only ~1.1 m tall) while still clearing the floor slab
+// (top at y = 0).
+pub const NAVMESH_HEIGHT: f32 = 0.3;
 pub const NAVMESH_BOUNDS: [Vec2; 4] = [
     Vec2::new(-(ARENA_HALF_SIZE - 1.0), -(ARENA_HALF_SIZE - 1.0)),
     Vec2::new(ARENA_HALF_SIZE - 1.0, -(ARENA_HALF_SIZE - 1.0)),
