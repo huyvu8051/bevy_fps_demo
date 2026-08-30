@@ -15,7 +15,7 @@
 // attempt at a real mesh/shape. Good enough to judge footprint and
 // height; not meant to look like the real prop.
 
-use bevy::prelude::{Quat, Vec3};
+use bevy::prelude::{EulerRot, Quat, Vec3};
 
 use crate::arena::ARENA_WALL_THICKNESS;
 use crate::level_piece::{floor_panel, wall_panel, BoxPiece, PanelPiece};
@@ -129,15 +129,43 @@ pub fn item_gallery_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
 // registering" or "player walks through" on whichever side didn't get the
 // update.
 
-/// (entity scale, entity Y translation, real width, height, depth in
-/// meters) per car, same order/count as client's `ITEM_GALLERY_CARS`
-/// (which zips this 1:1 by index for its own asset paths). scale/Y match
-/// each SceneRoot's own Transform exactly (see that array's own comments
-/// for why the first 4 need a scale/Y hack and the rest don't) — the
-/// collider size below is pre-divided by scale so it comes out to the
-/// stated real-world size once avian3d applies the entity's Transform.scale
-/// to it (confirmed behavior: colliders scale with ancestor Transform).
-/// Real sizes match docs/maps/map01_dimensions.md mục 1's "Xe" rows.
+/// glTF asset path per car — index i here is car i in
+/// `item_gallery_car_physics()` / `item_gallery_car_positions()`. Lives in
+/// `shared` (not client-only anymore) because the server now also loads
+/// these meshes: both sides build the car collider with avian's
+/// `ColliderConstructor::ConvexHullFromMesh` off the real geometry instead
+/// of a hand-sized `Collider::cuboid`, so the path list has to be the one
+/// source of truth. The first 4 (`car_sedan`..`car_vf3`) were exported
+/// before Meshy's "Resize + Origin: Bottom" download option — that's why
+/// their rows in the RON data file carry a scale/Y hack; everything after
+/// `car_vf3` was exported with it already applied.
+pub const ITEM_GALLERY_CAR_PATHS: [&str; 16] = [
+    "props/car_sedan/mesh/car_sedan_light.glb",
+    "props/car_van/mesh/car_van_light.glb",
+    "props/car_pickup/mesh/car_pickup_light.glb",
+    "props/car_vf3/mesh/car_vf3_light.glb",
+    "props/car_suv/mesh/car_suv_light.glb",
+    "props/car_hatchback/mesh/car_hatchback_light.glb",
+    "props/car_sports/mesh/car_sports_light.glb",
+    "props/car_taxi/mesh/car_taxi_light.glb",
+    "props/car_police/mesh/car_police_light.glb",
+    "props/car_ambulance/mesh/car_ambulance_light.glb",
+    "props/car_delivery/mesh/car_delivery_light.glb",
+    "props/car_towtruck/mesh/car_towtruck_light.glb",
+    "props/car_wagon/mesh/car_wagon_light.glb",
+    "props/car_motorcycle/mesh/car_motorcycle_light.glb",
+    "props/car_muscle/mesh/car_muscle_light.glb",
+    "props/car_minivan/mesh/car_minivan_light.glb",
+];
+
+/// `(scale, y, x, z, rot_x_deg, rot_y_deg, rot_z_deg)` per car — the full
+/// entity Transform placement (uniform scale + translation x/y/z + rotation
+/// as X/Y/Z euler degrees, applied in `EulerRot::YXZ` order), same
+/// order/count as `ITEM_GALLERY_CAR_PATHS` (index-matched). These match
+/// each SceneRoot's own Transform exactly (see ITEM_GALLERY_CAR_PATHS's doc
+/// for why the first 4 need a scale/Y hack). The collider is built from the
+/// mesh (`ConvexHullFromMesh`), so there's no size data here — just
+/// placement.
 ///
 /// Loaded from `crates/client/assets/data/item_gallery_car_physics.ron`
 /// (was a hardcoded const array here) instead of compiled in, so
@@ -153,8 +181,10 @@ pub fn item_gallery_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
 /// server (see server/src/main.rs's own comment on why), but shared's
 /// manifest dir is fixed regardless of which binary links it in, so this
 /// one path works unchanged for both.
-fn item_gallery_car_physics_raw() -> &'static [(f32, f32, f32, f32, f32)] {
-    static DATA: std::sync::OnceLock<Vec<(f32, f32, f32, f32, f32)>> = std::sync::OnceLock::new();
+type CarPhysicsRow = (f32, f32, f32, f32, f32, f32, f32);
+
+fn item_gallery_car_physics_raw() -> &'static [CarPhysicsRow] {
+    static DATA: std::sync::OnceLock<Vec<CarPhysicsRow>> = std::sync::OnceLock::new();
     DATA.get_or_init(|| {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../client/assets/data/item_gallery_car_physics.ron");
         let text = std::fs::read_to_string(path)
@@ -165,60 +195,42 @@ fn item_gallery_car_physics_raw() -> &'static [(f32, f32, f32, f32, f32)] {
     .as_slice()
 }
 
-// 2 rows of 8, 6m apart on both axes — independent of
-// item_gallery_positions() (only 10 slots, tied 1:1 to
-// ITEM_GALLERY_ENTRIES) since 16 cars no longer fits that grid.
-const ITEM_GALLERY_CAR_ROW_SPACING: f32 = 6.0;
-const ITEM_GALLERY_CAR_ROW_LEN: usize = 8;
-const ITEM_GALLERY_CAR_ROW_Z: [f32; 2] = [-6.0, -14.0];
+// The cars' original layout was a computed 2×8 grid (start_x -21, 6m
+// spacing, rows at z -6 / -14). That's now just the seed values baked into
+// the RON file's x/z columns — nudge a car in the editor and F9 writes its
+// new x/z straight back, no grid formula in the loop anymore.
 
-/// (x, z) grid position for `ITEM_GALLERY_CAR_PHYSICS[i]`/client's
-/// `ITEM_GALLERY_CARS[i]` — same index, same order.
-pub fn item_gallery_car_positions() -> Vec<(f32, f32)> {
-    let start_x = -(ITEM_GALLERY_CAR_ROW_LEN as f32 - 1.0) * ITEM_GALLERY_CAR_ROW_SPACING / 2.0;
-    (0..item_gallery_car_physics_raw().len())
-        .map(|i| {
-            let row = i / ITEM_GALLERY_CAR_ROW_LEN;
-            let col = i % ITEM_GALLERY_CAR_ROW_LEN;
-            (start_x + col as f32 * ITEM_GALLERY_CAR_ROW_SPACING, ITEM_GALLERY_CAR_ROW_Z[row])
-        })
-        .collect()
-}
-
-/// Resolved per-car collider placement — everything a collider-only spawn
-/// (server) or a collider+visual spawn (client) needs, already divided by
-/// `scale` so `Collider::cuboid(size.x, size.y, size.z)` on a child at
-/// local Y `collider_local_y` comes out to the real-world box once avian3d
-/// re-multiplies by the parent entity's Transform.scale.
+/// Resolved per-car placement — `x`/`z`/`scale`/`y`/`rotation` all straight
+/// from the RON file. Drives the client's visual `SceneRoot` and the
+/// server's collider proxy; the collider shape itself comes from the mesh
+/// (`ColliderConstructor::ConvexHullFromMesh` on both sides).
 pub struct ItemGalleryCarPhysics {
     pub x: f32,
     pub z: f32,
     pub scale: f32,
     /// Rest-height Y translation for the entity itself (matches the
-    /// SceneRoot's own Transform.y on the client — NOT the collider
-    /// center).
+    /// SceneRoot's own Transform.y on the client).
     pub y: f32,
-    pub collider_size: Vec3,
-    pub collider_local_y: f32,
-    /// Real-world (width, height, depth) in meters straight from the RON
-    /// file — i.e. `collider_size` before the `/ scale` pre-division. The
-    /// editor-driven save (client's F9 handler) writes these back
-    /// unchanged; they can't be recovered from a live Transform.
-    pub real_size: Vec3,
+    /// Full entity rotation — RON stores it as X/Y/Z euler degrees, built
+    /// here into a `Quat` (`EulerRot::YXZ`). Feed straight to
+    /// `Transform::with_rotation`.
+    pub rotation: Quat,
 }
 
 pub fn item_gallery_car_physics() -> Vec<ItemGalleryCarPhysics> {
     item_gallery_car_physics_raw()
         .iter()
-        .zip(item_gallery_car_positions())
-        .map(|(&(scale, y, w, h, d), (x, z))| ItemGalleryCarPhysics {
+        .map(|&(scale, y, x, z, rx_deg, ry_deg, rz_deg)| ItemGalleryCarPhysics {
             x,
             z,
             scale,
             y,
-            collider_size: Vec3::new(w, h, d) / scale,
-            collider_local_y: (h / 2.0) / scale,
-            real_size: Vec3::new(w, h, d),
+            rotation: Quat::from_euler(
+                EulerRot::YXZ,
+                ry_deg.to_radians(),
+                rx_deg.to_radians(),
+                rz_deg.to_radians(),
+            ),
         })
         .collect()
 }

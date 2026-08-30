@@ -324,12 +324,12 @@ const USE_MAP1_B1_GARAGE: bool = true;
 // minus the Mesh3d/MeshMaterial3d/lights — this process never renders
 // anything, it only needs the avian3d colliders so move_players has
 // something to collide against.
-fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>) {
+fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_server: Res<AssetServer>) {
     // ItemGallery is neither the real Map 1 nor the legacy flat arena —
     // its own dedicated flat scale-reference room, checked first so it
     // doesn't fall into either branch below.
     if *scenario == Scenario::ItemGallery {
-        spawn_item_gallery_level_pieces(&mut commands);
+        spawn_item_gallery_level_pieces(&mut commands, &asset_server);
         return;
     }
 
@@ -396,33 +396,37 @@ fn spawn_map1_level_pieces(commands: &mut Commands) {
     spawn_collider_pieces(commands, pieces, panels);
 }
 
-fn spawn_item_gallery_level_pieces(commands: &mut Commands) {
+fn spawn_item_gallery_level_pieces(commands: &mut Commands, asset_server: &AssetServer) {
     let (pieces, panels) = shared::item_gallery_level_pieces();
     spawn_collider_pieces(commands, pieces, panels);
-    spawn_item_gallery_car_colliders(commands);
+    spawn_item_gallery_car_colliders(commands, asset_server);
 }
 
-// Collider-only copy of the client's meshy.ai car test props (see
-// crate client's spawn_item_gallery_test_props) — same
-// shared::item_gallery_car_physics() data so hit registration
+// Collider proxy for the client's meshy.ai car test props (see crate
+// client's spawn_item_gallery_test_props). Loads the SAME glTF meshes the
+// client draws and lets avian build the collider off them
+// (ColliderConstructor::ConvexHullFromMesh — one convex hull per mesh
+// primitive, attached once the asset loads), so hit registration
 // (handle_fire_shot's SpatialQuery) and movement blocking (move_players'
-// MoveAndSlide) agree with what the client actually draws/simulates.
+// MoveAndSlide) match the real car shape instead of a hand-sized box that
+// kept drifting off the mesh. Headless is fine: this process already
+// loads zombie.glb the same way (MeshPlugin + GltfPlugin, no RenderPlugin).
+//
 // RigidBody::Static here (not Dynamic like the client's) on purpose: the
 // gravity-drop-then-shake-on-hit behavior is a purely cosmetic client-side
 // effect nobody watches this process's own physics world for — this
-// process only needs a fixed collider at each car's REST position (no
-// drop margin), which Static gives for free without an unnecessary
+// process only needs a fixed collider at each car's REST position (no drop
+// margin), which Static gives for free without an unnecessary
 // physics-settle each Startup.
-fn spawn_item_gallery_car_colliders(commands: &mut Commands) {
-    for physics in shared::item_gallery_car_physics() {
+fn spawn_item_gallery_car_colliders(commands: &mut Commands, asset_server: &AssetServer) {
+    for (path, physics) in shared::ITEM_GALLERY_CAR_PATHS.iter().zip(shared::item_gallery_car_physics()) {
         commands.spawn((
-            Transform::from_xyz(physics.x, physics.y, physics.z).with_scale(Vec3::splat(physics.scale)),
+            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(*path))),
+            Transform::from_xyz(physics.x, physics.y, physics.z)
+                .with_rotation(physics.rotation)
+                .with_scale(Vec3::splat(physics.scale)),
             RigidBody::Static,
-            Collider::compound(vec![(
-                Vec3::new(0.0, physics.collider_local_y, 0.0),
-                Quat::IDENTITY,
-                Collider::cuboid(physics.collider_size.x, physics.collider_size.y, physics.collider_size.z),
-            )]),
+            ColliderConstructorHierarchy::new(ColliderConstructor::ConvexHullFromMesh),
         ));
     }
 }

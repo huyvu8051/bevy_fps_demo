@@ -1,35 +1,38 @@
-// Ported from shared::item_gallery::ITEM_GALLERY_CAR_PHYSICS (was a hard-
-// coded Rust const array) — see that fn's doc comment in
-// crates/shared/src/item_gallery.rs for the full field meaning.
+// Per-car entity Transform placement:
+//   (scale, y, x, z, rot_x_deg, rot_y_deg, rot_z_deg)
+// uniform scale, translation in meters, rotation as X/Y/Z euler degrees
+// (applied EulerRot::YXZ). Same order/count as shared::ITEM_GALLERY_CAR_PATHS
+// (index i here is car i there).
 //
-// Each entry: (entity scale, entity Y translation, real width, height,
-// depth in meters). Same order/count as client's ITEM_GALLERY_CAR_PATHS
-// (crates/client/src/item_gallery_cars.rs) — index i here is car i there.
+// That's all this file drives now: the car collider is built from the real
+// glTF mesh (ColliderConstructor::ConvexHullFromMesh, client + server), so
+// there's no width/height/depth here.
 //
-// Why RON and not still a Rust const: this file is meant to be tuned by
-// eyeballing each car in the dev editor (F2) and nudging scale/position —
-// moving that loop from "edit code, recompile, retest" to "edit this file,
-// rerun" is the whole point. With EDITOR=1 in Scenario::ItemGallery,
-// pressing F9 writes every car's live scale + Y back into this file (see
-// save_item_gallery_car_physics_on_key in
-// crates/client/src/item_gallery_cars.rs); the width/height/depth columns
-// and this header are preserved as-is. Hand-editing still works fine too.
-// Grid x/z is NOT stored here (item_gallery_car_positions() computes it).
+// van / vf3 keep a big `scale` (and the first 4 cars a Y offset) because
+// they were exported before Meshy's "Resize + Origin: Bottom" option; the
+// rest sit at scale 1.0. x/z started as a computed 2×8 grid (start_x -21,
+// 6m spacing, rows at z -6 / -14) — now just seed values you can nudge.
+//
+// Tune by eyeballing each car in the dev editor (F2) and dragging /
+// rotating / scaling it; with EDITOR=1 in Scenario::ItemGallery, F9 writes
+// every car's live scale + x/y/z + rotation back here
+// (save_item_gallery_car_physics_on_key in
+// crates/client/src/item_gallery_cars.rs). Hand-editing works fine too.
 [
-    (2.2, 1.5, 1.9, 1.5, 4.6),     // sedan
-    (115.0, 0.0, 2.0, 2.3, 5.5),   // van
-    (1.0, 0.0, 2.6, 2.2, 5.3),     // pickup
-    (100.0, 0.0, 1.68, 1.6, 3.19), // vf3
-    (1.0, 0.0, 1.9, 1.8, 4.6),     // suv
-    (1.0, 0.0, 1.7, 1.45, 3.9),    // hatchback
-    (1.0, 0.0, 1.85, 1.25, 4.5),   // sports
-    (1.0, 0.0, 1.8, 1.5, 4.8),     // taxi
-    (1.0, 0.0, 1.85, 1.45, 5.0),   // police
-    (1.0, 0.0, 2.1, 2.6, 6.0),     // ambulance
-    (1.0, 0.0, 2.2, 2.5, 6.5),     // delivery
-    (1.0, 0.0, 2.3, 2.3, 6.5),     // towtruck
-    (1.0, 0.0, 1.8, 1.5, 4.8),     // wagon
-    (1.0, 0.0, 0.8, 1.15, 2.2),    // motorcycle
-    (1.0, 0.0, 1.9, 1.35, 5.0),    // muscle
-    (1.0, 0.0, 1.95, 1.75, 5.1),   // minivan
+    (2.2, 1.0064, -21.0, -6.0, 0.0, 0.0, 0.0),   // sedan
+    (115.0, 0.3495, -15.0, -6.0, 0.0, 0.0, 0.0), // van
+    (1.0, 0.3473, -9.0, -6.0, 0.0, 0.0, 0.0),    // pickup
+    (100.0, 0.3495, -3.0, -6.0, 0.0, 0.0, 0.0),  // vf3
+    (1.0, 0.3493, 3.0, -6.0, 0.0, 0.0, 0.0),     // suv
+    (1.0, 0.3456, 9.0, -6.0, 0.0, 0.0, 0.0),     // hatchback
+    (1.0, 0.3451, 16.1, -8.5, 0.0, 0.0, 0.0),    // sports
+    (1.0, 0.3493, 21.0, -6.0, 0.0, 0.0, 0.0),    // taxi
+    (1.0, 0.3453, -21.0, -14.0, 0.0, 0.0, 0.0),  // police
+    (1.0, 0.35, -15.0, -14.0, 0.0, 0.0, 0.0),    // ambulance
+    (1.0, 0.3485, -9.0, -14.0, 0.0, 0.0, 0.0),   // delivery
+    (1.0, 0.3479, -3.0, -14.0, 0.0, 0.0, 0.0),   // towtruck
+    (1.0, 0.3455, 3.0, -14.0, 0.0, 0.0, 0.0),    // wagon
+    (1.0, 0.3496, 9.0, -14.0, 0.0, 0.0, 0.0),    // motorcycle
+    (1.0, 0.3448, 15.0, -14.0, 0.0, 0.0, 0.0),   // muscle
+    (1.0, 0.3496, 21.0, -14.0, 0.0, 0.0, 0.0),   // minivan
 ]
