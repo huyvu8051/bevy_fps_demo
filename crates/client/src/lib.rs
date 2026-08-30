@@ -1234,11 +1234,10 @@ impl Plugin for GamePlugin {
         .add_observer(on_player_died_fx)
         .add_observer(on_game_state_event)
         .add_plugins(ItemGalleryCarsPlugin)
-        // Scenario::StressTest (Map 2) auto-enables noclip — the player
-        // spawns high above the arena specifically to observe a full
-        // zombie horde from a safe distance, no manual toggle needed. Every
-        // other scenario keeps Noclip's normal off-by-default.
-        .insert_resource(Noclip(current_scenario() == Scenario::StressTest))
+        // Noclip is a manual cheat toggle for every scenario now — off by
+        // default. (Map 2 used to auto-enable it for observing the horde
+        // from above; it's a walkable arena now.)
+        .insert_resource(Noclip(false))
         .init_resource::<InspectMode>()
         .init_resource::<Autopilot>()
         .init_resource::<AutopilotLookOnly>()
@@ -2449,7 +2448,7 @@ fn count_local_kills(
 // (Scenario::map_kind), so map_select_button can rebuild them properly.
 const MAP_SELECT_ENTRIES: [(u8, &str, &str); 3] = [
     (0, "GAME MAP", "OFFICE BUILDING (B1-F3)"),
-    (2, "STRESS TEST", "50 ZOMBIES ON THE OPEN ARENA"),
+    (2, "ARENA", "OPEN FLAT ARENA, CHASE-AI ZOMBIES"),
     (5, "ITEM GALLERY", "ALL STANDARD ITEM SIZES ON FLAT FLOOR"),
 ];
 

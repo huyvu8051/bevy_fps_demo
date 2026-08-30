@@ -584,12 +584,9 @@ pub(crate) fn map_select_button(
         }
         pending.0 = false;
         let scenario = Scenario::from_map_id(button.0);
-        // Mirrors the App-build-time `Noclip(current_scenario() ==
-        // StressTest)` default (see its own comment) — that default gets
-        // baked in before any map is actually picked (MAP_ID isn't set
-        // yet), so a StressTest pick needs to apply the same auto-enable
-        // itself now that the choice is real.
-        noclip.0 = scenario == Scenario::StressTest;
+        // No scenario auto-enables noclip anymore — reset it off in case a
+        // previous pick / manual toggle left it on.
+        noclip.0 = false;
         // Same reasoning — Autopilot::default() also baked in before any
         // map was picked (see autopilot_enabled_by_default's own doc
         // comment), needs re-applying now that the choice is real.

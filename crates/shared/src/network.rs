@@ -40,18 +40,17 @@ pub enum Scenario {
     /// HITBOX_TEST_RESPAWN_DELAY, not the normal cycling-zombie-grid
     /// behavior.
     HitboxTest,
-    /// Map 2: STRESS_TEST_ZOMBIE_COUNT zombies with normal chase AI on the
-    /// flat arena (MapKind::Arena — same geometry as LegacyArena), player
-    /// spawned high above it (noclip auto-enabled client-side, see
-    /// crate::client's map-select handling) to observe FPS/behavior with a
-    /// full horde active without being in melee range.
+    /// Map 2: the open flat arena (MapKind::Arena — same geometry as
+    /// LegacyArena) with STRESS_TEST_ZOMBIE_COUNT chase-AI zombies. Plain
+    /// walkable combat — noclip off, ground-level spawn — kept as its own
+    /// map-select entry / dedicated port.
     StressTest,
     /// Map 3: 3 stationary zombies, each parked in a different ZombiePose
     /// (Idle/Crawl/Bite — see RENDER_COMPARE_ZOMBIE_POSITIONS' own doc
     /// comment for how each pose is forced without AI movement), player
     /// spawned facing all three and not moving (Autopilot auto-disabled
-    /// client-side for this scenario, mirroring StressTest's noclip
-    /// auto-enable). A pure visual-inspection rig for comparing the
+    /// client-side for this scenario). A pure visual-inspection rig for
+    /// comparing the
     /// desktop and iOS/Metal renderers side by side — not a combat test,
     /// so unlike HitboxTest these zombies don't respawn once killed.
     RenderCompare,
@@ -148,8 +147,10 @@ pub const HITBOX_TEST_RESPAWN_DELAY: f32 = 2.0;
 // once ZOMBIE_RADIUS/ZOMBIE_LENGTH are in scope.
 pub const HITBOX_TEST_ROW_X: [f32; 5] = [-6.0, -3.0, 0.0, 3.0, 6.0];
 
-pub const STRESS_TEST_ZOMBIE_COUNT: usize = 50;
-pub const STRESS_TEST_PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 15.0, 0.0);
+pub const STRESS_TEST_ZOMBIE_COUNT: usize = 10;
+// Arena centre, ground level — same as LegacyArena's PLAYER_SPAWN (was
+// y=15 back when Map 2 auto-enabled noclip and you floated above the horde).
+pub const STRESS_TEST_PLAYER_SPAWN: Vec3 = PLAYER_SPAWN;
 
 // Scenario::RenderCompare — set back far enough that the Idle/Crawl
 // zombies (RENDER_COMPARE_ZOMBIE_POSITIONS' 1st/3rd entries) both fit in
