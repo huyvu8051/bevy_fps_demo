@@ -155,10 +155,12 @@ pub const NAVMESH_EDGE_INSET: f32 = 1.0;
 // `NavMeshSettings` values the server's real Arena navmesh
 // (spawn_zombie_navmesh) and the client's nav_debug reconstruction
 // (sync_client_navmesh) both feed in — one copy here so the two can't
-// drift. `AGENT_RADIUS` is 0: obstacles carve at their true footprint, no
-// inflation, so the navmesh holes hug the pillars/car boxes and zombies
-// can path through any gap that physically fits them.
-pub const ARENA_NAVMESH_AGENT_RADIUS: f32 = 0.0;
+// drift. `AGENT_RADIUS` inflates every obstacle by this much when
+// triangulating, so a gap narrower than ~2x it is closed in the navmesh
+// and the pathfinder routes around it instead of sending a zombie into a
+// slot it can't fit. Roughly the zombie's own ZOMBIE_MOVE_RADIUS (0.3), a
+// touch under so borderline gaps aren't over-closed.
+pub const ARENA_NAVMESH_AGENT_RADIUS: f32 = 0.2;
 pub const ARENA_NAVMESH_SIMPLIFY: f32 = 0.005;
 pub const ARENA_NAVMESH_BUILD_TIMEOUT_SECS: f32 = 1.0;
 
