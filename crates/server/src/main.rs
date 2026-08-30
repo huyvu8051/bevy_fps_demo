@@ -264,6 +264,7 @@ fn main() {
                 // spawns the child scene) for the other half.
                 wire_server_zombie_animations,
                 wire_zombie_hitbox_bones,
+                spawn_car_nav_obstacle_boxes,
             ),
         )
         .add_observer(spawn_player)
@@ -410,14 +411,61 @@ fn spawn_item_gallery_car_colliders(commands: &mut Commands, asset_server: &Asse
                 .with_scale(Vec3::splat(physics.scale)),
             RigidBody::Static,
             ColliderConstructorHierarchy::new(ColliderConstructor::ConvexHullFromMesh),
+            // spawn_car_nav_obstacle_boxes turns this into ONE navmesh
+            // obstacle box per car once the hull colliders exist.
+            CarNavObstacle,
         ));
     }
-    // NOTE: the cars are intentionally NOT fed to the navmesh. Tagging each
-    // car's ~15 per-primitive convex hulls as obstacles pushed hundreds of
-    // heavily-overlapping constraint polygons into polyanya's triangulation
-    // — it ballooned RAM into the tens of GB. If car footprints need to be
-    // carved, do it with ONE simple box per car (from the combined AABB),
-    // not the raw hulls.
+}
+
+/// Car SceneRoot that still needs its navmesh obstacle box (removed once
+/// CarNavBoxDone is added).
+#[derive(Component)]
+struct CarNavObstacle;
+/// Car SceneRoot whose navmesh obstacle box has been spawned.
+#[derive(Component)]
+struct CarNavBoxDone;
+
+// ONE coarse box per car for the navmesh, from the car's combined collider
+// AABB (XZ only; the box is pinned to the navmesh sampling plane so a
+// mid-drop snapshot still carves). NOT the raw per-primitive hulls —
+// tagging all ~15 of those per car fed hundreds of overlapping constraint
+// polygons into polyanya and blew RAM into the tens of GB. Sensor so it
+// carves the navmesh without also being an invisible physical wall (the
+// real hull colliders already block movement here). Idle once every car
+// has its box.
+fn spawn_car_nav_obstacle_boxes(
+    mut commands: Commands,
+    cars: Query<(Entity, &RigidBodyColliders), (With<CarNavObstacle>, Without<CarNavBoxDone>)>,
+    aabbs: Query<&ColliderAabb>,
+) {
+    for (car, colliders) in &cars {
+        let mut min = Vec3::splat(f32::INFINITY);
+        let mut max = Vec3::splat(f32::NEG_INFINITY);
+        let mut ready = !colliders.is_empty();
+        for collider in colliders.iter() {
+            match aabbs.get(collider) {
+                Ok(aabb) if aabb.min.is_finite() && aabb.max.is_finite() => {
+                    min = min.min(aabb.min);
+                    max = max.max(aabb.max);
+                }
+                _ => ready = false,
+            }
+        }
+        if !ready {
+            continue;
+        }
+        let center = Vec3::new((min.x + max.x) * 0.5, NAVMESH_HEIGHT, (min.z + max.z) * 0.5);
+        let size = Vec3::new((max.x - min.x).max(0.1), 2.0, (max.z - min.z).max(0.1));
+        commands.spawn((
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size.x, size.y, size.z),
+            Sensor,
+            ArenaObstacle,
+        ));
+        commands.entity(car).insert(CarNavBoxDone);
+    }
 }
 
 /// Spawns ONLY the avian3d colliders for a set of pieces — no LevelBox/
@@ -882,12 +930,12 @@ fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<Nav
 
     if scenario.map_kind() == MapKind::Arena {
         // Auto-generated: NavmeshUpdaterPlugin::<Collider, ArenaObstacle>
-        // triangulates the outer boundary minus every pillar collider's
-        // footprint, and rebuilds if one ever moves. Blocking so the mesh
-        // exists by the end of the first update (zombies spawn at Startup
-        // too) — a one-shot cost on a static scene, not a per-frame one.
-        // Only the 8 pillars are obstacles here (see
-        // spawn_item_gallery_car_colliders for why the cars are not).
+        // triangulates the outer boundary minus every ArenaObstacle
+        // collider's footprint — the 8 pillars, plus one coarse box per
+        // car (spawn_car_nav_obstacle_boxes) — and rebuilds if one moves.
+        // Blocking so the mesh exists by the end of the first update
+        // (zombies spawn at Startup too); the car boxes appearing a few
+        // frames later just trigger a cheap re-triangulation.
         commands.spawn((
             ManagedNavMesh::single(),
             NavMeshSettings {

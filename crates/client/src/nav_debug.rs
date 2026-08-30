@@ -13,11 +13,12 @@
 // The path is an APPROXIMATION of the server's route: same navmesh, but
 // the server picks each zombie's target by threat score, not nearest, and
 // adds separation / obstacle-steering on top. It's meant for "does the
-// navmesh route around the pillars like I expect", not a frame-exact
-// replay. Only the pillars are carved — the parked cars are not fed to
-// the navmesh on either side (see spawn_item_gallery_car_colliders on the
-// server for why: their per-primitive convex hulls blow up the
-// triangulation).
+// navmesh route around the pillars / cars like I expect", not a
+// frame-exact replay. Cars are carved as ONE coarse box each
+// (spawn_client_car_nav_boxes, from the combined collider AABB) — never
+// the raw per-primitive hulls, which blew polyanya's triangulation into
+// tens of GB. The client cars are RigidBody::Dynamic so a box can sit a
+// little off the server's Static rest pose.
 //
 // Only MapKind::Arena has a per-map navmesh; other maps get nothing.
 // Toggle: the "NavDbg" button in the settings menu Cheats section (debug
@@ -32,11 +33,16 @@ use crate::*;
 #[derive(Resource, Default)]
 pub(crate) struct NavDebugVisible(pub(crate) bool);
 
-/// On each arena pillar collider (the Cylinder rows of arena_layout) so
-/// NavmeshUpdaterPlugin carves a hole there — mirrors the server's
-/// ArenaObstacle. Added in spawn_test_arena.
+/// On each arena pillar collider (the Cylinder rows of arena_layout) and
+/// each per-car nav box so NavmeshUpdaterPlugin carves a hole there —
+/// mirrors the server's ArenaObstacle. Pillars: added in spawn_test_arena.
+/// Car boxes: spawn_client_car_nav_boxes.
 #[derive(Component)]
 pub(crate) struct ClientNavObstacle;
+
+/// Car prop whose nav box has been spawned — see spawn_client_car_nav_boxes.
+#[derive(Component)]
+struct ClientCarNavBoxDone;
 
 pub(crate) struct NavDebugPlugin;
 
@@ -59,6 +65,7 @@ impl Plugin for NavDebugPlugin {
                 nav_debug_toggle_button,
                 update_nav_debug_button_color,
                 sync_client_navmesh,
+                spawn_client_car_nav_boxes,
                 apply_nav_debug_visibility,
                 draw_zombie_path_traces,
             ),
@@ -125,6 +132,44 @@ fn sync_client_navmesh(mut commands: Commands, existing: Query<Entity, With<Mana
         }
         (false, Some(entity)) => commands.entity(entity).despawn(),
         _ => {}
+    }
+}
+
+// Mirror of the server's spawn_car_nav_obstacle_boxes: ONE coarse box per
+// car for the navmesh, from the car's combined collider AABB (XZ; pinned
+// to the sampling plane so a mid-drop snapshot still carves). Sensor so it
+// doesn't become an invisible wall. Idle once every car has its box.
+fn spawn_client_car_nav_boxes(
+    mut commands: Commands,
+    cars: Query<(Entity, &RigidBodyColliders), (With<ItemGalleryTestProp>, Without<ClientCarNavBoxDone>)>,
+    aabbs: Query<&ColliderAabb>,
+) {
+    for (car, colliders) in &cars {
+        let mut min = Vec3::splat(f32::INFINITY);
+        let mut max = Vec3::splat(f32::NEG_INFINITY);
+        let mut ready = !colliders.is_empty();
+        for collider in colliders.iter() {
+            match aabbs.get(collider) {
+                Ok(aabb) if aabb.min.is_finite() && aabb.max.is_finite() => {
+                    min = min.min(aabb.min);
+                    max = max.max(aabb.max);
+                }
+                _ => ready = false,
+            }
+        }
+        if !ready {
+            continue;
+        }
+        let center = Vec3::new((min.x + max.x) * 0.5, shared::NAVMESH_HEIGHT, (min.z + max.z) * 0.5);
+        let size = Vec3::new((max.x - min.x).max(0.1), 2.0, (max.z - min.z).max(0.1));
+        commands.spawn((
+            Transform::from_translation(center),
+            RigidBody::Static,
+            Collider::cuboid(size.x, size.y, size.z),
+            Sensor,
+            ClientNavObstacle,
+        ));
+        commands.entity(car).insert(ClientCarNavBoxDone);
     }
 }
 
