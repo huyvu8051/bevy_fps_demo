@@ -2561,8 +2561,8 @@ fn draw_bone_capsule(gizmos: &mut Gizmos, a: Vec3, b: Vec3, radius: f32, color: 
 struct PredictedInputs(std::collections::VecDeque<(u32, ClientInput, f32, f32, bool)>);
 
 // No point sending network input faster than crates/server's own
-// SERVER_TICK_HZ can act on it.
-const INPUT_SEND_HZ: f32 = 30.0;
+// SERVER_TICK_HZ can act on it — MUST equal it.
+const INPUT_SEND_HZ: f32 = 32.0;
 
 // predict_player_movement: only snap the body toward the server when the
 // disagreement exceeds THRESHOLD metres (below it, the steady per-frame-vs-

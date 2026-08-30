@@ -170,7 +170,6 @@ pub const INTERP_DELAY_SECS: f32 = 0.1;
 // Upper bound on how far handle_fire_shot will rewind zombie positions for
 // lag compensation, regardless of a shooter's actual measured RTT — caps
 // how far back a laggy/malicious client could shift hit detection in its
-// favor (a real server would care about this for fairness/anti-cheat; here
-// it's mostly just to keep the rewind sane if RTT ever reports something
-// absurd).
-pub const LAG_COMPENSATION_MAX_SECS: f32 = 0.3;
+// favor. 1.0s matches CS:GO's sv_maxunlag; ZombieHistory is pruned to this
+// window, so bumping it just costs ~1s * tick-rate entries per zombie.
+pub const LAG_COMPENSATION_MAX_SECS: f32 = 1.0;

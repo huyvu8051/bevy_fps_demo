@@ -80,10 +80,10 @@ fn scenario_from_env() -> Scenario {
 // mismatch was a real source of the client's jump-reconciliation drift
 // (see predict_player_movement's own doc comment for the other half of
 // that fix). Capping the server to a fixed tick gives both sides a
-// consistent, comparable dt. 30Hz: plenty for a hitscan zombie co-op (no
-// twitch-competitive aiming needs), and it's not render-rate-bound like the
-// client, so a lower tick than 60 is fine and cheaper.
-const SERVER_TICK_HZ: f64 = 30.0;
+// consistent, comparable dt. 32Hz — deliberately low (a hitscan zombie
+// co-op has no twitch-competitive aiming needs) and cheap; MUST equal the
+// client's INPUT_SEND_HZ.
+const SERVER_TICK_HZ: f64 = 32.0;
 
 fn main() {
     let scenario = scenario_from_env();
