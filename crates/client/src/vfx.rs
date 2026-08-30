@@ -888,22 +888,37 @@ pub(crate) fn update_scope_lens(
 // refills the magazine).
 pub(crate) fn gun_view_animation(
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     touch_aiming: Res<TouchAiming>,
     game_over: Res<GameOver>,
     look_delta: Res<MouseLookDelta>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    camera: Query<&Transform, (With<FpsCamera>, Without<Gun>)>,
+    camera: Query<(&Transform, &Lean), (With<FpsCamera>, Without<Gun>)>,
     spatial_query: SpatialQuery,
     mut query: Query<(&mut Transform, &mut Gun), Without<FpsCamera>>,
     local_moving: Res<LocalPlayerMoving>,
 ) {
+    let camera_single = camera.single().ok();
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
-    let shoulder_target = if !game_over.0 && keys.pressed(KeyCode::KeyQ) { 1.0 } else { 0.0 };
+    // Was `keys.pressed(KeyCode::KeyQ)` directly — meant the actual visible
+    // "gun swings to the left shoulder" effect only ever fired for a real
+    // keyboard Q press, missing both touch lean (TouchLeanHeld only feeds
+    // apply_lean_input's Lean.current, never a raw key) and autopilot's
+    // own corner-peek (autopilot_think also only writes Lean.current — see
+    // its own comment on "owns the lean while fully on" — never presses a
+    // key). Reading Lean.current instead (same threshold direction KeyQ
+    // used to represent: apply_lean_input's `left` maps to target -1.0)
+    // makes every lean source — keyboard, touch, autopilot — drive this
+    // the same way apply_view_recoil's roll and sync_camera_to_player's
+    // side_offset already do.
+    let shoulder_target = if game_over.0 {
+        0.0
+    } else {
+        camera_single.is_some_and(|(_, lean)| lean.current < -0.5) as u8 as f32
+    };
     // Wall-raise probe: how close is the wall directly in front of the
     // camera? 0.0 = clear, 1.0 = right up against it.
-    let wall_target = camera.single().ok().map_or(0.0, |camera_transform| {
+    let wall_target = camera_single.map_or(0.0, |(camera_transform, _)| {
         let filter = SpatialQueryFilter::default();
         spatial_query
             .cast_ray(
