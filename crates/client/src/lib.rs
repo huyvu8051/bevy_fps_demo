@@ -1127,7 +1127,7 @@ pub fn main() {
             }
         });
     // Dev-only level editor (bevy_editor_pls, vendored + patched for Bevy
-    // 0.18 under third_party/) — off unless EDITOR=1 is set, so normal
+    // 0.18 under vendor/) — off unless EDITOR=1 is set, so normal
     // play (and every other build target: iOS/Android/CADisplayLink)
     // never pulls it in. Desktop-only on purpose: it's for building Map 1
     // geometry on the dev Mac, not for on-device use.

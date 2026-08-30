@@ -3,7 +3,7 @@
 // One of EVERY standard item size from `docs/maps/map01_dimensions.md`
 // section 1 (the shared item-size library, not just Map 1's), laid out in
 // a single grid row on a flat floor. Purpose: open this in the dev editor
-// (EDITOR=1, F2 — see third_party/bevy_editor_pls) and eyeball each real-
+// (EDITOR=1, F2 — see vendor/bevy_editor_pls) and eyeball each real-
 // world-derived size next to the player capsule / a zombie BEFORE it gets
 // committed into an actual room layout — cheaper to catch "that desk reads
 // way too small in-engine" here than after a whole floor is built around

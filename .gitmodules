@@ -1,3 +1,0 @@
-[submodule "third_party/bevy_editor_pls"]
-	path = third_party/bevy_editor_pls
-	url = https://github.com/huyvu8051/bevy_editor_pls.git

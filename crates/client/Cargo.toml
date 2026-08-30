@@ -35,9 +35,9 @@ bevy_replicon = "0.38"
 bevy_replicon_renet2 = { version = "0.13", features = ["native_transport"] }
 
 # Dev-only level editor, vendored + patched for Bevy 0.18 under
-# third_party/ (upstream crates.io release still targets 0.15) — see
+# vendor/ (upstream crates.io release still targets 0.15) — see
 # main()'s own EDITOR=1 gate. path dep, not published anywhere.
-bevy_editor_pls = { path = "../../third_party/bevy_editor_pls/crates/bevy_editor_pls" }
+bevy_editor_pls = { path = "../../vendor/bevy_editor_pls/crates/bevy_editor_pls" }
 
 # CADisplayLink probe experiment (crates/client/src/cadisplaylink/) — an
 # alternate iOS entry point bypassing WinitPlugin entirely, driven by a

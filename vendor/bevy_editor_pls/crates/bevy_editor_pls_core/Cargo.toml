@@ -1,0 +1,18 @@
+[package]
+name = "bevy_editor_pls_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+readme.workspace = true
+
+[dependencies]
+bevy = { version = "0.18", default-features = false, features = [
+    "bevy_window",
+    "bevy_render",
+    "bevy_camera",
+] }
+bevy-inspector-egui.workspace = true
+indexmap = "2"
+egui_dock.workspace = true
