@@ -335,6 +335,16 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "HitMarks", CheatShowHitMarkersButton);
                         spawn_cheat_toggle_button(row, "Tracer", CheatShowTracersButton);
                     });
+                    page.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(8.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        // Client navmesh + zombie path-trace overlay
+                        // (nav_debug.rs) — Arena maps only.
+                        spawn_cheat_toggle_button(row, "NavDbg", CheatNavDebugButton);
+                    });
                 }
             });
 
@@ -585,6 +595,11 @@ pub(crate) struct CheatShowAutopilotTargetButton;
 pub(crate) struct CheatShowHitMarkersButton;
 #[derive(Component)]
 pub(crate) struct CheatShowTracersButton;
+// Flips NavDebugVisible (nav_debug.rs) — handled by nav_debug_toggle_button
+// / update_nav_debug_button_color there, not the cheat_toggle_buttons_*
+// family, to keep those systems under Bevy's param-count ceiling.
+#[derive(Component)]
+pub(crate) struct CheatNavDebugButton;
 
 // Changed<Interaction>-gated like every other touch button in this file —
 // each tap flips the same resource the matching desktop key

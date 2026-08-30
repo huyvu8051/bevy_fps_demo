@@ -24,6 +24,12 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 shared = { path = "../shared" }
 avian3d = "0.6"
+
+# Dev navmesh visualiser (crates/client/src/nav_debug.rs) — same vendored
+# crate the server pathfinds with, plus its gizmo debug feature so the
+# client can draw the reconstructed navmesh. Only wired up in debug builds
+# (the "NavDbg" settings toggle).
+vleue_navigator = { path = "../../vendor/vleue_navigator", default-features = false, features = ["avian3d", "debug-with-gizmos"] }
 bevy = { version = "0.18", features = ["jpeg", "bevy_dev_tools", "wav"] }
 bevy_replicon = "0.38"
 bevy_replicon_renet2 = { version = "0.13", features = ["native_transport"] }

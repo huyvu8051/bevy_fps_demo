@@ -2325,6 +2325,7 @@ dependencies = [
  "shared",
  "tobj",
  "uuid",
+ "vleue_navigator",
 ]
 
 [[package]]

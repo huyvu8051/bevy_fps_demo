@@ -109,6 +109,12 @@ use item_gallery_cars::*;
 mod arena_layout;
 use arena_layout::*;
 
+// Client-side navmesh + path-trace overlay for debugging the server's
+// zombie pathfinding — see the module doc comment. Plugin only added in
+// debug builds; the "NavDbg" settings toggle drives it.
+mod nav_debug;
+use nav_debug::*;
+
 // Which level geometry a scenario renders is decided in ONE place —
 // shared's `Scenario::map_kind()` — and matched on in setup() /
 // network_setup's map_select_button, mirroring the server's own
@@ -1244,6 +1250,10 @@ impl Plugin for GamePlugin {
         .add_observer(on_game_state_event)
         .add_plugins(ItemGalleryCarsPlugin)
         .add_plugins(ArenaLayoutPlugin)
+        // Dev-only navmesh / path-trace overlay (nav_debug.rs) — a no-op in
+        // release builds (see NavDebugPlugin::build), driven by the debug-
+        // gated "NavDbg" settings button.
+        .add_plugins(NavDebugPlugin)
         // Noclip is a manual cheat toggle for every scenario now — off by
         // default. (Map 2 used to auto-enable it for observing the horde
         // from above; it's a walkable arena now.)
@@ -2149,7 +2159,7 @@ fn spawn_test_arena(
                 Collider::cylinder(b.size.x * 0.5, b.size.y),
             ),
         };
-        commands.spawn((
+        let mut piece = commands.spawn((
             Mesh3d(mesh),
             MeshMaterial3d(material),
             Transform::from_translation(b.translation).with_rotation(b.rotation),
@@ -2158,6 +2168,12 @@ fn spawn_test_arena(
             ArenaGeometry,
             ArenaBoxDims { shape: b.shape, size: b.size, index: i },
         ));
+        // Pillars are the holes the client-side nav_debug overlay carves
+        // out of its reconstructed navmesh (mirrors the server's
+        // ArenaObstacle tag). Harmless when NavDebugPlugin is a no-op.
+        if b.shape == shared::ArenaShape::Cylinder {
+            piece.insert(ClientNavObstacle);
+        }
     }
 
     // AmbientLight is per-camera in this Bevy version (not a global
