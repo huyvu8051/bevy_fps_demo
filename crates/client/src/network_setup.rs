@@ -218,22 +218,28 @@ pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &Replic
 /// `shared::Scenario::ws_port`'s for the matching server side (socket_id 1
 /// there, same index used in `ClientAuthentication` below).
 ///
-/// Host is hard-coded to 127.0.0.1 for now (no `SERVER_ADDR`/`LOCAL`/
-/// `SERVER_HOST` env-var routing here — wasm32 has no env vars at all, see
-/// shared::read_ron_data_file!'s doc comment for the same limitation
-/// elsewhere) — fine for local dev/testing, which is what a browser build
-/// running off a local static server needs anyway. Reading the page's own
-/// origin (`web_sys::window().location()`) to support a real remote
-/// deployment is real follow-up work, not done here.
+/// Host comes from the page's own origin (`window.location.hostname`) via
+/// `web_sys`, not a hard-coded `127.0.0.1` — a phone on the same LAN opens
+/// `http://<dev-machine-lan-ip>:8765`, and this reads that same IP back out
+/// of the page so the WebSocket connects to the dev machine instead of the
+/// phone's own (nonexistent) localhost. Falls back to `127.0.0.1` if
+/// `window`/`location` are ever unavailable (should not happen in a real
+/// browser tab). No `SERVER_ADDR`/`LOCAL`/`SERVER_HOST` env-var routing
+/// here — wasm32 has no env vars at all, see shared::read_ron_data_file!'s
+/// doc comment for the same limitation elsewhere.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &RepliconChannels) {
     use bevy_replicon_renet2::netcode::{WebSocketClient, WebSocketClientConfig};
 
     let ws_port = current_scenario().ws_port();
-    let server_url = url::Url::parse(&format!("ws://127.0.0.1:{ws_port}")).expect("hard-coded ws:// URL should always parse");
+    let host = web_sys::window()
+        .and_then(|w| w.location().hostname().ok())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let server_url = url::Url::parse(&format!("ws://{host}:{ws_port}")).expect("ws:// URL built from page hostname should always parse");
     let server_addr = WebSocketClientConfig { server_url: server_url.clone() }
         .server_address()
-        .expect("127.0.0.1 host should always resolve to a SocketAddr");
+        .expect("page hostname should always resolve to a SocketAddr");
 
     let client = RenetClient::new(
         ConnectionConfig::from_channels(channels.server_configs(), channels.client_configs()),
@@ -260,7 +266,7 @@ pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &Replic
     commands.insert_resource(client);
     commands.insert_resource(transport);
     commands.insert_resource(MyClientId(client_id));
-    info!("connecting to server via ws://127.0.0.1:{ws_port}");
+    info!("connecting to server via ws://{host}:{ws_port}");
 }
 
 // The renet2 netcode client_id chosen in connect_to_server — also what the
