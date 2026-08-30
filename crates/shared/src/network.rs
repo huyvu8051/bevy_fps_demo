@@ -40,10 +40,11 @@ pub enum Scenario {
     /// HITBOX_TEST_RESPAWN_DELAY, not the normal cycling-zombie-grid
     /// behavior.
     HitboxTest,
-    /// Map 2: STRESS_TEST_ZOMBIE_COUNT zombies with normal chase AI,
-    /// player spawned high above the arena (noclip auto-enabled
-    /// client-side, see crate::client's map-select handling) to observe
-    /// FPS/behavior with a full horde active without being in melee range.
+    /// Map 2: STRESS_TEST_ZOMBIE_COUNT zombies with normal chase AI on the
+    /// flat arena (MapKind::Arena — same geometry as LegacyArena), player
+    /// spawned high above it (noclip auto-enabled client-side, see
+    /// crate::client's map-select handling) to observe FPS/behavior with a
+    /// full horde active without being in melee range.
     StressTest,
     /// Map 3: 3 stationary zombies, each parked in a different ZombiePose
     /// (Idle/Crawl/Bite — see RENDER_COMPARE_ZOMBIE_POSITIONS' own doc
@@ -56,11 +57,10 @@ pub enum Scenario {
     RenderCompare,
     /// Map 4: the old flat test arena (floor + pillars, crates/shared's
     /// arena.rs) — normal chase-AI zombie population, same as `Normal`,
-    /// just forced onto the pre-Map-1 geometry regardless of
-    /// USE_MAP1_B1_GARAGE (crates/server/src/main.rs). Kept around now
-    /// that `Normal` means the real Map 1 office building, so the old
-    /// arena is still reachable from the map-select menu for quick
-    /// combat/AI testing without the office building's geometry involved.
+    /// just on MapKind::Arena instead of the Map 1 office building. Kept
+    /// around now that `Normal` means the real Map 1 building, so the old
+    /// arena is still reachable for quick combat/AI testing without the
+    /// building's geometry involved.
     LegacyArena,
     /// Map 5: flat floor with ONE of every standard map-item size laid
     /// out in a grid (cars, desks, cubicles, lockers, reception counter,
@@ -98,6 +98,45 @@ impl Scenario {
 
     pub fn port(self) -> u16 {
         SERVER_PORT_BASE + self.map_id() as u16
+    }
+
+    /// The one place that decides which level geometry a scenario runs on —
+    /// both the server (colliders) and the client (visuals + local
+    /// prediction colliders) match on this instead of the old scattered
+    /// `USE_MAP1_B1_GARAGE` / `USE_TEST_ARENA` bools + per-scenario
+    /// `!= LegacyArena` special-casing.
+    pub fn map_kind(self) -> MapKind {
+        match self {
+            Scenario::ItemGallery => MapKind::ItemGallery,
+            Scenario::LegacyArena | Scenario::StressTest => MapKind::Arena,
+            Scenario::Normal | Scenario::HitboxTest | Scenario::RenderCompare => MapKind::Building,
+        }
+    }
+}
+
+/// Which level geometry a `Scenario` runs on — see `Scenario::map_kind`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MapKind {
+    /// Map 1 office building (garage / lobby / F2 / F3) — `shared::map1`.
+    Building,
+    /// Flat walled arena + pillars — `shared::arena` / client's spawn_test_arena.
+    Arena,
+    /// Flat scale-reference room with the item-size grid — `shared::item_gallery`.
+    ItemGallery,
+}
+
+/// Player spawn point for a scenario — the server's authoritative spawn
+/// (spawn_player / the reset handler) AND the client's first-frame camera
+/// position, so the two can't disagree. ItemGallery reads an env override,
+/// hence a fn rather than a const table.
+pub fn scenario_player_spawn(scenario: Scenario) -> Vec3 {
+    match scenario {
+        Scenario::Normal => crate::map1::GARAGE_PLAYER_SPAWN,
+        Scenario::HitboxTest => HITBOX_TEST_PLAYER_SPAWN,
+        Scenario::StressTest => STRESS_TEST_PLAYER_SPAWN,
+        Scenario::RenderCompare => RENDER_COMPARE_PLAYER_SPAWN,
+        Scenario::LegacyArena => PLAYER_SPAWN,
+        Scenario::ItemGallery => crate::item_gallery::item_gallery_player_spawn(),
     }
 }
 

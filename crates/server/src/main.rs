@@ -20,14 +20,14 @@ use shared::{
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
     ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, random_map1_zombie_spawn_pos,
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
-    GARAGE_PLAYER_SPAWN,
+    MapKind, scenario_player_spawn,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
-    HitboxTestSlot, HITBOX_TEST_PLAYER_SPAWN, HITBOX_TEST_RESPAWN_DELAY, HITBOX_TEST_ZOMBIE_POSITIONS,
+    HitboxTestSlot, HITBOX_TEST_RESPAWN_DELAY, HITBOX_TEST_ZOMBIE_POSITIONS,
     MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PILLAR_RADIUS,
-    PLAYER_LENGTH, PLAYER_RADIUS, PLAYER_SPAWN, Scenario,
-    RENDER_COMPARE_PLAYER_SPAWN, RENDER_COMPARE_ZOMBIE_POSITIONS,
-    STRESS_TEST_PLAYER_SPAWN, STRESS_TEST_ZOMBIE_COUNT,
+    PLAYER_LENGTH, PLAYER_RADIUS, Scenario,
+    RENDER_COMPARE_ZOMBIE_POSITIONS,
+    STRESS_TEST_ZOMBIE_COUNT,
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
     ZOMBIE_CRAWL_HEALTH_FRACTION,
     ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
@@ -305,41 +305,24 @@ fn start_server(mut commands: Commands, channels: Res<RepliconChannels>, scenari
     info!("dedicated server listening on {public_addr}");
 }
 
-// Toggles whether this process's authoritative world is the Map 1
-// greybox (garage/lobby/F2/F3, replicated out as LevelBox entities — see
-// spawn_map1_level_pieces) or the generic flat test arena. No longer
-// needs to be mirrored on the client side (USE_MAP1_B1_GARAGE there only
-// affects the client's own local pre-sync spawn guess now) — the SERVER
-// alone decides what the level looks like, and any connected client
-// (desktop or iOS, either renderer) builds it purely by reacting to
-// whatever LevelBox entities show up over the network. See LevelBox's
-// own doc comment (crates/shared/src/level_piece.rs) for why this is a
-// real improvement over the old "both processes read the same Rust
-// constants" scheme: editing the map now means editing
-// crates/shared/src/map1's code + restarting the SERVER — no client
-// rebuild, on any platform, needed for a map-only change.
-const USE_MAP1_B1_GARAGE: bool = true;
 
-// Same flat room as crates/client's USE_TEST_ARENA path (floor + 4 walls),
-// minus the Mesh3d/MeshMaterial3d/lights — this process never renders
-// anything, it only needs the avian3d colliders so move_players has
-// something to collide against.
+// The one geometry-per-scenario decision on the server — mirrors the
+// client's own `match current_scenario().map_kind()` in setup(). This
+// process never renders, it only needs the avian3d colliders so
+// move_players has something to collide against.
 fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_server: Res<AssetServer>) {
-    // ItemGallery is neither the real Map 1 nor the legacy flat arena —
-    // its own dedicated flat scale-reference room, checked first so it
-    // doesn't fall into either branch below.
-    if *scenario == Scenario::ItemGallery {
-        spawn_item_gallery_level_pieces(&mut commands, &asset_server);
-        return;
+    match scenario.map_kind() {
+        MapKind::ItemGallery => spawn_item_gallery_level_pieces(&mut commands, &asset_server),
+        MapKind::Building => spawn_map1_level_pieces(&mut commands),
+        MapKind::Arena => spawn_flat_arena_colliders(&mut commands),
     }
+}
 
-    // LegacyArena always forces the old flat arena below, regardless of
-    // USE_MAP1_B1_GARAGE — see Scenario::LegacyArena's own doc comment.
-    if USE_MAP1_B1_GARAGE && *scenario != Scenario::LegacyArena {
-        spawn_map1_level_pieces(&mut commands);
-        return;
-    }
-
+// Flat room: floor + 4 perimeter walls + free-standing pillars (same
+// positions as NAVMESH_COLUMN_OBSTACLES, which carve matching cutouts into
+// the zombie navmesh). Colliders only — no Mesh3d/lights, the client
+// builds its own visuals in spawn_test_arena.
+fn spawn_flat_arena_colliders(commands: &mut Commands) {
     let floor_size = ARENA_HALF_SIZE * 2.0;
     commands.spawn((
         Transform::from_xyz(0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0),
@@ -362,9 +345,6 @@ fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_
         ));
     }
 
-    // Free-standing pillars — same positions as NAVMESH_COLUMN_OBSTACLES
-    // (whose column_footprint carves a matching square cutout into the
-    // zombie navmesh), floor-to-ceiling so nothing can shoot/see over them.
     for &(x, z) in &NAVMESH_COLUMN_OBSTACLES {
         commands.spawn((
             Transform::from_xyz(x, ARENA_WALL_HEIGHT / 2.0, z),
@@ -465,15 +445,7 @@ fn spawn_collider_pieces(commands: &mut Commands, pieces: Vec<shared::BoxPiece>,
 fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands, scenario: Res<Scenario>) {
     let entity = trigger.event().entity;
     info!("client connected: {entity}");
-    let spawn_pos = match *scenario {
-        Scenario::Normal if USE_MAP1_B1_GARAGE => GARAGE_PLAYER_SPAWN,
-        Scenario::Normal => PLAYER_SPAWN,
-        Scenario::HitboxTest => HITBOX_TEST_PLAYER_SPAWN,
-        Scenario::StressTest => STRESS_TEST_PLAYER_SPAWN,
-        Scenario::RenderCompare => RENDER_COMPARE_PLAYER_SPAWN,
-        Scenario::LegacyArena => PLAYER_SPAWN,
-        Scenario::ItemGallery => shared::item_gallery_player_spawn(),
-    };
+    let spawn_pos = scenario_player_spawn(*scenario);
     commands.entity(entity).insert((
         Transform::from_translation(spawn_pos),
         Player {
@@ -956,24 +928,28 @@ impl Default for AutoMaintainZombies {
 #[derive(Resource, Default)]
 struct NextZombieSpawnIndex(usize);
 
-// Picks the right per-scenario spawn scatter for `Scenario::Normal` —
-// Map 1's own 4 real floors when USE_MAP1_B1_GARAGE, the flat test
-// arena's generic grid otherwise. Every Normal-scenario zombie spawn
-// call site (initial spawn, tick-based respawn, manual SetZombieCount)
-// goes through this instead of calling random_zombie_spawn_pos directly,
-// so none of them can drift back to spawning zombies in the void between
-// Map 1's floors (see the map1 coordinate audit for how bad that was).
-fn zombie_spawn_pos_for_scenario(seed: usize) -> Vec3 {
-    if USE_MAP1_B1_GARAGE {
-        random_map1_zombie_spawn_pos(seed)
-    } else {
-        random_zombie_spawn_pos(seed)
+// Picks the right spawn scatter for the map: Map 1's own 4 real floors on
+// MapKind::Building, the flat arena's generic grid otherwise. Every
+// baseline zombie spawn call site (initial spawn, tick-based respawn,
+// manual SetZombieCount — all Normal/LegacyArena only) goes through this
+// instead of calling the raw fns directly, so none can drift back to
+// spawning zombies in the void between Map 1's floors.
+fn zombie_spawn_pos_for(kind: MapKind, seed: usize) -> Vec3 {
+    match kind {
+        MapKind::Building => random_map1_zombie_spawn_pos(seed),
+        MapKind::Arena | MapKind::ItemGallery => random_zombie_spawn_pos(seed),
     }
 }
 
-fn spawn_initial_zombies(mut commands: Commands, target: Res<ZombieTargetCount>, mut next_spawn_index: ResMut<NextZombieSpawnIndex>) {
+fn spawn_initial_zombies(
+    mut commands: Commands,
+    scenario: Res<Scenario>,
+    target: Res<ZombieTargetCount>,
+    mut next_spawn_index: ResMut<NextZombieSpawnIndex>,
+) {
+    let kind = scenario.map_kind();
     let count = (target.0 as usize).min(ZOMBIE_SPAWNS.len());
-    let positions: Vec<Vec3> = (0..count).map(zombie_spawn_pos_for_scenario).collect();
+    let positions: Vec<Vec3> = (0..count).map(|seed| zombie_spawn_pos_for(kind, seed)).collect();
     spawn_zombies(&mut commands, &positions, ZOMBIE_AI_ENABLED, false, false);
     next_spawn_index.0 = count;
 }
@@ -987,16 +963,18 @@ fn spawn_initial_zombies(mut commands: Commands, target: Res<ZombieTargetCount>,
 fn on_set_zombie_count(
     trigger: On<FromClient<SetZombieCount>>,
     mut commands: Commands,
+    scenario: Res<Scenario>,
     mut target: ResMut<ZombieTargetCount>,
     mut next_spawn_index: ResMut<NextZombieSpawnIndex>,
     baseline_zombies: Query<Entity, (With<Zombie>, Without<DirectorSpawned>)>,
 ) {
+    let kind = scenario.map_kind();
     target.0 = trigger.message.0.min(ZOMBIE_SPAWNS.len() as u32);
     let current = baseline_zombies.iter().count() as u32;
     if current < target.0 {
         let to_spawn: Vec<Vec3> = (0..target.0 - current)
             .map(|_| {
-                let pos = zombie_spawn_pos_for_scenario(next_spawn_index.0);
+                let pos = zombie_spawn_pos_for(kind, next_spawn_index.0);
                 next_spawn_index.0 += 1;
                 pos
             })
@@ -1790,10 +1768,12 @@ struct PendingRespawn {
 fn tick_respawns(
     time: Res<Time>,
     mut commands: Commands,
+    scenario: Res<Scenario>,
     mut respawns: ResMut<PendingRespawns>,
     mut next_spawn_index: ResMut<NextZombieSpawnIndex>,
     auto_maintain: Res<AutoMaintainZombies>,
 ) {
+    let kind = scenario.map_kind();
     let dt = time.delta_secs();
     let mut i = 0;
     let mut to_spawn = Vec::new();
@@ -1809,7 +1789,7 @@ fn tick_respawns(
                 // whether it actually results in a new zombie depends on the
                 // toggle, so flipping auto-maintain back on later doesn't
                 // suddenly spawn a backlog of everything killed while it was off.
-                to_spawn.push(zombie_spawn_pos_for_scenario(next_spawn_index.0));
+                to_spawn.push(zombie_spawn_pos_for(kind, next_spawn_index.0));
                 next_spawn_index.0 += 1;
             }
         } else {
@@ -2165,30 +2145,21 @@ fn on_request_restart(
     // Re-spawn the same population Startup would have for this scenario —
     // see spawn_hitbox_test_zombies/spawn_stress_test_zombies/
     // spawn_initial_zombies' own doc comments.
-    let player_spawn = match *scenario {
-        Scenario::Normal => {
+    match *scenario {
+        Scenario::Normal | Scenario::LegacyArena => {
             spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, ZOMBIE_AI_ENABLED, false, false);
-            if USE_MAP1_B1_GARAGE { GARAGE_PLAYER_SPAWN } else { PLAYER_SPAWN }
         }
         Scenario::HitboxTest => {
             spawn_zombies(&mut commands, &HITBOX_TEST_ZOMBIE_POSITIONS, false, false, true);
-            HITBOX_TEST_PLAYER_SPAWN
         }
         Scenario::StressTest => {
             spawn_zombies(&mut commands, &ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT], true, false, false);
-            STRESS_TEST_PLAYER_SPAWN
         }
-        Scenario::RenderCompare => {
-            spawn_render_compare_zombies(&mut commands);
-            RENDER_COMPARE_PLAYER_SPAWN
-        }
-        Scenario::LegacyArena => {
-            spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, ZOMBIE_AI_ENABLED, false, false);
-            PLAYER_SPAWN
-        }
+        Scenario::RenderCompare => spawn_render_compare_zombies(&mut commands),
         // No zombies/gameplay — pure walk-around scale-reference rig.
-        Scenario::ItemGallery => shared::item_gallery_player_spawn(),
-    };
+        Scenario::ItemGallery => {}
+    }
+    let player_spawn = scenario_player_spawn(*scenario);
 
     for (entity, mut transform, mut player, mut net_transform) in &mut players {
         commands.entity(entity).remove::<Dead>();

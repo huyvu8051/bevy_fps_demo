@@ -532,6 +532,8 @@ pub(crate) fn spawn_map_select_ui_if_pending(mut commands: Commands, pending: Re
 pub(crate) fn map_select_button(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     buttons: Query<(&Interaction, &MapSelectButton), Changed<Interaction>>,
     root: Query<Entity, With<MapSelectRoot>>,
     mut pending: ResMut<MapSelectionPending>,
@@ -551,7 +553,12 @@ pub(crate) fn map_select_button(
     // never ran setup()'s Startup-only spawn, so they just never appeared.
     existing_geometry: Query<
         Entity,
-        Or<(With<shared::LevelBox>, With<shared::LevelPanel>, With<ItemGalleryTestProp>)>,
+        Or<(
+            With<shared::LevelBox>,
+            With<shared::LevelPanel>,
+            With<ItemGalleryTestProp>,
+            With<ArenaGeometry>,
+        )>,
     >,
 ) {
     for (interaction, button) in &buttons {
@@ -584,24 +591,24 @@ pub(crate) fn map_select_button(
         for entity in &existing_geometry {
             commands.entity(entity).despawn();
         }
-        if scenario == Scenario::ItemGallery {
-            let (pieces, panels) = shared::item_gallery_level_pieces();
-            spawn_level_pieces(&mut commands, pieces, panels);
-            spawn_item_gallery_test_props(&mut commands, &asset_server);
-            spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
-        } else if USE_MAP1_B1_GARAGE && scenario != Scenario::LegacyArena {
-            let (pieces, panels) = shared::map1_level_pieces();
-            spawn_level_pieces(&mut commands, pieces, panels);
-            // Static lights (spawn_map1_lights) aren't re-spawned here —
-            // they're already up from Startup and every non-ItemGallery,
-            // non-LegacyArena scenario reuses the same map1 geometry, so
-            // there's nothing stale to replace for the common case this
-            // menu is actually used for. Switching TO LegacyArena/GLTF
-            // from here would leave both map1's lights AND its own
-            // never-spawned geometry stale — pre-existing gap, not
-            // touched by this fix (this menu's own switch matrix always
-            // routed through USE_MAP1_B1_GARAGE's else-branches before
-            // ItemGallery existed too).
+        // Rebuild geometry for the picked scenario (Startup's setup() only
+        // ran for the default). Same match as setup()'s own, via
+        // Scenario::map_kind(). Static lights (spawn_map1_lights / the
+        // arena's overhead) aren't re-spawned/cleared here — they're
+        // default-off anyway and already up from Startup; a menu switch
+        // leaving a stale light is a known cosmetic gap, not a blocker.
+        match scenario.map_kind() {
+            MapKind::ItemGallery => {
+                let (pieces, panels) = shared::item_gallery_level_pieces();
+                spawn_level_pieces(&mut commands, pieces, panels);
+                spawn_item_gallery_test_props(&mut commands, &asset_server);
+                spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
+            }
+            MapKind::Building => {
+                let (pieces, panels) = shared::map1_level_pieces();
+                spawn_level_pieces(&mut commands, pieces, panels);
+            }
+            MapKind::Arena => spawn_test_arena(&mut commands, &mut meshes, &mut materials),
         }
         spawn_client_connection(&mut commands, &channels);
     }
@@ -649,7 +656,7 @@ pub(crate) fn on_game_state_event(
         GameStateEvent::Restarted => {
             game_over.0 = false;
             if let Ok((mut transform, mut player, mut health)) = player.single_mut() {
-                transform.translation = PLAYER_SPAWN;
+                transform.translation = scenario_player_spawn(current_scenario());
                 player.vertical_velocity = 0.0;
                 player.grounded = false;
                 health.0 = PLAYER_MAX_HEALTH;

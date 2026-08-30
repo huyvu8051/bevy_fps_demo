@@ -29,6 +29,7 @@ use shared::{
     KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform, Player, PlayerDied,
     ZombieAnimationPlayer,
     PlayerDiedFx, PlayerFiredFx,
+    MapKind, scenario_player_spawn,
     PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieMotion, ZombieShowcaseClip, wire_zombie_hitbox_bones,
     zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_mesh_transform, zombie_kind_showcase_root_y,
@@ -102,40 +103,12 @@ use network_setup::*;
 mod item_gallery_cars;
 use item_gallery_cars::*;
 
-// Downloaded once into assets/models/ so the app doesn't depend on a network
-// request (and a remote repo's file layout) every time it starts.
-// To load from a URL instead, add the WebAssetPlugin back (see bevy::asset::io::web)
-// and point this at an https:// path — bevy treats both the same way.
-const SCENE_PATH: &str = "models/Sponza/Sponza.gltf";
-
-// Sponza's dim, column-choked halls make it a bad zombie-shooting test bed
-// (poor sightlines, no open flat range to check bullet spread/spark/blood
-// effects at varying distances). No other map asset is available (offline,
-// no other .gltf on disk) and downloading one wasn't an option, so this is
-// a plain procedural arena (see spawn_test_arena) — flat lit floor + a
-// square perimeter wall, nothing fancy, just open sightlines. Flip this
-// back to false to use Sponza again; PLAYER_SPAWN/ZOMBIE_SPAWNS/
-// NAVMESH_BOUNDS below all branch on it too.
-const USE_TEST_ARENA: bool = true;
-// ARENA_HALF_SIZE/ARENA_WALL_HEIGHT/ARENA_WALL_THICKNESS now imported from
-// shared::arena (see spawn_test_arena) — this used to be its own local,
-// never-synced copy that silently drifted from the server's authoritative
-// arena size (crates/server's spawn_arena_colliders, which always used the
-// shared constant), so the client's own rendered/collidable floor+walls
-// stayed frozen at the old size while the server's real world — and the
-// player's own authoritative spawn point — moved to the new one. That's
-// what "spawning outside the map" was: PLAYER_SPAWN below (this crate)
-// used to compute off the stale local value while the server placed the
-// player using the correct, larger one.
-
-// Swaps in the Map 1 "Tòa nhà văn phòng" — Tầng B1 (Gara) greybox
-// blockout (docs/maps/map01_highrise.md, crates/shared's
-// map1_b1_garage.rs) in place of the generic USE_TEST_ARENA square room —
-// checked FIRST, so USE_TEST_ARENA's own bool only matters when this is
-// false. Temporary dev flag for trying out the real Map 1 layout; flip
-// back to false to go back to the plain arena. PLAYER_SPAWN below also
-// branches on this.
-const USE_MAP1_B1_GARAGE: bool = true;
+// Which level geometry a scenario renders is decided in ONE place —
+// shared's `Scenario::map_kind()` — and matched on in setup() /
+// network_setup's map_select_button, mirroring the server's own
+// spawn_arena_colliders. `spawn_test_arena` builds MapKind::Arena;
+// shared::map1_level_pieces + spawn_map1_lights build MapKind::Building;
+// shared::item_gallery_level_pieces builds MapKind::ItemGallery.
 
 // "AK47 with Scope" by Wolf Schevelenbos (Sketchfab, CC-BY 4.0) —
 // https://sketchfab.com/3d-models/ak47-with-scope-d4d9720f3677485b958ceecc02f7965c
@@ -566,24 +539,10 @@ const EYE_HEIGHT_OFFSET: f32 = 0.65;
 // capsule-length side of stance now lives in crates/server's move_players.
 const CROUCH_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.55;
 const PRONE_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.15;
-// We don't know the real scale of this Sponza export (its own bounding box
-// data was ambiguous — could be meters or centimeters), so the player spawns
-// well above y=0 and lets gravity fall it onto whatever the real floor turns
-// out to be, rather than guessing a spawn height that might be inside a wall.
-const PLAYER_SPAWN: Vec3 = if USE_MAP1_B1_GARAGE {
-    // Map 1 B1 Garage greybox — "Khu A" spawn corner near the entrance,
-    // see shared::GARAGE_PLAYER_SPAWN / crates/shared/src/map1/garage.rs.
-    shared::GARAGE_PLAYER_SPAWN
-} else if USE_TEST_ARENA {
-    // Arena center — matches shared::player::PLAYER_SPAWN (used by the
-    // server, the actual authority on where the player really is), so
-    // zombie distance (ZOMBIE_SPAWNS, spread across the whole arena) ends
-    // up roughly symmetric in every direction instead of closer on
-    // whichever edge the player used to spawn near.
-    Vec3::new(0.0, 3.0, 0.0)
-} else {
-    Vec3::new(0.0, 3.0, 4.0)
-};
+// Client's first-frame camera position — the server's replicated
+// NetTransform corrects it within a tick or two. Per-scenario value comes
+// from the same shared::scenario_player_spawn the server's own authoritative
+// spawn uses, so the two can't disagree; resolved at runtime in setup().
 
 // How long a bullet-hole marker stays visible before despawning.
 const HIT_MARKER_LIFETIME: f32 = 3.0;
@@ -891,8 +850,8 @@ fn ambient_brightness() -> f32 {
 
 
 // Marks the main game's sun DirectionalLight (setup()'s own, not the
-// per-hall accent lights from spawn_hall_lights) so apply_map_render_toggles
-// can find it unambiguously.
+// map1 / arena point lights) so apply_map_render_toggles can find it
+// unambiguously.
 #[derive(Component)]
 struct MainSun;
 
@@ -1562,6 +1521,11 @@ fn setup(
     touch_enabled: Res<TouchControlsEnabled>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
+    // First-frame camera/player position — see the PLAYER_SPAWN comment
+    // above; the server's replicated NetTransform takes over almost
+    // immediately.
+    let player_spawn = scenario_player_spawn(current_scenario());
+
     // Dynamic resolution scaling render target: the main 3D camera below
     // renders into this offscreen texture instead of straight to the
     // window, and a dedicated present_camera (also spawned below) displays
@@ -1721,40 +1685,30 @@ fn setup(
         (deg("REVIEW_YAW").to_radians(), deg("REVIEW_PITCH").to_radians())
     }
 
-    if current_scenario() == Scenario::ItemGallery {
-        // Flat scale-reference rig (crates/shared/src/item_gallery.rs) —
-        // checked before USE_MAP1_B1_GARAGE below since that constant is
-        // always true regardless of scenario.
-        let (pieces, panels) = shared::item_gallery_level_pieces();
-        spawn_level_pieces(&mut commands, pieces, panels);
-        spawn_item_gallery_test_props(&mut commands, &asset_server);
-        spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
-    } else if USE_MAP1_B1_GARAGE {
-        // Sàn/tường/dốc/bàn/phòng: build cục bộ từ đúng
-        // shared::map1_level_pieces() server cũng gọi để dựng collider
-        // của nó — xem level_piece.rs's module doc comment cho lý do
-        // không còn replicate nữa. spawn_level_box_visuals/
-        // spawn_level_panel_visuals bên dưới tự phản ứng với
-        // Added<LevelBox>/Added<LevelPanel> để dựng mesh+collider.
-        let (pieces, panels) = shared::map1_level_pieces();
-        spawn_level_pieces(&mut commands, pieces, panels);
-        if dynamic_lights_enabled() {
-            spawn_map1_lights(&mut commands);
+    // Geometry per scenario — same decision the server's
+    // spawn_arena_colliders makes, via shared's Scenario::map_kind().
+    // spawn_level_box_visuals / spawn_level_panel_visuals below react to
+    // Added<LevelBox>/Added<LevelPanel> to build mesh+collider for the
+    // Building/ItemGallery pieces.
+    match current_scenario().map_kind() {
+        MapKind::ItemGallery => {
+            let (pieces, panels) = shared::item_gallery_level_pieces();
+            spawn_level_pieces(&mut commands, pieces, panels);
+            spawn_item_gallery_test_props(&mut commands, &asset_server);
+            spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
         }
-    } else if USE_TEST_ARENA {
-        spawn_test_arena(&mut commands, &mut meshes, &mut materials);
-    } else {
-        commands.spawn((
-            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(SCENE_PATH))),
-            Transform::default(),
-            RigidBody::Static,
-            // Waits for the scene to finish loading, then generates a trimesh
-            // collider for every mesh in the hierarchy — the whole level becomes
-            // solid ground/walls/stairs without hand-placed colliders.
-            ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
-        ));
+        MapKind::Building => {
+            let (pieces, panels) = shared::map1_level_pieces();
+            spawn_level_pieces(&mut commands, pieces, panels);
+            if dynamic_lights_enabled() {
+                spawn_map1_lights(&mut commands);
+            }
+        }
+        MapKind::Arena => spawn_test_arena(&mut commands, &mut meshes, &mut materials),
     }
 
+    // spawn_test_arena carries its own overhead light; Building gets
+    // spawn_map1_lights above. This is just the shared sun.
     if dynamic_lights_enabled() {
         commands.spawn((
             DirectionalLight {
@@ -1765,19 +1719,11 @@ fn setup(
             Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
             MainSun,
         ));
-
-        // HALL_LIGHT_XS's placement is calibrated to Sponza's own hall
-        // geometry — the arena instead just gets a brighter ambient/
-        // directional light (see spawn_test_arena) since it's a single open
-        // room.
-        if !USE_TEST_ARENA {
-            spawn_hall_lights(&mut commands);
-        }
     }
 
     commands
         .spawn((
-            Transform::from_translation(PLAYER_SPAWN),
+            Transform::from_translation(player_spawn),
             Player {
                 vertical_velocity: 0.0,
                 grounded: false,
@@ -1794,7 +1740,7 @@ fn setup(
     // Transform or its avian3d collider.
     commands.spawn((
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(PLAYER_MODEL_PATH))),
-        Transform::from_translation(PLAYER_SPAWN).with_scale(Vec3::splat(PLAYER_MODEL_SCALE)),
+        Transform::from_translation(player_spawn).with_scale(Vec3::splat(PLAYER_MODEL_SCALE)),
         Visibility::Hidden,
         PlayerModel,
         PlayerModelAnimRoot,
@@ -1850,7 +1796,7 @@ fn setup(
                 fov: BASE_FOV,
                 ..default()
             }),
-            Transform::from_translation(PLAYER_SPAWN + Vec3::Y * EYE_HEIGHT_OFFSET),
+            Transform::from_translation(player_spawn + Vec3::Y * EYE_HEIGHT_OFFSET),
             FpsCamera { yaw: review_yaw, pitch: review_pitch },
             ViewRecoil::default(),
             Lean::default(),
@@ -1939,7 +1885,7 @@ fn setup(
                 fov: SCOPE_BASE_FOV / SCOPE_DEFAULT_ZOOM,
                 ..default()
             }),
-            Transform::from_translation(PLAYER_SPAWN + Vec3::Y * EYE_HEIGHT_OFFSET),
+            Transform::from_translation(player_spawn + Vec3::Y * EYE_HEIGHT_OFFSET),
             AmbientLight {
                 color: Color::WHITE,
                 brightness: ambient_brightness(),
@@ -2113,18 +2059,6 @@ const TOUCH_CONTROLS_IDLE_HIDE_SECS: f32 = 10.0;
 
 
 
-// Sponza.gltf ships as pure geometry with no KHR_lights_punctual data (single
-// unnamed mesh node, nothing to identify the hanging-lamp fixtures by), so
-// there's no way to read exact lamp positions from the file. This guesses a
-// handful of warm point lights spaced along the ~37m-long main hall
-// (bounding box measured from the mesh data) to approximate the lit look
-// seen in other Sponza demos. Shadows are off and intensity is modest to
-// avoid repeating the earlier SSAO performance hit — nudge HALL_LIGHT_XS /
-// height/intensity once you can see how well they line up with the geometry.
-const HALL_LIGHT_XS: [f32; 5] = [-14.0, -7.0, 0.0, 7.0, 14.0];
-const HALL_LIGHT_HEIGHT: f32 = 3.2;
-const HALL_LIGHT_INTENSITY: f32 = 200_000.0;
-
 
 
 
@@ -2145,11 +2079,17 @@ const HALL_LIGHT_INTENSITY: f32 = 200_000.0;
 // spawn_zombie_navmesh/column_footprint now live in crates/server —
 // pathfinding is server-authoritative.
 
-// A plain flat-floored square room (see USE_TEST_ARENA) — a proper level
-// editor/second .gltf asset wasn't available, so this is hand-built from
-// Bevy's own primitives: a floor plus four perimeter walls, each with a
-// matching Collider so avian3d treats them the same as Sponza's
-// mesh-derived colliders (RigidBody::Static + Collider::cuboid).
+// The MapKind::Arena geometry — a plain flat-floored square room, hand-built
+// from Bevy primitives: floor + 4 perimeter walls + free-standing pillars,
+// each with a matching RigidBody::Static + Collider. Mirrors the server's
+// spawn_flat_arena_colliders (same ARENA_* / NAVMESH_COLUMN_OBSTACLES).
+// Tags every entity spawn_test_arena creates (floor / walls / pillars /
+// light) so map_select_button can despawn the arena when the player picks
+// a different map from the in-game menu — the same job LevelBox/LevelPanel
+// do for the Building geometry.
+#[derive(Component)]
+struct ArenaGeometry;
+
 fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
     let floor_material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.35, 0.35, 0.38),
@@ -2169,6 +2109,7 @@ fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
         Transform::from_xyz(0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0),
         RigidBody::Static,
         Collider::cuboid(floor_size, ARENA_WALL_THICKNESS, floor_size),
+        ArenaGeometry,
     ));
 
     // (offset from center, length) for each of the 4 perimeter walls — two
@@ -2192,6 +2133,7 @@ fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
             Transform::from_translation(center),
             RigidBody::Static,
             Collider::cuboid(size_x, ARENA_WALL_HEIGHT, size_z),
+            ArenaGeometry,
         ));
     }
 
@@ -2210,6 +2152,7 @@ fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
             Transform::from_xyz(x, ARENA_WALL_HEIGHT / 2.0, z),
             RigidBody::Static,
             Collider::cylinder(PILLAR_RADIUS, ARENA_WALL_HEIGHT),
+            ArenaGeometry,
         ));
     }
 
@@ -2227,6 +2170,7 @@ fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
                 ..default()
             },
             Transform::from_xyz(0.0, ARENA_WALL_HEIGHT - 0.2, 0.0),
+            ArenaGeometry,
         ));
     }
 }
@@ -2407,22 +2351,6 @@ fn spawn_level_pieces(commands: &mut Commands, pieces: Vec<shared::BoxPiece>, pa
     }
 }
 
-fn spawn_hall_lights(commands: &mut Commands) {
-    for &x in &HALL_LIGHT_XS {
-        commands.spawn((
-            PointLight {
-                color: Color::srgb(1.0, 0.78, 0.5),
-                intensity: HALL_LIGHT_INTENSITY,
-                range: 12.0,
-                shadows_enabled: false,
-                ..default()
-            },
-            Transform::from_xyz(x, HALL_LIGHT_HEIGHT, 0.0),
-        ));
-    }
-}
-
-
 
 
 
@@ -2515,18 +2443,13 @@ fn count_local_kills(
 // uppercase A-Z/digits/a handful of symbols — see glyph_index's own doc
 // comment.
 //
-// MAP 1/2/3 (HitboxTest/StressTest/RenderCompare) and TEST ARENA
-// (LegacyArena) were dropped from this menu — map_select_button's
-// geometry-rebuild only special-cases ItemGallery vs. "everything else
-// that isn't LegacyArena gets map1 B1 garage pieces", so picking any of
-// those 4 from here just rebuilt the same B1 garage regardless of which
-// one was picked (indistinguishable from GAME MAP once connected). They
-// still work as dedicated test rigs when launched directly with
-// `MAP_ID=1..4` (own server process, own port — see Scenario::port) for
-// e.g. isolated hit-registration testing; only the in-game menu path was
-// broken/redundant.
-const MAP_SELECT_ENTRIES: [(u8, &str, &str); 2] = [
+// HITBOX TEST / RENDER COMPARE (MAP_ID 1 / 3) stay out of this menu — they
+// only make sense launched directly (`MAP_ID=1` / `MAP_ID=3`, own port) as
+// isolated test rigs. The three below each build a visibly different world
+// (Scenario::map_kind), so map_select_button can rebuild them properly.
+const MAP_SELECT_ENTRIES: [(u8, &str, &str); 3] = [
     (0, "GAME MAP", "OFFICE BUILDING (B1-F3)"),
+    (2, "STRESS TEST", "50 ZOMBIES ON THE OPEN ARENA"),
     (5, "ITEM GALLERY", "ALL STANDARD ITEM SIZES ON FLAT FLOOR"),
 ];
 
