@@ -613,7 +613,7 @@ pub(crate) fn map_select_button(
                 spawn_level_pieces(&mut commands, pieces, panels);
             }
             MapKind::Arena => {
-                spawn_test_arena(&mut commands, &mut meshes, &mut materials);
+                spawn_test_arena(&mut commands, &mut meshes, &mut materials, scenario.map_id());
                 spawn_item_gallery_test_props(&mut commands, &asset_server);
             }
         }

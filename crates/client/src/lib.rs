@@ -36,10 +36,10 @@ use shared::{
     INTERP_DELAY_SECS, MAX_SHOT_DISTANCE,
     HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
     resolve_bone_world_positions, zombie_hit_damage_ray,
-    NAVMESH_COLUMN_OBSTACLES, PILLAR_RADIUS, PROTOCOL_ID, ZOMBIE_ANIM_BITE, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_WALK,
+    PROTOCOL_ID, ZOMBIE_ANIM_BITE, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_WALK,
     ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_PATH,
     zombie_pose_for, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
-    ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
+    ARENA_HALF_SIZE, ARENA_WALL_HEIGHT,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
@@ -102,6 +102,12 @@ use network_setup::*;
 // comment for why that's safe re: GamePlugin's master `.chain()`).
 mod item_gallery_cars;
 use item_gallery_cars::*;
+
+// MapKind::Arena geometry is data-driven now (arena_layout_map<ID>.ron per
+// map id); this module is the EDITOR=1 F9 write-back for it, same idea as
+// item_gallery_cars.rs's F9 saver for the Map 5 cars.
+mod arena_layout;
+use arena_layout::*;
 
 // Which level geometry a scenario renders is decided in ONE place —
 // shared's `Scenario::map_kind()` — and matched on in setup() /
@@ -1237,6 +1243,7 @@ impl Plugin for GamePlugin {
         .add_observer(on_player_died_fx)
         .add_observer(on_game_state_event)
         .add_plugins(ItemGalleryCarsPlugin)
+        .add_plugins(ArenaLayoutPlugin)
         // Noclip is a manual cheat toggle for every scenario now — off by
         // default. (Map 2 used to auto-enable it for observing the horde
         // from above; it's a walkable arena now.)
@@ -1708,7 +1715,7 @@ fn setup(
             }
         }
         MapKind::Arena => {
-            spawn_test_arena(&mut commands, &mut meshes, &mut materials);
+            spawn_test_arena(&mut commands, &mut meshes, &mut materials, current_scenario().map_id());
             spawn_item_gallery_test_props(&mut commands, &asset_server);
         }
     }
@@ -2085,18 +2092,33 @@ const TOUCH_CONTROLS_IDLE_HIDE_SECS: f32 = 10.0;
 // spawn_zombie_navmesh/column_footprint now live in crates/server —
 // pathfinding is server-authoritative.
 
-// The MapKind::Arena geometry — a plain flat-floored square room, hand-built
-// from Bevy primitives: floor + 4 perimeter walls + free-standing pillars,
-// each with a matching RigidBody::Static + Collider. Mirrors the server's
-// spawn_flat_arena_colliders (same ARENA_* / NAVMESH_COLUMN_OBSTACLES).
-// Tags every entity spawn_test_arena creates (floor / walls / pillars /
-// light) so map_select_button can despawn the arena when the player picks
-// a different map from the in-game menu — the same job LevelBox/LevelPanel
-// do for the Building geometry.
+// The MapKind::Arena geometry — a plain flat-floored square room: floor +
+// 4 perimeter walls + free-standing pillars + a centre test ramp, each
+// with a matching RigidBody::Static + Collider. Read from
+// crates/client/assets/data/arena_layout_map<ID>.ron (shared::arena_layout)
+// so it stays byte-for-byte in step with the server's own
+// spawn_flat_arena_colliders. Tags every entity spawn_test_arena creates
+// (boxes + light) with ArenaGeometry so map_select_button can despawn the
+// arena when the player picks a different map from the in-game menu — the
+// same job LevelBox/LevelPanel do for the Building geometry.
 #[derive(Component)]
 struct ArenaGeometry;
 
-fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+/// The size + row index of one arena box, kept on the entity so F9
+/// (save_arena_layout_on_key) can write the live Transform back to the RON
+/// in the original row order. Not on the arena light — that has no row.
+#[derive(Component)]
+pub(crate) struct ArenaBoxDims {
+    pub(crate) size: Vec3,
+    pub(crate) index: usize,
+}
+
+fn spawn_test_arena(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    map_id: u8,
+) {
     let floor_material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.35, 0.35, 0.38),
         perceptual_roughness: 0.9,
@@ -2108,70 +2130,22 @@ fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
         ..default()
     });
 
-    let floor_size = ARENA_HALF_SIZE * 2.0;
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(floor_size, ARENA_WALL_THICKNESS, floor_size))),
-        MeshMaterial3d(floor_material),
-        Transform::from_xyz(0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0),
-        RigidBody::Static,
-        Collider::cuboid(floor_size, ARENA_WALL_THICKNESS, floor_size),
-        ArenaGeometry,
-    ));
-
-    // (offset from center, length) for each of the 4 perimeter walls — two
-    // run along X (north/south), two along Z (east/west), each centered on
-    // its own edge and long enough to span the full square including the
-    // corners (+ARENA_WALL_THICKNESS so adjacent walls overlap slightly
-    // there instead of leaving a gap).
-    let wall_span = floor_size + ARENA_WALL_THICKNESS;
-    let walls = [
-        // North/south (run along X, thin along Z)
-        (Vec3::new(0.0, ARENA_WALL_HEIGHT / 2.0, -ARENA_HALF_SIZE), wall_span, ARENA_WALL_THICKNESS),
-        (Vec3::new(0.0, ARENA_WALL_HEIGHT / 2.0, ARENA_HALF_SIZE), wall_span, ARENA_WALL_THICKNESS),
-        // East/west (run along Z, thin along X)
-        (Vec3::new(-ARENA_HALF_SIZE, ARENA_WALL_HEIGHT / 2.0, 0.0), ARENA_WALL_THICKNESS, wall_span),
-        (Vec3::new(ARENA_HALF_SIZE, ARENA_WALL_HEIGHT / 2.0, 0.0), ARENA_WALL_THICKNESS, wall_span),
-    ];
-    for (center, size_x, size_z) in walls {
+    // Row 0 is the floor by convention (see the RON header); the rest —
+    // walls, square pillar columns, the tilted ramp — share the wall
+    // material. One entity per row: mesh + its own RigidBody::Static +
+    // Collider, exactly the box the server spawns collider-only.
+    for (i, b) in shared::arena_layout(map_id).iter().enumerate() {
+        let material = if i == 0 { floor_material.clone() } else { wall_material.clone() };
         commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size_x, ARENA_WALL_HEIGHT, size_z))),
-            MeshMaterial3d(wall_material.clone()),
-            Transform::from_translation(center),
+            Mesh3d(meshes.add(Cuboid::new(b.size.x, b.size.y, b.size.z))),
+            MeshMaterial3d(material),
+            Transform::from_translation(b.translation).with_rotation(b.rotation),
             RigidBody::Static,
-            Collider::cuboid(size_x, ARENA_WALL_HEIGHT, size_z),
+            Collider::cuboid(b.size.x, b.size.y, b.size.z),
             ArenaGeometry,
+            ArenaBoxDims { size: b.size, index: i },
         ));
     }
-
-    // Free-standing pillars — cover/obstacles for testing navigation and
-    // line-of-sight (autopilot targeting, zombie pathfinding) instead of
-    // the previously wide-open flat room. Same positions as crates/server's
-    // spawn_arena_colliders and the navmesh cutout (column_footprint in
-    // crates/server, driven by this same NAVMESH_COLUMN_OBSTACLES array),
-    // so the client's visual/collider copy can't drift out of sync with
-    // the server's authoritative one.
-    let pillar_mesh = meshes.add(Cylinder::new(PILLAR_RADIUS, ARENA_WALL_HEIGHT));
-    for &(x, z) in &NAVMESH_COLUMN_OBSTACLES {
-        commands.spawn((
-            Mesh3d(pillar_mesh.clone()),
-            MeshMaterial3d(wall_material.clone()),
-            Transform::from_xyz(x, ARENA_WALL_HEIGHT / 2.0, z),
-            RigidBody::Static,
-            Collider::cylinder(PILLAR_RADIUS, ARENA_WALL_HEIGHT),
-            ArenaGeometry,
-        ));
-    }
-
-    // Centre test ramp — mirrors the server's own (shared::arena_ramp).
-    let (rc, rr, rs) = shared::arena_ramp();
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(rs.x, rs.y, rs.z))),
-        MeshMaterial3d(wall_material.clone()),
-        Transform::from_translation(rc).with_rotation(rr),
-        RigidBody::Static,
-        Collider::cuboid(rs.x, rs.y, rs.z),
-        ArenaGeometry,
-    ));
 
     // AmbientLight is per-camera in this Bevy version (not a global
     // resource) — the main camera already gets its own in setup(). A single

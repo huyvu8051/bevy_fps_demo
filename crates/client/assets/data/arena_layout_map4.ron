@@ -1,0 +1,40 @@
+// Arena geometry for MAP_ID=4 (Scenario::LegacyArena — MapKind::Arena).
+// Ported from the hardcoded consts in crates/shared/src/arena.rs
+// (ARENA_HALF_SIZE / ARENA_WALL_* / NAVMESH_COLUMN_OBSTACLES / arena_ramp()).
+//
+// Each row is ONE static cuboid:
+//   (size_x, size_y, size_z, x, y, z, rot_x_deg, rot_y_deg, rot_z_deg)
+// full box size + translation in meters, rotation as X/Y/Z euler degrees
+// (applied EulerRot::YXZ, same as item_gallery_car_physics.ron).
+//
+// Row 0 is the floor by convention (client paints it with the floor
+// material); every other row uses the wall material. Pillars are square
+// columns here (side = 2 x the old 0.6 m cylinder radius) — the navmesh
+// cutout footprint (crates/server column_footprint) was already square.
+//
+// Both the server (spawn_flat_arena_colliders, collider only) and the
+// client (spawn_test_arena, mesh + collider) iterate this list, so their
+// physics can't drift. Read once per process via a CARGO_MANIFEST_DIR
+// relative path, cached per map id (shared::arena_layout).
+//
+// Tune by dragging / rotating a piece in the dev editor (F2); with
+// EDITOR=1 on this map, F9 writes every ArenaBox's live Transform back
+// here (save_arena_layout_on_key in crates/client/src/arena_layout.rs).
+// NOTE: keep NAVMESH_COLUMN_OBSTACLES (crates/shared/src/arena.rs) in step
+// with the pillar rows by hand — the navmesh is not driven by this file.
+[
+    (72.0, 1.0, 72.0, 0.0, -0.5, 0.0, 0.0, 0.0, 0.0),               // floor
+    (73.0, 5.0, 1.0, 0.0, 2.5, -36.0, 0.0, 0.0, 0.0),               // wall N
+    (73.0, 5.0, 1.0, 0.0, 2.5, 36.0, 0.0, 0.0, 0.0),                // wall S
+    (1.0, 5.0, 73.0, -36.0, 2.5, 0.0, 0.0, 0.0, 0.0),               // wall W
+    (1.0, 5.0, 73.0, 36.0, 2.5, 0.0, 0.0, 0.0, 0.0),                // wall E
+    (1.2, 5.0, 1.2, -8.0, 2.5, -6.0, 0.0, 0.0, 0.0),                // pillar
+    (1.2, 5.0, 1.2, 8.0, 2.5, -6.0, 0.0, 0.0, 0.0),                 // pillar
+    (1.2, 5.0, 1.2, -8.0, 2.5, 6.0, 0.0, 0.0, 0.0),                 // pillar
+    (1.2, 5.0, 1.2, 8.0, 2.5, 6.0, 0.0, 0.0, 0.0),                  // pillar
+    (1.2, 5.0, 1.2, -4.0, 2.5, 0.0, 0.0, 0.0, 0.0),                 // pillar
+    (1.2, 5.0, 1.2, 4.0, 2.5, 0.0, 0.0, 0.0, 0.0),                  // pillar
+    (1.2, 5.0, 1.2, 0.0, 2.5, -10.0, 0.0, 0.0, 0.0),                // pillar
+    (1.2, 5.0, 1.2, 0.0, 2.5, 10.0, 0.0, 0.0, 0.0),                 // pillar
+    (4.0, 1.0, 6.7082, 0.0, 1.0528, 5.2236, -26.5651, 0.0, 0.0),    // ramp
+]

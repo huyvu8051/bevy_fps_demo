@@ -19,7 +19,6 @@ use shared::{
     SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount,
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
     ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, random_map1_zombie_spawn_pos,
-    ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
     MapKind, scenario_player_spawn,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
@@ -315,54 +314,26 @@ fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_
         MapKind::ItemGallery => spawn_item_gallery_level_pieces(&mut commands, &asset_server),
         MapKind::Building => spawn_map1_level_pieces(&mut commands),
         MapKind::Arena => {
-            spawn_flat_arena_colliders(&mut commands);
+            spawn_flat_arena_colliders(&mut commands, scenario.map_id());
             spawn_item_gallery_car_colliders(&mut commands, &asset_server);
         }
     }
 }
 
-// Flat room: floor + 4 perimeter walls + free-standing pillars (same
-// positions as NAVMESH_COLUMN_OBSTACLES, which carve matching cutouts into
-// the zombie navmesh). Colliders only — no Mesh3d/lights, the client
-// builds its own visuals in spawn_test_arena.
-fn spawn_flat_arena_colliders(commands: &mut Commands) {
-    let floor_size = ARENA_HALF_SIZE * 2.0;
-    commands.spawn((
-        Transform::from_xyz(0.0, -ARENA_WALL_THICKNESS / 2.0, 0.0),
-        RigidBody::Static,
-        Collider::cuboid(floor_size, ARENA_WALL_THICKNESS, floor_size),
-    ));
-
-    let wall_span = floor_size + ARENA_WALL_THICKNESS;
-    let walls = [
-        (Vec3::new(0.0, ARENA_WALL_HEIGHT / 2.0, -ARENA_HALF_SIZE), wall_span, ARENA_WALL_THICKNESS),
-        (Vec3::new(0.0, ARENA_WALL_HEIGHT / 2.0, ARENA_HALF_SIZE), wall_span, ARENA_WALL_THICKNESS),
-        (Vec3::new(-ARENA_HALF_SIZE, ARENA_WALL_HEIGHT / 2.0, 0.0), ARENA_WALL_THICKNESS, wall_span),
-        (Vec3::new(ARENA_HALF_SIZE, ARENA_WALL_HEIGHT / 2.0, 0.0), ARENA_WALL_THICKNESS, wall_span),
-    ];
-    for (center, size_x, size_z) in walls {
+// Flat room: floor + 4 perimeter walls + free-standing pillars + centre
+// test ramp, read from crates/client/assets/data/arena_layout_map<ID>.ron
+// (shared::arena_layout) — one file per MapKind::Arena map id. Colliders
+// only, no Mesh3d/lights; the client builds its own visuals from the same
+// list in spawn_test_arena. The pillar rows still mirror
+// NAVMESH_COLUMN_OBSTACLES, which carves the matching navmesh cutouts.
+fn spawn_flat_arena_colliders(commands: &mut Commands, map_id: u8) {
+    for b in shared::arena_layout(map_id) {
         commands.spawn((
-            Transform::from_translation(center),
+            Transform::from_translation(b.translation).with_rotation(b.rotation),
             RigidBody::Static,
-            Collider::cuboid(size_x, ARENA_WALL_HEIGHT, size_z),
+            Collider::cuboid(b.size.x, b.size.y, b.size.z),
         ));
     }
-
-    for &(x, z) in &NAVMESH_COLUMN_OBSTACLES {
-        commands.spawn((
-            Transform::from_xyz(x, ARENA_WALL_HEIGHT / 2.0, z),
-            RigidBody::Static,
-            Collider::cylinder(PILLAR_RADIUS, ARENA_WALL_HEIGHT),
-        ));
-    }
-
-    // Centre test ramp — see shared::arena_ramp.
-    let (rc, rr, rs) = shared::arena_ramp();
-    commands.spawn((
-        Transform::from_translation(rc).with_rotation(rr),
-        RigidBody::Static,
-        Collider::cuboid(rs.x, rs.y, rs.z),
-    ));
 }
 
 // Builds every Map 1 floor (garage/lobby/F2/F3) as (translation, rotation,
