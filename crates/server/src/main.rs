@@ -352,6 +352,14 @@ fn spawn_flat_arena_colliders(commands: &mut Commands) {
             Collider::cylinder(PILLAR_RADIUS, ARENA_WALL_HEIGHT),
         ));
     }
+
+    // Centre test ramp — see shared::arena_ramp.
+    let (rc, rr, rs) = shared::arena_ramp();
+    commands.spawn((
+        Transform::from_translation(rc).with_rotation(rr),
+        RigidBody::Static,
+        Collider::cuboid(rs.x, rs.y, rs.z),
+    ));
 }
 
 // Builds every Map 1 floor (garage/lobby/F2/F3) as (translation, rotation,

@@ -2158,6 +2158,17 @@ fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
         ));
     }
 
+    // Centre test ramp — mirrors the server's own (shared::arena_ramp).
+    let (rc, rr, rs) = shared::arena_ramp();
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(rs.x, rs.y, rs.z))),
+        MeshMaterial3d(wall_material.clone()),
+        Transform::from_translation(rc).with_rotation(rr),
+        RigidBody::Static,
+        Collider::cuboid(rs.x, rs.y, rs.z),
+        ArenaGeometry,
+    ));
+
     // AmbientLight is per-camera in this Bevy version (not a global
     // resource) — the main camera already gets its own in setup(). A single
     // bright, wide-range PointLight overhead is enough to light this flat
