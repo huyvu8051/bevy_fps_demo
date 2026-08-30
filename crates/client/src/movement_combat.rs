@@ -721,6 +721,7 @@ pub(crate) fn shoot(
     mut vfx_assets: VfxAssets,
     zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
+    spatial_query: SpatialQuery,
     touch_firing: Res<TouchFiring>,
     inspect_mode: Res<InspectMode>,
     mut cooldown: Local<f32>,
@@ -877,11 +878,16 @@ pub(crate) fn shoot(
     // stopping short of the actual model. Every zombie is tested (not just
     // the nearest outer-shell hit) and the closest REAL bone hit across all
     // of them wins — the same "don't let one zombie's shell block the one
-    // behind it" fix already applied to the server's rewound_hit. No wall-
-    // occlusion check against this predicted ray — acceptable for the
-    // current open arena layout (NAVMESH_COLUMN_OBSTACLES is empty), but a
-    // zombie visible through/behind level geometry could show a
-    // mispredicted hitmarker if that ever changes.
+    // behind it" fix already applied to the server's rewound_hit.
+    //
+    // Wall occlusion: a raycast that excludes zombie colliders (only level
+    // geometry / props block) — a bone hit farther than the nearest wall is
+    // dropped, so the local hitmarker matches the server's own occlusion
+    // check in handle_fire_shot instead of flashing through cover.
+    let wall_filter = SpatialQueryFilter::from_excluded_entities(zombies.iter().map(|(e, ..)| e));
+    let wall_distance = spatial_query
+        .cast_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, true, &wall_filter)
+        .map(|hit| hit.distance);
     let predicted_hit = zombies
         .iter()
         .filter_map(|(entity, transform, bones)| {
@@ -890,6 +896,7 @@ pub(crate) fn shoot(
             zombie_hit_damage_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, &bone_positions, forward)
                 .map(|(point, normal, _damage)| (point.distance(camera_transform.translation), entity, point, normal))
         })
+        .filter(|(distance, ..)| !wall_distance.is_some_and(|w| w < distance - 0.1))
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
     if let Some((distance, entity, point, normal)) = predicted_hit {
         info!("[shot] local prediction: real bone hit zombie={entity} distance={distance:.2}");

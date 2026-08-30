@@ -1979,6 +1979,16 @@ fn handle_fire_shot(
     // search distance (see the bug this fixed, below).
     let live_hit = spatial_query.cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &filter);
 
+    // Static-geometry occlusion: a wall / prop between the muzzle and a
+    // candidate zombie blocks the shot. Zombies are excluded from THIS ray
+    // so a zombie in front never counts as the blocker (the candidate loop
+    // below already falls through those); walls / cars are RigidBody::Static
+    // and don't move, so this uses the live world, not the rewound frame.
+    let wall_filter = SpatialQueryFilter::from_excluded_entities(zombies.iter().map(|(e, ..)| e));
+    let wall_distance = spatial_query
+        .cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &wall_filter)
+        .map(|hit| hit.distance);
+
     // Lag compensation: rewind to roughly what the shooter's own screen
     // showed when they fired (their network latency + the client's own
     // render-side interpolation delay — see INTERP_DELAY_SECS) and test
@@ -2062,6 +2072,19 @@ fn handle_fire_shot(
             }
             continue;
         };
+        // Occlusion: a wall between the muzzle and this hit point eats the
+        // shot. Skip to the next candidate (a wall in front of this zombie is
+        // almost always in front of any zombie behind it too, so the shot
+        // then registers as a clean miss).
+        let hit_distance = shot.origin.distance(hit_point);
+        if wall_distance.is_some_and(|w| w < hit_distance - 0.1) {
+            info!(
+                "[shot] blocked by level geometry before zombie={entity} (wall at {:.2} < zombie at {:.2})",
+                wall_distance.unwrap(),
+                hit_distance
+            );
+            continue;
+        }
         info!("[shot] inner bone capsule hit: zombie={entity} damage={damage:.1}");
         if let Ok((_, mut health, mut knockback, _, hitbox_slot)) = zombies.get_mut(entity) {
             health.0 -= damage;
