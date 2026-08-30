@@ -517,7 +517,7 @@ pub(crate) fn update_zombie_health_bars(
     mut fills: Query<&mut Node, (With<ZombieHealthBarFill>, Without<ZombieHealthBar>)>,
     mut texts: Query<&mut Text, With<ZombieHealthBarText>>,
 ) {
-    let perf_start = std::time::Instant::now();
+    let perf_start = web_time::Instant::now();
     let Ok((camera, camera_transform)) = camera.single() else {
         return;
     };
@@ -687,7 +687,7 @@ pub(crate) fn update_zombie_lod(
         return;
     }
     *elapsed = 0.0;
-    let perf_start = std::time::Instant::now();
+    let perf_start = web_time::Instant::now();
     let Ok(player_transform) = player.single() else {
         return;
     };

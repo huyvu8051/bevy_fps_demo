@@ -23,6 +23,16 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 shared = { path = "../shared" }
+
+# Drop-in std::time::Instant/SystemTime replacement (real std under the
+# hood on native, performance.now()/Date.now() on wasm32) — needed
+# because plain std::time::Instant::now() genuinely panics at runtime on
+# wasm32-unknown-unknown ("time not implemented on this platform",
+# confirmed via a live web build: zombie_client.rs's per-frame perf-timing
+# calls crashed the whole app on first frame). Bevy's own internals
+# already handle this themselves; this crate's own direct std::time calls
+# didn't.
+web-time = "1"
 avian3d = "0.6"
 
 # Dev navmesh visualiser (crates/client/src/nav_debug.rs) — same vendored

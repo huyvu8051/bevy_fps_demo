@@ -785,7 +785,7 @@ impl Default for SettingsMenuVisible {
 
 impl Default for MapSelectionPending {
     fn default() -> Self {
-        Self(std::env::var("MAP_ID").is_err())
+        Self(network_setup::map_id_override().is_none())
     }
 }
 

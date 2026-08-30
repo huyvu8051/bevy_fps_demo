@@ -38,6 +38,33 @@ pub(crate) fn connect_to_server(mut commands: Commands, channels: Res<RepliconCh
     spawn_client_connection(&mut commands, &channels);
 }
 
+// Cross-platform replacement for stashing the menu-picked map id in the
+// `MAP_ID` env var: std::env::var (read) works fine on wasm32 — it just
+// always returns Err there, a path every caller below already handled —
+// but std::env::set_var panics outright ("cannot set env vars on this
+// platform"), confirmed via a live web build crashing the instant
+// map_select_button tried to use it. A process-global static Mutex cell
+// behaves identically on every platform including wasm32 (single-threaded
+// there, so the lock is never actually contended) and needed no signature
+// changes at any of its 3 call sites (lib.rs's MapSelectionPending::default,
+// current_scenario, map_select_button below) — same "read env var, else
+// default" shape as before, just backed by this instead of the OS.
+static MAP_ID_OVERRIDE: std::sync::Mutex<Option<u8>> = std::sync::Mutex::new(None);
+
+pub(crate) fn set_map_id(id: u8) {
+    *MAP_ID_OVERRIDE.lock().unwrap() = Some(id);
+}
+
+/// Menu-picked map id if map_select_button has run this process, else
+/// whatever `MAP_ID` was set to at launch (native only — always None on
+/// wasm32, same as before).
+pub(crate) fn map_id_override() -> Option<u8> {
+    MAP_ID_OVERRIDE
+        .lock()
+        .unwrap()
+        .or_else(|| std::env::var("MAP_ID").ok().and_then(|s| s.parse().ok()))
+}
+
 // Runs every frame; only actually does anything once ClientState has been
 // Disconnected for RECONNECT_INTERVAL seconds straight (the timer resets
 // otherwise, including while Connecting/Connected). The stale RenetClient/
@@ -100,7 +127,7 @@ pub(crate) fn despawn_replicated_on_disconnect(mut commands: Commands, entities:
 // this run, hence a plain function (re-reads the env var, cheap) instead
 // of stashing it in a resource only one of them would see first.
 pub(crate) fn current_scenario() -> Scenario {
-    let map_id: u8 = std::env::var("MAP_ID").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let map_id: u8 = map_id_override().unwrap_or(0);
     Scenario::from_map_id(map_id)
 }
 
@@ -596,13 +623,7 @@ pub(crate) fn map_select_button(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        // SAFETY: called from this one Bevy system, on the main thread, in
-        // response to a UI tap — not concurrently with any other env var
-        // read/write, same assumption current_scenario()'s own callers
-        // already rely on.
-        unsafe {
-            std::env::set_var("MAP_ID", button.0.to_string());
-        }
+        set_map_id(button.0);
         if let Ok(root) = root.single() {
             commands.entity(root).despawn();
         }
