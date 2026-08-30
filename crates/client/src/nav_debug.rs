@@ -115,8 +115,11 @@ fn sync_client_navmesh(mut commands: Commands, existing: Query<Entity, With<Mana
                     fixed: Triangulation::from_outer_edges(&shared::arena_navmesh_outer_edges(
                         current_scenario().map_id(),
                     )),
-                    simplify: 0.005,
-                    build_timeout: Some(1.0),
+                    // Coarse on purpose — matches the server (see its
+                    // spawn_zombie_navmesh comment): the car .glb hulls are
+                    // many-sided and a fine simplify times the build out.
+                    simplify: 0.5,
+                    build_timeout: Some(15.0),
                     ..default()
                 },
                 // Debounced, not Direct: the client cars are Dynamic and

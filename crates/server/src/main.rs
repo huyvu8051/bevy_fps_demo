@@ -905,20 +905,26 @@ fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<Nav
 
     if scenario.map_kind() == MapKind::Arena {
         // Auto-generated: NavmeshUpdaterPlugin::<Collider, ArenaObstacle>
-        // triangulates the outer boundary minus every pillar collider's
-        // footprint, and rebuilds if one ever moves. Blocking so the mesh
-        // exists by the end of the first update (zombies spawn at Startup
-        // too) — a one-shot cost on a static scene, not a per-frame one.
+        // triangulates the outer boundary minus each obstacle collider's
+        // footprint (the pillars, plus the item-gallery cars' convex
+        // hulls), and rebuilds if one ever moves.
+        //
+        // simplify is deliberately coarse: each car .glb is many mesh
+        // primitives -> many hull polygons, and feeding all their raw
+        // points into the constrained triangulation blew past a 1s
+        // build_timeout. 0.5 (m^2) collapses each hull to a rough quad,
+        // which is plenty for AI pathing. NOT blocking — a multi-second
+        // stall at startup would hold up connecting clients; move_zombies
+        // already tolerates the navmesh being absent for the first frames.
         commands.spawn((
             ManagedNavMesh::single(),
             NavMeshSettings {
                 fixed: Triangulation::from_outer_edges(&shared::arena_navmesh_outer_edges(scenario.map_id())),
-                simplify: 0.005,
-                build_timeout: Some(1.0),
+                simplify: 0.5,
+                build_timeout: Some(15.0),
                 ..default()
             },
             NavMeshUpdateMode::Direct,
-            NavMeshUpdateModeBlocking,
             plane,
         ));
         return;
