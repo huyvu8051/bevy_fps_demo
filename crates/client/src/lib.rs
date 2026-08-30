@@ -357,7 +357,15 @@ const TOUCH_LOOK_SENSITIVITY_MULTIPLIER: f32 = 1.0;
 
 impl Default for TouchControlsEnabled {
     fn default() -> Self {
-        let mobile = cfg!(target_os = "ios") || cfg!(target_os = "android");
+        // wasm32 (crates/web) always shows the touch controller UI — the
+        // web build is meant to be opened from a phone browser (see
+        // network_setup.rs's wasm32 spawn_client_connection, which reads
+        // window.location.hostname so a phone on the same LAN connects
+        // back to the dev machine), same reasoning as the iOS/Android
+        // auto-on below, not gated behind TOUCH_UI_PREVIEW since there's
+        // no "desktop preview" concept for a build that only ever runs in
+        // a browser.
+        let mobile = cfg!(target_os = "ios") || cfg!(target_os = "android") || cfg!(target_arch = "wasm32");
         Self(mobile || std::env::var("TOUCH_UI_PREVIEW").is_ok())
     }
 }
@@ -1012,6 +1020,17 @@ const INTERP_BUFFER_MAX_AGE_SECS: f32 = 0.5;
 // regardless of platform.
 #[bevy_main]
 pub fn main() {
+    // The web build always launches straight into map 2 (Arena/
+    // StressTest — matches the "ARENA" map-select button), skipping the
+    // menu entirely, same idea as a native `MAP_ID=2` launch bypassing it
+    // (see MapSelectionPending::default) — the web build's whole purpose
+    // is "open this link on a phone and immediately be in a playable
+    // scene", not a general-purpose map picker. Paired with
+    // TouchControlsEnabled::default() forcing the touch controller UI on
+    // for every wasm32 build too (same section, above).
+    #[cfg(target_arch = "wasm32")]
+    network_setup::set_map_id(2);
+
     let mut app = App::new();
     app.add_plugins((
             // Desktop: WindowResolution is left at Bevy's default (a plain
