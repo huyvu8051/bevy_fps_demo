@@ -256,35 +256,25 @@ pub(crate) fn spawn_local_zombie(commands: &mut Commands, asset_server: &AssetSe
 // NetTransform / ZombieMotion, so movement / pose / LOD systems all skip
 // them and they just stand and cycle their clip. Called from setup()'s
 // ItemGallery branch alongside spawn_item_gallery_test_props.
-// Spawn height for the showcase zombies — RigidBody::Dynamic + a cylinder
-// collider let gravity drop them onto the ItemGallery floor (same idea as
-// the cars' ITEM_GALLERY_CAR_DROP_MARGIN), so the classic rig's feet land
-// exactly on Y=0 (its ZOMBIE_MODEL_Y_OFFSET == -ZOMBIE_OUTER_HEIGHT/2) with
-// no hand-tuning; the meshy rig's mesh_y knob then lines its own feet up.
-const ZOMBIE_SHOWCASE_DROP_Y: f32 = 3.0;
-
 pub(crate) fn spawn_item_gallery_zombie_showcase(commands: &mut Commands, asset_server: &AssetServer) {
     for (row, kind) in [ZombieKind::Classic, ZombieKind::Meshy].into_iter().enumerate() {
         let count = zombie_kind_clip_count(kind);
         let row_z = shared::ITEM_GALLERY_ZOMBIE_ROW_Z[row];
         for (i, (x, z)) in shared::item_gallery_zombie_row(count, row_z).into_iter().enumerate() {
             commands
+                // No RigidBody / Collider — walk-through, same as every
+                // zombie (movement blocking is never actor-vs-actor here;
+                // crowd shove is steering-force + on-hit KnockbackVelocity).
+                // The floor is a fixed known height, so the root Y is placed
+                // directly (zombie_kind_showcase_root_y) instead of dropped.
                 .spawn((
                     Name::new(format!("zombie_{kind}_clip{i}")),
-                    Transform::from_xyz(x, ZOMBIE_SHOWCASE_DROP_Y, z),
+                    Transform::from_xyz(x, zombie_kind_showcase_root_y(kind), z),
                     Zombie,
                     kind,
                     ZombieShowcaseClip(i),
                     Health(ZOMBIE_MAX_HEALTH),
                     zombie_cosmetic_bundle(),
-                    // Drop-and-settle. Rotation fully locked (the visible
-                    // yaw/pitch lives on the mesh child, not here) so they
-                    // never tip or spin; damping bleeds off the landing.
-                    RigidBody::Dynamic,
-                    Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
-                    LockedAxes::new().lock_rotation_x().lock_rotation_y().lock_rotation_z(),
-                    LinearDamping(4.0),
-                    AngularDamping(4.0),
                 ))
                 .with_child(zombie_mesh_bundle(asset_server, kind));
         }

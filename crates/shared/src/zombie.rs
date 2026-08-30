@@ -466,6 +466,18 @@ pub fn zombie_kind_mesh_transform(kind: ZombieKind) -> Transform {
     }
 }
 
+/// World Y for an ItemGallery showcase zombie's root — they have no
+/// physics (walk-through, like every zombie: bare Collider, no RigidBody)
+/// so the floor is a fixed known height. Classic: cancel the capsule-center
+/// `ZOMBIE_MODEL_Y_OFFSET` baked into its mesh child so the feet land on
+/// Y=0. Meshy: 0 — its mesh child's own `mesh_y` carries the whole offset.
+pub fn zombie_kind_showcase_root_y(kind: ZombieKind) -> f32 {
+    match kind {
+        ZombieKind::Classic => -ZOMBIE_MODEL_Y_OFFSET,
+        ZombieKind::Meshy => 0.0,
+    }
+}
+
 pub const ZOMBIE_PATH_RECALC_INTERVAL: f32 = 0.8;
 // How long a zombie sticks with its current chase target before re-picking
 // the nearest connected player. Without this, two players standing close
