@@ -488,21 +488,15 @@ pub fn zombie_kind_showcase_root_y(kind: ZombieKind) -> f32 {
     }
 }
 
-/// Mesh-child transform for a networked GAMEPLAY zombie of this kind — like
-/// `zombie_kind_mesh_transform` but with the meshy Y shifted so the feet
-/// land right when the root sits at the zombie's grounded rest height
-/// (move_zombies keeps it there) rather than the showcase's fixed Y. For
-/// Classic the two are identical (its showcase root Y already equals the
-/// grounded height).
+/// Mesh-child transform for a networked GAMEPLAY zombie of this kind.
+/// Currently identical to `zombie_kind_mesh_transform` (showcase) for both
+/// kinds — a networked zombie's grounded root Y turns out to match the
+/// showcase root Y closely enough that no extra shift is needed. Kept as a
+/// distinct entry point so a per-context tweak (e.g. a separate meshy
+/// gameplay Y in the RON) has an obvious home. Tune the meshy feet via
+/// `mesh_y` in zombie_meshy_transform.ron.
 pub fn zombie_kind_gameplay_mesh_transform(kind: ZombieKind) -> Transform {
-    match kind {
-        ZombieKind::Classic => zombie_kind_mesh_transform(ZombieKind::Classic),
-        ZombieKind::Meshy => {
-            let mut t = zombie_kind_mesh_transform(ZombieKind::Meshy);
-            t.translation.y = zombie_meshy_mesh_y() + ZOMBIE_MODEL_Y_OFFSET;
-            t
-        }
-    }
+    zombie_kind_mesh_transform(kind)
 }
 
 /// Clip indices into a kind's glTF for the 5 gameplay poses, in order
