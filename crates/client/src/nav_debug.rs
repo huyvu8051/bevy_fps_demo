@@ -121,10 +121,11 @@ fn sync_client_navmesh(mut commands: Commands, existing: Query<Entity, With<Mana
                     fixed: Triangulation::from_outer_edges(&shared::arena_navmesh_outer_edges(
                         current_scenario().map_id(),
                     )),
-                    simplify: 0.005,
-                    build_timeout: Some(1.0),
-                    // Match the server (spawn_zombie_navmesh).
-                    agent_radius: 0.1,
+                    // Shared with the server (spawn_zombie_navmesh) so the
+                    // overlay matches the real navmesh — see arena.rs.
+                    simplify: shared::ARENA_NAVMESH_SIMPLIFY,
+                    build_timeout: Some(shared::ARENA_NAVMESH_BUILD_TIMEOUT_SECS),
+                    agent_radius: shared::ARENA_NAVMESH_AGENT_RADIUS,
                     ..default()
                 },
                 // Pillars are RigidBody::Static, so Direct never churns.

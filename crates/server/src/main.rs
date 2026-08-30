@@ -940,14 +940,11 @@ fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<Nav
             ManagedNavMesh::single(),
             NavMeshSettings {
                 fixed: Triangulation::from_outer_edges(&shared::arena_navmesh_outer_edges(scenario.map_id())),
-                simplify: 0.005,
-                build_timeout: Some(1.0),
-                // Small obstacle inflation — just enough to keep a routed
-                // path off the exact obstacle edge. Kept well under the
-                // zombie's own move radius on purpose: a bigger value
-                // balloons the holes and closes gaps the zombies should
-                // still try to squeeze.
-                agent_radius: 0.1,
+                // These three are shared with the client's nav_debug copy —
+                // see their doc comment in crates/shared/src/arena.rs.
+                simplify: shared::ARENA_NAVMESH_SIMPLIFY,
+                build_timeout: Some(shared::ARENA_NAVMESH_BUILD_TIMEOUT_SECS),
+                agent_radius: shared::ARENA_NAVMESH_AGENT_RADIUS,
                 ..default()
             },
             NavMeshUpdateMode::Direct,

@@ -152,6 +152,16 @@ pub const NAVMESH_BOUNDS: [Vec2; 4] = [
 /// floor's own extent — enough that a path never hugs the perimeter walls.
 pub const NAVMESH_EDGE_INSET: f32 = 1.0;
 
+// `NavMeshSettings` values the server's real Arena navmesh
+// (spawn_zombie_navmesh) and the client's nav_debug reconstruction
+// (sync_client_navmesh) both feed in — one copy here so the two can't
+// drift. `AGENT_RADIUS` is 0: obstacles carve at their true footprint, no
+// inflation, so the navmesh holes hug the pillars/car boxes and zombies
+// can path through any gap that physically fits them.
+pub const ARENA_NAVMESH_AGENT_RADIUS: f32 = 0.0;
+pub const ARENA_NAVMESH_SIMPLIFY: f32 = 0.005;
+pub const ARENA_NAVMESH_BUILD_TIMEOUT_SECS: f32 = 1.0;
+
 /// Outer boundary polygon (CCW, on the XZ plane) for the auto-generated
 /// Arena navmesh — the floor row's footprint inset by `NAVMESH_EDGE_INSET`.
 /// The server hands this to `NavMeshSettings.fixed`; obstacle cutouts are
