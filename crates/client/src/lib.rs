@@ -1,8 +1,7 @@
 use avian3d::prelude::*;
 use bevy::animation::graph::AnimationGraph;
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::{MainPassResolutionOverride, RenderTarget};
-use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
+use bevy::camera::RenderTarget;
 use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::picking::hover::HoverMap;
@@ -452,7 +451,7 @@ const RESOLUTION_SCALE_MIN_TEXTURE_PX: u32 = 64;
 /// unless `RENDER_SCALE` env overrides it (clamped to the sane 0.1..=1.0
 /// range the offscreen target supports). The in-game settings-menu presets
 /// still change it at runtime from whatever this returns. Also feeds the
-/// editor-viewport downscale (see scale_editor_camera_render).
+/// the offscreen game-camera render target.
 fn resolution_scale_default() -> f32 {
     std::env::var("RENDER_SCALE")
         .ok()
@@ -1165,13 +1164,14 @@ pub fn main() {
         // viewport renders pitch black while the game view is fine. Give
         // every ambient-less 3D camera the same fill the game camera uses.
         app.add_systems(Update, fill_ambient_on_editor_cameras);
-        // RenderResolutionScale only shrinks the GAME camera's offscreen
-        // target; the bevy_editor_pls editor cameras render straight to the
-        // window at native res. Mirror the scale onto them via
-        // MainPassResolutionOverride so RENDER_SCALE / the settings-menu
-        // presets lighten the editor viewport too.
-        app.add_plugins(ExtractComponentPlugin::<EditorRenderScale>::default())
-            .add_systems(Update, scale_editor_camera_render);
+        // NOTE: RENDER_SCALE / RenderResolutionScale only shrink the GAME
+        // camera (it renders to an offscreen Image that a fullscreen
+        // ImageNode then stretches back). The bevy_editor_pls editor
+        // cameras render straight to the window, and MainPassResolutionOverride
+        // needs an upscaler (DLSS/FSR — none on macOS) to expand the
+        // reduced pass back to full size, so it just left the view in a
+        // black-bordered corner. Editor-viewport downscale is dropped;
+        // FPS_CAP + LIGHTS=0 already cover editor thermals.
     }
     app.add_plugins(GamePlugin);
     app.run();
@@ -1187,60 +1187,6 @@ fn fill_ambient_on_editor_cameras(
             brightness: ambient_brightness(),
             ..default()
         });
-    }
-}
-
-/// Main-world carrier for the editor cameras' reduced main-pass size.
-/// `ExtractComponentPlugin` copies it to the render world as a
-/// `MainPassResolutionOverride` (Bevy's built-in resolution-scale hook,
-/// otherwise only wired up for DLSS).
-#[derive(Component, Clone, Copy)]
-struct EditorRenderScale(UVec2);
-
-impl ExtractComponent for EditorRenderScale {
-    type QueryData = &'static Self;
-    type QueryFilter = ();
-    type Out = MainPassResolutionOverride;
-    fn extract_component(scale: &Self) -> Option<MainPassResolutionOverride> {
-        Some(MainPassResolutionOverride(scale.0))
-    }
-}
-
-/// Keeps `EditorRenderScale` in sync with `RenderResolutionScale` for every
-/// window-targeting editor `Camera3d` (the game/scope cameras render to an
-/// Image, not the window, and are skipped). Removes it at scale 1.0 so the
-/// editor is back to native.
-fn scale_editor_camera_render(
-    mut commands: Commands,
-    scale: Option<Res<RenderResolutionScale>>,
-    cams: Query<(Entity, &Camera, &RenderTarget, Option<&EditorRenderScale>), With<Camera3d>>,
-) {
-    let scale = scale.map(|s| s.0).unwrap_or_else(resolution_scale_default);
-    for (entity, camera, target, existing) in &cams {
-        if !matches!(target, RenderTarget::Window(_)) {
-            continue;
-        }
-        let Some(vp) = camera.physical_viewport_size() else { continue };
-        if vp.x < 2 || vp.y < 2 {
-            continue;
-        }
-
-        if scale >= 1.0 {
-            if existing.is_some() {
-                commands.entity(entity).remove::<EditorRenderScale>();
-            }
-            continue;
-        }
-
-        // Must stay strictly below the viewport (MainPassResolutionOverride
-        // requirement) and not collapse to nothing on a tiny panel.
-        let target = (vp.as_vec2() * scale)
-            .as_uvec2()
-            .max(UVec2::splat(RESOLUTION_SCALE_MIN_TEXTURE_PX))
-            .min(vp - UVec2::ONE);
-        if existing.map(|e| e.0) != Some(target) {
-            commands.entity(entity).insert(EditorRenderScale(target));
-        }
     }
 }
 
