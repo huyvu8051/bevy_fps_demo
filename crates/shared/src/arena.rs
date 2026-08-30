@@ -45,31 +45,53 @@ pub fn arena_ramp() -> (Vec3, Quat, Vec3) {
 // F9-saved (crates/client/src/arena_layout.rs) without a rebuild, exactly
 // like item_gallery_car_physics.ron does for the Map 5 cars.
 //
-// Every row is ONE static cuboid (pillars included — they're square columns
-// here now, not cylinders; the navmesh cutout footprint was already square,
-// see crates/server's column_footprint). Row 0 is the floor by convention
+// Every row is ONE static piece — a `shape` tag picks cuboid vs. cylinder
+// (pillars are cylinders again; a cylinder ignores size_z, using size_x as
+// its diameter and size_y as its height). Row 0 is the floor by convention
 // (the client paints it with the floor material); the rest use the wall
 // material. NAVMESH_COLUMN_OBSTACLES below is still the navmesh's own
 // obstacle list and must be kept in step with the pillar rows by hand — the
 // navmesh is built once at startup and is deliberately left out of this
 // data file for now.
 
-/// One static box in the arena: full size + translation + rotation. Both
-/// the server (collider only) and the client (mesh + collider) build from
-/// the same `arena_layout` slice so their physics can't drift.
+/// Collider/mesh shape of an `ArenaBox` row — the RON's first tuple field,
+/// a bare enum variant (`Cuboid` / `Cylinder`). A `Cylinder` uses
+/// `size.x` as its full diameter and `size.y` as its height (`size.z`
+/// unused); a `Cuboid` uses all three as its full extents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+pub enum ArenaShape {
+    Cuboid,
+    Cylinder,
+}
+
+impl ArenaShape {
+    /// RON token this serializes back to (the F9 saver writes rows by hand).
+    pub fn as_ron(self) -> &'static str {
+        match self {
+            ArenaShape::Cuboid => "Cuboid",
+            ArenaShape::Cylinder => "Cylinder",
+        }
+    }
+}
+
+/// One static piece of the arena: shape + full size + translation +
+/// rotation. Both the server (collider only) and the client (mesh +
+/// collider) build from the same `arena_layout` slice so their physics
+/// can't drift.
 #[derive(Clone, Copy, Debug)]
 pub struct ArenaBox {
+    pub shape: ArenaShape,
     pub size: Vec3,
     pub translation: Vec3,
     pub rotation: Quat,
 }
 
 /// Row shape in `arena_layout_map<ID>.ron`:
-/// `(size_x, size_y, size_z, x, y, z, rot_x_deg, rot_y_deg, rot_z_deg)` —
-/// full box size + translation in meters, rotation as X/Y/Z euler degrees
-/// applied `EulerRot::YXZ` (same convention as item_gallery_car_physics.ron,
-/// so the F9 save round-trips).
-type ArenaLayoutRow = (f32, f32, f32, f32, f32, f32, f32, f32, f32);
+/// `(shape, size_x, size_y, size_z, x, y, z, rot_x_deg, rot_y_deg, rot_z_deg)`
+/// — `shape` is a bare `Cuboid` / `Cylinder`; full size + translation in
+/// meters; rotation as X/Y/Z euler degrees applied `EulerRot::YXZ` (same
+/// convention as item_gallery_car_physics.ron, so the F9 save round-trips).
+type ArenaLayoutRow = (ArenaShape, f32, f32, f32, f32, f32, f32, f32, f32, f32);
 
 fn load_arena_layout(map_id: u8) -> Vec<ArenaBox> {
     // CARGO_MANIFEST_DIR-relative (baked in at shared's compile time) — see
@@ -84,7 +106,8 @@ fn load_arena_layout(map_id: u8) -> Vec<ArenaBox> {
     let rows: Vec<ArenaLayoutRow> = ron::de::from_str(&text)
         .unwrap_or_else(|e| panic!("failed to parse arena layout data at {path}: {e}"));
     rows.into_iter()
-        .map(|(sx, sy, sz, x, y, z, rx, ry, rz)| ArenaBox {
+        .map(|(shape, sx, sy, sz, x, y, z, rx, ry, rz)| ArenaBox {
+            shape,
             size: Vec3::new(sx, sy, sz),
             translation: Vec3::new(x, y, z),
             rotation: Quat::from_euler(EulerRot::YXZ, ry.to_radians(), rx.to_radians(), rz.to_radians()),

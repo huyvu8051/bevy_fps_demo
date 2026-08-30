@@ -328,10 +328,15 @@ fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_
 // NAVMESH_COLUMN_OBSTACLES, which carves the matching navmesh cutouts.
 fn spawn_flat_arena_colliders(commands: &mut Commands, map_id: u8) {
     for b in shared::arena_layout(map_id) {
+        let collider = match b.shape {
+            shared::ArenaShape::Cuboid => Collider::cuboid(b.size.x, b.size.y, b.size.z),
+            // size.x is the full diameter, size.y the height.
+            shared::ArenaShape::Cylinder => Collider::cylinder(b.size.x * 0.5, b.size.y),
+        };
         commands.spawn((
             Transform::from_translation(b.translation).with_rotation(b.rotation),
             RigidBody::Static,
-            Collider::cuboid(b.size.x, b.size.y, b.size.z),
+            collider,
         ));
     }
 }

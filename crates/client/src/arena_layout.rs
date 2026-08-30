@@ -14,7 +14,7 @@
 // shapes and the duplication is small and readable.
 
 use bevy::prelude::*;
-use shared::MapKind;
+use shared::{ArenaShape, MapKind};
 
 use crate::item_gallery_cars::{ron_f32, F9SaveToast};
 use crate::{current_scenario, ArenaBoxDims};
@@ -47,18 +47,22 @@ fn save_arena_layout_on_key(
     }
     let map_id = scenario.map_id();
 
-    // (row index, "(...9 numbers...)", trailing-comment label)
+    // (row index, "(shape, ...9 numbers...)", trailing-comment label)
     let mut rows: Vec<(usize, String, &'static str)> = boxes
         .iter()
         .map(|(t, dims)| {
             // Same EulerRot::YXZ split spawn_test_arena / shared::arena_layout
             // rebuild from — returns (y_angle, x_angle, z_angle).
             let (ry, rx, rz) = t.rotation.to_euler(EulerRot::YXZ);
+            // Fold the editor's scale gizmo into the saved size so it
+            // round-trips (spawn rebuilds every piece at scale 1).
+            let size = dims.size * t.scale;
             let core = format!(
-                "({}, {}, {}, {}, {}, {}, {}, {}, {})",
-                ron_f32(dims.size.x),
-                ron_f32(dims.size.y),
-                ron_f32(dims.size.z),
+                "({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                dims.shape.as_ron(),
+                ron_f32(size.x),
+                ron_f32(size.y),
+                ron_f32(size.z),
                 ron_f32(t.translation.x),
                 ron_f32(t.translation.y),
                 ron_f32(t.translation.z),
@@ -68,10 +72,10 @@ fn save_arena_layout_on_key(
             );
             let label = if dims.index == 0 {
                 "floor"
+            } else if dims.shape == ArenaShape::Cylinder {
+                "pillar"
             } else if t.rotation.angle_between(Quat::IDENTITY) > 1.0e-3 {
                 "ramp"
-            } else if dims.size.x < 2.0 && dims.size.z < 2.0 {
-                "pillar"
             } else {
                 "wall"
             };

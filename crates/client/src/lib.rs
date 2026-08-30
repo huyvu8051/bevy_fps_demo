@@ -2104,11 +2104,12 @@ const TOUCH_CONTROLS_IDLE_HIDE_SECS: f32 = 10.0;
 #[derive(Component)]
 struct ArenaGeometry;
 
-/// The size + row index of one arena box, kept on the entity so F9
-/// (save_arena_layout_on_key) can write the live Transform back to the RON
-/// in the original row order. Not on the arena light — that has no row.
+/// The shape + size + row index of one arena piece, kept on the entity so
+/// F9 (save_arena_layout_on_key) can write the live Transform back to the
+/// RON in the original row order. Not on the arena light — that has no row.
 #[derive(Component)]
 pub(crate) struct ArenaBoxDims {
+    pub(crate) shape: shared::ArenaShape,
     pub(crate) size: Vec3,
     pub(crate) index: usize,
 }
@@ -2131,19 +2132,31 @@ fn spawn_test_arena(
     });
 
     // Row 0 is the floor by convention (see the RON header); the rest —
-    // walls, square pillar columns, the tilted ramp — share the wall
+    // walls, cylindrical pillars, the tilted ramp — share the wall
     // material. One entity per row: mesh + its own RigidBody::Static +
-    // Collider, exactly the box the server spawns collider-only.
+    // Collider (cuboid or cylinder per b.shape), exactly the piece the
+    // server spawns collider-only.
     for (i, b) in shared::arena_layout(map_id).iter().enumerate() {
         let material = if i == 0 { floor_material.clone() } else { wall_material.clone() };
+        let (mesh, collider): (Handle<Mesh>, Collider) = match b.shape {
+            shared::ArenaShape::Cuboid => (
+                meshes.add(Cuboid::new(b.size.x, b.size.y, b.size.z)),
+                Collider::cuboid(b.size.x, b.size.y, b.size.z),
+            ),
+            // size.x is the full diameter, size.y the height.
+            shared::ArenaShape::Cylinder => (
+                meshes.add(Cylinder::new(b.size.x * 0.5, b.size.y)),
+                Collider::cylinder(b.size.x * 0.5, b.size.y),
+            ),
+        };
         commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(b.size.x, b.size.y, b.size.z))),
+            Mesh3d(mesh),
             MeshMaterial3d(material),
             Transform::from_translation(b.translation).with_rotation(b.rotation),
             RigidBody::Static,
-            Collider::cuboid(b.size.x, b.size.y, b.size.z),
+            collider,
             ArenaGeometry,
-            ArenaBoxDims { size: b.size, index: i },
+            ArenaBoxDims { shape: b.shape, size: b.size, index: i },
         ));
     }
 
