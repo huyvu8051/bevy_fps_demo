@@ -49,10 +49,14 @@ pub fn arena_ramp() -> (Vec3, Quat, Vec3) {
 // (pillars are cylinders again; a cylinder ignores size_z, using size_x as
 // its diameter and size_y as its height). Row 0 is the floor by convention
 // (the client paints it with the floor material); the rest use the wall
-// material. NAVMESH_COLUMN_OBSTACLES below is still the navmesh's own
-// obstacle list and must be kept in step with the pillar rows by hand — the
-// navmesh is built once at startup and is deliberately left out of this
-// data file for now.
+// material.
+//
+// The zombie navmesh for Arena maps is now derived from this data too: the
+// server tags every Cylinder row's collider as an obstacle and
+// NavmeshUpdaterPlugin triangulates the walkable area automatically
+// (arena_navmesh_outer_edges gives the boundary). NAVMESH_COLUMN_OBSTACLES
+// below is only the fallback for the non-Arena (Building / ItemGallery)
+// navmesh now — moving a pillar here no longer needs a matching hand-edit.
 
 /// Collider/mesh shape of an `ArenaBox` row — the RON's first tuple field,
 /// a bare enum variant (`Cuboid` / `Cylinder`). A `Cylinder` uses
@@ -139,17 +143,39 @@ pub const NAVMESH_BOUNDS: [Vec2; 4] = [
     Vec2::new(ARENA_HALF_SIZE - 1.0, ARENA_HALF_SIZE - 1.0),
     Vec2::new(-(ARENA_HALF_SIZE - 1.0), ARENA_HALF_SIZE - 1.0),
 ];
-// Radius of each USE_TEST_ARENA pillar (both the physical collider and the
-// navmesh cutout column_footprint carves out of NAVMESH_BOUNDS below).
+
+/// How far the zombie navmesh's outer edge is pulled in from the arena
+/// floor's own extent — enough that a path never hugs the perimeter walls.
+pub const NAVMESH_EDGE_INSET: f32 = 1.0;
+
+/// Outer boundary polygon (CCW, on the XZ plane) for the auto-generated
+/// Arena navmesh — the floor row's footprint inset by `NAVMESH_EDGE_INSET`.
+/// The server hands this to `NavMeshSettings.fixed`; obstacle cutouts are
+/// then derived automatically from the pillar colliders (see
+/// `NavmeshUpdaterPlugin` in crates/server), so there's no hand-kept
+/// obstacle list for Arena maps anymore.
+pub fn arena_navmesh_outer_edges(map_id: u8) -> Vec<Vec2> {
+    let floor = arena_layout(map_id)[0]; // row 0 = floor, by convention
+    let hx = floor.size.x * 0.5 - NAVMESH_EDGE_INSET;
+    let hz = floor.size.z * 0.5 - NAVMESH_EDGE_INSET;
+    let (cx, cz) = (floor.translation.x, floor.translation.z);
+    vec![
+        Vec2::new(cx - hx, cz - hz),
+        Vec2::new(cx + hx, cz - hz),
+        Vec2::new(cx + hx, cz + hz),
+        Vec2::new(cx - hx, cz + hz),
+    ]
+}
+// Pillar radius for the NON-Arena navmesh fallback's square cutouts
+// (column_footprint). Arena pillar colliders get their real size from the
+// RON's Cylinder rows instead.
 pub const PILLAR_RADIUS: f32 = 0.6;
-// Scattered (x, z) positions for a handful of free-standing pillars inside
-// the test arena — added as cover/obstacles to test navigation and
-// line-of-sight around (autopilot targeting, zombie pathfinding) rather
-// than the previously wide-open flat room. Kept clear of PLAYER_SPAWN
-// (0, ARENA_HALF_SIZE - 4 = 14) and the arena center. Both crates/client's
-// spawn_test_arena (visual mesh + collider) and crates/server's
-// spawn_arena_colliders (collider only) iterate this same array, so the
-// two processes' physical worlds can't drift out of sync with each other.
+// Pillar (x, z) positions for the NON-Arena navmesh fallback only
+// (Building / ItemGallery — see crates/server's spawn_zombie_navmesh).
+// Arena maps derive their navmesh obstacles automatically from the pillar
+// colliders spawned out of arena_layout_map<ID>.ron, so this array no
+// longer has to mirror those rows. Kept clear of PLAYER_SPAWN
+// (0, ARENA_HALF_SIZE - 4 = 14) and the arena center.
 pub const NAVMESH_COLUMN_OBSTACLES: [(f32, f32); 8] = [
     (-8.0, -6.0),
     (8.0, -6.0),

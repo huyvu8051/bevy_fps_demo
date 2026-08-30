@@ -145,6 +145,12 @@ fn main() {
             PhysicsPlugins::default(),
             BigBrainPlugin::new(PreUpdate),
             VleueNavigatorPlugin,
+            // Arena maps: the zombie navmesh is triangulated automatically
+            // from every ArenaObstacle-tagged collider (the pillar rows in
+            // arena_layout_map<ID>.ron), so there's no hand-kept obstacle
+            // list to drift. Non-Arena maps still use the manual
+            // NavMesh::from_edge_and_obstacles path in spawn_zombie_navmesh.
+            NavmeshUpdaterPlugin::<Collider, ArenaObstacle>::default(),
             RepliconPlugins,
             RepliconRenetPlugins,
         ))
@@ -320,24 +326,34 @@ fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_
     }
 }
 
+// Tags an arena collider the auto-navmesh (NavmeshUpdaterPlugin above)
+// should carve a hole around — only the pillars (Cylinder rows). The
+// floor, perimeter walls and the ramp are deliberately left untagged: the
+// floor/walls are the navmesh boundary, and the ramp has to stay
+// traversable (zombies climb it, MoveAndSlide handles the slope).
+#[derive(Component)]
+struct ArenaObstacle;
+
 // Flat room: floor + 4 perimeter walls + free-standing pillars + centre
 // test ramp, read from crates/client/assets/data/arena_layout_map<ID>.ron
 // (shared::arena_layout) — one file per MapKind::Arena map id. Colliders
 // only, no Mesh3d/lights; the client builds its own visuals from the same
-// list in spawn_test_arena. The pillar rows still mirror
-// NAVMESH_COLUMN_OBSTACLES, which carves the matching navmesh cutouts.
+// list in spawn_test_arena.
 fn spawn_flat_arena_colliders(commands: &mut Commands, map_id: u8) {
     for b in shared::arena_layout(map_id) {
-        let collider = match b.shape {
-            shared::ArenaShape::Cuboid => Collider::cuboid(b.size.x, b.size.y, b.size.z),
+        let (collider, is_obstacle) = match b.shape {
+            shared::ArenaShape::Cuboid => (Collider::cuboid(b.size.x, b.size.y, b.size.z), false),
             // size.x is the full diameter, size.y the height.
-            shared::ArenaShape::Cylinder => Collider::cylinder(b.size.x * 0.5, b.size.y),
+            shared::ArenaShape::Cylinder => (Collider::cylinder(b.size.x * 0.5, b.size.y), true),
         };
-        commands.spawn((
+        let mut e = commands.spawn((
             Transform::from_translation(b.translation).with_rotation(b.rotation),
             RigidBody::Static,
             collider,
         ));
+        if is_obstacle {
+            e.insert(ArenaObstacle);
+        }
     }
 }
 
@@ -854,15 +870,40 @@ fn debug_bot_fire(
     }
 }
 
-fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<NavMesh>>) {
+fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<NavMesh>>, scenario: Res<Scenario>) {
+    let plane = Transform::from_xyz(0.0, NAVMESH_HEIGHT, 0.0)
+        .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
+
+    if scenario.map_kind() == MapKind::Arena {
+        // Auto-generated: NavmeshUpdaterPlugin::<Collider, ArenaObstacle>
+        // triangulates the outer boundary minus every pillar collider's
+        // footprint, and rebuilds if one ever moves. Blocking so the mesh
+        // exists by the end of the first update (zombies spawn at Startup
+        // too) — a one-shot cost on a static scene, not a per-frame one.
+        commands.spawn((
+            ManagedNavMesh::single(),
+            NavMeshSettings {
+                fixed: Triangulation::from_outer_edges(&shared::arena_navmesh_outer_edges(scenario.map_id())),
+                simplify: 0.005,
+                build_timeout: Some(1.0),
+                ..default()
+            },
+            NavMeshUpdateMode::Direct,
+            NavMeshUpdateModeBlocking,
+            plane,
+        ));
+        return;
+    }
+
+    // Non-Arena (Building / ItemGallery): no per-map RON, so keep the
+    // hand-authored boundary + pillar footprints. A bare ManagedNavMesh
+    // (no NavMeshSettings) is ignored by the updater, so this manual
+    // insert stands.
     let mut navmesh = NavMesh::from_edge_and_obstacles(
         NAVMESH_BOUNDS.to_vec(),
         NAVMESH_COLUMN_OBSTACLES.iter().map(|&(x, z)| column_footprint(x, z)).collect(),
     );
-    navmesh.set_transform(
-        Transform::from_xyz(0.0, NAVMESH_HEIGHT, 0.0)
-            .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
-    );
+    navmesh.set_transform(plane);
     navmeshes
         .insert(ManagedNavMesh::get_single().id(), navmesh)
         .expect("inserting under a Uuid asset id never fails");
