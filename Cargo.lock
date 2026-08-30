@@ -1534,9 +1534,9 @@ dependencies = [
 
 [[package]]
 name = "bevy_renet2"
-version = "0.13.1"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c66874c475e715b38519cd59346c7ffe2e327c38b2fee54d1590615683a72377"
+checksum = "149927aa2d7709910e964bd19c96d06a2b7b9fb3b5de6e8b995a4bddc287c551"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -1547,12 +1547,13 @@ dependencies = [
 
 [[package]]
 name = "bevy_replicon"
-version = "0.38.2"
+version = "0.39.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aee12260a021e0d9e4437ba9a325deb4ca05c98ef29d670fc63b366799ecaad0"
+checksum = "6a0d6f7d37938f1f6797950774a41adc189a459d73cffb1941804a5d9d8fd059"
 dependencies = [
  "bevy",
  "bitflags 2.13.1",
+ "bumpalo",
  "bytes",
  "deterministic-hash",
  "log",
@@ -1567,9 +1568,9 @@ dependencies = [
 
 [[package]]
 name = "bevy_replicon_renet2"
-version = "0.13.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1d2c4d8473bd0fb8da1a91eaeb794f9883191bda140876ba4c95266a1d1e639"
+checksum = "2f838a1e860673421215afd3d14d8f2fbfabe8e53cb87ad0049565306c212e1b"
 dependencies = [
  "bevy",
  "bevy_renet2",
@@ -5883,9 +5884,9 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "renet2"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2c550a2f3af57778d06bacb70719ad2c2ba0d3607b1908550595f574541defd"
+checksum = "b7cd34c115420d365a14e3315c75da4175aea1f1553860717c96d424cdb5569f"
 dependencies = [
  "bevy_ecs",
  "bytes",
@@ -5895,9 +5896,9 @@ dependencies = [
 
 [[package]]
 name = "renet2_netcode"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccc08034101c292bb9732380a918d66f7bc2209ed508876661f3c781fbb31689"
+checksum = "b5eb54a49bb7b1890aeb2e1df1418bb236de24a73cca5410588a0ad260e78f5e"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -5928,9 +5929,9 @@ dependencies = [
 
 [[package]]
 name = "renetcode2"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27bfe18aab83ac82e30bae5f98c5455f3ee4984ecf5dd6755607628de2a8e00c"
+checksum = "de1406df1fdfc595462e26dc35c764be6a6e12743d93375bee3af25137fdb4d4"
 dependencies = [
  "chacha20poly1305",
  "log",

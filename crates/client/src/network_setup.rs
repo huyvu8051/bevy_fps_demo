@@ -241,20 +241,47 @@ pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &Replic
     // host (Ipv4/Ipv6) — it errors on a domain name, and "localhost" IS a
     // domain name (not an IP), which panicked here every time this page
     // was opened via http://localhost:... instead of a literal IP (found
-    // live: "url is a domain but a SocketAddr was expected"). This
-    // SocketAddr is only netcode's own bookkeeping (goes into the
-    // ConnectToken's address list) — the actual WebSocket connection
-    // always routes through `server_url` itself, which the browser's own
-    // WebSocket API resolves fine including real domains — so a
-    // non-IP host falls back to a harmless loopback placeholder here
-    // instead of failing to connect at all.
+    // live: "url is a domain but a SocketAddr was expected").
+    //
+    // The fallback here MUST exactly match what WebSocketClient::new()
+    // computes internally for its own `server_address` field (also
+    // `config.server_address().unwrap_or_else(...)`, same crate,
+    // websocket_socket/client/socket.rs) — that field is what
+    // WebSocketClient::send() checks every outgoing packet's `addr`
+    // against (`if addr != self.server_address() { reject }`), and if our
+    // ClientAuthentication.server_addr fallback doesn't match its
+    // fallback bit-for-bit, EVERY packet gets rejected as "invalid
+    // WebSocket server" and the netcode handshake can never complete —
+    // confirmed live: this previously fell back to a 127.0.0.1 loopback
+    // guess here while WebSocketClient's own fallback is `0.0.0.0:0`, so
+    // the client cycled Connecting -> Disconnected forever, never once
+    // reaching Connected, on any non-IP host (including plain
+    // http://localhost, not just a future real domain).
     let server_addr = WebSocketClientConfig { server_url: server_url.clone() }
         .server_address()
-        .unwrap_or_else(|_| std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), ws_port));
+        .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
 
+    // `true`, not the native path's `false` (was copy-pasted from there and
+    // left wrong) — THE actual root cause of a "received message with
+    // invalid channel" disconnect loop that took a very long time to find.
+    // renet2_netcode's server side auto-detects this correctly per-socket
+    // (`sockets[socket_id].is_reliable()`, see renet2_netcode's
+    // server.rs::add_connection — WebSocketServer::is_reliable() is
+    // hard-coded `true`) and downgrades that connection's channels to
+    // `SendType::Unreliable { ordered_reliable_substrate: true }`
+    // server-side (see renet2::ConnectionConfig::downgrade_to_unreliable —
+    // WebSocket/TCP already guarantees ordering+reliability, so renet2's
+    // own reliable-channel bookkeeping would just be redundant overhead on
+    // top of it). But `RenetClient::new`'s own `has_reliable_socket` flag
+    // has to be told the same thing by hand — it doesn't introspect the
+    // `socket` argument — and this stayed `false` here, so only the SERVER
+    // side downgraded its channels while the CLIENT kept sending the
+    // original Reliable* packet framing. That framing mismatch is what the
+    // server was parsing as a bogus channel id and disconnecting on, every
+    // single connection attempt, forever (via auto_reconnect retrying).
     let client = RenetClient::new(
         ConnectionConfig::from_channels(channels.server_configs(), channels.client_configs()),
-        false,
+        true,
     );
 
     // web_time (not std::time) — see this crate's Cargo.toml comment on
