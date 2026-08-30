@@ -127,46 +127,51 @@ pub(crate) fn predict_player_movement(
     >,
     mut player: Query<(&mut Transform, &mut Player, &PlayerStance), Without<NetPlayer>>,
     mut pending: ResMut<PredictedInputs>,
+    mut smooth: ResMut<PredictionSmooth>,
     mover: MoveAndSlide,
 ) {
     let Ok((net_transform, last_processed)) = local.single() else {
         return;
     };
-    // Bound from single_mut() so restoring the real reconcile is a 1-line
-    // change; Test A only reads them.
-    let Ok((transform, player, stance)) = player.single_mut() else {
+    let Ok((mut transform, mut player, stance)) = player.single_mut() else {
         return;
     };
+    let stance = *stance;
 
-    // TEST A: reconcile fully DISABLED — client runs pure local prediction,
-    // never corrected toward the server. Still drain confirmed inputs so
-    // `pending` stays bounded, and log the correction that WOULD have been
-    // applied (server pos + replay-pending vs the local prediction) so we
-    // can see its size/direction while moving.
-    let mut confirmed_baseline = None;
+    // Drop every input the server has now confirmed; the last one's trailing
+    // (vertical_velocity, grounded) is the authoritative baseline to replay from.
+    let mut baseline = None;
     while pending.0.front().is_some_and(|&(sequence, ..)| sequence <= last_processed.0) {
-        let (_, _, _, vertical_velocity, grounded) = pending.0.pop_front().unwrap();
-        confirmed_baseline = Some((vertical_velocity, grounded));
+        let (_, _, _, vv, grounded) = pending.0.pop_front().unwrap();
+        baseline = Some((vv, grounded));
     }
-    let Some((base_vv, base_grounded)) = confirmed_baseline else {
-        return;
+    let Some((base_vv, base_grounded)) = baseline else {
+        return; // nothing new confirmed — leave the local prediction alone
     };
 
+    // Full "snap to the server position + replay unconfirmed inputs" result,
+    // computed on a scratch copy. The client sims per render frame while the
+    // server sims once per 30Hz tick, so MoveAndSlide non-linearity leaves a
+    // steady few-cm gap even with no real error — hard-snapping to it every
+    // reconcile is the regular backward strafe jerk. Only commit the snap
+    // past RECONCILE_POS_THRESHOLD; below that, trust the local prediction.
     let mut scratch_tf = *transform;
     scratch_tf.translation = net_transform.translation;
     let mut scratch_player = Player { vertical_velocity: base_vv, grounded: base_grounded };
     for (_, input, dt, ..) in &pending.0 {
-        shared::movement::simulate_player_step(&mover, &mut scratch_tf, &mut scratch_player, *stance, input, *dt);
+        shared::movement::simulate_player_step(&mover, &mut scratch_tf, &mut scratch_player, stance, input, *dt);
     }
-    let correction = scratch_tf.translation - transform.translation;
-    info!(
-        "[reconcile] would-correct err={:.3}m corr={:.3?} pending={} vv_local={:.2} vv_srv={:.2}",
-        correction.length(),
-        correction,
-        pending.0.len(),
-        player.vertical_velocity,
-        scratch_player.vertical_velocity,
-    );
+
+    if transform.translation.distance(scratch_tf.translation) > RECONCILE_POS_THRESHOLD {
+        let pre = transform.translation;
+        *transform = scratch_tf;
+        player.vertical_velocity = scratch_player.vertical_velocity;
+        player.grounded = scratch_player.grounded;
+        // sync_camera_to_player (runs right after, same frame) reads
+        // transform + smooth.offset, so camera == pre this frame; then
+        // smooth.offset decays to 0 and the camera glides into the snap.
+        smooth.offset += pre - transform.translation;
+    }
 }
 
 // Any zombie actively chasing (has Chase) and within melee range continuously
@@ -632,8 +637,10 @@ pub(crate) fn send_player_input(
 // at eye height every frame. Its rotation is set separately by
 // apply_view_recoil, which runs earlier in the chain.
 pub(crate) fn sync_camera_to_player(
+    time: Res<Time>,
     player_query: Query<(&Transform, &PlayerStance), (With<Player>, Without<FpsCamera>)>,
     mut camera_query: Query<(&mut Transform, &Lean), With<FpsCamera>>,
+    mut smooth: ResMut<PredictionSmooth>,
 ) {
     let Ok((player_transform, stance)) = player_query.single() else {
         return;
@@ -646,7 +653,13 @@ pub(crate) fn sync_camera_to_player(
         PlayerStance::Crouching => CROUCH_EYE_HEIGHT_OFFSET,
         PlayerStance::Prone => PRONE_EYE_HEIGHT_OFFSET,
     };
-    let eye = player_transform.translation + Vec3::Y * eye_height_offset;
+    // predict_player_movement (runs just before, same frame) parked the
+    // reconciliation delta here so the body could teleport without the
+    // camera popping; ease it to zero.
+    smooth.offset = smooth
+        .offset
+        .lerp(Vec3::ZERO, (time.delta_secs() / RECONCILE_SMOOTH_SECS).min(1.0));
+    let eye = player_transform.translation + smooth.offset + Vec3::Y * eye_height_offset;
     // Uses the rotation apply_view_recoil already set this frame (it runs
     // earlier in the chain) so the peek offset follows whichever way the
     // camera is actually facing, including its current lean roll.

@@ -1266,6 +1266,7 @@ impl Plugin for GamePlugin {
         .init_resource::<ZombieHealthBarsHidden>()
         .init_resource::<ZombieLodDisabled>()
         .init_resource::<PredictedInputs>()
+        .init_resource::<PredictionSmooth>()
         .init_resource::<PlayerModelVisible>()
         .init_resource::<GunVisible>()
         .init_resource::<MapMsaaOn>()
@@ -2562,6 +2563,20 @@ struct PredictedInputs(std::collections::VecDeque<(u32, ClientInput, f32, f32, b
 // No point sending network input faster than crates/server's own
 // SERVER_TICK_HZ can act on it.
 const INPUT_SEND_HZ: f32 = 30.0;
+
+// predict_player_movement: only snap the body toward the server when the
+// disagreement exceeds THRESHOLD metres (below it, the steady per-frame-vs-
+// -30Hz MoveAndSlide gap that used to jerk every reconcile is ignored).
+// When it does snap, the visual delta goes into PredictionSmooth.offset and
+// sync_camera_to_player eases it to zero over SMOOTH_SECS — body teleports,
+// camera glides.
+const RECONCILE_POS_THRESHOLD: f32 = 0.15;
+const RECONCILE_SMOOTH_SECS: f32 = 0.12;
+
+#[derive(Resource, Default)]
+struct PredictionSmooth {
+    offset: Vec3,
+}
 
 // send_player_input's own throttle state — bundled into one Local (instead
 // of two) since that fn was already at Bevy's 16-param system function
