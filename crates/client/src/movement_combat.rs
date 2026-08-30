@@ -71,7 +71,8 @@ pub(crate) struct ViewRecoil {
 // it into a sideways offset.
 #[derive(Component, Default)]
 pub(crate) struct Lean {
-    current: f32,
+    // Read/written by autopilot_think for corner-peek — hence pub(crate).
+    pub(crate) current: f32,
 }
 
 // Debug/dev flight mode: toggled by KeyN. Sent to the server as part of
@@ -371,8 +372,14 @@ pub(crate) fn apply_lean_input(
     keys: Res<ButtonInput<KeyCode>>,
     touch_lean: Res<TouchLeanHeld>,
     game_over: Res<GameOver>,
+    autopilot: Res<Autopilot>,
     mut query: Query<&mut Lean>,
 ) {
+    // While fully on, autopilot drives Lean.current directly (corner-peek —
+    // see autopilot_think), same hands-off deal as mouse_look/touch_look.
+    if autopilot.0 {
+        return;
+    }
     let target: f32 = if game_over.0 {
         0.0
     } else {

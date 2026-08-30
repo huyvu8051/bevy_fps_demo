@@ -31,10 +31,11 @@
 // the side" failure mode both Left 4 Dead and World War Z's companion bots
 // are documented to have.
 
+use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use bevy::math::ops;
 use bevy::prelude::*;
 
-use crate::{FpsCamera, Player, TouchAiming};
+use crate::{FpsCamera, Lean, Player, TouchAiming, LEAN_SIDE_OFFSET};
 use shared::{random_aim_point, resolve_bone_world_positions, Health, NetPlayer, Zombie, ZombieHitboxBones, PLAYER_MAX_HEALTH};
 
 /// Master on/off switch — ON by default, see the module doc comment. OFF
@@ -166,6 +167,20 @@ const AUTOPILOT_SPRINT_APPROACH_DISTANCE: f32 = 22.0;
 const AUTOPILOT_LOW_HEALTH_FRACTION: f32 = 0.3;
 const AUTOPILOT_LOW_HEALTH_RETREAT_BONUS: f32 = 4.0;
 const AUTOPILOT_IDLE_SCAN_DEG_PER_SEC: f32 = 20.0;
+// Line-of-sight: a hit this much before the aim point still counts as
+// "clear" (the aim point sits just inside the zombie mesh, so the ray
+// naturally ends a hair short).
+const AUTOPILOT_LOS_SLACK: f32 = 0.3;
+// Only bother trying to lean around cover when the blocked target is at
+// least this close — farther than this, repositioning is the better play.
+const AUTOPILOT_PEEK_MAX_DISTANCE: f32 = 32.0;
+// How fast autopilot eases its lean toward / away from a peek (per second,
+// 0..1 units — matches LEAN_SPEED's feel).
+const AUTOPILOT_LEAN_SPEED: f32 = 6.0;
+// Fan of headings tried when steering toward an occluded target — degrees
+// off the straight line to it. Mirrors the server's ZOMBIE_AVOID_ANGLES_DEG.
+const AUTOPILOT_AVOID_ANGLES_DEG: [f32; 6] = [22.0, -22.0, 45.0, -45.0, 70.0, -70.0];
+const AUTOPILOT_AVOID_PROBE_DISTANCE: f32 = 6.0;
 // How often (per second) the comfortable-band dodge cycle repeats, and what
 // fraction of each cycle is spent actually stepping sideways vs. standing
 // still (true Idle) — see the comfortable-band branch's own comment for why
@@ -268,10 +283,12 @@ pub(crate) fn autopilot_think(
     mut state: ResMut<AutopilotState>,
     mut intent: ResMut<AutopilotIntent>,
     player: Query<&Transform, (With<Player>, Without<NetPlayer>, Without<FpsCamera>)>,
-    zombies: Query<(&Transform, &ZombieHitboxBones), With<Zombie>>,
+    zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
     health: Query<&Health, With<Player>>,
     mut camera: Query<(&mut FpsCamera, &GlobalTransform)>,
+    mut lean_query: Query<&mut Lean, With<FpsCamera>>,
+    spatial_query: SpatialQuery,
     mut decision_timer: Local<f32>,
     mut touch_aiming: ResMut<TouchAiming>,
 ) {
@@ -299,7 +316,7 @@ pub(crate) fn autopilot_think(
     let dt = time.delta_secs();
 
     let Some((target_entity, target_transform, target_bones)) =
-        state.target.and_then(|target| zombies.get(target).ok().map(|(t, b)| (target, t, b)))
+        state.target.and_then(|target| zombies.get(target).ok().map(|(e, t, b)| (e, t, b)))
     else {
         // Nothing in range — hold position, slowly scan for something to
         // find. Zombies already actively chase within their own
@@ -335,6 +352,50 @@ pub(crate) fn autopilot_think(
     // wobbled one — the wobble should sway the aim, not flicker the engage-
     // range/fire gate in and out near a boundary.
     let horizontal_distance = Vec2::new(to_target.x, to_target.z).length();
+
+    // --- Line of sight to the target ----------------------------------------
+    // A ray from the eye to the aim point that stops on level geometry before
+    // reaching it means the zombie is behind cover. Zombies are excluded so
+    // their own colliders never read as the blocker; walls and the parked
+    // cars do.
+    let occ_filter = SpatialQueryFilter::default().with_excluded_entities(zombies.iter().map(|(e, _, _)| e));
+    let clear_to_aim_from = |eye: Vec3| -> bool {
+        let delta = aim_point - eye;
+        let dist = delta.length();
+        match Dir3::new(delta) {
+            Ok(dir) => spatial_query
+                .cast_ray(eye, dir, (dist - AUTOPILOT_LOS_SLACK).max(0.0), true, &occ_filter)
+                .is_none(),
+            Err(_) => true,
+        }
+    };
+    let straight_los = clear_to_aim_from(camera_position);
+
+    // Corner peek: straight line blocked, but a ~shoulder-width sideways step
+    // would clear it — lean that way so a shot opens up before fully rounding
+    // the corner. Only worth it fairly close; farther out, repositioning wins.
+    let cam_right = Vec3::new(ops::cos(cam.yaw), 0.0, -ops::sin(cam.yaw));
+    let peek_dir = if straight_los || horizontal_distance > AUTOPILOT_PEEK_MAX_DISTANCE {
+        0.0
+    } else if clear_to_aim_from(camera_position + cam_right * LEAN_SIDE_OFFSET) {
+        1.0
+    } else if clear_to_aim_from(camera_position - cam_right * LEAN_SIDE_OFFSET) {
+        -1.0
+    } else {
+        0.0
+    };
+    // Autopilot owns the lean while fully on (apply_lean_input early-returns
+    // then), same as it owns yaw/pitch — ease toward the peek or back upright.
+    // Once leaned, sync_camera_to_player shifts the eye, so next frame's
+    // `straight_los` naturally flips true from the peek position and the fire
+    // gate below opens.
+    if autopilot.0 {
+        if let Ok(mut lean) = lean_query.single_mut() {
+            let step = (AUTOPILOT_LEAN_SPEED * dt).min(1.0);
+            lean.current += (peek_dir - lean.current) * step;
+        }
+    }
+
     // Smooth cosine S-curve interpolation between 1.0 (close) and 0.15 (far,
     // >=AUTOPILOT_TURN_FAR_DISTANCE).
     let t = (horizontal_distance / AUTOPILOT_TURN_FAR_DISTANCE).clamp(0.0, 1.0);
@@ -363,6 +424,7 @@ pub(crate) fn autopilot_think(
     let raw_aim_error = (cam.yaw - desired_yaw).rem_euclid(std::f32::consts::TAU);
     let aim_error = raw_aim_error.min(std::f32::consts::TAU - raw_aim_error);
     let want_fire = state.hold_fire_timer <= 0.0
+        && straight_los
         && horizontal_distance <= AUTOPILOT_ENGAGE_RANGE + 1.0
         && aim_error < AUTOPILOT_FIRE_AIM_TOLERANCE_DEG.to_radians();
     // Far enough that spraying would climb spread faster than it decays —
@@ -410,7 +472,7 @@ pub(crate) fn autopilot_think(
     // doc comment.
     let nearby: Vec<Vec3> = zombies
         .iter()
-        .map(|(t, _)| t.translation)
+        .map(|(_, t, _)| t.translation)
         .filter(|p| player_transform.translation.distance(*p) <= retreat_range)
         .collect();
 
@@ -418,6 +480,16 @@ pub(crate) fn autopilot_think(
         let average = nearby.iter().copied().sum::<Vec3>() / nearby.len() as f32;
         let away = player_transform.translation - average;
         yaw_relative_axis(cam.yaw, away)
+    } else if !straight_los && peek_dir == 0.0 {
+        // Target behind cover and no quick peek available — close in on it,
+        // steering the heading around whatever's blocking (walls, cars)
+        // instead of walking face-first into it.
+        let toward = target_transform.translation - player_transform.translation;
+        let toward = Vec3::new(toward.x, 0.0, toward.z).normalize_or_zero();
+        yaw_relative_axis(cam.yaw, steer_toward(&spatial_query, camera_position, toward, &occ_filter))
+    } else if !straight_los {
+        // Peeking around a corner — hold position, let the lean do the work.
+        Vec2::ZERO
     } else if horizontal_distance > AUTOPILOT_ENGAGE_RANGE {
         Vec2::new(0.0, 1.0) // approach — forward is toward-target since yaw tracks it
     } else {
@@ -441,7 +513,33 @@ pub(crate) fn autopilot_think(
     };
 
     intent.move_axis = move_axis;
-    intent.sprint = nearby.is_empty() && horizontal_distance > AUTOPILOT_SPRINT_APPROACH_DISTANCE;
+    intent.sprint = nearby.is_empty()
+        && (horizontal_distance > AUTOPILOT_SPRINT_APPROACH_DISTANCE
+            || (!straight_los && peek_dir == 0.0 && horizontal_distance > AUTOPILOT_RETREAT_RANGE));
+}
+
+// Raycast fan toward an occluded target: return the straight-line direction
+// if the way is clear, otherwise the first angled heading (see
+// AUTOPILOT_AVOID_ANGLES_DEG) that is. Mirrors the server's
+// steer_around_obstacles for chase-AI zombies.
+fn steer_toward(spatial_query: &SpatialQuery, origin: Vec3, desired: Vec3, filter: &SpatialQueryFilter) -> Vec3 {
+    let clear = |dir: Vec3| {
+        Dir3::new(dir).is_ok_and(|d| {
+            spatial_query
+                .cast_ray(origin, d, AUTOPILOT_AVOID_PROBE_DISTANCE, true, filter)
+                .is_none()
+        })
+    };
+    if clear(desired) {
+        return desired;
+    }
+    for angle_deg in AUTOPILOT_AVOID_ANGLES_DEG {
+        let rotated = Quat::from_rotation_y(angle_deg.to_radians()) * desired;
+        if clear(rotated) {
+            return rotated;
+        }
+    }
+    desired
 }
 
 // Shortest-path angle interpolation, rate-limited — same reasoning as the
