@@ -1,0 +1,117 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>bevy_fps_demo</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
+  canvas { display: block; }
+
+  #loading {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: #111;
+    color: #eee;
+    font: 14px monospace;
+    z-index: 10;
+  }
+  #loading.hidden { display: none; }
+  #loading-bar-track {
+    width: min(320px, 80vw);
+    height: 10px;
+    border: 1px solid #555;
+    border-radius: 5px;
+    overflow: hidden;
+    background: #222;
+  }
+  #loading-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: #4a7dff;
+    transition: width 0.15s ease-out;
+  }
+  #loading-label { opacity: 0.85; }
+  #loading-error { color: #ff6b6b; max-width: 80vw; text-align: center; }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div id="loading-label">Loading… 0%</div>
+  <div id="loading-bar-track"><div id="loading-bar-fill"></div></div>
+  <div id="loading-error"></div>
+</div>
+
+<script type="module">
+  import init from "./web.js";
+
+  const label = document.getElementById("loading-label");
+  const fill = document.getElementById("loading-bar-fill");
+  const overlay = document.getElementById("loading");
+  const errorBox = document.getElementById("loading-error");
+
+  // wasm-bindgen's init() accepts a Response/promise-of-Response and will
+  // stream+instantiate it directly (WebAssembly.instantiateStreaming) with
+  // no way to observe progress in between — fine for UX, useless for a
+  // progress bar. Fetching by hand instead, reading the body in chunks via
+  // a ReadableStream reader, tracking bytes-read against Content-Length
+  // (the .wasm is served uncompressed as a plain static file here, so the
+  // header is present and accurate — would need a different progress
+  // signal if this were ever served gzip/brotli-compressed with chunked
+  // transfer-encoding, where Content-Length reflects the compressed size
+  // or may be absent entirely).
+  async function fetchWithProgress(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`fetch ${url} failed: ${response.status} ${response.statusText}`);
+    }
+    const total = Number(response.headers.get("Content-Length")) || 0;
+    if (!response.body || total === 0) {
+      // No streaming body or no length to report against — fall back to a
+      // plain await with no progress, better than crashing.
+      label.textContent = "Loading…";
+      return await response.arrayBuffer();
+    }
+
+    const reader = response.body.getReader();
+    const chunks = [];
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      const pct = Math.min(100, Math.round((received / total) * 100));
+      fill.style.width = `${pct}%`;
+      label.textContent = `Loading… ${pct}% (${(received / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB)`;
+    }
+
+    const bytes = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return bytes.buffer;
+  }
+
+  try {
+    const wasmBytes = await fetchWithProgress("./web_bg.wasm");
+    label.textContent = "Starting…";
+    await init({ module_or_path: wasmBytes });
+    // Bevy's own winit canvas takes over the page at this point; the
+    // overlay's only job was covering the wasm download, so it's done.
+    overlay.classList.add("hidden");
+  } catch (err) {
+    label.textContent = "Failed to load.";
+    errorBox.textContent = String(err);
+    console.error(err);
+  }
+</script>
+</body>
+</html>
