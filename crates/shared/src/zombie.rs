@@ -308,15 +308,16 @@ pub const ZOMBIE_LENGTH: f32 = ZOMBIE_WORLD_HEIGHT - 2.0 * ZOMBIE_RADIUS;
 // directly, keeping the same "still covers the mesh's real height"
 // invariant ZOMBIE_LENGTH/ZOMBIE_OUTER_LENGTH (its capsule-era equivalent)
 // kept. Was `ZOMBIE_RADIUS * 4.0` (~0.85, itself a 2x widen doubled);
-// pinned to a flat 0.7 so the zombie's move footprint (this is also the
-// MoveAndSlide cylinder in move_zombies) is small enough to fit gaps a
-// player clears. Does NOT affect the real per-bone damage regions
+// pinned to a flat 0.2 — basically the accurate ZOMBIE_RADIUS, so the
+// zombie's move footprint (this is also the MoveAndSlide cylinder in
+// move_zombies) hugs the real torso and the shot broad-phase no longer
+// grazes. Does NOT affect the real per-bone damage regions
 // (HEAD/TORSO/LIMB_HITBOX_RADIUS still derive from the accurate
 // ZOMBIE_RADIUS above) — zombie_hit_damage_ray still decides how much (if
 // any) damage actually lands from where the ray actually goes; a shot that
 // only reaches this outer shell and no real bone region is a genuine miss
 // (see zombie_hit_damage_ray's own doc comment), not a graze.
-pub const ZOMBIE_OUTER_RADIUS: f32 = 0.7;
+pub const ZOMBIE_OUTER_RADIUS: f32 = 0.2;
 pub const ZOMBIE_OUTER_HEIGHT: f32 = ZOMBIE_WORLD_HEIGHT;
 
 // How far below the zombie root's own Transform/NetTransform.translation
