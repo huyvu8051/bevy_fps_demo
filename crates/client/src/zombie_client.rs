@@ -154,6 +154,42 @@ pub(crate) struct ZombieAnim {
     pub(crate) bite: AnimationNodeIndex,
 }
 
+// Per-kind graph holding EVERY clip in the file, indexed by clip number —
+// only the ItemGallery showcase rig uses this (one zombie pinned per clip,
+// see wire_zombie_animations / spawn_item_gallery_zombie_showcase). Normal
+// gameplay zombies keep using ZombieAnim's 5 named slots.
+#[derive(Resource)]
+pub(crate) struct ZombieKindAnims {
+    classic: (Handle<AnimationGraph>, Vec<AnimationNodeIndex>),
+    meshy: (Handle<AnimationGraph>, Vec<AnimationNodeIndex>),
+}
+
+impl ZombieKindAnims {
+    fn slot(&self, kind: ZombieKind) -> &(Handle<AnimationGraph>, Vec<AnimationNodeIndex>) {
+        match kind {
+            ZombieKind::Classic => &self.classic,
+            ZombieKind::Meshy => &self.meshy,
+        }
+    }
+}
+
+pub(crate) fn build_zombie_kind_anims(
+    asset_server: &AssetServer,
+    graphs: &mut Assets<AnimationGraph>,
+) -> ZombieKindAnims {
+    let mut build = |kind: ZombieKind| {
+        let clips: Vec<Handle<AnimationClip>> = (0..zombie_kind_clip_count(kind))
+            .map(|i| asset_server.load(GltfAssetLabel::Animation(i).from_asset(zombie_kind_mesh_path(kind))))
+            .collect();
+        let (graph, nodes) = AnimationGraph::from_clips(clips);
+        (graphs.add(graph), nodes)
+    };
+    ZombieKindAnims {
+        classic: build(ZombieKind::Classic),
+        meshy: build(ZombieKind::Meshy),
+    }
+}
+
 #[derive(Resource)]
 pub(crate) struct PlayerModelAnim {
     pub(crate) graph: Handle<AnimationGraph>,
@@ -173,10 +209,21 @@ pub(crate) struct PlayerModelAnim {
 // pieces onto that same entity: the GLTF scene, health, hitbox bones for
 // zombie_hit_damage, and a persistent Sensor collider so shoot() can
 // raycast against it (see the collider's own comment below).
-pub(crate) fn on_zombie_replicated(trigger: On<Add, Zombie>, mut commands: Commands, asset_server: Res<AssetServer>) {
+pub(crate) fn on_zombie_replicated(
+    trigger: On<Add, Zombie>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    // ItemGallery showcase zombies also carry `Zombie` but build their own
+    // mesh/kind in spawn_item_gallery_zombie_showcase — don't stack a second
+    // (classic) mesh + a health bar on top of them here.
+    showcase: Query<(), With<ZombieShowcaseClip>>,
+) {
     let entity = trigger.event().entity;
+    if showcase.contains(entity) {
+        return;
+    }
     commands.entity(entity).insert(zombie_cosmetic_bundle());
-    commands.entity(entity).with_child(zombie_mesh_bundle(&asset_server));
+    commands.entity(entity).with_child(zombie_mesh_bundle(&asset_server, ZombieKind::Classic));
     spawn_zombie_health_bar(&mut commands, entity);
 }
 
@@ -197,9 +244,103 @@ pub(crate) fn spawn_local_zombie(commands: &mut Commands, asset_server: &AssetSe
             Health(ZOMBIE_MAX_HEALTH),
             zombie_cosmetic_bundle(),
         ))
-        .with_child(zombie_mesh_bundle(asset_server))
+        .with_child(zombie_mesh_bundle(asset_server, ZombieKind::Classic))
         .id();
     spawn_zombie_health_bar(commands, zombie_entity);
+}
+
+// Scenario::ItemGallery animation-review rig: two rows of stationary
+// zombies (one row per mesh kind), one zombie per animation clip of that
+// kind, each pinned to loop its one clip (ZombieShowcaseClip →
+// wire_zombie_animations). Client-local like spawn_local_zombie — no
+// NetTransform / ZombieMotion, so movement / pose / LOD systems all skip
+// them and they just stand and cycle their clip. Called from setup()'s
+// ItemGallery branch alongside spawn_item_gallery_test_props.
+// Spawn height for the showcase zombies — RigidBody::Dynamic + a cylinder
+// collider let gravity drop them onto the ItemGallery floor (same idea as
+// the cars' ITEM_GALLERY_CAR_DROP_MARGIN), so the classic rig's feet land
+// exactly on Y=0 (its ZOMBIE_MODEL_Y_OFFSET == -ZOMBIE_OUTER_HEIGHT/2) with
+// no hand-tuning; the meshy rig's mesh_y knob then lines its own feet up.
+const ZOMBIE_SHOWCASE_DROP_Y: f32 = 3.0;
+
+pub(crate) fn spawn_item_gallery_zombie_showcase(commands: &mut Commands, asset_server: &AssetServer) {
+    for (row, kind) in [ZombieKind::Classic, ZombieKind::Meshy].into_iter().enumerate() {
+        let count = zombie_kind_clip_count(kind);
+        let row_z = shared::ITEM_GALLERY_ZOMBIE_ROW_Z[row];
+        for (i, (x, z)) in shared::item_gallery_zombie_row(count, row_z).into_iter().enumerate() {
+            commands
+                .spawn((
+                    Name::new(format!("zombie_{kind}_clip{i}")),
+                    Transform::from_xyz(x, ZOMBIE_SHOWCASE_DROP_Y, z),
+                    Zombie,
+                    kind,
+                    ZombieShowcaseClip(i),
+                    Health(ZOMBIE_MAX_HEALTH),
+                    zombie_cosmetic_bundle(),
+                    // Drop-and-settle. Rotation fully locked (the visible
+                    // yaw/pitch lives on the mesh child, not here) so they
+                    // never tip or spin; damping bleeds off the landing.
+                    RigidBody::Dynamic,
+                    Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
+                    LockedAxes::new().lock_rotation_x().lock_rotation_y().lock_rotation_z(),
+                    LinearDamping(4.0),
+                    AngularDamping(4.0),
+                ))
+                .with_child(zombie_mesh_bundle(asset_server, kind));
+        }
+    }
+}
+
+const ZOMBIE_MESHY_TRANSFORM_RON: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/data/zombie_meshy_transform.ron");
+
+// F9 (EDITOR=1, ItemGallery): reads a live meshy showcase zombie's
+// mesh-child scale / rotation / Y-offset and writes them to
+// zombie_meshy_transform.ron, so "rotate/scale/nudge it in the editor,
+// eyeball, repeat" ends with a real save. All 7 meshy showcase zombies
+// share one transform, so any one is read. The root Y is physics-owned
+// (gravity), so only the mesh child matters here. Runs on the same F9 as
+// the car handler.
+pub(crate) fn save_zombie_meshy_showcase_transform(
+    keys: Res<ButtonInput<KeyCode>>,
+    roots: Query<(&Children, &ZombieKind), With<ZombieShowcaseClip>>,
+    child_tf: Query<&Transform, (With<SceneRoot>, Without<ZombieShowcaseClip>)>,
+    mut toast: ResMut<F9SaveToast>,
+) {
+    if !keys.just_pressed(KeyCode::F9) {
+        return;
+    }
+    let Some((children, _)) = roots.iter().find(|(_, k)| **k == ZombieKind::Meshy) else {
+        return; // not the ItemGallery showcase — nothing to save
+    };
+    let Some(mesh) = children.iter().find_map(|c| child_tf.get(c).ok()) else {
+        return;
+    };
+
+    let (ry, rx, rz) = mesh.rotation.to_euler(EulerRot::YXZ);
+    let out = format!(
+        "// Meshy showcase zombie transform — Scenario::ItemGallery only.\n\
+         //   (scale, mesh_y, rot_x_deg, rot_y_deg, rot_z_deg)\n\
+         // F9 (EDITOR=1) writes this; hand-editing works too.\n\
+         ({}, {}, {}, {}, {})\n",
+        ron_f32(mesh.scale.x),
+        ron_f32(mesh.translation.y),
+        ron_f32(rx.to_degrees()),
+        ron_f32(ry.to_degrees()),
+        ron_f32(rz.to_degrees()),
+    );
+    match std::fs::write(ZOMBIE_MESHY_TRANSFORM_RON, out) {
+        Ok(()) => {
+            info!("saved meshy zombie transform -> {ZOMBIE_MESHY_TRANSFORM_RON}");
+            // Runs after the car handler in the Update tuple — fold into
+            // its "saved N cars" line if that one just succeeded.
+            toast.ok_also("F9: saved meshy zombie transform", " + meshy zombie");
+        }
+        Err(e) => {
+            error!("F9 meshy zombie save failed writing {ZOMBIE_MESHY_TRANSFORM_RON}: {e}");
+            toast.err(format!("F9: meshy zombie save FAILED — {e}"));
+        }
+    }
 }
 
 // No collider here anymore — hit detection is server-authoritative now
@@ -232,10 +373,10 @@ pub(crate) fn zombie_cosmetic_bundle() -> impl Bundle {
 // wire_zombie_hitbox_bones walk back up through ChildOf to find the Zombie
 // ancestor regardless of how many hops that takes, so this extra nesting
 // level doesn't break either of them.
-pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer) -> impl Bundle {
+pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer, kind: ZombieKind) -> impl Bundle {
     (
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(ZOMBIE_PATH))),
-        Transform::from_xyz(0.0, ZOMBIE_MODEL_Y_OFFSET, 0.0).with_scale(Vec3::splat(ZOMBIE_SCALE)),
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(zombie_kind_mesh_path(kind)))),
+        zombie_kind_mesh_transform(kind),
     )
 }
 
@@ -506,24 +647,42 @@ pub(crate) fn update_zombie_lod(
 pub(crate) fn wire_zombie_animations(
     mut commands: Commands,
     anim: Res<ZombieAnim>,
+    kind_anims: Res<ZombieKindAnims>,
     child_of: Query<&ChildOf>,
-    zombies: Query<(), With<Zombie>>,
+    zombies: Query<(Option<&ZombieShowcaseClip>, Option<&ZombieKind>), With<Zombie>>,
     mut new_players: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
 ) {
     for (player_entity, mut player) in &mut new_players {
         let Some(root) = find_animation_root(player_entity, &child_of, |e| zombies.contains(e)) else {
             continue;
         };
+        let (showcase, kind) = zombies
+            .get(root)
+            .map_or((None, None), |(s, k)| (s.copied(), k.copied()));
+
         // try_insert, not insert: with 100 zombies all loading their glTF
         // scenes at once, one can despawn (killed instantly, or the
         // respawn queue replacing it) between this query running and the
         // command actually applying — same benign race chase_action_system
         // already works around below. Plain insert() surfaced it as a
         // "entity despawned" warning, once per zombie, right at startup.
-        commands
-            .entity(player_entity)
-            .try_insert(AnimationGraphHandle(anim.graph.clone()));
-        player.play(anim.idle).repeat();
+        if let Some(ZombieShowcaseClip(clip)) = showcase {
+            // ItemGallery showcase zombie — pin to its one clip forever,
+            // using the kind's full-clip graph rather than ZombieAnim's
+            // 5 named slots. update_zombie_animation skips it after this.
+            let (graph, clips) = kind_anims.slot(kind.unwrap_or_default());
+            commands
+                .entity(player_entity)
+                .try_insert(AnimationGraphHandle(graph.clone()));
+            if let Some(&node) = clips.get(clip % clips.len().max(1)) {
+                player.play(node).repeat();
+            }
+        } else {
+            commands
+                .entity(player_entity)
+                .try_insert(AnimationGraphHandle(anim.graph.clone()));
+            player.play(anim.idle).repeat();
+        }
         commands.entity(root).try_insert(ZombieAnimationPlayer(player_entity));
     }
 }
@@ -687,7 +846,13 @@ pub(crate) fn wire_gun_mesh(
 pub(crate) fn update_zombie_animation(
     anim: Res<ZombieAnim>,
     player: Query<&Transform, With<Player>>,
-    mut zombies: Query<(&Transform, &NetTransform, &Health, &ZombieAnimationPlayer, &mut ZombiePose), With<Zombie>>,
+    // Without<ZombieShowcaseClip>: ItemGallery showcase zombies stay pinned
+    // to the single clip wire_zombie_animations gave them (they also carry
+    // no NetTransform, so this query would skip them anyway — belt and braces).
+    mut zombies: Query<
+        (&Transform, &NetTransform, &Health, &ZombieAnimationPlayer, &mut ZombiePose),
+        (With<Zombie>, Without<ZombieShowcaseClip>),
+    >,
     mut players: Query<&mut AnimationPlayer>,
 ) {
     let Ok(player_transform) = player.single() else {

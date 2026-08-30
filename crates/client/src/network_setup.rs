@@ -588,6 +588,7 @@ pub(crate) fn map_select_button(
             let (pieces, panels) = shared::item_gallery_level_pieces();
             spawn_level_pieces(&mut commands, pieces, panels);
             spawn_item_gallery_test_props(&mut commands, &asset_server);
+            spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
         } else if USE_MAP1_B1_GARAGE && scenario != Scenario::LegacyArena {
             let (pieces, panels) = shared::map1_level_pieces();
             spawn_level_pieces(&mut commands, pieces, panels);

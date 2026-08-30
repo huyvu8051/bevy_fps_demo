@@ -1,0 +1,4 @@
+// Meshy showcase zombie transform — Scenario::ItemGallery only.
+//   (scale, mesh_y, rot_x_deg, rot_y_deg, rot_z_deg)
+// F9 (EDITOR=1) writes this; hand-editing works too.
+(1.0, -1.0, 90.0, -0.0, 0.0)

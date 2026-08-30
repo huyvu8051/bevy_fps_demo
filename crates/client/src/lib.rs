@@ -30,13 +30,14 @@ use shared::{
     ZombieAnimationPlayer,
     PlayerDiedFx, PlayerFiredFx,
     PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
-    SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, wire_zombie_hitbox_bones,
+    SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieMotion, ZombieShowcaseClip, wire_zombie_hitbox_bones,
+    zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_mesh_transform,
     INTERP_DELAY_SECS, MAX_SHOT_DISTANCE,
     HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
     resolve_bone_world_positions, zombie_hit_damage_ray,
     NAVMESH_COLUMN_OBSTACLES, PILLAR_RADIUS, PROTOCOL_ID, ZOMBIE_ANIM_BITE, ZOMBIE_ANIM_CRAWL, ZOMBIE_ANIM_IDLE, ZOMBIE_ANIM_RUN, ZOMBIE_ANIM_WALK,
-    ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_MODEL_Y_OFFSET, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_PATH,
-    zombie_pose_for, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_SCALE, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
+    ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_PATH,
+    zombie_pose_for, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT, ARENA_WALL_THICKNESS,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
@@ -1727,6 +1728,7 @@ fn setup(
         let (pieces, panels) = shared::item_gallery_level_pieces();
         spawn_level_pieces(&mut commands, pieces, panels);
         spawn_item_gallery_test_props(&mut commands, &asset_server);
+        spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
     } else if USE_MAP1_B1_GARAGE {
         // Sàn/tường/dốc/bàn/phòng: build cục bộ từ đúng
         // shared::map1_level_pieces() server cũng gọi để dựng collider
@@ -1816,6 +1818,9 @@ fn setup(
     // No local zombie spawning here anymore — zombies are server-spawned
     // and replicated; see the on_zombie_replicated observer.
     commands.insert_resource(zombie_anim);
+    // Per-kind full-clip graphs — only the ItemGallery showcase rig uses
+    // these (one zombie pinned per clip); harmless everywhere else.
+    commands.insert_resource(build_zombie_kind_anims(&asset_server, &mut graphs));
 
     let player_model_clips: Vec<Handle<AnimationClip>> = [
         PLAYER_MODEL_ANIM_IDLE,

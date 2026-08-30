@@ -79,44 +79,79 @@ pub struct ZombieHitboxBones {
 // crates/server (Phase 2 onward — real hit detection) — same system,
 // same component, so there's exactly one place this bone-name mapping
 // can drift out of sync with the actual rig.
+// Each entry is (rig node name, setter) — the setter both picks which field
+// this bone belongs on and, for the limb chains, which position in the
+// [shoulder/hip, elbow/knee, hand/foot] ordering, so zombie_hit_damage_bones
+// can always build its capsule segments in the right order regardless of
+// what order glTF nodes happen to load in.
+type HitboxSetter = fn(&mut ZombieHitboxBones, Entity);
+
+const CLASSIC_HITBOX_SLOTS: &[(&str, HitboxSetter)] = &[
+    ("Head", |b, e| b.head = Some(e)),
+    ("Spine", |b, e| b.belly = Some(e)),
+    ("Spine2", |b, e| b.chest = Some(e)),
+    ("LeftArm", |b, e| b.left_arm[0] = Some(e)),
+    ("LeftForeArm", |b, e| b.left_arm[1] = Some(e)),
+    ("LeftHand", |b, e| b.left_arm[2] = Some(e)),
+    ("RightArm", |b, e| b.right_arm[0] = Some(e)),
+    ("RightForeArm", |b, e| b.right_arm[1] = Some(e)),
+    ("RightHand", |b, e| b.right_arm[2] = Some(e)),
+    ("LeftUpLeg", |b, e| b.left_leg[0] = Some(e)),
+    ("LeftLeg", |b, e| b.left_leg[1] = Some(e)),
+    ("LeftFoot", |b, e| b.left_leg[2] = Some(e)),
+    ("RightUpLeg", |b, e| b.right_leg[0] = Some(e)),
+    ("RightLeg", |b, e| b.right_leg[1] = Some(e)),
+    ("RightFoot", |b, e| b.right_leg[2] = Some(e)),
+];
+
+// zombie_meshy's rig is Mixamo-named too — identical to CLASSIC except the
+// chest bone is "Spine02" (it also carries Spine01 / LeftShoulder /
+// RightShoulder that the classic rig lacks; the game's arm chains still
+// start at LeftArm/RightArm, so those aren't mapped).
+const MESHY_HITBOX_SLOTS: &[(&str, HitboxSetter)] = &[
+    ("Head", |b, e| b.head = Some(e)),
+    ("Spine", |b, e| b.belly = Some(e)),
+    ("Spine02", |b, e| b.chest = Some(e)),
+    ("LeftArm", |b, e| b.left_arm[0] = Some(e)),
+    ("LeftForeArm", |b, e| b.left_arm[1] = Some(e)),
+    ("LeftHand", |b, e| b.left_arm[2] = Some(e)),
+    ("RightArm", |b, e| b.right_arm[0] = Some(e)),
+    ("RightForeArm", |b, e| b.right_arm[1] = Some(e)),
+    ("RightHand", |b, e| b.right_arm[2] = Some(e)),
+    ("LeftUpLeg", |b, e| b.left_leg[0] = Some(e)),
+    ("LeftLeg", |b, e| b.left_leg[1] = Some(e)),
+    ("LeftFoot", |b, e| b.left_leg[2] = Some(e)),
+    ("RightUpLeg", |b, e| b.right_leg[0] = Some(e)),
+    ("RightLeg", |b, e| b.right_leg[1] = Some(e)),
+    ("RightFoot", |b, e| b.right_leg[2] = Some(e)),
+];
+
+pub fn zombie_hitbox_bone_slots(kind: ZombieKind) -> &'static [(&'static str, HitboxSetter)] {
+    match kind {
+        ZombieKind::Classic => CLASSIC_HITBOX_SLOTS,
+        ZombieKind::Meshy => MESHY_HITBOX_SLOTS,
+    }
+}
+
 pub fn wire_zombie_hitbox_bones(
     child_of: Query<&ChildOf>,
-    mut zombies: Query<&mut ZombieHitboxBones, With<Zombie>>,
+    mut zombies: Query<(&mut ZombieHitboxBones, Option<&ZombieKind>), With<Zombie>>,
     new_names: Query<(Entity, &Name), Added<Name>>,
 ) {
-    // Each entry is (rig node name, setter) — the setter both picks which
-    // field this bone belongs on and, for the limb chains, which position
-    // in the [shoulder/hip, elbow/knee, hand/foot] ordering, so
-    // zombie_hit_damage_bones can always build its capsule segments in the
-    // right order regardless of what order glTF nodes happen to load in.
-    type Setter = fn(&mut ZombieHitboxBones, Entity);
-    const SLOTS: &[(&str, Setter)] = &[
-        ("Head", |b, e| b.head = Some(e)),
-        ("Spine", |b, e| b.belly = Some(e)),
-        ("Spine2", |b, e| b.chest = Some(e)),
-        ("LeftArm", |b, e| b.left_arm[0] = Some(e)),
-        ("LeftForeArm", |b, e| b.left_arm[1] = Some(e)),
-        ("LeftHand", |b, e| b.left_arm[2] = Some(e)),
-        ("RightArm", |b, e| b.right_arm[0] = Some(e)),
-        ("RightForeArm", |b, e| b.right_arm[1] = Some(e)),
-        ("RightHand", |b, e| b.right_arm[2] = Some(e)),
-        ("LeftUpLeg", |b, e| b.left_leg[0] = Some(e)),
-        ("LeftLeg", |b, e| b.left_leg[1] = Some(e)),
-        ("LeftFoot", |b, e| b.left_leg[2] = Some(e)),
-        ("RightUpLeg", |b, e| b.right_leg[0] = Some(e)),
-        ("RightLeg", |b, e| b.right_leg[1] = Some(e)),
-        ("RightFoot", |b, e| b.right_leg[2] = Some(e)),
-    ];
-
     for (bone_entity, name) in &new_names {
-        let Some(&(_, set)) = SLOTS.iter().find(|&&(slot_name, _)| slot_name == name.as_str()) else {
+        let n = name.as_str();
+        // Cheap reject before the ChildOf walk: not a bone name in either rig.
+        if n != "Spine02" && !CLASSIC_HITBOX_SLOTS.iter().any(|&(s, _)| s == n) {
             continue;
-        };
+        }
 
         let mut current = bone_entity;
         for _ in 0..20 {
-            if let Ok(mut bones) = zombies.get_mut(current) {
-                set(&mut bones, bone_entity);
+            if let Ok((mut bones, kind)) = zombies.get_mut(current) {
+                let slots = zombie_hitbox_bone_slots(kind.copied().unwrap_or_default());
+                if let Some(&(_, set)) = slots.iter().find(|&&(s, _)| s == n) {
+                    set(&mut bones, bone_entity);
+                }
                 break;
             }
             let Ok(parent) = child_of.get(current) else {
@@ -314,6 +349,122 @@ pub const ZOMBIE_ANIM_CRAWL: usize = 1;
 pub const ZOMBIE_ANIM_IDLE: usize = 2;
 pub const ZOMBIE_ANIM_RUN: usize = 3;
 pub const ZOMBIE_ANIM_WALK: usize = 4;
+
+// --- Second zombie mesh (Scenario::ItemGallery animation-review rig only) ---
+//
+// A fully separate Meshy-generated zombie — different 24-joint rig, 7 clips
+// (0..4 Text-to-Motion, 5=Running, 6=Walking) — NOT wired into gameplay:
+// only spawn_item_gallery_zombie_showcase (crates/client) uses it, to stand
+// one instance per clip next to the classic zombie's own row so the two
+// rigs' animations can be eyeballed side by side. See commit bf3614c.
+pub const ZOMBIE_MESHY_PATH: &str = "characters/zombie_meshy/mesh/zombie_meshy.glb";
+
+// Eyeball-tuned placement for the meshy rig — its glTF ships lying on its
+// back (bind pose ~flat in Y, long in Z) at an unknown scale, so the right
+// numbers can only be found by eye (F2 editor). Stored in a RON file rather
+// than compiled in so F9 can save edits back — see zombie_meshy_transform()
+// and crates/client's save_zombie_meshy_showcase_transform.
+//
+// Tuple layout: (scale, mesh_y, rot_x_deg, rot_y_deg, rot_z_deg)
+//   scale    — uniform scale of the mesh child
+//   mesh_y   — Y offset of the mesh child relative to the (physics-settled)
+//              root, to line the meshy rig's feet up with the floor — the
+//              classic rig's equivalent is the baked-in ZOMBIE_MODEL_Y_OFFSET
+//   rot_*    — X/Y/Z euler degrees (EulerRot::YXZ); X pitch stands it up,
+//              Y yaw faces it at the player
+
+fn zombie_meshy_transform_raw() -> (f32, f32, f32, f32, f32) {
+    static DATA: std::sync::OnceLock<(f32, f32, f32, f32, f32)> = std::sync::OnceLock::new();
+    *DATA.get_or_init(|| {
+        // Same CARGO_MANIFEST_DIR-relative resolution as the item-gallery
+        // car physics RON — see its own comment for why not CWD.
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../client/assets/data/zombie_meshy_transform.ron");
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("failed to read meshy zombie transform at {path}: {e}"));
+        ron::de::from_str(&text)
+            .unwrap_or_else(|e| panic!("failed to parse meshy zombie transform at {path}: {e}"))
+    })
+}
+
+pub fn zombie_meshy_scale() -> f32 {
+    zombie_meshy_transform_raw().0
+}
+/// Y offset of the meshy mesh child relative to the zombie root.
+pub fn zombie_meshy_mesh_y() -> f32 {
+    zombie_meshy_transform_raw().1
+}
+/// X/Y/Z euler degrees.
+pub fn zombie_meshy_rot_deg() -> Vec3 {
+    let (_, _, x, y, z) = zombie_meshy_transform_raw();
+    Vec3::new(x, y, z)
+}
+
+/// Which of the two zombie meshes an entity uses. Only ItemGallery's
+/// showcase rig ever sets it to `Meshy`; every networked/gameplay zombie is
+/// `Classic` (and usually carries no `ZombieKind` at all — absence == Classic,
+/// see `zombie_hitbox_bone_slots` / client's `zombie_mesh_bundle`).
+#[derive(Component, Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum ZombieKind {
+    #[default]
+    Classic,
+    Meshy,
+}
+
+impl std::fmt::Display for ZombieKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ZombieKind::Classic => "classic",
+            ZombieKind::Meshy => "meshy",
+        })
+    }
+}
+
+/// Marks a showcase zombie (ItemGallery) whose animation is pinned to this
+/// clip index for its whole life — client's `wire_zombie_animations` plays
+/// it once and `update_zombie_animation` skips the entity, so no pose logic
+/// ever runs. Never replicated; these entities are client-local.
+#[derive(Component, Clone, Copy)]
+pub struct ZombieShowcaseClip(pub usize);
+
+pub fn zombie_kind_mesh_path(kind: ZombieKind) -> &'static str {
+    match kind {
+        ZombieKind::Classic => ZOMBIE_PATH,
+        ZombieKind::Meshy => ZOMBIE_MESHY_PATH,
+    }
+}
+
+/// How many animation clips the kind's glTF file ships — one showcase
+/// zombie is spawned per clip.
+pub fn zombie_kind_clip_count(kind: ZombieKind) -> usize {
+    match kind {
+        ZombieKind::Classic => 5,
+        ZombieKind::Meshy => 7,
+    }
+}
+
+/// Local transform for the mesh child under a zombie root, per kind. Classic
+/// keeps the exact transform on_zombie_spawned / zombie_mesh_bundle already
+/// used (`ZOMBIE_MODEL_Y_OFFSET` + `ZOMBIE_SCALE`); meshy uses its own
+/// eyeball-tuned consts above (Y placement is on the root instead — see
+/// `zombie_kind_showcase_root_y`).
+pub fn zombie_kind_mesh_transform(kind: ZombieKind) -> Transform {
+    match kind {
+        ZombieKind::Classic => {
+            Transform::from_xyz(0.0, ZOMBIE_MODEL_Y_OFFSET, 0.0).with_scale(Vec3::splat(ZOMBIE_SCALE))
+        }
+        ZombieKind::Meshy => {
+            let r = zombie_meshy_rot_deg();
+            Transform::from_xyz(0.0, zombie_meshy_mesh_y(), 0.0)
+                .with_rotation(Quat::from_euler(
+                    EulerRot::YXZ,
+                    r.y.to_radians(),
+                    r.x.to_radians(),
+                    r.z.to_radians(),
+                ))
+                .with_scale(Vec3::splat(zombie_meshy_scale()))
+        }
+    }
+}
 
 pub const ZOMBIE_PATH_RECALC_INTERVAL: f32 = 0.8;
 // How long a zombie sticks with its current chase target before re-picking

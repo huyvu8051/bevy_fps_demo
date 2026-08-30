@@ -234,3 +234,22 @@ pub fn item_gallery_car_physics() -> Vec<ItemGalleryCarPhysics> {
         })
         .collect()
 }
+
+// --- Animation-showcase zombie rows (client-only, Scenario::ItemGallery) ---
+//
+// Two rows of stationary zombies between the player spawn (z ≈ +18) and the
+// car rows (z −6 / −14), one row per zombie mesh kind, one zombie per
+// animation clip of that kind. See crates/client's
+// spawn_item_gallery_zombie_showcase.
+pub const ITEM_GALLERY_ZOMBIE_ROW_Z: [f32; 2] = [10.0, 5.0];
+// Wide enough that the showcase zombies' drop colliders (ZOMBIE_OUTER_RADIUS,
+// ~4x the mesh radius) don't overlap and shove each other while settling.
+pub const ITEM_GALLERY_ZOMBIE_SPACING: f32 = 2.5;
+
+/// A single centered row of `count` evenly-spaced `(x, z)` slots.
+pub fn item_gallery_zombie_row(count: usize, z: f32) -> Vec<(f32, f32)> {
+    let start_x = -(count.saturating_sub(1) as f32) * ITEM_GALLERY_ZOMBIE_SPACING / 2.0;
+    (0..count)
+        .map(|i| (start_x + i as f32 * ITEM_GALLERY_ZOMBIE_SPACING, z))
+        .collect()
+}

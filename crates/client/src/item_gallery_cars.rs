@@ -39,7 +39,18 @@ impl Plugin for ItemGalleryCarsPlugin {
         // (crates/client/src/lib.rs) — no key handler at all in a normal
         // player build.
         if std::env::var("EDITOR").is_ok() {
-            app.add_systems(Update, save_item_gallery_car_physics_on_key);
+            app.init_resource::<F9SaveToast>()
+                .add_systems(Startup, spawn_f9_toast_ui)
+                .add_systems(
+                    Update,
+                    (
+                        save_item_gallery_car_physics_on_key,
+                        // Same F9 keypress also saves the shared meshy
+                        // showcase zombie transform (zombie_client.rs).
+                        save_zombie_meshy_showcase_transform,
+                        tick_f9_toast,
+                    ),
+                );
         }
     }
 }
@@ -196,20 +207,107 @@ fn force_backface_culling_on_car_materials(
 const ITEM_GALLERY_CAR_PHYSICS_RON: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/assets/data/item_gallery_car_physics.ron");
 
-fn round4(v: f32) -> f32 {
+pub(crate) fn round4(v: f32) -> f32 {
     (v * 1.0e4).round() / 1.0e4
 }
 
 /// f32 -> RON float literal: shortest form, but always with a decimal
-/// point (`1` is an int in RON and won't parse into an f32 field).
-fn ron_f32(v: f32) -> String {
+/// point (`1` is an int in RON and won't parse into an f32 field). Shared
+/// with save_zombie_meshy_showcase_transform.
+pub(crate) fn ron_f32(v: f32) -> String {
     let s = format!("{}", round4(v));
     if s.contains('.') { s } else { format!("{s}.0") }
+}
+
+// --- On-screen F9-save feedback (EDITOR=1 only) --------------------------
+//
+// The F9 handlers already info!/error! log, but you're looking at the game
+// window in the editor, not the terminal — so both handlers also drop a
+// line here and tick_f9_toast flashes it bottom-centre for a couple of
+// seconds.
+#[derive(Resource, Default)]
+pub(crate) struct F9SaveToast {
+    text: String,
+    ttl: f32,
+    is_error: bool,
+}
+
+impl F9SaveToast {
+    pub(crate) fn ok(&mut self, msg: impl Into<String>) {
+        self.text = msg.into();
+        self.ttl = 2.5;
+        self.is_error = false;
+    }
+    pub(crate) fn err(&mut self, msg: impl Into<String>) {
+        self.text = msg.into();
+        self.ttl = 4.0;
+        self.is_error = true;
+    }
+    /// Append `extra` to a success line still showing from earlier THIS
+    /// frame (so "saved N cars" becomes "saved N cars + meshy zombie"),
+    /// otherwise show `standalone`.
+    pub(crate) fn ok_also(&mut self, standalone: &str, extra: &str) {
+        if self.ttl > 0.0 && !self.is_error {
+            self.text.push_str(extra);
+            self.ttl = 2.5;
+        } else {
+            self.ok(standalone);
+        }
+    }
+}
+
+#[derive(Component)]
+struct F9ToastText;
+
+fn spawn_f9_toast_ui(mut commands: Commands) {
+    commands.spawn((
+        Text::new(""),
+        TextFont { font_size: 18.0, ..default() },
+        TextColor(Color::srgb(0.6, 1.0, 0.6)),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(48.0),
+            left: Val::Percent(50.0),
+            margin: UiRect::left(Val::Px(-160.0)),
+            width: Val::Px(320.0),
+            padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.65)),
+        Visibility::Hidden,
+        F9ToastText,
+    ));
+}
+
+fn tick_f9_toast(
+    time: Res<Time>,
+    mut toast: ResMut<F9SaveToast>,
+    mut q: Query<(&mut Text, &mut Visibility, &mut TextColor), With<F9ToastText>>,
+) {
+    let Ok((mut text, mut vis, mut color)) = q.single_mut() else {
+        return;
+    };
+    if toast.ttl > 0.0 {
+        toast.ttl -= time.delta_secs();
+        if text.0 != toast.text {
+            text.0 = toast.text.clone();
+        }
+        color.0 = if toast.is_error {
+            Color::srgb(1.0, 0.6, 0.5)
+        } else {
+            Color::srgb(0.6, 1.0, 0.6)
+        };
+        *vis = Visibility::Inherited;
+    } else if *vis != Visibility::Hidden {
+        *vis = Visibility::Hidden;
+    }
 }
 
 fn save_item_gallery_car_physics_on_key(
     keys: Res<ButtonInput<KeyCode>>,
     cars: Query<(&Name, &Transform), With<ItemGalleryTestProp>>,
+    mut toast: ResMut<F9SaveToast>,
 ) {
     if !keys.just_pressed(KeyCode::F9) {
         return;
@@ -227,6 +325,7 @@ fn save_item_gallery_car_physics_on_key(
                 "F9 save aborted: car '{name}' not in the scene \
                  (are you on Scenario::ItemGallery / MAP_ID=5?) — nothing written"
             );
+            toast.err(format!("F9: car '{name}' not in scene — nothing saved"));
             return;
         };
 
@@ -264,6 +363,7 @@ fn save_item_gallery_car_physics_on_key(
         Ok(s) => s,
         Err(e) => {
             error!("F9 save aborted: can't read {ITEM_GALLERY_CAR_PHYSICS_RON}: {e}");
+            toast.err(format!("F9: can't read car RON — {e}"));
             return;
         }
     };
@@ -282,7 +382,13 @@ fn save_item_gallery_car_physics_on_key(
     out.push_str("]\n");
 
     match std::fs::write(ITEM_GALLERY_CAR_PHYSICS_RON, out) {
-        Ok(()) => info!("saved {} cars -> {ITEM_GALLERY_CAR_PHYSICS_RON}", rows.len()),
-        Err(e) => error!("F9 save failed writing {ITEM_GALLERY_CAR_PHYSICS_RON}: {e}"),
+        Ok(()) => {
+            info!("saved {} cars -> {ITEM_GALLERY_CAR_PHYSICS_RON}", rows.len());
+            toast.ok(format!("F9: saved {} cars", rows.len()));
+        }
+        Err(e) => {
+            error!("F9 save failed writing {ITEM_GALLERY_CAR_PHYSICS_RON}: {e}");
+            toast.err(format!("F9: car save FAILED — {e}"));
+        }
     }
 }
