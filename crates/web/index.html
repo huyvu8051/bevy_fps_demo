@@ -2,10 +2,35 @@
 <html>
 <head>
 <meta charset="utf-8">
+<!-- viewport-fit=cover: lets the page draw under the iPhone notch/home-
+     indicator area (so #game-container's own padding — via
+     env(safe-area-inset-*) above — is what actually keeps content clear
+     of them, rather than Safari just letterboxing the page short of that
+     area and never handing us the extra width/height at all). -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>bevy_fps_demo</title>
 <style>
   html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
-  canvas { display: block; }
+
+  /* Padded container the canvas actually lives in — WindowPlugin's
+     `canvas: Some("#bevy-canvas")` + `fit_canvas_to_parent: true`
+     (crates/client/src/lib.rs) makes winit continuously resize
+     #bevy-canvas to match THIS element's size, so the padding here is
+     real screen space the canvas never draws into, not just a CSS border
+     sitting on top of it. `env(safe-area-inset-*)` covers the iPhone
+     notch/Dynamic Island/home-indicator safe areas on top of a flat
+     minimum padding — without it the touch controls (bottom corners)
+     would sit right under the home-indicator gesture zone. */
+  #game-container {
+    position: fixed;
+    inset: 0;
+    box-sizing: border-box;
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-right: max(12px, env(safe-area-inset-right));
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    padding-left: max(12px, env(safe-area-inset-left));
+  }
+  #bevy-canvas { display: block; width: 100%; height: 100%; }
 
   #loading {
     position: fixed;
@@ -40,6 +65,8 @@
 </style>
 </head>
 <body>
+
+<div id="game-container"><canvas id="bevy-canvas"></canvas></div>
 
 <div id="loading">
   <div id="loading-label">Loading… 0%</div>

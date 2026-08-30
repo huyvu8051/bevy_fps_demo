@@ -1058,6 +1058,27 @@ pub fn main() {
                         } else {
                             WindowMode::Windowed
                         },
+                        // wasm32: winit's web backend has no OS window at
+                        // all — `mode`/`WindowResolution` above are moot,
+                        // it just creates (or reuses, per `canvas` below) a
+                        // <canvas> element sized at Bevy's own default
+                        // (1280x720 logical px) and leaves it there,
+                        // regardless of the actual browser viewport —
+                        // confirmed live: every screenshot taken of the web
+                        // build so far showed the canvas as a small fixed
+                        // box, not filling the tab. `canvas` points winit
+                        // at the specific <canvas id="bevy-canvas"> element
+                        // crates/web/index.html creates (inside a padded
+                        // container div, see that file's own comment) —
+                        // without this, winit creates its own bare canvas
+                        // appended straight to <body>, outside that padded
+                        // container. `fit_canvas_to_parent` then makes
+                        // winit continuously resize that canvas to match
+                        // its parent (the padded div) every frame, so it
+                        // tracks the real viewport size (and orientation
+                        // changes) instead of staying pinned at 1280x720.
+                        canvas: if cfg!(target_arch = "wasm32") { Some("#bevy-canvas".to_string()) } else { None },
+                        fit_canvas_to_parent: cfg!(target_arch = "wasm32"),
                         ..default()
                     }),
                     ..default()
