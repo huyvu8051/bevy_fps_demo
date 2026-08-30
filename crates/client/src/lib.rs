@@ -842,14 +842,37 @@ impl Default for GunVisible {
 #[derive(Resource, Default)]
 struct MapMsaaOn(bool);
 
-// Starts matching the sun DirectionalLight's own shadows_enabled: true at
-// spawn (see setup()) — same reasoning as MapMsaaOn.
+// Starts matching the sun DirectionalLight's own shadows_enabled at spawn
+// (see setup()) — same reasoning as MapMsaaOn. Default now follows
+// light_shadows_enabled() so a desktop dev run starts with shadows off.
 #[derive(Resource)]
 struct MapShadowsOn(bool);
 impl Default for MapShadowsOn {
     fn default() -> Self {
-        Self(true)
+        Self(light_shadows_enabled())
     }
+}
+
+// Dynamic lighting is expensive on a warm laptop during walk-around /
+// editor sessions and adds nothing to judging prop scale, so desktop
+// defaults it OFF: no sun, no hall/map point lights — just the per-camera
+// AmbientLight (flat but everything stays clearly visible). `LIGHTS=1`
+// brings the light entities back; `SHADOWS=1` additionally re-enables
+// their shadow maps (the priciest part — point-light shadows are a 6-face
+// cubemap render each, per frame). Mobile (iOS/Android) always keeps full
+// lighting + shadows — this is purely a desktop dev-ergonomics / thermal
+// lever, not a shipped downgrade.
+pub(crate) fn dynamic_lights_enabled() -> bool {
+    cfg!(any(target_os = "ios", target_os = "android")) || std::env::var("LIGHTS").is_ok()
+}
+pub(crate) fn light_shadows_enabled() -> bool {
+    cfg!(any(target_os = "ios", target_os = "android")) || std::env::var("SHADOWS").is_ok()
+}
+
+/// AmbientLight brightness for the two scene cameras — bumped hard when
+/// dynamic lights are off so an ambient-only scene doesn't read as murky.
+fn ambient_brightness() -> f32 {
+    if dynamic_lights_enabled() { 250.0 } else { 1800.0 }
 }
 
 
@@ -1092,7 +1115,27 @@ pub fn main() {
                 ..WinitSettings::game()
             }
         } else {
-            WinitSettings::game()
+            // Desktop: cap the update/redraw rate instead of
+            // WinitSettings::game()'s UpdateMode::Continuous. Continuous
+            // renders flat-out and only relies on VSync to throttle — on a
+            // 120Hz ProMotion Mac, or with EDITOR=1 adding an egui pass, or
+            // a near-empty scene like ItemGallery, that just spins the GPU
+            // hot for no visible benefit in a walk-around / editor session.
+            // Reactive at 1/FPS_CAP still redraws every interval with zero
+            // input (so animation/physics stay smooth) but stops the
+            // uncapped spin. FPS_CAP env overrides the 60 default; unfocused
+            // (window in background while you read the terminal) drops to
+            // 10Hz.
+            let cap = std::env::var("FPS_CAP")
+                .ok()
+                .and_then(|s| s.parse::<f32>().ok())
+                .filter(|c| *c > 0.0)
+                .unwrap_or(60.0);
+            WinitSettings {
+                focused_mode: UpdateMode::reactive(std::time::Duration::from_secs_f32(1.0 / cap)),
+                unfocused_mode: UpdateMode::reactive_low_power(std::time::Duration::from_secs_f32(1.0 / 10.0)),
+                ..WinitSettings::game()
+            }
         });
     // Dev-only level editor (bevy_editor_pls, vendored + patched for Bevy
     // 0.18 under third_party/) — off unless EDITOR=1 is set, so normal
@@ -1101,9 +1144,29 @@ pub fn main() {
     // geometry on the dev Mac, not for on-device use.
     if std::env::var("EDITOR").is_ok() {
         app.add_plugins(bevy_editor_pls::EditorPlugin::default());
+        // AmbientLight is per-camera in Bevy 0.18 (no global resource
+        // fallback), and only the two game cameras in setup() carry one.
+        // bevy_editor_pls spawns its own free / pan-orbit editor cameras
+        // without it, so when dynamic_lights_enabled() is false the editor
+        // viewport renders pitch black while the game view is fine. Give
+        // every ambient-less 3D camera the same fill the game camera uses.
+        app.add_systems(Update, fill_ambient_on_editor_cameras);
     }
     app.add_plugins(GamePlugin);
     app.run();
+}
+
+fn fill_ambient_on_editor_cameras(
+    mut commands: Commands,
+    cams: Query<Entity, (With<Camera3d>, Without<AmbientLight>)>,
+) {
+    for cam in &cams {
+        commands.entity(cam).insert(AmbientLight {
+            color: Color::WHITE,
+            brightness: ambient_brightness(),
+            ..default()
+        });
+    }
 }
 
 // Everything the real game needs that has nothing to do with which
@@ -1652,7 +1715,9 @@ fn setup(
         // Added<LevelBox>/Added<LevelPanel> để dựng mesh+collider.
         let (pieces, panels) = shared::map1_level_pieces();
         spawn_level_pieces(&mut commands, pieces, panels);
-        spawn_map1_lights(&mut commands);
+        if dynamic_lights_enabled() {
+            spawn_map1_lights(&mut commands);
+        }
     } else if USE_TEST_ARENA {
         spawn_test_arena(&mut commands, &mut meshes, &mut materials);
     } else {
@@ -1667,21 +1732,24 @@ fn setup(
         ));
     }
 
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 8_000.0,
-            shadows_enabled: true,
-            ..default()
-        },
-        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
-        MainSun,
-    ));
+    if dynamic_lights_enabled() {
+        commands.spawn((
+            DirectionalLight {
+                illuminance: 8_000.0,
+                shadows_enabled: light_shadows_enabled(),
+                ..default()
+            },
+            Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
+            MainSun,
+        ));
 
-    // HALL_LIGHT_XS's placement is calibrated to Sponza's own hall geometry
-    // — the arena instead just gets a brighter ambient/directional light
-    // (see spawn_test_arena) since it's a single open room.
-    if !USE_TEST_ARENA {
-        spawn_hall_lights(&mut commands);
+        // HALL_LIGHT_XS's placement is calibrated to Sponza's own hall
+        // geometry — the arena instead just gets a brighter ambient/
+        // directional light (see spawn_test_arena) since it's a single open
+        // room.
+        if !USE_TEST_ARENA {
+            spawn_hall_lights(&mut commands);
+        }
     }
 
     commands
@@ -1762,7 +1830,7 @@ fn setup(
             Lean::default(),
             AmbientLight {
                 color: Color::WHITE,
-                brightness: 250.0,
+                brightness: ambient_brightness(),
                 ..default()
             },
             // Glow around bright spots (muzzle flash, hit markers). Requires Hdr,
@@ -1848,7 +1916,7 @@ fn setup(
             Transform::from_translation(PLAYER_SPAWN + Vec3::Y * EYE_HEIGHT_OFFSET),
             AmbientLight {
                 color: Color::WHITE,
-                brightness: 250.0,
+                brightness: ambient_brightness(),
                 ..default()
             },
             Msaa::Off,
@@ -2123,16 +2191,18 @@ fn spawn_test_arena(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
     // resource) — the main camera already gets its own in setup(). A single
     // bright, wide-range PointLight overhead is enough to light this flat
     // open room evenly (no columns/corners to leave dark, unlike Sponza).
-    commands.spawn((
-        PointLight {
-            color: Color::srgb(1.0, 0.98, 0.92),
-            intensity: 4_000_000.0,
-            range: ARENA_HALF_SIZE * 3.0,
-            shadows_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(0.0, ARENA_WALL_HEIGHT - 0.2, 0.0),
-    ));
+    if dynamic_lights_enabled() {
+        commands.spawn((
+            PointLight {
+                color: Color::srgb(1.0, 0.98, 0.92),
+                intensity: 4_000_000.0,
+                range: ARENA_HALF_SIZE * 3.0,
+                shadows_enabled: light_shadows_enabled(),
+                ..default()
+            },
+            Transform::from_xyz(0.0, ARENA_WALL_HEIGHT - 0.2, 0.0),
+        ));
+    }
 }
 
 // Map 1 "Tòa nhà văn phòng" — đèn tĩnh cho garage/lobby/F2/F3. Phần hình
@@ -2150,7 +2220,7 @@ fn spawn_map1_lights(commands: &mut Commands) {
             color: Color::srgb(0.85, 0.88, 1.0),
             intensity: 3_000_000.0,
             range: (shared::GARAGE_HALF_SIZE_X + shared::GARAGE_HALF_SIZE_Z) * 1.5,
-            shadows_enabled: true,
+            shadows_enabled: light_shadows_enabled(),
             ..default()
         },
         Transform::from_xyz(0.0, ARENA_WALL_HEIGHT - 0.2, 0.0),
@@ -2163,7 +2233,7 @@ fn spawn_map1_lights(commands: &mut Commands) {
                 color: Color::srgb(0.95, 0.93, 0.88),
                 intensity: 4_500_000.0,
                 range: (shared::LOBBY_HALF_SIZE_X + shared::LOBBY_HALF_SIZE_Z) * 1.2,
-                shadows_enabled: true,
+                shadows_enabled: light_shadows_enabled(),
                 ..default()
             },
             Transform::from_xyz(lx, shared::FLOOR_HEIGHT + shared::LOBBY_WALL_HEIGHT - 0.3, lz),
@@ -2181,7 +2251,7 @@ fn spawn_map1_lights(commands: &mut Commands) {
                 color: Color::srgb(0.95, 0.95, 0.9),
                 intensity: 2_500_000.0,
                 range: shared::F2_HALF_SIZE_X * 1.5,
-                shadows_enabled: true,
+                shadows_enabled: light_shadows_enabled(),
                 ..default()
             },
             Transform::from_xyz(lx, shared::F2_ELEVATION + shared::F2_WALL_HEIGHT - 0.3, lz),
@@ -2201,7 +2271,7 @@ fn spawn_map1_lights(commands: &mut Commands) {
                 color: Color::srgb(0.95, 0.9, 0.85),
                 intensity: 2_500_000.0,
                 range: shared::F3_HALF_SIZE_X * 1.5,
-                shadows_enabled: true,
+                shadows_enabled: light_shadows_enabled(),
                 ..default()
             },
             Transform::from_xyz(lx, shared::F3_ELEVATION + shared::F3_WALL_HEIGHT - 0.3, lz),
