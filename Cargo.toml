@@ -23,3 +23,27 @@ opt-level = 3
 inherits = "dev"
 debug = "line-tables-only"
 strip = "debuginfo"
+
+# Used only for `cargo build -p web --target wasm32-unknown-unknown
+# --profile web-release` (see docs/WEB_PORT.md's build steps). Plain
+# `release` (opt-level 3, no LTO, no strip) produced a 108MB .wasm —
+# reported unable to even open the page on an iPhone 14 Pro Max, almost
+# certainly hitting iOS Safari's WebAssembly linear-memory/tab-memory
+# limits (historically much tighter than desktop Chrome's, regardless of
+# the device's own 6GB RAM — this is a WebKit limit, not a device one).
+# A dedicated profile (not just tuning `[profile.release]` directly) so
+# native desktop/server release builds — which don't have this problem —
+# keep their normal speed-optimized settings and fast-ish compile time;
+# this one trades a much slower build for a much smaller artifact, which
+# only matters for the one-off "build it to actually deploy" case, not
+# everyday iteration (that's still `cargo run -p web`... except that
+# doesn't exist for wasm — iteration on web-specific code happens via
+# `cargo check --target wasm32-unknown-unknown`, this profile is only
+# ever invoked right before a wasm-bindgen + wasm-opt pass).
+[profile.web-release]
+inherits = "release"
+opt-level = "z"    # optimize for size over speed — the .wasm itself IS the bottleneck here, not runtime perf
+lto = true          # cross-crate dead code elimination — the single biggest lever for wasm size
+codegen-units = 1   # more aggressive optimization at the cost of build time; a one-off release build, not iterated on
+strip = true        # no debuginfo needed — this build is never attached to with a native debugger
+panic = "abort"     # wasm32 has no real unwinding anyway; drops landing-pad/unwind-table code

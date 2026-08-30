@@ -189,21 +189,28 @@ the very end of `crates/client/Cargo.toml`.
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli   # must match the wasm-bindgen crate version
                                   # pinned in crates/web/Cargo.toml exactly
+brew install binaryen            # provides wasm-opt, see §5.1
 
-# 2. Build the .wasm
-cargo build -p web --target wasm32-unknown-unknown --release
+# 2. Build the .wasm — the web-release profile (Cargo.toml), not plain
+# --release; see §5.1 for why. Slow (LTO + codegen-units=1, ~7 minutes on
+# this dev machine) — that's the deliberate size/build-time trade this
+# profile makes, only pay it right before actually shipping a build.
+cargo build -p web --target wasm32-unknown-unknown --profile web-release
 
 # 3. Generate the JS glue + final .wasm
 mkdir -p target/web_dist
 wasm-bindgen --target web --out-dir target/web_dist --out-name web \
-  target/wasm32-unknown-unknown/release/web.wasm
+  target/wasm32-unknown-unknown/web-release/web.wasm
 
-# 4. index.html (target/web_dist/index.html) — Bevy auto-creates its own
-# <canvas>, nothing else needed:
-#   <script type="module">
-#     import init from "./web.js";
-#     init();
-#   </script>
+# 3b. Shrink it further with wasm-opt -Oz (binaryen) — see §5.1 for the
+# actual size numbers this and step 2 together produce.
+wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int \
+  -o target/web_dist/web_bg.wasm target/web_dist/web_bg.wasm
+
+# 4. index.html — crates/web/index.html is the canonical one (has a
+# loading progress bar, see its own comments); copy it in rather than
+# hand-writing a new one:
+cp crates/web/index.html target/web_dist/index.html
 
 # 5. Serve it — needs assets/ reachable at the SAME relative path the
 # native build uses (bevy_asset resolves "assets/..." relative to the
@@ -212,22 +219,49 @@ ln -sfn "$(pwd)/crates/client/assets" target/web_dist/assets
 cd target/web_dist && python3 -m http.server 8765
 
 # 6. Run a real server so the web client has something to connect to —
-# any scenario works, e.g. Arena (map_id 2, matches the "ARENA" menu
-# button):
+# the web build always launches into Arena (map_id 2, see §4.1's sibling
+# note in client::main — no menu on web anymore):
 MAP_ID=2 cargo run -p server
 ```
 
+### 5.1 `.wasm` size: 108MB → 25MB
+
+The original 108MB `--release` build (plain `opt-level = 3`, no LTO, no
+strip) reportedly wouldn't even open on an iPhone 14 Pro Max — almost
+certainly iOS Safari's WebAssembly linear-memory/tab-memory limit (a
+WebKit limit, much tighter than desktop Chrome's regardless of the
+device's own RAM — a 6GB-RAM phone can still fail to load a page a
+16GB-RAM desktop opens fine). Two independent levers, both real,
+worth keeping in mind separately if this needs revisiting:
+
+1. **`[profile.web-release]` (root `Cargo.toml`)** — `opt-level = "z"`
+   (size over speed), `lto = true` (cross-crate dead code elimination,
+   the single biggest lever here), `codegen-units = 1`, `strip = true`,
+   `panic = "abort"`. A dedicated profile, not a change to
+   `[profile.release]` itself, so native desktop/server release builds
+   (which don't have this problem) keep their normal fast-compile,
+   speed-optimized settings. **108MB → 33MB** on its own.
+2. **`wasm-opt -Oz`** (binaryen, step 3b above) on top of that —
+   **33MB → 25MB** after `wasm-bindgen` processes it down to ~30MB first.
+
+Verified the `web-release` + `wasm-opt` build still runs correctly (same
+Chrome test as always: loads, connects, Arena renders, touch UI, no
+console panics) before trusting the size win.
+
 Open `http://localhost:8765/index.html` (or `http://<lan-ip>:8765/...`
 from another device on the same network — the client reads the page's own
-hostname, see §4.1), pick a map from the menu. Ping/Loss in the HUD
-should read real, moving numbers once connected (e.g. `31ms`/`0%`), not
-stuck at `0ms`/`0%` forever or `--`/`--`.
+hostname, see §4.1). Lands straight in Arena, no menu (see the wasm32
+branch in `client::main`) — Ping/Loss in the HUD should read real, moving
+numbers once connected (e.g. `31ms`/`0%`), not stuck at `0ms`/`0%` forever
+or `--`/`--`.
 
 ## 6. What's left (not done here)
 
-- **`.wasm` size.** The release build is ~97MB uncompressed. No
-  `wasm-opt`, no gzip/brotli compression, no texture/asset trimming for
-  web specifically. Fine for local testing, not for shipping.
+- **No gzip/brotli compression, no asset trimming for web specifically.**
+  §5.1 covers the `.wasm` binary itself (108MB → 25MB); `crates/client/
+  assets/` is still whatever the native build ships, untrimmed for a
+  mobile-web audience — serving it compressed would help further but
+  hasn't been done.
 - **WebTransport.** Would cut latency vs WebSocket, but needs a real TLS
   cert (or the self-signed certificate-hash-pinning dance) to test
   properly — revisit once there's an actual domain to deploy against.
