@@ -231,7 +231,7 @@ pub(crate) struct PingUi;
 
 pub(crate) fn spawn_ping_ui(commands: &mut Commands) {
     commands.spawn((
-        Text::new("Ping: -- ms"),
+        Text::new("Ping: -- ms   Loss: --"),
         TextFont {
             font_size: 16.0,
             ..default()
@@ -264,8 +264,11 @@ pub(crate) fn update_ping_ui(
         return;
     };
     text.0 = match client {
-        Some(client) => format!("Ping: {:.0} ms", client.rtt() * 1000.0),
-        None => "Ping: -- ms".to_string(),
+        Some(client) => {
+            let info = client.network_info();
+            format!("Ping: {:.0} ms   Loss: {:.0}%", info.rtt * 1000.0, info.packet_loss * 100.0)
+        }
+        None => "Ping: -- ms   Loss: --".to_string(),
     };
 }
 

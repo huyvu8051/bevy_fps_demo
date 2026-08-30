@@ -43,10 +43,13 @@ Có thể chạy nhiều client cùng lúc (nhiều terminal) để test multipl
 | `EDITOR=1` | client | Bật `bevy_editor_pls` (F2). Desktop-only. |
 | `SIM_LATENCY_MS=<ms>` | server và/hoặc client | Giả lập độ trễ 1 chiều (delay chiều gửi). Set 2 bên → RTT ≈ 2× giá trị. |
 | `SIM_LATENCY_JITTER_MS=<ms>` | server và/hoặc client | Random `0..=jitter` cộng thêm mỗi gói (mô phỏng jitter mạng thật). |
+| `SIM_PACKET_LOSS_PCT=<0..100>` | server và/hoặc client | % gói tin gửi bị drop (channel reliable sẽ tự retransmit). |
+
+HUD góc trên-phải hiện `Ping: N ms   Loss: M%` (loss là số đo thực tế của renet, phản ánh cả drop giả lập lẫn drop thật).
 
 ### Test lag / độ trễ mạng
 
-`SIM_LATENCY_MS` là delay **một chiều** mỗi bên, nên đặt ở cả server lẫn client để có RTT đầy đủ (`RTT ≈ 2 × SIM_LATENCY_MS + jitter`). Các mốc tham chiếu theo CS:GO:
+`SIM_LATENCY_MS` là delay **một chiều** mỗi bên, nên đặt ở cả server lẫn client để có RTT đầy đủ (`RTT ≈ 2 × SIM_LATENCY_MS + jitter`). Thêm `SIM_PACKET_LOSS_PCT` để giả lập mất gói. Các mốc tham chiếu theo CS:GO:
 
 **~150 ms RTT** — mức tệ nhất matchmaking chính chủ còn xếp người vào (nấc cuối slider "Max Acceptable Matchmaking Ping"):
 ```bash
@@ -64,6 +67,12 @@ SIM_LATENCY_MS=175 SIM_LATENCY_JITTER_MS=40 EDITOR=1 MAP_ID=2 RENDER_SCALE=0.5 L
 ```bash
 SIM_LATENCY_MS=500 SIM_LATENCY_JITTER_MS=60 MAP_ID=2 cargo run -p server
 SIM_LATENCY_MS=500 SIM_LATENCY_JITTER_MS=60 EDITOR=1 MAP_ID=2 RENDER_SCALE=0.5 LOCAL=1 cargo run -p client
+```
+
+**Mạng tệ** — ping trung bình + mất gói:
+```bash
+SIM_LATENCY_MS=60 SIM_LATENCY_JITTER_MS=40 SIM_PACKET_LOSS_PCT=5 MAP_ID=2 cargo run -p server
+SIM_LATENCY_MS=60 SIM_LATENCY_JITTER_MS=40 SIM_PACKET_LOSS_PCT=5 EDITOR=1 MAP_ID=2 RENDER_SCALE=0.5 LOCAL=1 cargo run -p client
 ```
 
 Cần chú ý khi test: di chuyển vẫn mượt (client prediction), reconcile snap chỉ khi lệch > `RECONCILE_POS_THRESHOLD` rồi camera lướt vào qua `RECONCILE_SMOOTH_SECS` — tune 2 const đó trong `crates/client/src/lib.rs` nếu ở lag cao thấy giật/trôi. Tick rate server/client là `SERVER_TICK_HZ` / `INPUT_SEND_HZ` (phải bằng nhau, hiện 32).

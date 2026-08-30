@@ -4,11 +4,14 @@ use std::time::{Duration, Instant};
 
 use renet2_netcode::{ClientSocket, NetcodeTransportError, ServerSocket};
 
-// Base delay + jitter, both in whole milliseconds — see sim_latency_from_env.
+// Base delay + jitter (whole ms) + packet-loss fraction — see
+// sim_latency_from_env.
 #[derive(Debug, Clone, Copy)]
 pub struct SimLatencyConfig {
     pub base: Duration,
     pub jitter: Duration,
+    // 0.0..=1.0 — chance each outgoing packet is silently dropped.
+    pub loss: f32,
 }
 
 // Reads SIM_LATENCY_MS (base delay) and SIM_LATENCY_JITTER_MS (extra random
@@ -21,11 +24,18 @@ pub struct SimLatencyConfig {
 // version if that's what you're after. Jitter is randomized independently
 // per packet (see LaggedSocket's own xorshift), so a real connection's
 // packet-to-packet variance is modeled too, not just a flat extra delay.
+// SIM_PACKET_LOSS_PCT (0..=100, unset/invalid = 0) drops that % of
+// outgoing packets — set on either/both ends the same way as the delay.
 pub fn sim_latency_from_env() -> SimLatencyConfig {
     let read_ms = |var: &str| -> u64 { std::env::var(var).ok().and_then(|s| s.parse().ok()).unwrap_or(0) };
+    let loss_pct: f32 = std::env::var("SIM_PACKET_LOSS_PCT")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0.0);
     SimLatencyConfig {
         base: Duration::from_millis(read_ms("SIM_LATENCY_MS")),
         jitter: Duration::from_millis(read_ms("SIM_LATENCY_JITTER_MS")),
+        loss: (loss_pct / 100.0).clamp(0.0, 1.0),
     }
 }
 
@@ -68,6 +78,19 @@ impl<S> LaggedSocket<S> {
 
     fn has_delay(&self) -> bool {
         !self.config.base.is_zero() || !self.config.jitter.is_zero()
+    }
+
+    // True with probability `config.loss`, consuming from the same xorshift
+    // stream next_delay uses.
+    fn should_drop(&mut self) -> bool {
+        if self.config.loss <= 0.0 {
+            return false;
+        }
+        self.rng_state ^= self.rng_state << 13;
+        self.rng_state ^= self.rng_state >> 7;
+        self.rng_state ^= self.rng_state << 17;
+        let frac = (self.rng_state >> 11) as f64 / (1u64 << 53) as f64;
+        (frac as f32) < self.config.loss
     }
 }
 
@@ -130,6 +153,9 @@ impl<S: ServerSocket> ServerSocket for LaggedSocket<S> {
         self.inner.postupdate();
     }
     fn send(&mut self, addr: SocketAddr, packet: &[u8]) -> Result<(), NetcodeTransportError> {
+        if self.should_drop() {
+            return Ok(()); // silently lost — reliable channels retransmit
+        }
         if !self.has_delay() {
             return self.inner.send(addr, packet);
         }
@@ -183,6 +209,9 @@ impl<S: ClientSocket> ClientSocket for LaggedSocket<S> {
         self.inner.postupdate();
     }
     fn send(&mut self, addr: SocketAddr, packet: &[u8]) -> Result<(), NetcodeTransportError> {
+        if self.should_drop() {
+            return Ok(()); // silently lost — reliable channels retransmit
+        }
         if !self.has_delay() {
             return self.inner.send(addr, packet);
         }
