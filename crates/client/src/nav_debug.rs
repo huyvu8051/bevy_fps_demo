@@ -123,10 +123,8 @@ fn sync_client_navmesh(mut commands: Commands, existing: Query<Entity, With<Mana
                     )),
                     simplify: 0.005,
                     build_timeout: Some(1.0),
-                    // Match the server (spawn_zombie_navmesh): obstacles
-                    // inflated by the zombie move radius so sub-zombie gaps
-                    // close and the overlay shows the real routed paths.
-                    agent_radius: shared::ZOMBIE_OUTER_RADIUS,
+                    // Match the server (spawn_zombie_navmesh).
+                    agent_radius: 0.1,
                     ..default()
                 },
                 // Pillars are RigidBody::Static, so Direct never churns.

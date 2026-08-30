@@ -942,11 +942,12 @@ fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<Nav
                 fixed: Triangulation::from_outer_edges(&shared::arena_navmesh_outer_edges(scenario.map_id())),
                 simplify: 0.005,
                 build_timeout: Some(1.0),
-                // Inflate every obstacle by the zombie's own move radius so
-                // a pillar/car gap narrower than a zombie is CLOSED in the
-                // navmesh — the pathfinder then routes around it instead of
-                // sending the zombie into a gap MoveAndSlide will wedge it in.
-                agent_radius: ZOMBIE_OUTER_RADIUS,
+                // Small obstacle inflation — just enough to keep a routed
+                // path off the exact obstacle edge. Kept well under the
+                // zombie's own move radius on purpose: a bigger value
+                // balloons the holes and closes gaps the zombies should
+                // still try to squeeze.
+                agent_radius: 0.1,
                 ..default()
             },
             NavMeshUpdateMode::Direct,
