@@ -132,24 +132,41 @@ pub(crate) fn predict_player_movement(
     let Ok((net_transform, last_processed)) = local.single() else {
         return;
     };
-    let Ok((mut transform, mut player, stance)) = player.single_mut() else {
+    // Bound from single_mut() so restoring the real reconcile is a 1-line
+    // change; Test A only reads them.
+    let Ok((transform, player, stance)) = player.single_mut() else {
         return;
     };
 
+    // TEST A: reconcile fully DISABLED — client runs pure local prediction,
+    // never corrected toward the server. Still drain confirmed inputs so
+    // `pending` stays bounded, and log the correction that WOULD have been
+    // applied (server pos + replay-pending vs the local prediction) so we
+    // can see its size/direction while moving.
     let mut confirmed_baseline = None;
     while pending.0.front().is_some_and(|&(sequence, ..)| sequence <= last_processed.0) {
         let (_, _, _, vertical_velocity, grounded) = pending.0.pop_front().unwrap();
         confirmed_baseline = Some((vertical_velocity, grounded));
     }
-    if let Some((vertical_velocity, grounded)) = confirmed_baseline {
-        player.vertical_velocity = vertical_velocity;
-        player.grounded = grounded;
-    }
+    let Some((base_vv, base_grounded)) = confirmed_baseline else {
+        return;
+    };
 
-    transform.translation = net_transform.translation;
+    let mut scratch_tf = *transform;
+    scratch_tf.translation = net_transform.translation;
+    let mut scratch_player = Player { vertical_velocity: base_vv, grounded: base_grounded };
     for (_, input, dt, ..) in &pending.0 {
-        shared::movement::simulate_player_step(&mover, &mut transform, &mut player, *stance, input, *dt);
+        shared::movement::simulate_player_step(&mover, &mut scratch_tf, &mut scratch_player, *stance, input, *dt);
     }
+    let correction = scratch_tf.translation - transform.translation;
+    info!(
+        "[reconcile] would-correct err={:.3}m corr={:.3?} pending={} vv_local={:.2} vv_srv={:.2}",
+        correction.length(),
+        correction,
+        pending.0.len(),
+        player.vertical_velocity,
+        scratch_player.vertical_velocity,
+    );
 }
 
 // Any zombie actively chasing (has Chase) and within melee range continuously
