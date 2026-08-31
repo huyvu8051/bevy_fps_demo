@@ -10,7 +10,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>bevy_fps_demo</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
+  html, body { margin: 0; height: 100%; background: #111; overflow: hidden; overscroll-behavior: none; }
 
   /* Padded container the canvas actually lives in — WindowPlugin's
      `canvas: Some("#bevy-canvas")` + `fit_canvas_to_parent: true`
@@ -30,7 +30,16 @@
     padding-bottom: max(12px, env(safe-area-inset-bottom));
     padding-left: max(12px, env(safe-area-inset-left));
   }
-  #bevy-canvas { display: block; width: 100%; height: 100%; }
+  /* touch-action: none — without this, iOS Safari/mobile Chrome treat a
+     vertical finger drag on the canvas as a page-pan/rubber-band gesture
+     candidate and can swallow or truncate the touchmove sequence before
+     winit's own `event.prevent_default()` (crates/client/src/touch_input.rs'
+     drag-to-scroll on the settings/cheat panel, touch_scroll_settings_menu)
+     ever sees a clean stream of moves — the browser, not our code, ends up
+     owning the gesture. `overscroll-behavior: none` is the same idea for
+     the bounce-scroll iOS applies at the document edges. Desktop/mouse
+     input is unaffected either way. */
+  #bevy-canvas { display: block; width: 100%; height: 100%; touch-action: none; overscroll-behavior: none; }
 
   #loading {
     position: fixed;
@@ -62,6 +71,25 @@
   }
   #loading-label { opacity: 0.85; }
   #loading-error { color: #ff6b6b; max-width: 80vw; text-align: center; }
+
+  /* Resource HUD — see startResourceStats' own comment for what each
+     number actually means/where it comes from and its limits. Offset
+     below the HP text (top-left, see setup() in crates/client/src/lib.rs)
+     so the two don't overlap. */
+  #resource-stats {
+    position: fixed;
+    top: max(40px, calc(env(safe-area-inset-top) + 40px));
+    left: max(12px, env(safe-area-inset-left));
+    z-index: 20;
+    font: 11px monospace;
+    line-height: 1.4;
+    color: #9f9;
+    background: rgba(0, 0, 0, 0.55);
+    padding: 4px 7px;
+    border-radius: 4px;
+    white-space: pre;
+    pointer-events: none;
+  }
 </style>
 </head>
 <body>
@@ -75,7 +103,20 @@
 </div>
 
 <script type="module">
-  import init from "./web.js";
+  // Cache-busting: web.js/web_bg.wasm keep the exact same filename across
+  // every rebuild (no content hash in the name), and mobile Safari in
+  // particular caches a fetched module/wasm very aggressively with no easy
+  // user-facing "hard refresh" gesture — a phone could keep re-running a
+  // build from hours/days ago indefinitely, silently, with no way to tell
+  // from the game itself that it's stale. Appending a per-page-load
+  // timestamp to both URLs forces a real network fetch every time (this is
+  // a small dev/test deployment, not a high-traffic static site, so paying
+  // for zero HTTP caching here is the right trade against ever silently
+  // testing stale code again). `cache: "no-store"` on top of that as a
+  // second layer against any intermediate proxy/service-worker cache that
+  // might still try to reuse a same-URL response.
+  const CACHE_BUST = Date.now();
+  const { default: init } = await import(`./web.js?v=${CACHE_BUST}`);
 
   const label = document.getElementById("loading-label");
   const fill = document.getElementById("loading-bar-fill");
@@ -93,7 +134,7 @@
   // transfer-encoding, where Content-Length reflects the compressed size
   // or may be absent entirely).
   async function fetchWithProgress(url) {
-    const response = await fetch(url);
+    const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) {
       throw new Error(`fetch ${url} failed: ${response.status} ${response.statusText}`);
     }
@@ -127,13 +168,84 @@
     return bytes.buffer;
   }
 
+  // On-screen RAM/CPU/GPU readout — added to chase down "won't open on
+  // iPhone, probably too much RAM" without needing Safari's remote Web
+  // Inspector (requires a Mac + cable + enabling it in iOS Settings first,
+  // not something to ask of every test run). Everything here is a REAL
+  // browser-exposed number, not a guess:
+  //  - WASM memory: the game's actual linear-memory footprint
+  //    (wasm-bindgen's `init()` return value exposes the WebAssembly.
+  //    Memory instance directly — see target/web_dist/web.js's
+  //    `__wbg_finalize_init`/`wasm.memory` — no Rust-side plumbing
+  //    needed). This is the one number that actually answers "how much
+  //    RAM is this tab using", and works on every browser.
+  //  - JS heap (performance.memory): Chrome/Android-only, non-standard —
+  //    iOS Safari has no equivalent API at all, shows "n/a" there.
+  //  - navigator.deviceMemory: an approximate, ROUNDED-DOWN total device
+  //    RAM in GB — also Chrome/Android-only; iOS Safari never implemented
+  //    it (fingerprinting concerns), shows "n/a" there too.
+  //  - GPU name: WEBGL_debug_renderer_info gives the renderer STRING (e.g.
+  //    "Apple GPU"), not a usage percentage — no browser exposes real-time
+  //    GPU utilization to a web page, on any platform, full stop.
+  //  - CPU: same story — no browser exposes per-process CPU%. hardware
+  //    Concurrency (core count) is the only real CPU number available. FPS
+  //    is the closest indirect proxy for "is the CPU/GPU struggling".
+  function startResourceStats(wasmModule) {
+    const el = document.createElement("div");
+    el.id = "resource-stats";
+    document.body.appendChild(el);
+
+    let rendererInfo = "n/a";
+    try {
+      const canvas = document.getElementById("bevy-canvas");
+      const gl = canvas && (canvas.getContext("webgl2") || canvas.getContext("webgl"));
+      const dbg = gl && gl.getExtension("WEBGL_debug_renderer_info");
+      if (gl && dbg) rendererInfo = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL);
+    } catch (err) {
+      rendererInfo = `error: ${err}`;
+    }
+
+    let frames = 0;
+    let lastTick = performance.now();
+    let fps = 0;
+    function countFrame() {
+      frames++;
+      requestAnimationFrame(countFrame);
+    }
+    requestAnimationFrame(countFrame);
+
+    setInterval(() => {
+      const now = performance.now();
+      fps = Math.round((frames * 1000) / (now - lastTick));
+      frames = 0;
+      lastTick = now;
+
+      const wasmMB = (wasmModule.memory.buffer.byteLength / 1e6).toFixed(1);
+      const jsHeap = performance.memory
+        ? `${(performance.memory.usedJSHeapSize / 1e6).toFixed(1)}/${(performance.memory.jsHeapSizeLimit / 1e6).toFixed(0)} MB`
+        : "n/a (Safari)";
+      const deviceMem = navigator.deviceMemory ? `${navigator.deviceMemory} GB (approx)` : "n/a";
+      const cores = navigator.hardwareConcurrency ?? "n/a";
+
+      const text =
+        `WASM mem: ${wasmMB} MB\n` +
+        `JS heap:  ${jsHeap}\n` +
+        `Device:   ${deviceMem}, ${cores} cores\n` +
+        `GPU:      ${rendererInfo}\n` +
+        `FPS:      ${fps}`;
+      el.textContent = text;
+      console.log(`[stats] wasm=${wasmMB}MB heap=${jsHeap} device=${deviceMem} cores=${cores} gpu="${rendererInfo}" fps=${fps}`);
+    }, 1000);
+  }
+
   try {
-    const wasmBytes = await fetchWithProgress("./web_bg.wasm");
+    const wasmBytes = await fetchWithProgress(`./web_bg.wasm?v=${CACHE_BUST}`);
     label.textContent = "Starting…";
-    await init({ module_or_path: wasmBytes });
+    const wasmModule = await init({ module_or_path: wasmBytes });
     // Bevy's own winit canvas takes over the page at this point; the
     // overlay's only job was covering the wasm download, so it's done.
     overlay.classList.add("hidden");
+    startResourceStats(wasmModule);
   } catch (err) {
     label.textContent = "Failed to load.";
     errorBox.textContent = String(err);
