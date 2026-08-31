@@ -578,7 +578,13 @@ pub const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
 // the server's own skeleton is actually cycling through the right poses at
 // the right (server-authoritative) moments, that existing mechanism closes
 // most of the remaining gap for free, no new sync channel needed.
-#[derive(Component, Default, Clone, Copy, PartialEq, Eq, Debug)]
+// Reflect + register_type (GamePlugin, crates/client/src/lib.rs) so
+// bevy_editor_pls's inspector (EDITOR=1, F2) can show/edit this on a
+// selected zombie entity — an enum dropdown to force a pose for testing
+// without needing the real health/distance conditions that normally drive
+// zombie_pose_for. Debug-only convenience; nothing else needs this Reflect.
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq, Debug, Reflect)]
+#[reflect(Component)]
 pub enum ZombiePose {
     #[default]
     Idle,

@@ -2332,6 +2332,8 @@ dependencies = [
  "metal 0.33.0",
  "objc",
  "raw-window-handle",
+ "ron 0.8.1",
+ "serde",
  "shared",
  "tobj",
  "url",

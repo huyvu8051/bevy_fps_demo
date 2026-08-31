@@ -348,6 +348,7 @@ pub(crate) fn on_net_player_replicated(
     my_id: Res<MyClientId>,
     network_ids: Query<&NetworkId>,
     asset_server: Res<AssetServer>,
+    tuning: Res<PlayerModelTuning>,
 ) {
     let entity = trigger.event().entity;
     if network_ids.get(entity).is_ok_and(|id| id.get() == my_id.0) {
@@ -359,10 +360,16 @@ pub(crate) fn on_net_player_replicated(
     commands.entity(entity).insert(Visibility::default());
     commands.entity(entity).with_children(|parent| {
         parent.spawn((
+            Name::new("PlayerModel (remote NetPlayer)"),
             SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(PLAYER_MODEL_PATH))),
-            Transform::from_xyz(0.0, PLAYER_MODEL_Y_OFFSET, 0.0)
-                .with_rotation(Quat::from_rotation_y(PLAYER_MODEL_FACING_CORRECTION))
-                .with_scale(Vec3::splat(PLAYER_MODEL_SCALE)),
+            // Reads PlayerModelTuning (see its own doc comment) at spawn
+            // time only — unlike the local player's sync_player_model, no
+            // per-frame system re-applies this, so a live nudge (Comma/
+            // Period/Minus/Equal, EDITOR=1) only reaches remote players who
+            // join/reconnect after the nudge, not ones already on screen.
+            Transform::from_xyz(0.0, tuning.y_offset, 0.0)
+                .with_rotation(Quat::from_rotation_y(tuning.facing_deg.to_radians()))
+                .with_scale(Vec3::splat(tuning.scale)),
             PlayerModelAnimRoot,
         ));
     });

@@ -50,10 +50,22 @@ impl Plugin for ItemGalleryCarsPlugin {
                 .add_systems(
                     Update,
                     (
-                        save_item_gallery_car_physics_on_key,
+                        // .run_if(debug_keys_allowed) on all 4 key-reading
+                        // ones — see that fn's own doc comment (lib.rs).
+                        // Doesn't affect the normal F9-nudge workflow (done
+                        // while just playing with EDITOR=1 set, F2 overlay
+                        // closed); only actually disables these while the
+                        // F2 overlay itself is open and could claim the
+                        // same keys for something else later.
+                        save_item_gallery_car_physics_on_key.run_if(debug_keys_allowed),
                         // Same F9 keypress also saves the shared meshy
-                        // showcase zombie transform (zombie_client.rs).
-                        save_zombie_meshy_showcase_transform,
+                        // showcase zombie transform (zombie_client.rs), and
+                        // the soldier model's own tuning (movement_combat.rs)
+                        // — Comma/Period/Minus/Equal nudge that one live
+                        // first, see nudge_player_model_tuning's own comment.
+                        save_zombie_meshy_showcase_transform.run_if(debug_keys_allowed),
+                        nudge_player_model_tuning.run_if(debug_keys_allowed),
+                        save_player_model_tuning.run_if(debug_keys_allowed),
                         tick_f9_toast,
                     ),
                 );

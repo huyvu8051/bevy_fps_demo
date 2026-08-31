@@ -760,6 +760,9 @@ pub(crate) fn toggle_inspect_mode(
 }
 
 #[allow(clippy::too_many_arguments)]
+// Registered with `.run_if(debug_keys_allowed)` (see that fn's own doc
+// comment for why) — several of these keys (F, T) collide with
+// bevy_editor_pls' own hotkeys while its F2 overlay is open.
 pub(crate) fn toggle_debug_flags(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,

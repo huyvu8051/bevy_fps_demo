@@ -65,7 +65,13 @@ pub(crate) struct PlayerModelAnimationPlayer(pub(crate) Entity);
 // on_player_fired_fx/on_player_died_fx without going through this
 // enum/comparison at all — see those systems), so this only ever holds
 // Idle/Walk/Run.
-#[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
+// Reflect + register_type (GamePlugin, lib.rs) so bevy_editor_pls's
+// inspector (EDITOR=1, F2) can actually show/edit this on a selected
+// entity — an enum dropdown to force Idle/Walk/Run for testing without
+// needing to actually move the player. Debug-only convenience; nothing
+// else needs this to be Reflect.
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq, Reflect)]
+#[reflect(Component)]
 pub(crate) enum PlayerModelPose {
     #[default]
     Idle,
@@ -793,6 +799,7 @@ pub(crate) fn wire_player_model_animations(
 // ChildOf, so it never matches this query — see
 // update_local_player_model_animation instead).
 pub(crate) fn update_remote_player_model_animation(
+    over: Res<PlayerModelPoseOverride>,
     parents: Query<&NetTransform, With<NetPlayer>>,
     mut roots: Query<
         (&ChildOf, &PlayerModelAnimationPlayer, &mut PlayerModelPose),
@@ -801,6 +808,12 @@ pub(crate) fn update_remote_player_model_animation(
     anim: Res<PlayerModelAnim>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
+    // See PlayerModelPoseOverride's own doc comment — while set, a manual
+    // pose (F2 inspector, EDITOR=1) would get stomped back to whatever
+    // real movement says every single frame otherwise.
+    if over.0 {
+        return;
+    }
     for (child_of, link, mut pose) in &mut roots {
         let Ok(net_transform) = parents.get(child_of.0) else {
             continue;
@@ -839,12 +852,19 @@ pub(crate) fn update_remote_player_model_animation(
 // own move_axis directly (no need to wait on a replication round trip for
 // something only this client ever sees anyway).
 pub(crate) fn update_local_player_model_animation(
+    over: Res<PlayerModelPoseOverride>,
     moving: Res<LocalPlayerMoving>,
     sprinting: Res<LocalPlayerSprinting>,
     mut roots: Query<(&PlayerModelAnimationPlayer, &mut PlayerModelPose), (With<PlayerModelAnimRoot>, With<PlayerModel>)>,
     anim: Res<PlayerModelAnim>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
+    // See PlayerModelPoseOverride's own doc comment — while set, a manual
+    // pose (F2 inspector, EDITOR=1) would get stomped back to whatever
+    // real movement says every single frame otherwise.
+    if over.0 {
+        return;
+    }
     let Ok((link, mut pose)) = roots.single_mut() else {
         return;
     };
@@ -862,6 +882,45 @@ pub(crate) fn update_local_player_model_animation(
     if let Ok(mut player) = players.get_mut(link.0) {
         player.stop_all();
         let node = match new_pose {
+            PlayerModelPose::Idle => anim.idle,
+            PlayerModelPose::Walk => anim.walk,
+            PlayerModelPose::Run => anim.run,
+        };
+        player.play(node).repeat();
+    }
+}
+
+// Debug-only (EDITOR=1): flip this in the F2 inspector's Resources tab to
+// freeze update_local_player_model_animation/update_remote_player_model_
+// animation's own real-movement-driven overwrite, so a manually-picked
+// PlayerModelPose (selected on a player entity in the inspector) actually
+// sticks and plays instead of snapping back to Idle the very next frame —
+// this is what was silently fighting a "F2, change PlayerModelPose,
+// dropdown value doesn't change" attempt before this resource existed.
+#[derive(Resource, Default, Reflect)]
+#[reflect(Resource)]
+pub(crate) struct PlayerModelPoseOverride(pub(crate) bool);
+
+// Companion to PlayerModelPoseOverride: while it's on, this is the only
+// thing left driving the AnimationPlayer — reacts to the pose actually
+// changing (Changed<PlayerModelPose>, whether from the inspector or
+// anywhere else) and plays the matching clip, since a plain component edit
+// alone never calls AnimationPlayer::play by itself.
+pub(crate) fn apply_player_model_pose_override(
+    over: Res<PlayerModelPoseOverride>,
+    anim: Res<PlayerModelAnim>,
+    roots: Query<(&PlayerModelAnimationPlayer, &PlayerModelPose), (With<PlayerModelAnimRoot>, Changed<PlayerModelPose>)>,
+    mut players: Query<&mut AnimationPlayer>,
+) {
+    if !over.0 {
+        return;
+    }
+    for (link, pose) in &roots {
+        let Ok(mut player) = players.get_mut(link.0) else {
+            continue;
+        };
+        player.stop_all();
+        let node = match *pose {
             PlayerModelPose::Idle => anim.idle,
             PlayerModelPose::Walk => anim.walk,
             PlayerModelPose::Run => anim.run,

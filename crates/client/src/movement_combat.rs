@@ -19,6 +19,24 @@ pub(crate) struct FpsCamera {
     pub(crate) pitch: f32,
 }
 
+// Which of the two cameras spawned in setup() is actually rendering —
+// FpsCamera stays the single source of look/aim truth in both modes (see
+// this enum's own toggle_camera_mode/sync_third_person_camera), so shooting,
+// the crosshair, and the gun viewmodel all keep working unmodified: only the
+// *visual* camera swaps, not the aim math.
+#[derive(Resource, Default, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum CameraMode {
+    #[default]
+    FirstPerson,
+    ThirdPerson,
+}
+
+// Marks the third-person spectator camera spawned in setup() alongside the
+// real FpsCamera — see CameraMode's own doc comment for why this is a
+// separate entity rather than moving FpsCamera itself.
+#[derive(Component)]
+pub(crate) struct ThirdPersonCamera;
+
 // Shared by shoot(), move_player_physics, and apply_aim_zoom so "aiming"
 // means the same thing everywhere: cursor locked (actually playing, not
 // paused/menu'd out) and right mouse button held — or, on touch, the
@@ -465,6 +483,96 @@ pub(crate) fn toggle_noclip(keys: Res<ButtonInput<KeyCode>>, mut noclip: ResMut<
     }
 }
 
+// Toggles CameraMode on KeyU by flipping which of the two cameras is
+// Camera::is_active (never both/neither — same "swap the active one"
+// pattern update_scope_lens uses for scope_camera vs. the main camera), and
+// shows/hides PlayerModel to match: there's no point standing in third
+// person looking at an invisible body. Also flips it back off on return to
+// first person, on top of whatever KeyT (PlayerModelVisible's own debug
+// toggle) last left it at — the two controls stepping on each other here is
+// an accepted, documented quirk rather than plumbing a second bool through.
+pub(crate) fn toggle_camera_mode(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut mode: ResMut<CameraMode>,
+    mut player_model_visible: ResMut<PlayerModelVisible>,
+    mut fps_camera: Query<&mut Camera, (With<FpsCamera>, Without<ThirdPersonCamera>)>,
+    mut third_person_camera: Query<&mut Camera, (With<ThirdPersonCamera>, Without<FpsCamera>)>,
+) {
+    if !keys.just_pressed(KeyCode::KeyU) {
+        return;
+    }
+    *mode = match *mode {
+        CameraMode::FirstPerson => CameraMode::ThirdPerson,
+        CameraMode::ThirdPerson => CameraMode::FirstPerson,
+    };
+    let third_person = *mode == CameraMode::ThirdPerson;
+    if let Ok(mut camera) = fps_camera.single_mut() {
+        camera.is_active = !third_person;
+    }
+    if let Ok(mut camera) = third_person_camera.single_mut() {
+        camera.is_active = third_person;
+    }
+    player_model_visible.0 = third_person;
+}
+
+// While in third person, orbits ThirdPersonCamera behind-and-to-one-side of
+// wherever FpsCamera (still the real look/aim source — see CameraMode's doc
+// comment) is currently facing, PUBG-style over-the-shoulder rather than
+// dead-center behind the head. Orbits on yaw alone (not the full look
+// rotation) so aiming straight up/down doesn't swing the camera to sit
+// above/below the player — only the look-at tilt below follows pitch.
+// Raycasts from the eye out to the desired spot (same SpatialQuery::cast_ray
+// idiom shoot() uses for wall occlusion, movement_combat.rs's own
+// wall_distance) and pulls the camera in to just short of anything solid it
+// hits, so it never clips through a wall or prop behind the player.
+pub(crate) fn sync_third_person_camera(
+    mode: Res<CameraMode>,
+    spatial_query: SpatialQuery,
+    eye: Query<(Entity, &Transform, &FpsCamera, &Lean), Without<ThirdPersonCamera>>,
+    mut camera: Query<&mut Transform, (With<ThirdPersonCamera>, Without<FpsCamera>)>,
+) {
+    if *mode != CameraMode::ThirdPerson {
+        return;
+    }
+    let Ok((eye_entity, eye_transform, cam, lean)) = eye.single() else {
+        return;
+    };
+    let Ok(mut camera_transform) = camera.single_mut() else {
+        return;
+    };
+    let yaw_only = Quat::from_rotation_y(cam.yaw);
+    let horizontal_forward = yaw_only * Vec3::NEG_Z;
+    let horizontal_right = yaw_only * Vec3::X;
+    // Bias toward the right shoulder at rest; Q (lean left, Lean.current
+    // negative) pulls this past center to the left shoulder instead,
+    // E (lean right) pushes further right — same shoulder-swap-on-lean feel
+    // as PUBG/most cover shooters, riding Lean's existing ease rather than a
+    // second hand-rolled lerp.
+    let side_offset = THIRD_PERSON_SIDE_OFFSET * (lean.current + THIRD_PERSON_SHOULDER_BIAS).clamp(-1.0, 1.0);
+    let desired = eye_transform.translation - horizontal_forward * THIRD_PERSON_DISTANCE
+        + horizontal_right * side_offset
+        + Vec3::Y * THIRD_PERSON_HEIGHT_OFFSET;
+    let offset = desired - eye_transform.translation;
+    let distance = offset.length();
+    let Ok(direction) = Dir3::new(offset) else {
+        return;
+    };
+    let filter = SpatialQueryFilter::from_excluded_entities([eye_entity]);
+    let safe_distance = spatial_query
+        .cast_ray(eye_transform.translation, direction, distance, true, &filter)
+        .map(|hit| (hit.distance - THIRD_PERSON_COLLISION_MARGIN).max(0.0))
+        .unwrap_or(distance);
+    camera_transform.translation = eye_transform.translation + direction * safe_distance;
+    // Looks toward a point out along the real aim ray (yaw+pitch, ignoring
+    // roll) rather than the camera's own position — so pitching the mouse
+    // up/down still tilts this camera (see THIRD_PERSON_LOOK_AHEAD_DISTANCE's
+    // own doc comment), while the camera's position above only orbited on
+    // yaw, keeping the framing this was tuned against stable.
+    let aim_dir = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0) * Vec3::NEG_Z;
+    let look_target = eye_transform.translation + aim_dir * THIRD_PERSON_LOOK_AHEAD_DISTANCE;
+    camera_transform.look_at(look_target, Vec3::Y);
+}
+
 // KeyC toggles Standing<->Crouching; KeyX toggles Standing<->Prone. Pressing
 // C while Prone (or X while Crouching) switches directly to the other
 // stance rather than needing to stand up first.
@@ -675,6 +783,7 @@ pub(crate) fn sync_camera_to_player(
 // Player entity's own avian3d-owned Transform.
 pub(crate) fn sync_player_model(
     visible: Res<PlayerModelVisible>,
+    tuning: Res<PlayerModelTuning>,
     player: Query<&Transform, (With<Player>, Without<PlayerModel>)>,
     camera: Query<&FpsCamera>,
     mut model: Query<(&mut Transform, &mut Visibility), (With<PlayerModel>, Without<Player>)>,
@@ -690,13 +799,86 @@ pub(crate) fn sync_player_model(
         return;
     };
     let yaw = camera.single().map(|cam| cam.yaw).unwrap_or(0.0);
-    transform.translation = player_transform.translation + Vec3::Y * PLAYER_MODEL_Y_OFFSET;
-    // + PLAYER_MODEL_FACING_CORRECTION: see PLAYER_MODEL_SCALE's own doc
-    // comment — this asset's rig faces +Z, not Bevy's -Z-forward
-    // convention, so a bare `Quat::from_rotation_y(yaw)` (matching every
-    // other yaw-driven rotation in this file) rendered the model walking
-    // backward relative to where it was actually headed.
-    transform.rotation = Quat::from_rotation_y(yaw + PLAYER_MODEL_FACING_CORRECTION);
+    // scale re-applied every frame (not just at spawn) so nudge_player_model_
+    // tuning's live Comma/Period adjustments show up immediately instead of
+    // only on the next restart.
+    transform.scale = Vec3::splat(tuning.scale);
+    transform.translation = player_transform.translation + Vec3::Y * tuning.y_offset;
+    // + facing_deg: see PlayerModelTuning's own doc comment — this asset's
+    // rig faces +Z, not Bevy's -Z-forward convention, so a bare
+    // `Quat::from_rotation_y(yaw)` (matching every other yaw-driven rotation
+    // in this file) rendered the model walking backward relative to where
+    // it was actually headed.
+    transform.rotation = Quat::from_rotation_y(yaw + tuning.facing_deg.to_radians());
+}
+
+const PLAYER_CHARACTER_RON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/characters/soldier/character.ron");
+
+// EDITOR=1-only: Comma/Period nudge PlayerModelTuning.scale, Minus/Equal
+// nudge y_offset — see PlayerModelTuning's own doc comment. Meant to be
+// used while looking at the local player in third-person (KeyU) so the
+// effect (sync_player_model re-applies this resource every frame) is
+// visible immediately; F9 (save_player_model_tuning) then writes whatever
+// this settles on back to character.ron.
+pub(crate) fn nudge_player_model_tuning(keys: Res<ButtonInput<KeyCode>>, mut tuning: ResMut<PlayerModelTuning>) {
+    const SCALE_STEP: f32 = 0.02;
+    const Y_OFFSET_STEP: f32 = 0.02;
+    if keys.just_pressed(KeyCode::Comma) {
+        tuning.scale = (tuning.scale - SCALE_STEP).max(0.05);
+    }
+    if keys.just_pressed(KeyCode::Period) {
+        tuning.scale += SCALE_STEP;
+    }
+    if keys.just_pressed(KeyCode::Minus) {
+        tuning.y_offset -= Y_OFFSET_STEP;
+    }
+    if keys.just_pressed(KeyCode::Equal) {
+        tuning.y_offset += Y_OFFSET_STEP;
+    }
+}
+
+// F9: writes PlayerModelTuning's current (possibly nudged) scale/y_offset/
+// facing_deg back into character.ron, rewriting the WHOLE file (not just
+// those 3 numbers) so id/display_name/lore_ref/mesh/animations/audio —
+// carried unchanged in PlayerModelTuning purely for this — survive the
+// round-trip instead of getting clobbered. Same "eyeball it live, F9
+// saves" loop as save_zombie_meshy_showcase_transform (zombie_client.rs),
+// just saving a live-nudged Resource instead of a live-dragged Transform:
+// sync_player_model overwrites PlayerModel's own Transform every frame, so
+// there'd be nothing meaningful to read a hand-dragged value back FROM
+// there the way the zombie showcase (never overwritten per-frame) allows.
+pub(crate) fn save_player_model_tuning(
+    keys: Res<ButtonInput<KeyCode>>,
+    tuning: Res<PlayerModelTuning>,
+    mut toast: ResMut<F9SaveToast>,
+) {
+    if !keys.just_pressed(KeyCode::F9) {
+        return;
+    }
+    // Reuses the same formatter player_anim_editor.rs's mesh-file-browser
+    // Save button calls for any OTHER character's character.ron — see
+    // format_character_ron's own doc comment (lib.rs).
+    let out = format_character_ron(&CharacterRon {
+        id: tuning.id.clone(),
+        display_name: tuning.display_name.clone(),
+        lore_ref: tuning.lore_ref.clone(),
+        mesh: tuning.mesh.clone(),
+        scale: tuning.scale,
+        y_offset: tuning.y_offset,
+        facing_deg: tuning.facing_deg,
+        animations: tuning.animations.clone(),
+        audio: tuning.audio.clone(),
+    });
+    match std::fs::write(PLAYER_CHARACTER_RON, out) {
+        Ok(()) => {
+            info!("saved soldier character.ron -> {PLAYER_CHARACTER_RON}");
+            toast.ok_also("F9: saved soldier character.ron", " + soldier");
+        }
+        Err(e) => {
+            error!("F9 soldier character.ron save failed writing {PLAYER_CHARACTER_RON}: {e}");
+            toast.err(format!("F9: soldier character.ron save FAILED — {e}"));
+        }
+    }
 }
 
 // Holding left click (while the cursor is locked) fires automatically at

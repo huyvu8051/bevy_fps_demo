@@ -1,9 +1,24 @@
 // adapter from the bevy cookbook example <https://bevy-cheatbook.github.io/cookbook/pan-orbit-camera.html>
 
 use bevy::{
-    input::mouse::{MouseMotion, MouseWheel},
+    input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel},
     prelude::*,
 };
+
+// Host-game patch: a physical mouse wheel reports MouseScrollUnit::Line
+// (one unit ~= one click), but a trackpad's two-finger scroll reports
+// MouseScrollUnit::Pixel (one unit = one screen pixel of gesture travel).
+// The un-patched code below summed `ev.y` directly regardless of unit, so
+// a single trackpad swipe — dozens of Pixel events, each worth tens of
+// real pixels — accumulated into a `scroll` value ~100x larger than the
+// ~1.0 a mouse-wheel click produces, making `radius -= scroll * radius *
+// 0.1` slam the zoom almost instantly (reported: "touchpad zoom too
+// sensitive on Mac, mouse is fine" — exactly this Line-vs-Pixel gap, not
+// something needing separate trackpad *detection*: the OS/winit already
+// tags every event with which one it is). Divide Pixel deltas down by
+// TRACKPAD_ZOOM_PIXELS_PER_LINE so one wheel "click" and roughly that many
+// pixels of trackpad travel feel like the same zoom step.
+const TRACKPAD_ZOOM_PIXELS_PER_LINE: f32 = 20.0;
 use bevy_editor_pls_core::Editor;
 
 pub struct PanOrbitCameraPlugin;
@@ -96,7 +111,10 @@ fn pan_orbit_camera(
     }
 
     for ev in ev_scroll.read() {
-        scroll += ev.y;
+        scroll += match ev.unit {
+            MouseScrollUnit::Line => ev.y,
+            MouseScrollUnit::Pixel => ev.y / TRACKPAD_ZOOM_PIXELS_PER_LINE,
+        };
     }
     if input_mouse.just_released(pan_orbit.orbit_button)
         || input_mouse.just_pressed(pan_orbit.orbit_button)

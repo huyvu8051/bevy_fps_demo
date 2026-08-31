@@ -575,6 +575,33 @@ const EYE_HEIGHT_OFFSET: f32 = 0.65;
 // capsule-length side of stance now lives in crates/server's move_players.
 const CROUCH_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.55;
 const PRONE_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.15;
+
+// Third-person camera (KeyU, see CameraMode) — how far behind the eye it
+// tries to sit, how much higher than eye height, and how much clearance to
+// leave in front of whatever wall/prop the orbit raycast hits so the lens
+// doesn't poke through geometry. Closer/lower than the first cut (was 4.0/
+// 0.5) — that framed the player small and low in the frame (see git history
+// for the screenshot this was tuned against).
+const THIRD_PERSON_DISTANCE: f32 = 2.6;
+const THIRD_PERSON_HEIGHT_OFFSET: f32 = 0.35;
+const THIRD_PERSON_COLLISION_MARGIN: f32 = 0.3;
+// PUBG-style over-the-shoulder framing: idles offset toward the right
+// shoulder (THIRD_PERSON_SHOULDER_BIAS) rather than dead-center behind the
+// head, and rides the same Lean (Q/E) value the peek-lean already drives —
+// leaning left pulls the camera further left, past center to the left
+// shoulder, exactly like it swaps shoulders in PUBG/most cover-shooters. See
+// sync_third_person_camera for the blend.
+const THIRD_PERSON_SIDE_OFFSET: f32 = 0.9;
+const THIRD_PERSON_SHOULDER_BIAS: f32 = 0.4;
+// Looking at a fixed chest-height point (the previous fix for the "small
+// and sinking" framing bug) traded away vertical mouse look entirely —
+// cam.pitch no longer moved the camera at all, only yaw did. Instead,
+// look_at a point out ahead of the eye along the REAL aim ray (yaw+pitch,
+// this distance out) while the camera's own position still orbits on yaw
+// alone (unchanged) — pitching up/down swings what the camera looks at
+// (restoring vertical look) without moving the camera itself far enough to
+// reproduce the old sinking bug.
+const THIRD_PERSON_LOOK_AHEAD_DISTANCE: f32 = 8.0;
 // Client's first-frame camera position — the server's replicated
 // NetTransform corrects it within a tick or two. Per-scenario value comes
 // from the same shared::scenario_player_spawn the server's own authoritative
@@ -685,20 +712,18 @@ const ZOMBIE_HEALTH_BAR_MAX_VISIBLE: usize = 30;
 // Animation clip order inside soldier.glb (24 clips total, read from the
 // file's own animations list): 0=Death, 1=Gun_Shoot, 4=Idle, 5=Idle_Gun,
 // 16=Run, 22=Walk (full list has many more not used here — kick/punch/
-// sword/wave/etc. from the same generic asset pack).
-// Idle_Gun instead of bare Idle — this game's player always holds a gun,
-// so the weapon-drawn idle pose reads correctly instead of empty-handed.
-const PLAYER_MODEL_ANIM_IDLE: usize = 5;
-const PLAYER_MODEL_ANIM_WALK: usize = 22;
-// Sprinting (NetTransform.sprinting, see its own doc comment for why this
-// wasn't replicated before) — a "closing the distance" pose distinct from
-// the ordinary Walk, mirroring ZombiePose's Run tier.
-const PLAYER_MODEL_ANIM_RUN: usize = 16;
-// One-shot poses, not part of the continuous idle/walk/run state — see
-// PlayerFiredFx/PlayerDiedFx's own doc comments in crates/shared for why
-// no equivalent signal existed before this pass.
-const PLAYER_MODEL_ANIM_SHOOT: usize = 1;
-const PLAYER_MODEL_ANIM_DEATH: usize = 0;
+// sword/wave/etc. from the same generic asset pack). Idle_Gun instead of
+// bare Idle — this game's player always holds a gun, so the weapon-drawn
+// idle pose reads correctly instead of empty-handed. Sprinting
+// (NetTransform.sprinting) gets its own Run tier, mirroring ZombiePose's;
+// Shoot/Death are one-shot, not part of the continuous idle/walk/run state
+// — see PlayerFiredFx/PlayerDiedFx's own doc comments in crates/shared.
+//
+// These 5 indices used to be hardcoded consts here — now live in
+// PlayerModelTuning.animations, loaded from
+// assets/characters/soldier/character.ron (see that file's own comment
+// and PlayerModelTuning's), since a replacement mesh needs its own
+// different indices and there's no reason to touch Rust code for that.
 
 
 
@@ -1238,6 +1263,28 @@ fn fill_ambient_on_editor_cameras(
 // depends on running in this precise sequence (e.g. camera sync must
 // see this frame's already-applied movement prediction, not next
 // frame's). One `GamePlugin` = one place that owns the order.
+// Run condition (not a system — attach via `.run_if(debug_keys_allowed)`)
+// for every debug/dev-tool system that reads raw ButtonInput<KeyCode>:
+// noclip/god-mode/hitbox/etc. toggles, the F9 savers, the debug panel,
+// restart-on-KeyR. Centralized here so a *newly added* debug key is
+// protected automatically just by attaching this the same way, instead of
+// each system threading its own `Option<Res<Editor>>` param and an inline
+// `if editor.active() { return; }` (what toggle_debug_flags's KeyF/KeyT
+// fix looked like before this) — that pattern doesn't scale: every future
+// key needs the same boilerplate re-added, and it's easy to forget on a
+// new system. bevy_editor_pls (EDITOR=1) binds several of its own hotkeys
+// to the same raw keys some of these already use (KeyF: "Focus Selected
+// Entity" vs. this game's Freeze-zombies toggle; KeyT: gizmo Translate
+// mode vs. PlayerModelVisible; KeyR: gizmo Rotate mode vs. restart-on-
+// death) — both sides read the same global keyboard state with no
+// coordination, so a single keypress fired both. Bailing out on any of
+// these while the F2 overlay is actually open sidesteps every such
+// collision, current and future, in one place; the `Editor` resource is
+// `None` entirely outside EDITOR=1 builds, where this is always true.
+pub(crate) fn debug_keys_allowed(editor: Option<Res<bevy_editor_pls::editor::Editor>>) -> bool {
+    !editor.is_some_and(|e| e.active())
+}
+
 pub(crate) struct GamePlugin;
 
 impl Plugin for GamePlugin {
@@ -1256,6 +1303,14 @@ impl Plugin for GamePlugin {
         // shared::map1_level_pieces/item_gallery_level_pieces (see
         // setup()), same data the server independently builds its
         // colliders from.
+        //
+        // Debug-only: lets bevy_editor_pls's inspector (EDITOR=1, F2) show/
+        // edit these enums on a selected entity — see their own doc
+        // comments (zombie_client.rs, shared::zombie).
+        .init_resource::<PlayerModelPoseOverride>()
+        .register_type::<PlayerModelPose>()
+        .register_type::<ZombiePose>()
+        .register_type::<PlayerModelPoseOverride>()
         .add_client_event::<ClientInput>(Channel::Unreliable)
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
         .add_client_event::<FireShot>(Channel::Ordered)
@@ -1340,6 +1395,8 @@ impl Plugin for GamePlugin {
         .init_resource::<PredictedInputs>()
         .init_resource::<PredictionSmooth>()
         .init_resource::<PlayerModelVisible>()
+        .init_resource::<CameraMode>()
+        .init_resource::<PlayerModelTuning>()
         .init_resource::<GunVisible>()
         .init_resource::<MapMsaaOn>()
         .init_resource::<MapShadowsOn>()
@@ -1440,10 +1497,10 @@ impl Plugin for GamePlugin {
             (
                 (
                     grab_cursor,
-                    toggle_noclip,
+                    toggle_noclip.run_if(debug_keys_allowed),
                     toggle_player_stance,
-                    toggle_debug_flags,
-                    debug_panel_actions,
+                    toggle_debug_flags.run_if(debug_keys_allowed),
+                    debug_panel_actions.run_if(debug_keys_allowed),
                     autopilot_pick_target,
                     autopilot_think,
                     mouse_look,
@@ -1467,12 +1524,12 @@ impl Plugin for GamePlugin {
                 // tuple slot instead of a 21st+ flat entry. Still fully
                 // ordered: .chain() on this outer tuple runs the entire inner
                 // chain before this.
-                (count_local_kills, toggle_inspect_mode).chain(),
+                (count_local_kills, toggle_inspect_mode, toggle_camera_mode, sync_third_person_camera).chain(),
             )
                 .chain(),
             (
                 check_game_over,
-                restart_game,
+                restart_game.run_if(debug_keys_allowed),
                 restart_button,
                 map_select_button,
                 wire_zombie_animations,
@@ -1485,6 +1542,7 @@ impl Plugin for GamePlugin {
                 wire_player_model_animations,
                 update_remote_player_model_animation,
                 update_local_player_model_animation,
+                apply_player_model_pose_override,
                 update_health_ui,
                 update_inspect_ui,
                 update_compass_ui,
@@ -1595,6 +1653,7 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     touch_enabled: Res<TouchControlsEnabled>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    player_model_tuning: Res<PlayerModelTuning>,
 ) {
     // First-frame camera/player position — see the PLAYER_SPAWN comment
     // above; the server's replicated NetTransform takes over almost
@@ -1813,6 +1872,7 @@ fn setup(
 
     commands
         .spawn((
+            Name::new("Player"),
             Transform::from_translation(player_spawn),
             Player {
                 vertical_velocity: 0.0,
@@ -1829,8 +1889,9 @@ fn setup(
     // so this doesn't have to fight the Player entity's own physics-owned
     // Transform or its avian3d collider.
     commands.spawn((
+        Name::new("PlayerModel (local, debug — KeyT/CameraMode)"),
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(PLAYER_MODEL_PATH))),
-        Transform::from_translation(player_spawn).with_scale(Vec3::splat(PLAYER_MODEL_SCALE)),
+        Transform::from_translation(player_spawn).with_scale(Vec3::splat(player_model_tuning.scale)),
         Visibility::Hidden,
         PlayerModel,
         PlayerModelAnimRoot,
@@ -1845,11 +1906,11 @@ fn setup(
     commands.insert_resource(build_zombie_kind_anims(&asset_server, &mut graphs));
 
     let player_model_clips: Vec<Handle<AnimationClip>> = [
-        PLAYER_MODEL_ANIM_IDLE,
-        PLAYER_MODEL_ANIM_WALK,
-        PLAYER_MODEL_ANIM_RUN,
-        PLAYER_MODEL_ANIM_SHOOT,
-        PLAYER_MODEL_ANIM_DEATH,
+        player_model_tuning.animations.idle,
+        player_model_tuning.animations.walk,
+        player_model_tuning.animations.run,
+        player_model_tuning.animations.shoot,
+        player_model_tuning.animations.death,
     ]
     .into_iter()
     .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(PLAYER_MODEL_PATH)))
@@ -1867,6 +1928,7 @@ fn setup(
     let (review_yaw, review_pitch) = review_yaw_pitch();
     let camera = commands
         .spawn((
+            Name::new("FpsCamera (first-person, main render camera)"),
             Camera3d::default(),
             Projection::Perspective(PerspectiveProjection {
                 fov: BASE_FOV,
@@ -1896,13 +1958,14 @@ fn setup(
             // of the window — see this fn's own comment on scene_image up
             // top for why (and present_camera/the fullscreen ImageNode for
             // how it actually reaches the screen).
-            RenderTarget::from(scene_image_handle),
+            RenderTarget::from(scene_image_handle.clone()),
         ))
         .id();
 
     // Viewmodel: parented to the camera so it stays fixed in the bottom-right
     // of the screen regardless of where the player looks.
     commands.spawn((
+        Name::new("Gun (first-person viewmodel)"),
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(GUN_PATH))),
         Transform::from_translation(GUN_OFFSET)
             .with_rotation(Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians()))
@@ -1921,6 +1984,34 @@ fn setup(
             look_sway_roll: 0.0,
         },
         ChildOf(camera),
+    ));
+
+    // Third-person spectator camera (KeyU, see CameraMode) — a separate
+    // entity from the real FpsCamera above rather than moving it, so aiming/
+    // shooting/the gun viewmodel (all keyed off FpsCamera's own transform)
+    // keep working unmodified; only this camera's is_active flips when the
+    // mode toggles (see toggle_camera_mode), same "swap the active one"
+    // pattern as scope_camera below. Starts inactive, sharing the same
+    // offscreen scene_image_handle target so present_camera's fullscreen
+    // quad shows whichever one is actually rendering. World layer only —
+    // deliberately omits VIEWMODEL_LAYER so the first-person gun (parented
+    // to FpsCamera, layer-gated) doesn't float in front of the third-person
+    // view; sync_player_model's PlayerModel body fills that role instead.
+    commands.spawn((
+        Name::new("ThirdPersonCamera (KeyU, inactive until CameraMode::ThirdPerson)"),
+        Camera3d::default(),
+        Camera {
+            is_active: false,
+            ..default()
+        },
+        Projection::Perspective(PerspectiveProjection {
+            fov: BASE_FOV,
+            ..default()
+        }),
+        Transform::from_translation(player_spawn + Vec3::Y * EYE_HEIGHT_OFFSET),
+        ThirdPersonCamera,
+        RenderLayers::from_layers(&[WORLD_LAYER]),
+        RenderTarget::from(scene_image_handle),
     ));
 
     // Scope render target: the scope camera below renders the actual world
@@ -1950,6 +2041,7 @@ fn setup(
     // update_scope_lens only turns it (and the lens quad) on while ADS'd.
     let scope_camera = commands
         .spawn((
+            Name::new("ScopeCamera (renders the ADS lens texture)"),
             Camera3d::default(),
             Camera {
                 order: -1,
@@ -2658,38 +2750,146 @@ struct InputSendThrottleState {
 
 
 
-// -0.8 (capsule half-height: PLAYER_RADIUS 0.35 + half PLAYER_LENGTH 0.9)
-// assumed PLAYER_MODEL_PATH's rig root sits at its own feet, like
-// ZOMBIE_PATH's does — measured (via a temporary per-frame log comparing
-// this model's world Y against a zombie's own proven-correct ground-contact
-// Y) to land EXACTLY on the floor at -0.8, yet still visibly floats.
-// Inspecting soldier.glb's raw joint hierarchy directly (its "Root" bone
-// sits close to "Hips", well above "Foot.L"/"Foot.R") confirms this rig's
-// root is NOT at its feet, unlike the zombie's — it needs an *additional*
-// drop for the hip-to-ground distance the zombie's rig doesn't have. No
-// exact figure available without decoding the full skinned bind pose
-// (bone rotations, not just translations, position the legs), so this is
-// a reasoned estimate (typical hip height ≈ half standing height, scaled
-// by PLAYER_MODEL_SCALE) rather than a measured one — confirm in-game and
-// nudge further if the feet still don't sit exactly on the floor.
-const PLAYER_MODEL_Y_OFFSET: f32 = -1.3;
+// PLAYER_MODEL_PATH (soldier.glb)'s scale/Y-offset/facing correction AND
+// animation clip-index mapping used to be hand-picked consts here, nudged
+// by editing this file and rebuilding every time — same "eyeball it, no
+// real third-person camera to check against" problem ZOMBIE_MESHY_PATH
+// already solved for zombies by moving its own equivalent numbers into a
+// RON file an F9 press can write back to (see
+// shared::zombie::zombie_meshy_transform_raw). Same idea here, but going
+// one step further: `character.ron` is THE dedicated per-character file
+// for both concerns (scale/offset/facing *and* animation mapping) — not
+// two separate files — since both are "numbers a specific mesh file needs
+// that change if the mesh changes." History of *why* -0.8 (capsule
+// half-height) wasn't enough as a Y offset — this rig's root sits near the
+// hips, not the feet, unlike the zombie's, needing an extra hip-to-ground
+// drop — and why plain native scale (1.0) rendered taller than a zombie
+// standing next to it lives with the RON file itself
+// (assets/characters/soldier/character.ron), not here anymore.
+#[derive(serde::Deserialize, Clone)]
+pub(crate) struct CharacterAnimIndices {
+    pub(crate) idle: usize,
+    pub(crate) walk: usize,
+    pub(crate) run: usize,
+    pub(crate) shoot: usize,
+    pub(crate) death: usize,
+}
 
-// PLAYER_MODEL_PATH (soldier.glb, a different generic asset pack than
-// ZOMBIE_PATH) had never actually been looked at in-game before — spawned
-// at native scale with no facing correction, unlike ZOMBIE_PATH's own
-// ZOMBIE_SCALE. Reported: at scale 1.0 the model rendered visibly taller
-// than a zombie standing next to it, and walked backward relative to its
-// own facing (this asset's rig faces +Z, the opposite of Bevy's
-// -Z-forward convention that NetTransform.yaw/FpsCamera assume everywhere
-// else). ZOMBIE_SCALE itself (0.25) turned out too small once actually
-// checked (the local debug model — the only self-check available, since
-// this is a first-person game with no real third-person camera — read as
-// tiny/crumpled at extreme close range); this halves the gap between
-// "native size" and ZOMBIE_SCALE as a best-effort middle value. Only a
-// second client actually looking at this player's remote model from a
-// normal distance can judge the exact number properly — nudge after that.
-const PLAYER_MODEL_SCALE: f32 = 0.5;
-const PLAYER_MODEL_FACING_CORRECTION: f32 = std::f32::consts::PI;
+// Mirrors character.ron's shape. Only `scale`/`y_offset`/`facing_deg`/
+// `animations` are read into PlayerModelTuning below — `id`/`display_name`/
+// `lore_ref`/`mesh`/`audio` exist so this struct can deserialize the WHOLE
+// file (serde ignores fields present in the RON but absent from a struct,
+// not the other way around) and so save_player_model_tuning can write them
+// back out unchanged alongside a live-nudged scale/y_offset/facing_deg.
+#[derive(serde::Deserialize, Clone)]
+pub(crate) struct CharacterRon {
+    pub(crate) id: String,
+    pub(crate) display_name: String,
+    pub(crate) lore_ref: String,
+    pub(crate) mesh: String,
+    pub(crate) scale: f32,
+    pub(crate) y_offset: f32,
+    pub(crate) facing_deg: f32,
+    pub(crate) animations: CharacterAnimIndices,
+    pub(crate) audio: Vec<String>,
+}
+
+fn load_character_ron() -> CharacterRon {
+    let text = shared::read_ron_data_file!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/characters/soldier/character.ron"
+    ));
+    ron::de::from_str(&text).unwrap_or_else(|e| panic!("failed to parse soldier character.ron: {e}"))
+}
+
+// Used by save_player_model_tuning (movement_combat.rs) to write
+// characters/soldier/character.ron back out.
+pub(crate) fn format_character_ron(c: &CharacterRon) -> String {
+    format!(
+        "// Metadata for the \"{id}\" character — see docs/CHARACTER_IMPORT_CHECKLIST.md's\n\
+         // \"Scale and origin\" section for why this can't just trust the mesh's native\n\
+         // scale/pivot.\n\
+         //\n\
+         // scale/y_offset/facing_deg are F9-tunable (EDITOR=1): third-person (KeyU),\n\
+         // Comma/Period nudges scale, Minus/Equal nudges y_offset — see\n\
+         // nudge_player_model_tuning/save_player_model_tuning\n\
+         // (crates/client/src/movement_combat.rs). `animations` isn't nudge-able,\n\
+         // only hand-edited.\n\
+         (\n\
+         \u{20}   id: \"{id}\",\n\
+         \u{20}   display_name: \"{display_name}\",\n\
+         \u{20}   lore_ref: \"{lore_ref}\",\n\
+         \n\
+         \u{20}   mesh: \"{mesh}\",\n\
+         \u{20}   // See docs/CHARACTER_IMPORT_CHECKLIST.md before replacing this mesh.\n\
+         \u{20}   scale: {scale},\n\
+         \u{20}   y_offset: {y_offset},\n\
+         \u{20}   facing_deg: {facing_deg},\n\
+         \n\
+         \u{20}   animations: (\n\
+         \u{20}       idle: {idle},\n\
+         \u{20}       walk: {walk},\n\
+         \u{20}       run: {run},\n\
+         \u{20}       shoot: {shoot},\n\
+         \u{20}       death: {death},\n\
+         \u{20}   ),\n\
+         \n\
+         \u{20}   audio: [{audio}],\n\
+         )\n",
+        id = c.id,
+        display_name = c.display_name,
+        lore_ref = c.lore_ref,
+        mesh = c.mesh,
+        scale = ron_f32(c.scale),
+        y_offset = ron_f32(c.y_offset),
+        facing_deg = ron_f32(c.facing_deg),
+        idle = c.animations.idle,
+        walk = c.animations.walk,
+        run = c.animations.run,
+        shoot = c.animations.shoot,
+        death = c.animations.death,
+        audio = c.audio.iter().map(|a| format!("\"{a}\"")).collect::<Vec<_>>().join(", "),
+    )
+}
+
+// Live-tunable copy of character.ron's values — nudge_player_model_tuning/
+// save_player_model_tuning (EDITOR=1 only) work against this Resource
+// instead of the file directly, seeded from it at Startup.
+// sync_player_model and on_net_player_replicated both read this (not the
+// RON loader directly) so a live nudge shows up immediately on every
+// player's model, local and remote alike — they all share the one
+// soldier.glb. `id`/`display_name`/`lore_ref`/`mesh`/`audio` are carried
+// through unchanged (never mutated at runtime) purely so a F9 save can
+// rewrite the whole file faithfully instead of clobbering those fields.
+#[derive(Resource, Clone)]
+pub(crate) struct PlayerModelTuning {
+    pub(crate) scale: f32,
+    pub(crate) y_offset: f32,
+    pub(crate) facing_deg: f32,
+    pub(crate) animations: CharacterAnimIndices,
+    pub(crate) id: String,
+    pub(crate) display_name: String,
+    pub(crate) lore_ref: String,
+    pub(crate) mesh: String,
+    pub(crate) audio: Vec<String>,
+}
+
+impl Default for PlayerModelTuning {
+    fn default() -> Self {
+        let c = load_character_ron();
+        Self {
+            scale: c.scale,
+            y_offset: c.y_offset,
+            facing_deg: c.facing_deg,
+            animations: c.animations,
+            id: c.id,
+            display_name: c.display_name,
+            lore_ref: c.lore_ref,
+            mesh: c.mesh,
+            audio: c.audio,
+        }
+    }
+}
 
 
 

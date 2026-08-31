@@ -40,6 +40,150 @@ Run, Shoot, Death.
 Crouch-run and prone-run aren't in this list on purpose: `send_player_input`
 only allows sprint while `stance == Standing`, so those states can't happen.
 
+## 8-directional strafe locomotion set (rifle stance)
+
+Directional expansion of clips #2 (Walk), #5 (Crouch Walk), and #3 (Run)
+above — not new poses, new *travel directions* for those same three. This
+is the standard strafe-locomotion shape for a shooter where aim is
+decoupled from movement (`shared::movement::simulate_player_step` already
+takes `move_axis` independent of facing) — the upper body and rifle stay
+aimed forward the whole time in every clip; only the direction the hips/
+feet actually travel changes. **Say this explicitly in every prompt** —
+Meshy's default read of "walking forward" is a normal walk that turns to
+face where it's going, which is wrong here.
+
+Directions are named by travel angle relative to where the character is
+aiming (0° = straight ahead), clockwise — not compass directions, and not
+which way the character *faces* (that's always 0°/forward in every clip).
+
+19 clips total: 8 standing walk + 8 crouch walk + 3 run (run only covers
+forward + the two forward diagonals — full 8-way running isn't requested/
+needed here, matching this game's sprint being a forward-biased action).
+
+| # | Clip | Stance | Angle | Duration (loop) |
+|---|---|---|---|---|
+| 1 | Walk Forward | Standing | 0° | 1–1.2 s |
+| 2 | Walk Forward-Right | Standing | 45° | 1–1.2 s |
+| 3 | Walk Right (strafe) | Standing | 90° | 1–1.2 s |
+| 4 | Walk Backward-Right | Standing | 135° | 1–1.2 s |
+| 5 | Walk Backward | Standing | 180° | 1–1.2 s |
+| 6 | Walk Backward-Left | Standing | 225° | 1–1.2 s |
+| 7 | Walk Left (strafe) | Standing | 270° | 1–1.2 s |
+| 8 | Walk Forward-Left | Standing | 315° | 1–1.2 s |
+| 9 | Crouch Walk Forward | Crouching | 0° | 1–1.2 s |
+| 10 | Crouch Walk Forward-Right | Crouching | 45° | 1–1.2 s |
+| 11 | Crouch Walk Right (strafe) | Crouching | 90° | 1–1.2 s |
+| 12 | Crouch Walk Backward-Right | Crouching | 135° | 1–1.2 s |
+| 13 | Crouch Walk Backward | Crouching | 180° | 1–1.2 s |
+| 14 | Crouch Walk Backward-Left | Crouching | 225° | 1–1.2 s |
+| 15 | Crouch Walk Left (strafe) | Crouching | 270° | 1–1.2 s |
+| 16 | Crouch Walk Forward-Left | Crouching | 315° | 1–1.2 s |
+| 17 | Run Forward | Standing | 0° | 0.8–1 s |
+| 18 | Run Forward-Right (diagonal) | Standing | 45° | 0.8–1 s |
+| 19 | Run Forward-Left (diagonal) | Standing | 315° | 0.8–1 s |
+
+### Text-to-Motion prompts (copy-paste, ≤400 chars each)
+
+All 19 are loops, all **in place / no root motion**, all rifle held
+**right-handed** (right hand on trigger/grip, left hand on handguard),
+torso/rifle always aimed forward regardless of travel direction. Kept
+under Meshy's 400-character Text-to-Motion prompt limit.
+
+**1. Walk Forward** (standing, 0°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character strafe-walks, moving straight forward. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**2. Walk Forward-Right** (standing, 45°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character strafe-walks, moving diagonally forward-right. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**3. Walk Right (strafe)** (standing, 90°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character strafe-walks, moving directly right (sideways strafe). Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**4. Walk Backward-Right** (standing, 135°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character strafe-walks, moving diagonally backward-right. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**5. Walk Backward** (standing, 180°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character strafe-walks, moving straight backward. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**6. Walk Backward-Left** (standing, 225°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character strafe-walks, moving diagonally backward-left. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**7. Walk Left (strafe)** (standing, 270°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character strafe-walks, moving directly left (sideways strafe). Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**8. Walk Forward-Left** (standing, 315°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character strafe-walks, moving diagonally forward-left. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**9. Crouch Walk Forward** (crouching, 0°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character crouch-walks low to the ground, knees bent, moving straight forward. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**10. Crouch Walk Forward-Right** (crouching, 45°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character crouch-walks low to the ground, knees bent, moving diagonally forward-right. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**11. Crouch Walk Right (strafe)** (crouching, 90°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character crouch-walks low to the ground, knees bent, moving directly right (sideways strafe). Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**12. Crouch Walk Backward-Right** (crouching, 135°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character crouch-walks low to the ground, knees bent, moving diagonally backward-right. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**13. Crouch Walk Backward** (crouching, 180°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character crouch-walks low to the ground, knees bent, moving straight backward. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**14. Crouch Walk Backward-Left** (crouching, 225°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character crouch-walks low to the ground, knees bent, moving diagonally backward-left. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**15. Crouch Walk Left (strafe)** (crouching, 270°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character crouch-walks low to the ground, knees bent, moving directly left (sideways strafe). Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**16. Crouch Walk Forward-Left** (crouching, 315°, loop, ~1–1.2 s, in place — no root motion)
+```
+Character crouch-walks low to the ground, knees bent, moving diagonally forward-left. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**17. Run Forward** (standing, 0°, loop, ~0.8–1 s, in place — no root motion)
+```
+Character sprints, moving straight forward, leaning into the direction of travel from the hips. Torso and rifle stay aimed/oriented forward, not fully turning to face travel direction. Rifle held right-handed at chest/firing-ready height (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**18. Run Forward-Right (diagonal)** (standing, 45°, loop, ~0.8–1 s, in place — no root motion)
+```
+Character sprints, moving diagonally forward-right, leaning into the direction of travel from the hips. Torso and rifle stay aimed/oriented forward, not fully turning to face travel direction. Rifle held right-handed at chest/firing-ready height (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
+**19. Run Forward-Left (diagonal)** (standing, 315°, loop, ~0.8–1 s, in place — no root motion)
+```
+Character sprints, moving diagonally forward-left, leaning into the direction of travel from the hips. Torso and rifle stay aimed/oriented forward, not fully turning to face travel direction. Rifle held right-handed at chest/firing-ready height (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
+```
+
 ## Reference — what PUBG / Left 4 Dead ship for the player
 
 Scope-matching notes, not a checklist to copy.
@@ -78,79 +222,60 @@ Incapacitated/revive (a real co-op feature, bigger than an animation task).
 | Lean left/right | one-shot (hold last frame) | 0.6–1 s | fast transition into the pose; the pose itself is held by code |
 | Hit reaction | one-shot | 0.3–0.5 s | a quick flinch, must not interrupt aiming for long |
 
-## Text-to-Motion prompts (copy-paste)
+## Text-to-Motion prompts (copy-paste, ≤400 chars each)
 
 Every prompt keeps root motion **off** — see
-[`CHARACTER_ANIMATION_PLAN.md`](CHARACTER_ANIMATION_PLAN.md) for why.
+[`CHARACTER_ANIMATION_PLAN.md`](CHARACTER_ANIMATION_PLAN.md) for why. Same
+right-handed grip convention as the 8-directional set above (right hand
+on trigger/grip, left hand on handguard), and same 400-character Meshy
+Text-to-Motion limit.
 
 **Player — Crouch Idle** (loop, ~2–3 s)
 ```
-Character crouches down and holds a stationary crouching idle pose,
-weight balanced on both feet, knees bent, torso upright, alert ready
-stance, holding a rifle at the chest.
+Character holds a stationary crouching idle pose, weight balanced, knees bent, torso upright, alert ready stance, holding a rifle at chest right-handed (right hand on trigger/grip, left hand on handguard).
 ```
 
 **Player — Crouch Walk** (loop, ~1–1.2 s, in place — no root motion)
 ```
-Character walks in place while crouching low, knees bent, staying low
-to the ground, cautious tactical crouch-walk cycle, holding a rifle
-raised at the chest. In place, hips stay centered, no forward travel —
-only legs and arms cycle.
+Character crouch-walks low to the ground, knees bent, moving straight forward. Torso and rifle stay aimed straight forward the whole time, upper body does not turn toward travel direction. Rifle held right-handed at chest (right hand on trigger/grip, left hand on handguard). In place, no root motion, only limbs cycle.
 ```
 
 **Player — Prone Idle** (loop, ~2–3 s)
 ```
-Character lies flat on the stomach in a prone position, elbows propped
-forward on the ground, holding a rifle aimed forward, stationary prone
-ready pose.
+Character lies flat prone, elbows propped on the ground, holding a rifle aimed forward right-handed (right hand on trigger/grip, left hand on handguard), stationary prone ready pose.
 ```
 
 **Player — Prone Crawl** (loop, ~1.5–2 s, in place — no root motion)
 ```
-Character crawls in place while lying prone on the stomach, pulling
-with elbows and forearms, legs dragging behind, military low crawl,
-holding a rifle in front. In place, torso stays centered, no forward
-travel — only arms and legs cycle.
+Character crawls in place lying prone, pulling with elbows and forearms, legs dragging behind, military low crawl, holding a rifle in front right-handed (right hand on trigger/grip, left hand on handguard). In place, no root motion, only arms/legs cycle.
 ```
 
 **Player — Reload** (one-shot, ~2–2.5 s)
 ```
-Character reloads a rifle: pulls out the empty magazine downward with
-one hand, drops it, inserts a new magazine up into the weapon, pulls
-the charging handle back and releases it, quick tactical reload, weapon
-held at chest height.
+Character reloads a rifle held right-handed at chest height (right hand stays on trigger/grip throughout): left hand pulls the empty magazine down, drops it, inserts a new magazine, pulls the charging handle back and releases it. Quick tactical reload, one-shot.
 ```
 
 **Player — Aim/ADS pose** (loop, ~1.5–2 s)
 ```
-Character raises a rifle to shoulder height and aims down the sights,
-steady standing aiming stance, weapon held close to the face, elbows
-tucked in, minimal sway.
+Character raises a rifle to shoulder height and aims down the sights, right-handed - right cheek on the stock, right hand on trigger/grip, left hand on handguard. Steady standing aiming stance, weapon close to the face, elbows tucked in, minimal sway.
 ```
 
 **Player — Jump/Fall** (one-shot, ~0.8–1.2 s, in place — no vertical or
 forward root travel; the height is already driven by `vertical_velocity`,
 and jump is the clip most likely to get baked-in root motion by default)
 ```
-Character jumps in place from a standing position, arms swinging up
-for momentum, then transitions into a mid-air falling pose with knees
-slightly bent, landing in a soft recovery crouch. In place, no forward
-or vertical root travel — pose only.
+Character jumps in place from standing, holding a rifle right-handed (right hand on trigger/grip, left hand on handguard), arms swinging up without releasing the weapon, then a mid-air falling pose, knees bent, landing in a soft recovery crouch. In place, no root travel, pose only.
 ```
 
 **Player — Lean left/right** (one-shot, hold last frame, ~0.6–1 s)
 ```
-Character leans sideways from the waist while standing still, upper
-body tilts out to peek around a corner, feet planted, weapon still
-raised and aimed.
+Character leans sideways from the waist while standing still, upper body tilts out to peek around a corner, feet planted, rifle still raised and aimed right-handed (right hand on trigger/grip, left hand on handguard).
 ```
 
 **Player — Hit reaction / flinch** (one-shot, ~0.3–0.5 s; needs a code
 hook — no damage event exists yet)
 ```
-Character flinches from a bullet impact, upper body jerking back and to
-one side, a short stagger step, weapon dipping briefly, then recovers to
-the ready stance. Very short one-shot, in place, no root motion.
+Character flinches from a bullet impact, upper body jerks back and to one side, a short stagger step, rifle (held right-handed, right hand on trigger/grip, left hand on handguard) dips briefly, then recovers to ready stance. Very short one-shot, in place, no root motion.
 ```
 
 ## Suggested generation order

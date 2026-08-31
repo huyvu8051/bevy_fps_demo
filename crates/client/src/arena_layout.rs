@@ -37,7 +37,10 @@ impl Plugin for ArenaLayoutPlugin {
         // gated for the same reason as that plugin — see its own comment.
         #[cfg(not(target_arch = "wasm32"))]
         if std::env::var("EDITOR").is_ok() {
-            app.add_systems(Update, save_arena_layout_on_key);
+            // .run_if(debug_keys_allowed) — see that fn's own doc comment
+            // (lib.rs) for why every F9/debug-toggle system reading raw
+            // keyboard input is guarded the same way.
+            app.add_systems(Update, save_arena_layout_on_key.run_if(crate::debug_keys_allowed));
         }
     }
 }

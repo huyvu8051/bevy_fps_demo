@@ -1,0 +1,8 @@
+# Caps the wasm32 linear memory ceiling so the web build fails predictably
+# (an allocation error) instead of getting silently jetsam-killed by the OS
+# on lower-RAM phones (e.g. older iPhones), where the linker's default max
+# (~4GiB, the wasm32 address-space limit) would otherwise let the app try
+# to grow memory far past what the device/browser will actually grant.
+# 3 GiB = 3221225472 bytes = 49152 wasm pages (64KiB/page).
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--max-memory=3221225472"]
