@@ -25,13 +25,10 @@ use shared::{
     MapKind, scenario_player_spawn,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
-    HitboxTestSlot, HITBOX_TEST_RESPAWN_DELAY, HITBOX_TEST_ZOMBIE_POSITIONS,
     MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PILLAR_RADIUS,
     PLAYER_LENGTH, PLAYER_RADIUS, Scenario,
-    RENDER_COMPARE_ZOMBIE_POSITIONS,
     STRESS_TEST_ZOMBIE_COUNT,
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
-    ZOMBIE_CRAWL_HEALTH_FRACTION,
     ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
     DIRECTOR_CALM_DURATION_SECS, DIRECTOR_CALM_PRESSURE_THRESHOLD, DIRECTOR_HORDE_SIZE,
     DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, INTERP_DELAY_SECS,
@@ -237,10 +234,8 @@ fn main() {
                 // Mutually exclusive — exactly one runs, gated on the
                 // Scenario resource `insert_resource`d above (fixed for
                 // this process's whole lifetime, no runtime switching).
-                spawn_initial_zombies.run_if(|s: Res<Scenario>| matches!(*s, Scenario::Normal | Scenario::LegacyArena)),
-                spawn_hitbox_test_zombies.run_if(resource_equals(Scenario::HitboxTest)),
+                spawn_initial_zombies.run_if(resource_equals(Scenario::Normal)),
                 spawn_stress_test_zombies.run_if(resource_equals(Scenario::StressTest)),
-                spawn_render_compare_zombies_system.run_if(resource_equals(Scenario::RenderCompare)),
                 setup_server_zombie_anim,
             ),
         )
@@ -255,7 +250,7 @@ fn main() {
             Update,
             (
                 move_players,
-                (assign_render_compare_bite_target, move_zombies, update_server_zombie_pose, record_zombie_history).chain(),
+                (move_zombies, update_server_zombie_pose, record_zombie_history).chain(),
                 (bot_pick_target, move_debug_bots, debug_bot_fire).chain(),
                 tick_respawns,
                 decay_player_threat,
@@ -648,7 +643,7 @@ fn run_ai_director(
         })
         .collect();
     info!("AI Director: sustained calm, spawning a {}-zombie horde near {center}", DIRECTOR_HORDE_SIZE);
-    spawn_zombies(&mut commands, &spawns, ZOMBIE_AI_ENABLED, true, false);
+    spawn_zombies(&mut commands, &spawns, ZOMBIE_AI_ENABLED, true);
 }
 
 fn log_client_disconnect(trigger: On<Remove, ConnectedClient>) {
@@ -944,7 +939,7 @@ fn debug_bot_fire(
             let was_director_spawn = director_spawned.contains(entity);
             commands.entity(entity).despawn();
             if !was_director_spawn {
-                respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY, fixed_position: None });
+                respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
             }
         } else {
             let push = Vec3::new(zombie_transform.translation.x - origin.x, 0.0, zombie_transform.translation.z - origin.z)
@@ -1056,9 +1051,9 @@ struct NextZombieSpawnIndex(usize);
 // Picks the right spawn scatter for the map: Map 1's own 4 real floors on
 // MapKind::Building, the flat arena's generic grid otherwise. Every
 // baseline zombie spawn call site (initial spawn, tick-based respawn,
-// manual SetZombieCount — all Normal/LegacyArena only) goes through this
-// instead of calling the raw fns directly, so none can drift back to
-// spawning zombies in the void between Map 1's floors.
+// manual SetZombieCount) goes through this instead of calling the raw fns
+// directly, so none can drift back to spawning zombies in the void between
+// Map 1's floors.
 fn zombie_spawn_pos_for(kind: MapKind, seed: usize) -> Vec3 {
     match kind {
         MapKind::Building => random_map1_zombie_spawn_pos(seed),
@@ -1075,7 +1070,7 @@ fn spawn_initial_zombies(
     let kind = scenario.map_kind();
     let count = (target.0 as usize).min(ZOMBIE_SPAWNS.len());
     let positions: Vec<Vec3> = (0..count).map(|seed| zombie_spawn_pos_for(kind, seed)).collect();
-    spawn_zombies(&mut commands, &positions, ZOMBIE_AI_ENABLED, false, false);
+    spawn_zombies(&mut commands, &positions, ZOMBIE_AI_ENABLED, false);
     next_spawn_index.0 = count;
 }
 
@@ -1104,7 +1099,7 @@ fn on_set_zombie_count(
                 pos
             })
             .collect();
-        spawn_zombies(&mut commands, &to_spawn, ZOMBIE_AI_ENABLED, false, false);
+        spawn_zombies(&mut commands, &to_spawn, ZOMBIE_AI_ENABLED, false);
     } else if current > target.0 {
         for entity in baseline_zombies.iter().take((current - target.0) as usize) {
             commands.entity(entity).try_despawn();
@@ -1134,7 +1129,7 @@ fn on_set_auto_maintain_zombies(trigger: On<FromClient<SetAutoMaintainZombies>>,
 }
 
 fn spawn_more_zombies(_trigger: On<FromClient<SpawnMoreZombies>>, mut commands: Commands) {
-    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, ZOMBIE_AI_ENABLED, false, false);
+    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, ZOMBIE_AI_ENABLED, false);
 }
 
 // Marks a zombie spawned by run_ai_director as a bonus horde rather than
@@ -1296,12 +1291,9 @@ mod hitbox_phase3_tests {
 // autopilot_think) needs the exact same per-entity hash, not a second copy.
 
 // `ai_enabled` used to be the global ZOMBIE_AI_ENABLED const unconditionally
-// — now a per-call flag so Scenario::HitboxTest's row can spawn with no
-// Thinker at all (stationary, per its own doc comment) while normal/
-// stress-test zombies keep the usual global toggle. `hitbox_test` tags the
-// spawned entities with HitboxTestSlot (their own fixed respawn position)
-// — see PendingRespawn's own doc comment for why.
-fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], ai_enabled: bool, director_spawned: bool, hitbox_test: bool) {
+// — now a per-call flag so normal/stress-test zombies keep the usual global
+// toggle while other call sites can opt out.
+fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], ai_enabled: bool, director_spawned: bool) {
     for &spawn_pos in spawns {
         let mut zombie = commands.spawn_empty();
         let phase = entity_phase(zombie.id());
@@ -1352,113 +1344,14 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], ai_enabled: bool, dir
         if director_spawned {
             zombie.insert(DirectorSpawned);
         }
-        if hitbox_test {
-            zombie.insert(HitboxTestSlot(spawn_pos));
-        }
     }
 }
-
-// Scenario::HitboxTest's Startup spawn — see HITBOX_TEST_ZOMBIE_POSITIONS
-// and HitboxTestSlot's own doc comments.
-fn spawn_hitbox_test_zombies(mut commands: Commands) {
-    spawn_zombies(&mut commands, &HITBOX_TEST_ZOMBIE_POSITIONS, false, false, true);
-}
-
 
 // Scenario::StressTest's Startup spawn — STRESS_TEST_ZOMBIE_COUNT zombies
 // with normal chase AI, taken from the front of the same ZOMBIE_SPAWNS
 // grid the normal game uses.
 fn spawn_stress_test_zombies(mut commands: Commands) {
-    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT], true, false, false);
-}
-
-// Scenario::RenderCompare's Startup spawn — 3 stationary zombies, one per
-// RENDER_COMPARE_ZOMBIE_POSITIONS entry, each hand-built (not via
-// spawn_zombies — no Thinker/Chase on any of them, so move_zombies never
-// touches them, and each needs different bonus components) to land on a
-// different ZombiePose without ever moving:
-//   - Idle: no ChaseTarget at all, so update_server_zombie_pose's query
-//     (which requires &ChaseTarget) skips it entirely — it just sits on
-//     ZombiePose's own spawn-time default forever.
-//   - Crawl: a bare ChaseTarget (entity: None — distance then reads as
-//     f32::MAX, well past ZOMBIE_STOP_DISTANCE, so it can't accidentally
-//     read as Bite) plus low Health, since zombie_pose_for's Crawl branch
-//     only looks at health_fraction.
-//   - Bite: a bare ChaseTarget too, but assign_render_compare_bite_target
-//     (Update) points its `entity` at the first connected player once one
-//     exists (impossible to do here — no player has connected yet at
-//     Startup) — RENDER_COMPARE_ZOMBIE_POSITIONS' Bite entry is already
-//     placed within ZOMBIE_STOP_DISTANCE of RENDER_COMPARE_PLAYER_SPAWN,
-//     so once ChaseTarget.entity is set the distance check passes too.
-fn spawn_render_compare_zombies_system(mut commands: Commands) {
-    spawn_render_compare_zombies(&mut commands);
-}
-
-fn spawn_render_compare_zombies(commands: &mut Commands) {
-    for (i, &spawn_pos) in RENDER_COMPARE_ZOMBIE_POSITIONS.iter().enumerate() {
-        let mut zombie = commands.spawn_empty();
-        zombie.insert((
-            Transform::from_translation(spawn_pos),
-            Zombie,
-            // RenderCompare is a classic-rig visual test — pin it, don't
-            // randomise. Present so the client's on_zombie_kind_replicated
-            // still fires and builds the mesh.
-            ZombieKind::Classic,
-            ZombieMotion::default(),
-            KnockbackVelocity::default(),
-            ZombieAttackTimer::default(),
-            NetTransform { translation: spawn_pos, yaw: 0.0, moving: false, sprinting: false },
-            Replicated,
-            Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
-            ZombieHistory::default(),
-            ZombieHitboxBones::default(),
-            ZombiePose::default(),
-            Visibility::default(),
-        ));
-        match i {
-            // Crawl: low health, bare ChaseTarget.
-            2 => {
-                zombie.insert((Health(ZOMBIE_MAX_HEALTH * ZOMBIE_CRAWL_HEALTH_FRACTION * 0.5), ChaseTarget::default()));
-            }
-            // Bite: full health, bare ChaseTarget — entity filled in once a
-            // player connects, see assign_render_compare_bite_target.
-            1 => {
-                zombie.insert((Health(ZOMBIE_MAX_HEALTH), ChaseTarget::default(), RenderCompareBiteZombie));
-            }
-            // Idle: full health, no ChaseTarget at all.
-            _ => {
-                zombie.insert(Health(ZOMBIE_MAX_HEALTH));
-            }
-        }
-    }
-}
-
-// Marker for RenderCompare's one Bite-pose zombie — lets
-// assign_render_compare_bite_target find it without a magic index into
-// RENDER_COMPARE_ZOMBIE_POSITIONS.
-#[derive(Component)]
-struct RenderCompareBiteZombie;
-
-// Startup spawns this zombie before any player has connected, so its
-// ChaseTarget.entity starts None — this fills it in with the first
-// connected player as soon as one exists, which is what actually makes
-// update_server_zombie_pose's distance check (RENDER_COMPARE_ZOMBIE_
-// POSITIONS' Bite entry is already within ZOMBIE_STOP_DISTANCE of
-// RENDER_COMPARE_PLAYER_SPAWN) start passing. Runs every frame but is a
-// no-op once assigned or once there's simply no player yet.
-fn assign_render_compare_bite_target(
-    players: Query<Entity, With<NetPlayer>>,
-    mut zombie: Query<&mut ChaseTarget, With<RenderCompareBiteZombie>>,
-) {
-    let Ok(mut chase_target) = zombie.single_mut() else {
-        return;
-    };
-    if chase_target.entity.is_some() {
-        return;
-    }
-    if let Some(player) = players.iter().next() {
-        chase_target.entity = Some(player);
-    }
+    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT], true, false);
 }
 
 // --- Phase 2 (HITBOX_PLAN.md): real skeleton on every server zombie -------
@@ -1913,17 +1806,8 @@ fn move_zombies(
 #[derive(Resource, Default)]
 struct PendingRespawns(Vec<PendingRespawn>);
 
-// `fixed_position: Some(pos)` — Scenario::HitboxTest — respawns a fresh
-// zombie back at its own row slot (no AI, tagged HitboxTestSlot again)
-// regardless of AutoMaintainZombies, which only governs the normal
-// cycling-ZOMBIE_SPAWNS-grid population. `None` is the original/normal
-// behavior. Only handle_fire_shot's two hit-resolution branches (the real
-// player-shot path — what actually matters for hitbox testing) populate
-// `fixed_position`; debug_bot_fire's own fire branch always pushes `None`,
-// since bots aren't expected to be active during a HitboxTest session.
 struct PendingRespawn {
     timer: f32,
-    fixed_position: Option<Vec3>,
 }
 
 fn tick_respawns(
@@ -1938,14 +1822,11 @@ fn tick_respawns(
     let dt = time.delta_secs();
     let mut i = 0;
     let mut to_spawn = Vec::new();
-    let mut to_spawn_fixed = Vec::new();
     while i < respawns.0.len() {
         respawns.0[i].timer -= dt;
         if respawns.0[i].timer <= 0.0 {
-            let entry = respawns.0.swap_remove(i);
-            if let Some(pos) = entry.fixed_position {
-                to_spawn_fixed.push(pos);
-            } else if auto_maintain.0 {
+            respawns.0.swap_remove(i);
+            if auto_maintain.0 {
                 // Still consumes the pending-respawn slot either way — only
                 // whether it actually results in a new zombie depends on the
                 // toggle, so flipping auto-maintain back on later doesn't
@@ -1958,10 +1839,7 @@ fn tick_respawns(
         }
     }
     if !to_spawn.is_empty() {
-        spawn_zombies(&mut commands, &to_spawn, ZOMBIE_AI_ENABLED, false, false);
-    }
-    if !to_spawn_fixed.is_empty() {
-        spawn_zombies(&mut commands, &to_spawn_fixed, false, false, true);
+        spawn_zombies(&mut commands, &to_spawn, ZOMBIE_AI_ENABLED, false);
     }
 }
 
@@ -1977,7 +1855,7 @@ fn handle_fire_shot(
     renet_server: Res<RenetServer>,
     network_ids: Query<&NetworkId>,
     spatial_query: SpatialQuery,
-    mut zombies: Query<(Entity, &mut Health, &mut KnockbackVelocity, &ZombieHistory, Option<&HitboxTestSlot>), With<Zombie>>,
+    mut zombies: Query<(Entity, &mut Health, &mut KnockbackVelocity, &ZombieHistory), With<Zombie>>,
     mut respawns: ResMut<PendingRespawns>,
     mut threats: Query<&mut PlayerThreat>,
     director_spawned: Query<(), With<DirectorSpawned>>,
@@ -2065,7 +1943,7 @@ fn handle_fire_shot(
     // shot right there, indistinguishable from actually blocking it.
     let mut rewound_candidates: Vec<(f32, Entity, BoneWorldPositions, Vec3)> = zombies
         .iter()
-        .filter_map(|(entity, _, _, history, _)| {
+        .filter_map(|(entity, _, _, history)| {
             let (position, rotation, bones) = zombie_history_at(history, rewind_time)?;
             let (distance, _outer_normal) = cylinder.cast_ray(position, rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
             // See head_and_neck_positions' own doc comment — needs the
@@ -2122,23 +2000,14 @@ fn handle_fire_shot(
             continue;
         }
         info!("[shot] inner bone capsule hit: zombie={entity} damage={damage:.1}");
-        if let Ok((_, mut health, mut knockback, _, hitbox_slot)) = zombies.get_mut(entity) {
+        if let Ok((_, mut health, mut knockback, _)) = zombies.get_mut(entity) {
             health.0 -= damage;
             let killed = health.0 <= 0.0;
             if killed {
                 let was_director_spawn = director_spawned.contains(entity);
                 commands.entity(entity).despawn();
                 if !was_director_spawn {
-                    // HitboxTestSlot present -> Scenario::HitboxTest zombie:
-                    // respawn at its own row slot after
-                    // HITBOX_TEST_RESPAWN_DELAY instead of the normal
-                    // cycling-grid behavior — see PendingRespawn's own doc
-                    // comment.
-                    let (timer, fixed_position) = match hitbox_slot {
-                        Some(slot) => (HITBOX_TEST_RESPAWN_DELAY, Some(slot.0)),
-                        None => (ZOMBIE_RESPAWN_DELAY, None),
-                    };
-                    respawns.0.push(PendingRespawn { timer, fixed_position });
+                    respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
                 }
             } else {
                 let push = Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
@@ -2192,7 +2061,7 @@ fn handle_fire_shot(
     // spawn) — low priority, fix later if it turns out to matter: re-cast
     // spatial_query with a growing SpatialQueryFilter exclusion set (one
     // more excluded entity per miss) instead of a single cast_ray call.
-    if let Ok((entity, mut health, mut knockback, history, hitbox_slot)) = zombies.get_mut(hit.entity) {
+    if let Ok((entity, mut health, mut knockback, history)) = zombies.get_mut(hit.entity) {
         info!("[shot] outer capsule hit (live, no rewind match): zombie={entity} distance={:.2}", hit.distance);
         let (_, rotation, bones) = zombie_history_at(history, time.elapsed_secs())
             .unwrap_or((outer_hit_point, Quat::IDENTITY, BoneWorldPositions::default()));
@@ -2223,11 +2092,7 @@ fn handle_fire_shot(
             let was_director_spawn = director_spawned.contains(entity);
             commands.entity(entity).despawn();
             if !was_director_spawn {
-                let (timer, fixed_position) = match hitbox_slot {
-                    Some(slot) => (HITBOX_TEST_RESPAWN_DELAY, Some(slot.0)),
-                    None => (ZOMBIE_RESPAWN_DELAY, None),
-                };
-                respawns.0.push(PendingRespawn { timer, fixed_position });
+                respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
             }
         } else {
             let push = Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
@@ -2327,19 +2192,14 @@ fn on_request_restart(
         commands.entity(entity).despawn();
     }
     // Re-spawn the same population Startup would have for this scenario —
-    // see spawn_hitbox_test_zombies/spawn_stress_test_zombies/
-    // spawn_initial_zombies' own doc comments.
+    // see spawn_stress_test_zombies/spawn_initial_zombies' own doc comments.
     match *scenario {
-        Scenario::Normal | Scenario::LegacyArena => {
-            spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, ZOMBIE_AI_ENABLED, false, false);
-        }
-        Scenario::HitboxTest => {
-            spawn_zombies(&mut commands, &HITBOX_TEST_ZOMBIE_POSITIONS, false, false, true);
+        Scenario::Normal => {
+            spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, ZOMBIE_AI_ENABLED, false);
         }
         Scenario::StressTest => {
-            spawn_zombies(&mut commands, &ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT], true, false, false);
+            spawn_zombies(&mut commands, &ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT], true, false);
         }
-        Scenario::RenderCompare => spawn_render_compare_zombies(&mut commands),
         // No zombies/gameplay — pure walk-around scale-reference rig.
         Scenario::ItemGallery => {}
     }

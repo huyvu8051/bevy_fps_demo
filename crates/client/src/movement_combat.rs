@@ -190,12 +190,7 @@ pub(crate) fn zombies_damage_player(
     mut player: Query<(&Transform, &mut Health), With<Player>>,
     mut elapsed: Local<f32>,
 ) {
-    // RenderCompare deliberately parks its one Bite-pose zombie within
-    // ZOMBIE_STOP_DISTANCE of the player (see RENDER_COMPARE_ZOMBIE_
-    // POSITIONS' own doc comment) purely to force that pose for visual
-    // comparison — it's not a combat test, so real bite damage there would
-    // just end the game before anyone gets to look at anything.
-    if game_over.0 || freeze.0 || god_mode.0 || current_scenario() == Scenario::RenderCompare {
+    if game_over.0 || freeze.0 || god_mode.0 {
         return;
     }
     // ZombieAttackTimer counts down in real wall-clock seconds, so unlike

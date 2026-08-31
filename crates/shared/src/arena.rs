@@ -40,8 +40,8 @@ pub fn arena_ramp() -> (Vec3, Quat, Vec3) {
 // NAVMESH_COLUMN_OBSTACLES / arena_ramp()) directly in both
 // spawn_flat_arena_colliders (server) and spawn_test_arena (client). They
 // now come from crates/client/assets/data/arena_layout_map<ID>.ron instead
-// — one file per MapKind::Arena map id (2 = StressTest, 4 = LegacyArena) —
-// so a wall / the ramp / a pillar can be dragged in the dev editor (F2) and
+// — one file per MapKind::Arena map id (only 2 = StressTest today) — so a
+// wall / the ramp / a pillar can be dragged in the dev editor (F2) and
 // F9-saved (crates/client/src/arena_layout.rs) without a rebuild, exactly
 // like item_gallery_car_physics.ron does for the Map 5 cars.
 //
@@ -112,7 +112,6 @@ fn load_arena_layout(map_id: u8) -> Vec<ArenaBox> {
     #[cfg(target_arch = "wasm32")]
     let text = match map_id {
         2 => include_str!("../../client/assets/data/arena_layout_map2.ron"),
-        4 => include_str!("../../client/assets/data/arena_layout_map4.ron"),
         other => panic!("no wasm-embedded arena layout RON for map_id {other} — add a match arm in load_arena_layout"),
     }
     .to_string();

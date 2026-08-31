@@ -2,11 +2,11 @@
 //
 // The flat arena (floor + walls + pillars + centre ramp) is spawned from
 // crates/client/assets/data/arena_layout_map<ID>.ron by spawn_test_arena
-// (crates/client/src/lib.rs), one file per Arena map id (2 = StressTest,
-// 4 = LegacyArena). This module is the write-back half: with EDITOR=1 on
-// one of those maps, drag / rotate / scale a wall or the ramp in the dev
-// editor (F2) and press F9 — every ArenaBox's live Transform + size is
-// written back to that map's own RON, in the original row order.
+// (crates/client/src/lib.rs), one file per Arena map id (only 2 = StressTest
+// today). This module is the write-back half: with EDITOR=1, drag / rotate /
+// scale a wall or the ramp in the dev editor (F2) and press F9 — every
+// ArenaBox's live Transform + size is written back to that map's own RON,
+// in the original row order.
 //
 // Deliberately a near-copy of item_gallery_cars.rs's F9 saver (same
 // EulerRot::YXZ split, same header-preservation, same F9SaveToast) rather

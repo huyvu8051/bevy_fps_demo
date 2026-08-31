@@ -29,7 +29,7 @@ pub(crate) struct RestartButton;
 // launch has no MAP_ID yet, so this stays true and connect_to_server (see
 // its own `.run_if`) holds off connecting until map_select_button sets
 // MAP_ID and flips this false. A `MAP_ID` env var already present (e.g. a
-// devicectl/xcrun launch with `-e MAP_ID=1`) skips the menu entirely, same
+// devicectl/xcrun launch with `-e MAP_ID=2`) skips the menu entirely, same
 // as the old Swift behavior.
 #[derive(Resource)]
 pub(crate) struct MapSelectionPending(pub(crate) bool);
@@ -136,13 +136,11 @@ pub(crate) fn current_scenario() -> Scenario {
 // and from the map-select menu's own button handler (see AutopilotButton's
 // call site) — previously only the LATTER existed, so a direct MAP_ID
 // launch (no menu) always got Autopilot::default()'s plain `true`
-// regardless of scenario. Off for any scenario where an AI target-seeking,
-// auto-firing player would fight the reason that scenario exists:
-// RenderCompare (static pose comparison, needs the camera to hold still)
-// and ItemGallery (no zombies to target at all — walk-around scale check,
-// autopilot has nothing to do but still eats manual WASD/mouse input).
+// regardless of scenario. Off for ItemGallery: no zombies to target at all
+// (walk-around scale check), autopilot has nothing to do but still eats
+// manual WASD/mouse input.
 pub(crate) fn autopilot_enabled_by_default(scenario: Scenario) -> bool {
-    !matches!(scenario, Scenario::RenderCompare | Scenario::ItemGallery)
+    scenario != Scenario::ItemGallery
 }
 
 /// Native desktop/iOS path: real UDP via renet2's `native_transport`

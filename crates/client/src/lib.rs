@@ -2506,10 +2506,12 @@ fn count_local_kills(
 // uppercase A-Z/digits/a handful of symbols — see glyph_index's own doc
 // comment.
 //
-// HITBOX TEST / RENDER COMPARE (MAP_ID 1 / 3) stay out of this menu — they
-// only make sense launched directly (`MAP_ID=1` / `MAP_ID=3`, own port) as
-// isolated test rigs. The three below each build a visibly different world
-// (Scenario::map_kind), so map_select_button can rebuild them properly.
+// These are the only 3 scenarios that exist at all now (`Scenario` in
+// crates/shared/src/network.rs) — HitboxTest/RenderCompare/LegacyArena were
+// dedicated-server-only test rigs never reachable from this menu, removed
+// wholesale rather than kept around unreachable (see git history). Each of
+// the 3 below builds a visibly different world (Scenario::map_kind), so
+// map_select_button can rebuild them properly.
 const MAP_SELECT_ENTRIES: [(u8, &str, &str); 3] = [
     (0, "GAME MAP", "OFFICE BUILDING (B1-F3)"),
     (2, "ARENA", "OPEN FLAT ARENA, CHASE-AI ZOMBIES"),
