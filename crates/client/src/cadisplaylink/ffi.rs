@@ -661,7 +661,14 @@ pub extern "C" fn native_metal_probe_near_death_nearest_zombie(obj: *mut std::ff
 // networking/physics/AI actually progress. See native_game_app.rs.
 #[unsafe(no_mangle)]
 pub extern "C" fn native_game_app_create() -> *mut std::ffi::c_void {
-    let app = build_headless_game_ecs_app();
+    // No real device/view to read metrics from at this untouched spike
+    // entry point (see this fn's own doc comment — "not wired into any
+    // renderer yet") — the old hardcoded iPhone-13/14-ish physical size at
+    // scale_factor 1.0 is fine here since nothing reads real touch input
+    // through it. NativeMetalProbe::new is the path that threads the
+    // actual device metrics through (see build_headless_game_ecs_app's own
+    // doc comment).
+    let app = build_headless_game_ecs_app(1170, 2532, 1.0);
     Box::into_raw(Box::new(app)) as *mut std::ffi::c_void
 }
 

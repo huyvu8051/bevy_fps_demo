@@ -19,7 +19,7 @@ use bevy::asset::AssetApp;
 // all without any window/render backend? This was never tested before —
 // every previous run of this code (device, Simulator, desktop) always had
 // a full DefaultPlugins/WinitPlugin/RenderPlugin stack underneath it.
-pub fn build_headless_game_ecs_app() -> App {
+pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, scale_factor: f32) -> App {
     let mut app = App::new();
     // Proactive pass over bevy_internal's actual `DefaultPlugins` member
     // list (checked directly against
@@ -169,8 +169,27 @@ pub fn build_headless_game_ecs_app() -> App {
     // `cadisplaylink_mouse_connected` on iOS (no on-screen cursor to
     // click-to-lock there either) — so `mouse_look` reads `MouseMotion`
     // immediately instead of early-returning.
+    // Physical resolution + a real `scale_factor_override` (not the
+    // WindowResolution default of 1.0) — MUST match Swift's real device
+    // metrics (UIScreen.main.nativeScale + the Metal view's own point-size
+    // bounds, threaded in via NativeMetalProbe::new/native_metal_probe_
+    // create_real_game) or every touch-driven UI hit-test breaks: Swift
+    // reports touch.location(in:) in POINTS (UIKit's own coordinate space),
+    // while Bevy UI lays out Node/ComputedNode using window.width()/height()
+    // (LOGICAL pixels = physical / scale_factor). A hardcoded physical size
+    // with scale_factor stuck at 1.0 made "logical" 1170x2532 regardless of
+    // the real device, while touches arrived in ~390x844-ish point space —
+    // node.contains_point() then compared two different coordinate spaces,
+    // so drag gestures (touch_scroll_settings_menu) silently never hit
+    // their target node. Simple taps partly worked by coincidence wherever
+    // the mismatched scales happened to still overlap, which is why this
+    // surfaced as "scroll doesn't work" rather than "nothing works".
     app.world_mut().spawn((
-        bevy::window::Window { resolution: (1170_u32, 2532_u32).into(), ..Default::default() },
+        bevy::window::Window {
+            resolution: bevy::window::WindowResolution::new(physical_width, physical_height)
+                .with_scale_factor_override(scale_factor),
+            ..Default::default()
+        },
         bevy::window::PrimaryWindow,
         bevy::window::CursorOptions {
             grab_mode: bevy::window::CursorGrabMode::Locked,

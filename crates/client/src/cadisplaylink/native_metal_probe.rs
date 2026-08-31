@@ -1584,7 +1584,16 @@ impl NativeMetalProbe {
             );
         }
 
-        let real_game_app = Some(build_headless_game_ecs_app());
+        // Real device metrics (bounds/scale computed above for the Metal
+        // drawable size) threaded into the headless App's Window too — see
+        // build_headless_game_ecs_app's own doc comment for why a mismatch
+        // here breaks touch-driven UI hit-testing (drag-to-scroll silently
+        // never engaging, taps landing on the wrong element).
+        let real_game_app = Some(build_headless_game_ecs_app(
+            (bounds.size.width * scale) as u32,
+            (bounds.size.height * scale) as u32,
+            scale as f32,
+        ));
 
         // Resolve target — single-sample, still what quad_fragment (the PIP
         // composite) actually samples from; MSAA never touches this one
