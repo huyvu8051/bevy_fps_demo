@@ -351,6 +351,10 @@ pub(crate) fn spawn_item_gallery_zombie_showcase(commands: &mut Commands, asset_
     }
 }
 
+// Definition (not just its registration in ItemGalleryCarsPlugin::build)
+// is wasm32-gated too — see that fn's own doc comment for why an EDITOR=1
+// F9 saver can't exist there at all.
+#[cfg(not(target_arch = "wasm32"))]
 const ZOMBIE_MESHY_TRANSFORM_RON: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/assets/data/zombie_meshy_transform.ron");
 
@@ -361,6 +365,7 @@ const ZOMBIE_MESHY_TRANSFORM_RON: &str =
 // share one transform, so any one is read. The root Y is physics-owned
 // (gravity), so only the mesh child matters here. Runs on the same F9 as
 // the car handler.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn save_zombie_meshy_showcase_transform(
     keys: Res<ButtonInput<KeyCode>>,
     roots: Query<(&Children, &ZombieKind), With<ZombieShowcaseClip>>,

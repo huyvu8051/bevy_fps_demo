@@ -14,14 +14,21 @@
 // shapes and the duplication is small and readable.
 
 use bevy::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
 use shared::{ArenaShape, MapKind};
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::item_gallery_cars::{ron_f32, F9SaveToast};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::{current_scenario, ArenaBoxDims};
 
 pub(crate) struct ArenaLayoutPlugin;
 
 impl Plugin for ArenaLayoutPlugin {
+    // `app` only gets used inside the non-wasm32 branch below — on wasm32
+    // this method body is empty, which would otherwise warn on the
+    // now-unused parameter.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     fn build(&self, app: &mut App) {
         // Gated on EDITOR=1 exactly like ItemGalleryCarsPlugin's own F9
         // saver — F9SaveToast / spawn_f9_toast_ui / tick_f9_toast are only
@@ -35,6 +42,10 @@ impl Plugin for ArenaLayoutPlugin {
     }
 }
 
+// Definition (not just its registration above) is wasm32-gated too — see
+// ItemGalleryCarsPlugin's own comment on why an EDITOR=1 F9 saver can't
+// exist there at all, not just be unregistered.
+#[cfg(not(target_arch = "wasm32"))]
 fn save_arena_layout_on_key(
     keys: Res<ButtonInput<KeyCode>>,
     boxes: Query<(&Transform, &ArenaBoxDims)>,

@@ -49,6 +49,10 @@ use shared::{
     zombie_pose_for, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT,
 };
+// Only network_setup.rs's native (non-wasm32) spawn_client_connection uses
+// these — a wasm32 client can't open a raw UDP socket at all (browser
+// sandbox), so there's no native socket here to wrap in simulated latency.
+#[cfg(not(target_arch = "wasm32"))]
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
 // Experimental CADisplayLink-driven entry point for MINIMAL_MAP_PROBE — see
