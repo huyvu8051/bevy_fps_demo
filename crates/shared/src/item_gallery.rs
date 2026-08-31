@@ -24,6 +24,13 @@ use crate::level_piece::{floor_panel, wall_panel, BoxPiece, PanelPiece};
 /// rendering); it also becomes each box's line in the console log the
 /// server prints on startup for this scenario, since there's no in-game
 /// nameplate to read otherwise.
+///
+/// Editing this array alone no longer changes what actually spawns —
+/// `item_gallery_level_pieces()` (the live path) reads `item_gallery_
+/// level_pieces.ron`, a frozen snapshot of `item_gallery_level_pieces_
+/// computed()`'s output. Add/resize an entry here, then run `cargo test
+/// -p shared regenerate_level_piece_ron -- --ignored --nocapture`
+/// (level_piece.rs) to bake the change into that RON file too.
 pub const ITEM_GALLERY_ENTRIES: [(&str, Vec3); 10] = [
     ("Sedan (gara)", Vec3::new(1.9, 1.5, 4.6)),
     ("Ban lam viec don", Vec3::new(1.4, 0.75, 0.7)),
@@ -82,10 +89,12 @@ pub fn item_gallery_player_spawn() -> Vec3 {
     }
 }
 
-/// Flat floor + 4 walls + 1 LevelBox per ITEM_GALLERY_ENTRIES — pure
-/// data, no spawning (see map1_level_pieces's own doc comment for why:
-/// same function, called by both client and server).
-pub fn item_gallery_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
+/// Flat floor + 4 walls + 1 LevelBox per ITEM_GALLERY_ENTRIES, TÍNH TOÁN
+/// TỪ ĐẦU — pure data, no spawning (see map1_level_pieces_computed's own
+/// doc comment for why this exists but isn't the live path anymore:
+/// `item_gallery_level_pieces()` below, reading `item_gallery_level_
+/// pieces.ron`, is what client/server actually call now).
+pub fn item_gallery_level_pieces_computed() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
     let half_x = ITEM_GALLERY_HALF_SIZE_X;
     let half_z = ITEM_GALLERY_HALF_SIZE_Z;
     let floor_color = [0.35, 0.35, 0.38];
@@ -118,6 +127,20 @@ pub fn item_gallery_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
     }
 
     (pieces, panels)
+}
+
+/// Flat floor + 4 walls + 1 LevelBox per ITEM_GALLERY_ENTRIES, đọc từ
+/// `crates/client/assets/data/item_gallery_level_pieces.ron` — đường chạy
+/// CHÍNH client/server thực sự gọi. Đọc 1 lần rồi cache, giống hệt
+/// `map1_level_pieces`/`arena_layout`.
+pub fn item_gallery_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
+    static DATA: std::sync::OnceLock<(Vec<BoxPiece>, Vec<PanelPiece>)> = std::sync::OnceLock::new();
+    DATA.get_or_init(|| {
+        let text =
+            crate::read_ron_data_file!(concat!(env!("CARGO_MANIFEST_DIR"), "/../client/assets/data/item_gallery_level_pieces.ron"));
+        crate::level_piece::level_pieces_from_ron(&text)
+    })
+    .clone()
 }
 
 // --- meshy.ai car test props — collision/physics layout -------------------

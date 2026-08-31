@@ -30,6 +30,76 @@
 use bevy::prelude::{Component, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
+// --- RON round-trip for BoxPiece/PanelPiece lists ---------------------
+//
+// Same idea as arena.rs's ArenaLayoutRow/item_gallery's CarPhysicsRow —
+// map1/item_gallery's actual geometry (crates/client/assets/data/
+// map1_level_pieces.ron, item_gallery_level_pieces.ron) now lives in a
+// RON file per map instead of being (re)computed at every Startup, so
+// F2/F9 hand-tuning + `docs/maps/*` measurement changes both land the
+// same way arena walls already do.
+//
+// Rotation is stored as raw quaternion components (qx,qy,qz,qw), NOT
+// XYZ euler degrees like ArenaLayoutRow — map1/item_gallery build several
+// rotations as a COMPOUND product (ramp_panel: `ramp_rotation *
+// Quat::from_rotation_x(-FRAC_PI_2)`) and/or sit at an exact 90° pitch
+// (every floor_panel/ramp_panel), both classic gimbal-lock territory for
+// a 3-angle euler round-trip. Raw quaternion components have no such
+// failure mode — the tradeoff is a wall/floor's rotation isn't eyeball-
+// editable by hand the way a single-axis arena wall's one euler angle
+// is, but these RON files are meant to be captured by `regenerate_level_
+// piece_ron` (crates/shared/src/level_piece.rs's own test) reading back
+// off the parametric Rust builders (map1::map1_level_pieces_computed/
+// item_gallery::item_gallery_level_pieces_computed) whenever a `docs/
+// maps/*` measurement changes, not hand-typed.
+pub type BoxLayoutRow = (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32);
+// (tx, ty, tz, qx, qy, qz, qw, sx, sy, sz, color_r, color_g, color_b, roughness)
+
+pub type PanelLayoutRow = (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, Option<f32>, bool);
+// (tx, ty, tz, qx, qy, qz, qw, width, height, color_r, color_g, color_b, roughness, collider_thickness, collider_offset)
+
+pub fn box_piece_to_row(piece: &BoxPiece) -> BoxLayoutRow {
+    let &(t, r, s, c, roughness) = piece;
+    (t.x, t.y, t.z, r.x, r.y, r.z, r.w, s.x, s.y, s.z, c[0], c[1], c[2], roughness)
+}
+
+fn row_to_box_piece(row: &BoxLayoutRow) -> BoxPiece {
+    let &(tx, ty, tz, qx, qy, qz, qw, sx, sy, sz, cr, cg, cb, roughness) = row;
+    (Vec3::new(tx, ty, tz), Quat::from_xyzw(qx, qy, qz, qw), Vec3::new(sx, sy, sz), [cr, cg, cb], roughness)
+}
+
+pub fn panel_piece_to_row(piece: &PanelPiece) -> PanelLayoutRow {
+    let &(t, r, width, height, c, roughness, collider_thickness, collider_offset) = piece;
+    (t.x, t.y, t.z, r.x, r.y, r.z, r.w, width, height, c[0], c[1], c[2], roughness, collider_thickness, collider_offset)
+}
+
+fn row_to_panel_piece(row: &PanelLayoutRow) -> PanelPiece {
+    let &(tx, ty, tz, qx, qy, qz, qw, width, height, cr, cg, cb, roughness, collider_thickness, collider_offset) = row;
+    (Vec3::new(tx, ty, tz), Quat::from_xyzw(qx, qy, qz, qw), width, height, [cr, cg, cb], roughness, collider_thickness, collider_offset)
+}
+
+/// Renders a `(Vec<BoxPiece>, Vec<PanelPiece>)` pair to the RON text a
+/// `map<N>_level_pieces.ron` / `item_gallery_level_pieces.ron` file holds —
+/// used by `regenerate_level_piece_ron` (this module's own test) to
+/// (re)capture a map's parametric Rust geometry into its RON file.
+pub fn level_pieces_to_ron(pieces: &(Vec<BoxPiece>, Vec<PanelPiece>)) -> String {
+    let box_rows: Vec<BoxLayoutRow> = pieces.0.iter().map(box_piece_to_row).collect();
+    let panel_rows: Vec<PanelLayoutRow> = pieces.1.iter().map(panel_piece_to_row).collect();
+    ron::ser::to_string_pretty(&(box_rows, panel_rows), ron::ser::PrettyConfig::default().struct_names(false))
+        .expect("serializing level pieces to RON")
+}
+
+/// Parses a `map<N>_level_pieces.ron` / `item_gallery_level_pieces.ron`
+/// file's text back into `(Vec<BoxPiece>, Vec<PanelPiece>)` — the actual
+/// runtime path `map1_level_pieces()`/`item_gallery_level_pieces()` (their
+/// own doc comments) call every Startup now, replacing what used to be a
+/// from-scratch parametric computation every time.
+pub fn level_pieces_from_ron(text: &str) -> (Vec<BoxPiece>, Vec<PanelPiece>) {
+    let (box_rows, panel_rows): (Vec<BoxLayoutRow>, Vec<PanelLayoutRow>) =
+        ron::de::from_str(text).unwrap_or_else(|e| panic!("failed to parse level pieces RON: {e}"));
+    (box_rows.iter().map(row_to_box_piece).collect(), panel_rows.iter().map(row_to_panel_piece).collect())
+}
+
 /// (translation, rotation, full-size, color, roughness) — 1 solid
 /// LevelBox worth of data, before it's actually spawned. Vec'd up by
 /// map1_level_pieces/item_gallery_level_pieces so the caller (client:
@@ -199,5 +269,35 @@ impl LevelTransform {
 
     pub const fn new(translation: Vec3, rotation: Quat) -> Self {
         Self { translation, rotation }
+    }
+}
+
+// --- Regenerate map1_level_pieces.ron / item_gallery_level_pieces.ron --
+//
+// `cargo test -p shared regenerate_level_piece_ron -- --ignored --nocapture`
+// re-derives both RON files from the parametric Rust builders
+// (map1::map1_level_pieces_computed / item_gallery::item_gallery_level_
+// pieces_computed) and overwrites the checked-in RON — run this after
+// changing a measurement constant (docs/maps/*) or a wall/floor/ramp
+// helper in map1/mod.rs's or item_gallery.rs's *_computed function.
+// `--ignored`: never runs as part of a normal `cargo test` (it WRITES to
+// the repo's asset files — a side effect, not a check), and CARGO_
+// MANIFEST_DIR-relative like every other RON path in this crate (see
+// read_ron_data_file!'s own doc comment), so it works from any CWD.
+#[cfg(test)]
+mod regenerate {
+    use super::*;
+
+    fn write_ron(relative_path: &str, pieces: &(Vec<BoxPiece>, Vec<PanelPiece>)) {
+        let path = format!("{}/../client/assets/data/{relative_path}", env!("CARGO_MANIFEST_DIR"));
+        std::fs::write(&path, level_pieces_to_ron(pieces)).unwrap_or_else(|e| panic!("failed to write {path}: {e}"));
+        println!("wrote {path} ({} boxes, {} panels)", pieces.0.len(), pieces.1.len());
+    }
+
+    #[test]
+    #[ignore]
+    fn regenerate_level_piece_ron() {
+        write_ron("map1_level_pieces.ron", &crate::map1::map1_level_pieces_computed());
+        write_ron("item_gallery_level_pieces.ron", &crate::item_gallery::item_gallery_level_pieces_computed());
     }
 }

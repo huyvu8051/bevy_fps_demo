@@ -6,6 +6,14 @@
 // nên xây thêm tầng mới (F3, F4, Mái...) chỉ cần khai 1 FloorLevel + viết
 // nội thất riêng của tầng đó — không phải chép lại phần lượng giác/khoảng
 // hở tường lần nữa. Xem garage.rs/lobby.rs/office.rs để thấy cách dùng.
+//
+// LƯU Ý: sửa 1 hằng số/công thức ở đây (hoặc trong f3.rs/garage.rs/
+// lobby.rs/office.rs) không tự động đổi hình học lúc chơi game nữa —
+// `map1_level_pieces()` (cuối file) mới là đường chạy chính, đọc từ
+// `crates/client/assets/data/map1_level_pieces.ron` (snapshot đông cứng
+// của `map1_level_pieces_computed()`). Sửa xong, chạy `cargo test -p
+// shared regenerate_level_piece_ron -- --ignored --nocapture`
+// (level_piece.rs) để bake thay đổi vào file RON đó.
 
 use bevy::prelude::{Quat, Vec3};
 
@@ -395,15 +403,16 @@ pub const fn simple_stairwell_half_len() -> f32 {
     TOWER_STAIR_RUN + TOWER_STAIR_LANDING_RUN / 2.0
 }
 
-/// Toàn bộ hình học Map 1 (B1 Gara → G Sảnh → F2 → F3) dưới dạng dữ liệu
-/// thuần — (BoxPiece cho nội thất đặc như xe/bàn, PanelPiece cho tường/
-/// sàn/dốc) — KHÔNG tự spawn gì cả. Gọi từ CẢ client lẫn server (xem
-/// level_piece.rs's module doc comment cho lý do): server dùng để spawn
-/// Collider-only cho vật lý thật, client dùng để spawn LevelBox/
-/// LevelPanel cục bộ (không Replicated) rồi để spawn_level_box_visuals/
-/// spawn_level_panel_visuals tự dựng mesh — cùng 1 hàm này đảm bảo 2 bên
-/// không bao giờ lệch hình học.
-pub fn map1_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
+/// Toàn bộ hình học Map 1 (B1 Gara → G Sảnh → F2 → F3) TÍNH TOÁN TỪ ĐẦU
+/// bằng các hằng số/công thức tham số hoá bên dưới — (BoxPiece cho nội
+/// thất đặc như xe/bàn, PanelPiece cho tường/sàn/dốc) — KHÔNG tự spawn gì
+/// cả. KHÔNG còn là đường chạy chính lúc chơi game nữa — `map1_level_
+/// pieces()` (đọc RON, cuối file) mới là hàm client/server thực sự gọi.
+/// Hàm này giờ chỉ được `regenerate_level_piece_ron` (test dưới
+/// level_piece.rs) gọi, để (tái) sinh `map1_level_pieces.ron` mỗi khi 1
+/// hằng số đo đạc (docs/maps/*) đổi — xem level_piece.rs's module doc
+/// comment cho lý do tách RON ra khỏi việc tính toán.
+pub fn map1_level_pieces_computed() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
     let mut pieces: Vec<BoxPiece> = Vec::new();
     let mut panels: Vec<PanelPiece> = Vec::new();
     let ident = Quat::IDENTITY;
@@ -525,4 +534,18 @@ pub fn map1_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
     panels.push((Vec3::new(0.0, 0.02, khu_boundary_z), flat_on_floor, GARAGE_HALF_SIZE_X * 2.0, 1.0, [1.0, 0.85, 0.1], 0.5, None, false));
 
     (pieces, panels)
+}
+
+/// Toàn bộ hình học Map 1, đọc từ `crates/client/assets/data/
+/// map1_level_pieces.ron` — đường chạy CHÍNH client/server thực sự gọi
+/// (`map1_level_pieces_computed()` ở trên chỉ còn là nguồn sinh ra file
+/// RON này, xem doc comment của nó). Đọc 1 lần rồi cache, giống hệt
+/// `arena_layout`/`item_gallery_car_physics_raw`.
+pub fn map1_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
+    static DATA: std::sync::OnceLock<(Vec<BoxPiece>, Vec<PanelPiece>)> = std::sync::OnceLock::new();
+    DATA.get_or_init(|| {
+        let text = crate::read_ron_data_file!(concat!(env!("CARGO_MANIFEST_DIR"), "/../client/assets/data/map1_level_pieces.ron"));
+        crate::level_piece::level_pieces_from_ron(&text)
+    })
+    .clone()
 }
