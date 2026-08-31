@@ -1776,6 +1776,13 @@ fn setup(
         }
         MapKind::Arena => {
             spawn_test_arena(&mut commands, &mut meshes, &mut materials, current_scenario().map_id());
+            // Temporarily hidden on web only: the web build force-starts on
+            // map 2 (StressTest, an Arena map — see wasm32 set_map_id(2) in
+            // main() above), and the 16 meshy.ai car test props this spawns
+            // add real vertex/texture weight for no gameplay reason there.
+            // Testing iPhone load/perf without them for now; desktop keeps
+            // its cars unchanged. Remove this cfg to restore always-on.
+            #[cfg(not(target_arch = "wasm32"))]
             spawn_item_gallery_test_props(&mut commands, &asset_server);
         }
     }

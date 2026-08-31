@@ -351,6 +351,15 @@ fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_
         MapKind::Building => spawn_map1_level_pieces(&mut commands),
         MapKind::Arena => {
             spawn_flat_arena_colliders(&mut commands, scenario.map_id());
+            // Kept on: desktop/iOS clients still render + expect to collide
+            // with these cars (see spawn_item_gallery_test_props's web-only
+            // cfg gate in crates/client/src/lib.rs). The server is one
+            // native binary shared by every client connecting to this map —
+            // it can't tell a web client from a desktop one apart at this
+            // point, so a web client walking through here will bump into a
+            // collider it can't see. Accepted tradeoff for now: fixing it
+            // properly would need per-client visibility, not just a spawn
+            // toggle.
             spawn_item_gallery_car_colliders(&mut commands, &asset_server);
         }
     }
