@@ -1006,13 +1006,25 @@ throwable: pipe bomb/molotov/bile bomb).
 - **Map:** **~20 map**, chia thành **4 campaign x 5 map** (giữ đúng cấu
   trúc L4D: mỗi campaign là 1 hành trình A→B riêng, có mở đầu/kết thúc
   riêng, nối vào cốt truyện chung ở mục 14).
-- **Zombie:** zombie thường (đã có) + **~5 loại đặc biệt** (vai trò khác
-  nhau: 1 loại nổ/gây khói mù kiểu Boomer, 1 loại tốc độ cao/leo trèo kiểu
-  Hunter, 1 loại tấn công tầm xa/kéo người kiểu Smoker, 1 loại gây debuff
-  diện rộng kiểu Spitter, 1 loại tách người chơi ra khỏi nhóm kiểu Jockey)
-  + **1 boss** (Tank-style, sát thương/máu rất cao) + **1 special
-  encounter** (đứng yên, chỉ tấn công nếu bị làm phiền, kiểu Witch) — tổng
-  **~8 loại địch**.
+- **Zombie:** zombie thường (đã có) + **~5 loại đặc biệt kiểu L4D** (vai
+  trò khác nhau: 1 loại nổ/gây khói mù kiểu Boomer, 1 loại tốc độ cao/leo
+  trèo kiểu Hunter, 1 loại tấn công tầm xa/kéo người kiểu Smoker, 1 loại
+  gây debuff diện rộng kiểu Spitter, 1 loại tách người chơi ra khỏi nhóm
+  kiểu Jockey) + **1 boss** (Tank-style, sát thương/máu rất cao) + **1
+  special encounter** (đứng yên, chỉ tấn công nếu bị làm phiền, kiểu
+  Witch) + **3 loại đặc biệt bổ sung tham khảo ngoài L4D** (quyết định
+  2026-09-01 — Charger-style lao/tóm kéo, Clicker-style mù chỉ dò bằng
+  âm thanh, Screamer-style gọi bầy rồi bỏ chạy) — tổng **~10 loại đặc
+  biệt/boss/encounter** phân biệt bằng AI/kỹ năng. **Thiết kế đầy đủ (tên
+  tiếng Việt, kỹ năng, ngoại hình, map gán) cho cả 10 loại này đã có ở
+  `docs/ZOMBIE_BESTIARY.md`** — không dừng ở mức "kiểu XYZ" nữa. **Cộng
+  thêm** (quyết định
+  2026-09-01, chi tiết ở `docs/ZOMBIE_BESTIARY.md`): mỗi map có **đúng 4**
+  **archetype môi trường** riêng (nhân viên văn phòng, công nhân cảng,
+  lính BRDF...) — tái dùng NGUYÊN AI zombie thường, chỉ đổi model/trang
+  phục (2-3 variant/archetype) + tuỳ chọn lệch nhẹ máu/tốc độ, không phải
+  8 loại địch nói trên tăng thêm — mục đích thuần thị giác, để mỗi map
+  không lặp lại đúng 1 hình ảnh zombie xuyên suốt 20 map.
 - **Vũ khí:** **~12 khẩu**, đủ nhóm vai trò như L4D (pistol khởi đầu x2,
   shotgun x2, rifle x3-4 — AK47 hiện có là 1 trong số này, sniper x2, SMG
   x2, melee) + **throwable** (pipe bomb thu hút zombie, molotov đốt diện
