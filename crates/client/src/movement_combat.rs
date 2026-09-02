@@ -917,6 +917,7 @@ pub(crate) fn apply_player_model_travel_twist(
 // effect (sync_player_model re-applies this resource every frame) is
 // visible immediately; F9 (save_player_model_tuning) then writes whatever
 // this settles on back to character.ron.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn nudge_player_model_tuning(keys: Res<ButtonInput<KeyCode>>, mut tuning: ResMut<PlayerModelTuning>) {
     const SCALE_STEP: f32 = 0.02;
     const Y_OFFSET_STEP: f32 = 0.02;
@@ -948,6 +949,7 @@ pub(crate) fn nudge_player_model_tuning(keys: Res<ButtonInput<KeyCode>>, mut tun
 // Transform every frame, so there'd be nothing meaningful to read a
 // hand-dragged value back FROM there the way the zombie showcase (never
 // overwritten per-frame) allows.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn save_player_model_tuning(
     keys: Res<ButtonInput<KeyCode>>,
     tuning: Res<PlayerModelTuning>,
@@ -961,6 +963,7 @@ pub(crate) fn save_player_model_tuning(
         display_name: tuning.display_name.clone(),
         lore_ref: tuning.lore_ref.clone(),
         mesh: tuning.mesh.clone(),
+        anim_source: tuning.anim_source.clone(),
         scale: tuning.scale,
         y_offset: tuning.y_offset,
         facing_deg: tuning.facing_deg,

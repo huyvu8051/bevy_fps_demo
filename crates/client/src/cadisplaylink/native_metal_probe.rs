@@ -1556,22 +1556,26 @@ impl NativeMetalProbe {
         // "soldiers", only that something registered these names.
         let resource_path = bundle_resource_path().unwrap_or_default();
         let mut skinned_models = super::skinned_actor::SkinnedModelRegistry::default();
-        let soldier_path = std::path::Path::new(&resource_path).join("assets/characters/soldier/mesh/soldier.glb");
+        let soldier_path = std::path::Path::new(&resource_path).join("assets/characters/soldier_meshy/mesh/soldier_meshy.glb");
         if let Some(soldier_model) = super::skinned_gltf::load_skinned_gltf(&device, &soldier_path) {
-            // See the old per-EntityKind match this replaced (git history)
-            // for why these specific correction values are needed: the
-            // real game never scales the player entity's own Transform
-            // (PLAYER_MODEL_SCALE/_Y_OFFSET/_FACING_CORRECTION only apply
-            // to the mesh's own child entity on the desktop/wgpu path,
-            // which this custom Metal renderer doesn't query at all — this
-            // is the only place actually determining what's drawn here).
-            skinned_models.register(
-                "soldier",
-                soldier_model,
-                crate::PLAYER_MODEL_SCALE,
-                crate::PLAYER_MODEL_Y_OFFSET,
-                crate::PLAYER_MODEL_FACING_CORRECTION,
-            );
+            // Hand-copied from assets/characters/soldier_meshy/character.ron
+            // — this custom Metal renderer never queries PlayerModelTuning
+            // (the real game's dynamic RON-loaded source of truth on the
+            // desktop/wgpu path) at all, only this hardcoded registration
+            // determines what's drawn here, so these 3 numbers have to be
+            // kept in sync BY HAND with that file. (This was already true
+            // before switching to soldier_meshy — PLAYER_MODEL_SCALE/
+            // _Y_OFFSET/_FACING_CORRECTION were themselves hand-copied
+            // consts, now replaced by PlayerModelTuning; loading the RON
+            // file dynamically here too would need bundle_resource_path(),
+            // not PlayerModelTuning::load's CARGO_MANIFEST_DIR-relative
+            // std::fs read, which only resolves correctly on the dev
+            // machine that built the app, not a real device — untouched,
+            // pre-existing gap, not introduced by this change.)
+            const SCALE: f32 = 1.04;
+            const Y_OFFSET: f32 = -0.76;
+            const FACING_DEG: f32 = 0.0;
+            skinned_models.register("soldier", soldier_model, SCALE, Y_OFFSET, FACING_DEG.to_radians());
         }
         let zombie_path = std::path::Path::new(&resource_path).join("assets/characters/zombie/mesh/zombie.glb");
         if let Some(zombie_model) = super::skinned_gltf::load_skinned_gltf(&device, &zombie_path) {
@@ -2021,8 +2025,7 @@ impl NativeMetalProbe {
             // on screen for USE_REAL_GAME_NATIVE_RENDERER — this custom
             // Metal renderer never queries Bevy's own scene graph (the
             // mesh-child-entity scale/offset/facing corrections the
-            // desktop/wgpu path applies there, e.g. PLAYER_MODEL_SCALE/
-            // _Y_OFFSET/_FACING_CORRECTION on the child SceneRoot in
+            // desktop/wgpu path applies there via PlayerModelTuning,
             // crate::lib) at all — see skinned_actor.rs's own doc comment
             // for why each registered model instead carries its own
             // scale/y_offset/facing_correction as plain data.

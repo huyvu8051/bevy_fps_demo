@@ -629,15 +629,13 @@ const ZOMBIE_ATTACK_DAMAGE: f32 = 12.0;
 // too far from the root (unscaled) and nowhere near where the outer
 // capsule/visible mesh actually are. See its own doc comment.
 
-// Soldier's default mesh — "Soldier" by Quaternius (poly.pizza, CC-BY 3.0)
-// — https://poly.pizza/m/oAArCNHjFB — keep this attribution if
-// shared/published. Visible either via KeyT (PlayerModelVisible, a debug
-// toggle) or CameraMode::ThirdPerson (KeyU) — real third-person now, not
-// just a debug-only visual the way it started before that camera existed.
+// The player's own visible body model — Meshy AI-generated
+// (assets/characters/soldier_meshy/, see its character.ron's own doc
+// comment for the export/normalization history). Visible either via KeyT
+// (PlayerModelVisible, a debug toggle) or CameraMode::ThirdPerson (KeyU).
 // The mesh path itself lives in PlayerModelTuning.mesh, not a fixed const
-// here — character_cycle_button (settings_menu.rs) can switch which
-// character.ron (and therefore which mesh) is active at runtime, see
-// AVAILABLE_CHARACTER_DIRS' own doc comment.
+// here — see AVAILABLE_CHARACTER_DIRS' own doc comment for why (room to
+// add more Meshy-sourced characters later without re-plumbing this).
 
 // Damage number popup: spawned at the hit point, drifts straight up in
 // world space, and fades out over its lifetime.
@@ -1426,7 +1424,6 @@ impl Plugin for GamePlugin {
         .init_resource::<TouchSprintHeld>()
         .init_resource::<TouchLeanHeld>()
         .init_resource::<SensitivityScale>()
-        .init_resource::<ActiveCharacterDir>()
         .init_resource::<KillCount>()
         .init_resource::<MapSelectionPending>()
         .init_resource::<RecentlyHitZombies>()
@@ -1488,8 +1485,6 @@ impl Plugin for GamePlugin {
                     update_zombie_count_text,
                     sensitivity_buttons,
                     update_sensitivity_text,
-                    character_cycle_button,
-                    update_character_name_text,
                     auto_maintain_button,
                     update_auto_maintain_button_color,
                     update_touch_controls_idle_hidden,
@@ -1557,15 +1552,23 @@ impl Plugin for GamePlugin {
                 spawn_level_panel_visuals,
                 update_zombie_animation,
                 freeze_zombie_animations,
-                wire_player_model_animations,
-                update_remote_player_model_animation,
-                update_local_player_model_animation,
-                apply_player_model_pose_override,
-                update_health_ui,
-                update_inspect_ui,
-                update_compass_ui,
-                update_zombie_health_bars,
-                update_floating_damage_texts,
+                // Nested (own .chain()) purely to dodge the ~20-element tuple
+                // arity limit on IntoSystemConfigs — the outer .chain() still
+                // orders this whole group after freeze_zombie_animations and
+                // before whatever follows it, same as if it were flat.
+                (
+                    wire_player_model_scene_animation_targets,
+                    wire_player_model_animations,
+                    update_remote_player_model_animation,
+                    update_local_player_model_animation,
+                    apply_player_model_pose_override,
+                    update_health_ui,
+                    update_inspect_ui,
+                    update_compass_ui,
+                    update_zombie_health_bars,
+                    update_floating_damage_texts,
+                )
+                    .chain(),
             )
                 .chain(),
             (
@@ -2811,6 +2814,14 @@ pub(crate) struct CharacterRon {
     pub(crate) display_name: String,
     pub(crate) lore_ref: String,
     pub(crate) mesh: String,
+    // Separate glb carrying the animation clips `animations` indexes into —
+    // see character.ron's own comment on why (mesh-only + anim-only file
+    // split, for animation reuse across future Meshy characters).
+    // #[serde(default)] only guards a hypothetical character.ron predating
+    // this field; an empty string means "no split, load animations from
+    // `mesh` like before" (see PlayerModelTuning::anim_source_or_mesh).
+    #[serde(default)]
+    pub(crate) anim_source: String,
     pub(crate) scale: f32,
     pub(crate) y_offset: f32,
     pub(crate) facing_deg: f32,
@@ -2818,17 +2829,25 @@ pub(crate) struct CharacterRon {
     pub(crate) audio: Vec<String>,
 }
 
-// Every switchable player character, in cycle order — "Đổi nhân vật"
-// (character_cycle_button, settings_menu.rs) walks this list. A dir here
-// (e.g. "characters/soldier") is both an asset path prefix AND the id
+// Every switchable player character, in cycle order. A dir here (e.g.
+// "characters/soldier_meshy") is both an asset path prefix AND the id
 // load_character_ron_by_dir keys its wasm32 include_str! match arm on —
 // adding a new character means adding both a character.ron + mesh under
 // this dir AND a match arm below, in the same commit.
-pub(crate) const AVAILABLE_CHARACTER_DIRS: &[&str] = &["characters/soldier", "characters/soldier_meshy"];
+//
+// Only one entry right now — the original "characters/soldier" (a
+// different-source, non-Meshy mesh with an incompatible 62-bone rig, no
+// Mixamo naming) was dropped entirely; soldier_meshy is the only player
+// model going forward. Kept as a list (not a single PLAYER_MODEL_DIR
+// const) rather than collapsing this back down, since the whole point was
+// to support swapping in more Meshy-sourced characters later without
+// re-doing this plumbing — see docs on animation-library sharing across
+// Mixamo-rigged Meshy exports (chat history).
+pub(crate) const AVAILABLE_CHARACTER_DIRS: &[&str] = &["characters/soldier_meshy"];
 
-// Generalizes the old hardcoded-to-soldier loader so character_cycle_button
-// can switch to any dir in AVAILABLE_CHARACTER_DIRS at runtime, not just
-// load soldier's once at Startup. Same wasm32-vs-native split
+// Generalizes the old hardcoded-to-soldier loader so any future character
+// added to AVAILABLE_CHARACTER_DIRS can be loaded at runtime, not just
+// hardcoded once at Startup. Same wasm32-vs-native split
 // shared::read_ron_data_file! already does (see its own doc comment) but
 // hand-written here since that macro needs a *literal* path token for its
 // include_str! branch — it can't take one built from a runtime `dir`
@@ -2836,9 +2855,6 @@ pub(crate) const AVAILABLE_CHARACTER_DIRS: &[&str] = &["characters/soldier", "ch
 fn load_character_ron_by_dir(dir: &str) -> CharacterRon {
     #[cfg(target_arch = "wasm32")]
     let text: &str = match dir {
-        "characters/soldier" => {
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/characters/soldier/character.ron"))
-        }
         "characters/soldier_meshy" => {
             include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/characters/soldier_meshy/character.ron"))
         }
@@ -2855,13 +2871,18 @@ fn load_character_ron_by_dir(dir: &str) -> CharacterRon {
 // save_player_model_tuning (movement_combat.rs) to save back to whichever
 // character is CURRENTLY active (PlayerModelTuning.mesh), not always
 // soldier's — a leftover from before character-switching existed, when
-// there was only ever one possible active file.
+// there was only ever one possible active file. Native/EDITOR-only, like
+// its only caller.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn character_dir_from_mesh_path(mesh_path: &str) -> String {
     mesh_path.rsplit_once("/mesh/").map(|(dir, _)| dir.to_string()).unwrap_or_default()
 }
 
 // Used by save_player_model_tuning (movement_combat.rs) to write
-// characters/soldier/character.ron back out.
+// characters/soldier_meshy/character.ron back out. Native/EDITOR-only, like
+// its only caller — cfg-gated so it doesn't need ron_f32 (item_gallery_cars.rs,
+// itself not(wasm32)) to exist on wasm32.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn format_character_ron(c: &CharacterRon) -> String {
     format!(
         "// Metadata for the \"{id}\" character — see docs/CHARACTER_IMPORT_CHECKLIST.md's\n\
@@ -2880,10 +2901,12 @@ pub(crate) fn format_character_ron(c: &CharacterRon) -> String {
          \n\
          \u{20}   mesh: \"{mesh}\",\n\
          \u{20}   // See docs/CHARACTER_IMPORT_CHECKLIST.md before replacing this mesh.\n\
+         \u{20}   anim_source: \"{anim_source}\",\n\
          \u{20}   scale: {scale},\n\
          \u{20}   y_offset: {y_offset},\n\
          \u{20}   facing_deg: {facing_deg},\n\
          \n\
+         \u{20}   // Indices into anim_source, not mesh.\n\
          \u{20}   animations: (\n\
          \u{20}       idle: {idle},\n\
          \u{20}       walk: {walk},\n\
@@ -2899,6 +2922,7 @@ pub(crate) fn format_character_ron(c: &CharacterRon) -> String {
         display_name = c.display_name,
         lore_ref = c.lore_ref,
         mesh = c.mesh,
+        anim_source = c.anim_source,
         scale = ron_f32(c.scale),
         y_offset = ron_f32(c.y_offset),
         facing_deg = ron_f32(c.facing_deg),
@@ -2931,6 +2955,7 @@ pub(crate) struct PlayerModelTuning {
     pub(crate) display_name: String,
     pub(crate) lore_ref: String,
     pub(crate) mesh: String,
+    pub(crate) anim_source: String,
     pub(crate) audio: Vec<String>,
 }
 
@@ -2948,7 +2973,19 @@ impl PlayerModelTuning {
             display_name: c.display_name,
             lore_ref: c.lore_ref,
             mesh: c.mesh,
+            anim_source: c.anim_source,
             audio: c.audio,
+        }
+    }
+
+    // "" (character.ron predates the mesh/anim split, or was hand-edited
+    // without it) falls back to the old behavior: load animations from the
+    // mesh file itself.
+    pub(crate) fn anim_source_or_mesh(&self) -> &str {
+        if self.anim_source.is_empty() {
+            &self.mesh
+        } else {
+            &self.anim_source
         }
     }
 }

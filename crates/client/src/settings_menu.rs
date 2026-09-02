@@ -404,32 +404,6 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     ));
                     spawn_cheat_action_button(row, "+", SensitivityIncButton);
                 });
-                page.spawn((
-                    Text::new("Character"),
-                    TextFont {
-                        font_size: 16.0,
-                        ..default()
-                    },
-                    TextColor(Color::WHITE),
-                ));
-                page.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    align_items: AlignItems::Center,
-                    ..default()
-                })
-                .with_children(|row| {
-                    row.spawn((
-                        Text::new("Soldier"),
-                        TextFont {
-                            font_size: 16.0,
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                        CharacterNameText,
-                    ));
-                    spawn_cheat_action_button(row, "Đổi", CharacterCycleButton);
-                });
                 // Same debug-build-only gate as page 0's "Cheats" section
                 // above — Kill All / Heal Nearest / 1HP Nearest are testing
                 // tools, not something a real player should have.
@@ -552,11 +526,6 @@ pub(crate) struct SensitivityDecButton;
 pub(crate) struct SensitivityIncButton;
 #[derive(Component)]
 pub(crate) struct SensitivityText;
-
-#[derive(Component)]
-pub(crate) struct CharacterCycleButton;
-#[derive(Component)]
-pub(crate) struct CharacterNameText;
 
 // Client's own best guess at the server's current zombie population
 // target, so the cheat panel has a number to show and step from without
@@ -1127,84 +1096,6 @@ pub(crate) fn update_sensitivity_text(scale: Res<SensitivityScale>, mut text: Qu
     }
 }
 
-// Which entry in AVAILABLE_CHARACTER_DIRS (lib.rs) is currently loaded into
-// PlayerModelTuning/PlayerModelAnim — character_cycle_button owns this,
-// update_character_name_text just displays it.
-#[derive(Resource)]
-pub(crate) struct ActiveCharacterDir(pub(crate) String);
-
-impl Default for ActiveCharacterDir {
-    fn default() -> Self {
-        Self(AVAILABLE_CHARACTER_DIRS[0].to_string())
-    }
-}
-
-// "Đổi" cycles AVAILABLE_CHARACTER_DIRS (lib.rs) and does everything a
-// character switch needs in one place:
-//   1. Reload PlayerModelTuning (scale/offset/facing/animation mapping)
-//      from the new character's own character.ron.
-//   2. Rebuild PlayerModelAnim's AnimationGraph — a different mesh's clips
-//      live at different indices, so the OLD graph's nodes would point at
-//      the wrong (or out-of-range) clips otherwise.
-//   3. Despawn + respawn the local debug PlayerModel with the new mesh —
-//      SceneRoot's Handle<Scene> isn't swappable in place, and a stale
-//      AnimationPlayer/skeleton from the old scene graph would linger
-//      alongside the new one otherwise.
-//   4. Same despawn + respawn for every ALREADY-CONNECTED remote player's
-//      model child (on_net_player_replicated only spawns fresh ones for
-//      players who join/reconnect AFTER this point — existing ones need
-//      this loop or they'd keep showing the old character forever).
-pub(crate) fn character_cycle_button(
-    mut commands: Commands,
-    btn: Query<&Interaction, (With<CharacterCycleButton>, Changed<Interaction>)>,
-    mut active: ResMut<ActiveCharacterDir>,
-    asset_server: Res<AssetServer>,
-    mut graphs: ResMut<Assets<AnimationGraph>>,
-    mut tuning: ResMut<PlayerModelTuning>,
-    mut anim: ResMut<PlayerModelAnim>,
-    local_model: Query<Entity, With<PlayerModel>>,
-    remote_model_roots: Query<(Entity, &ChildOf), (With<PlayerModelAnimRoot>, Without<PlayerModel>)>,
-) {
-    if !btn.iter().any(|i| *i == Interaction::Pressed) {
-        return;
-    }
-
-    let current_index = AVAILABLE_CHARACTER_DIRS.iter().position(|d| *d == active.0).unwrap_or(0);
-    active.0 = AVAILABLE_CHARACTER_DIRS[(current_index + 1) % AVAILABLE_CHARACTER_DIRS.len()].to_string();
-
-    *tuning = PlayerModelTuning::load(&active.0);
-    *anim = build_player_model_anim(&asset_server, &mut graphs, &tuning);
-
-    if let Ok(entity) = local_model.single() {
-        commands.entity(entity).despawn();
-    }
-    commands.spawn((
-        Name::new("PlayerModel (local, debug — KeyT/CameraMode)"),
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(tuning.mesh.clone()))),
-        Transform::from_scale(Vec3::splat(tuning.scale)),
-        Visibility::Hidden,
-        PlayerModel,
-        PlayerModelAnimRoot,
-        PlayerModelSkeletonBones::default(),
-    ));
-
-    for (old_model, child_of) in &remote_model_roots {
-        let net_player = child_of.0;
-        commands.entity(old_model).despawn();
-        commands.entity(net_player).with_children(|parent| {
-            spawn_remote_player_model(parent, &asset_server, &tuning);
-        });
-    }
-}
-
-pub(crate) fn update_character_name_text(tuning: Res<PlayerModelTuning>, mut text: Query<&mut Text, With<CharacterNameText>>) {
-    if !tuning.is_changed() {
-        return;
-    }
-    for mut text in &mut text {
-        text.0 = tuning.display_name.clone();
-    }
-}
 
 pub(crate) fn auto_maintain_button(
     mut commands: Commands,

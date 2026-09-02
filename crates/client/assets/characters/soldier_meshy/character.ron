@@ -17,6 +17,18 @@
 // nudge_player_model_tuning/save_player_model_tuning
 // (crates/client/src/movement_combat.rs). `animations` isn't nudge-able,
 // only hand-edited.
+//
+// mesh/anim_source are two SEPARATE glb files (scripts/extract_glb_mesh_only.py
+// and scripts/extract_glb_animations.py, run against the original combined
+// export) — mesh has zero animations of its own; every clip below is
+// loaded from anim_source instead. This split is what lets a future
+// Meshy-sourced character with the same Mixamo bone names reuse
+// anim_source without shipping its own copy of these clips. See
+// wire_player_model_scene_animation_targets (zombie_client.rs) for how the
+// two get stitched back together at runtime (AnimationTargetId hashes
+// bone-name paths, so this only works because both files share the exact
+// same scene-root name and bone hierarchy — "target_character" down to
+// each Mixamo bone).
 (
     id: "soldier_meshy",
     display_name: "Soldier (Meshy)",
@@ -24,10 +36,12 @@
 
     mesh: "characters/soldier_meshy/mesh/soldier_meshy.glb",
     // See docs/CHARACTER_IMPORT_CHECKLIST.md before replacing this mesh.
+    anim_source: "characters/soldier_meshy/anims/mixamo_base.glb",
     scale: 1.04,
     y_offset: -0.76,
     facing_deg: 0.0,
 
+    // Indices into anim_source (mixamo_base.glb), not mesh.
     animations: (
         idle: 15,
         walk: 15,

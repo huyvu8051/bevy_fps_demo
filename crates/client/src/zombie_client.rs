@@ -11,6 +11,7 @@
 // `use`/path, hence the glob rather than hunting down each one by hand.
 
 use bevy::prelude::*;
+use bevy::animation::{AnimatedBy, AnimationTargetId};
 use crate::*;
 
 // Debug/dev: toggled by KeyM. Forces every zombie's animation paused
@@ -61,22 +62,20 @@ pub(crate) struct PlayerModelAnimationPlayer(pub(crate) Entity);
 
 // Found the same way (walk up from a newly-spawned named bone to the
 // PlayerModelAnimRoot ancestor, mirroring wire_zombie_hitbox_bones' own
-// pattern in crates/shared/src/zombie.rs) — soldier.glb's own rig, NOT
-// Mixamo-named like the zombies. Measured the ACTUAL parent/child tree
-// directly from the glb (not guessed from the flat joint name list, which
-// misled the first cut of this — Hips and Abdomen are BOTH on the spine
-// branch, Hips -> Abdomen -> Torso -> Chest -> arms/head; legs are a
-// completely separate branch, UpperLeg.L/UpperLeg.R attach straight to
-// Body, not to Hips at all):
-//   Body -> Hips -> Abdomen -> Torso -> Chest -> (Neck/Head, L/R Shoulder->arm)
-//   Body -> UpperLeg.L -> LowerLeg.L -> Foot.L
-//   Body -> UpperLeg.R -> LowerLeg.R -> Foot.R
+// pattern in crates/shared/src/zombie.rs) — soldier_meshy's rig is
+// Mixamo-named like the zombies (soldier.glb, the old Quaternius mesh this
+// used to target, is gone). Measured the ACTUAL parent/child tree directly
+// from the glb: standard Mixamo layout, both leg chains AND the spine hang
+// straight off Hips —
+//   Hips -> LeftUpLeg -> LeftLeg -> LeftFoot -> LeftToeBase
+//   Hips -> RightUpLeg -> RightLeg -> RightFoot -> RightToeBase
+//   Hips -> Spine -> Spine01 -> Spine02 -> (neck/Head, L/R Shoulder->arm)
 // apply_player_model_travel_twist (movement_combat.rs) only touches the two
-// UpperLeg bones — rotating the actual leg-chain roots toward the real
-// travel direction — and leaves Hips/spine/arms alone entirely: the torso
-// already faces the aim direction correctly (sync_player_model sets that
-// on the whole model's root), so there's nothing to counter-rotate back
-// there like the first (wrong) cut of this tried to.
+// UpLeg bones — rotating the actual leg-chain roots toward the real travel
+// direction — and leaves Hips/spine/arms alone entirely: the torso already
+// faces the aim direction correctly (sync_player_model sets that on the
+// whole model's root), so there's nothing to counter-rotate back there like
+// the first (wrong) cut of this tried to.
 #[derive(Component, Default)]
 pub(crate) struct PlayerModelSkeletonBones {
     pub(crate) left_upper_leg: Option<Entity>,
@@ -94,15 +93,15 @@ pub(crate) fn wire_player_model_skeleton_bones(
 ) {
     for (bone_entity, name) in &new_names {
         let n = name.as_str();
-        if n != "UpperLeg.L" && n != "UpperLeg.R" {
+        if n != "LeftUpLeg" && n != "RightUpLeg" {
             continue;
         }
         let mut current = bone_entity;
         for _ in 0..20 {
             if let Ok(mut bones) = roots.get_mut(current) {
                 match n {
-                    "UpperLeg.L" => bones.left_upper_leg = Some(bone_entity),
-                    "UpperLeg.R" => bones.right_upper_leg = Some(bone_entity),
+                    "LeftUpLeg" => bones.left_upper_leg = Some(bone_entity),
+                    "RightUpLeg" => bones.right_upper_leg = Some(bone_entity),
                     _ => {}
                 }
                 break;
@@ -334,7 +333,7 @@ pub(crate) fn build_player_model_anim(
         tuning.animations.death,
     ]
     .into_iter()
-    .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(tuning.mesh.clone())))
+    .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(tuning.anim_source_or_mesh().to_string())))
     .collect();
     let (graph, nodes) = AnimationGraph::from_clips(clips);
     PlayerModelAnim {
@@ -858,6 +857,83 @@ pub(crate) fn wire_zombie_animations(
             player.play(slot.idle()).repeat();
         }
         commands.entity(root).try_insert(ZombieAnimationPlayer(player_entity));
+    }
+}
+
+// Name of the mesh glb's own glTF scene root node — baked into it by
+// normalize_glb_root_rotation.py (the "target_character" node those
+// scripts bake rotation corrections into) and unchanged by
+// extract_glb_mesh_only.py/extract_glb_animations.py, which both carry
+// every node's own name through verbatim. Both the mesh-only file
+// (soldier_meshy.glb) and the animation-only file (mixamo_base.glb) share
+// this exact root name — required for wire_player_model_scene_animation_targets
+// below to compute the same AnimationTargetId hashes the animation clips
+// were baked against (see its own doc comment).
+const PLAYER_MODEL_SCENE_ROOT_NAME: &str = "target_character";
+
+// PlayerModelTuning.mesh (soldier_meshy.glb) carries zero animations of its
+// own since docs/CHARACTER_IMPORT_CHECKLIST.md's mesh/anim split —
+// build_player_model_anim instead loads every clip from
+// PlayerModelTuning.anim_source (mixamo_base.glb). bevy_gltf's own loader
+// only ever inserts AnimationPlayer/AnimationTargetId/AnimatedBy for a
+// scene that has animations IN THAT SAME FILE (see
+// bevy_gltf::loader::mod.rs's `animation_roots` — computed purely from
+// `gltf.animations()`), so spawning the mesh-only scene produces NONE of
+// that wiring on its own. This system does it by hand instead, exactly
+// mirroring what bevy_gltf would have done for a combined file:
+//   - insert AnimationPlayer on the scene's root node (PLAYER_MODEL_SCENE_ROOT_NAME)
+//   - insert (AnimationTargetId, AnimatedBy(root)) on every descendant,
+//     with the ID hashed from the full ancestor Name path INCLUDING the
+//     root's own name — see bevy_gltf's collect_path
+//     (loader/gltf_ext/scene.rs), which does exactly this starting from
+//     `[]` at the scene root and pushing each node's name going down.
+// Once AnimationPlayer exists here, wire_player_model_animations'
+// Added<AnimationPlayer> query picks it up exactly as if bevy_gltf had
+// inserted it itself — same AnimationGraphHandle/play() wiring either way.
+pub(crate) fn wire_player_model_scene_animation_targets(
+    mut commands: Commands,
+    child_of: Query<&ChildOf>,
+    children: Query<&Children>,
+    names: Query<&Name>,
+    roots: Query<(), With<PlayerModelAnimRoot>>,
+    new_names: Query<Entity, Added<Name>>,
+) {
+    for entity in &new_names {
+        let Ok(name) = names.get(entity) else { continue };
+        if name.as_str() != PLAYER_MODEL_SCENE_ROOT_NAME {
+            continue;
+        }
+        // Confirms this is actually a PlayerModel's own mesh scene (not
+        // some unrelated glb that happens to reuse the same root node
+        // name) before touching anything.
+        if find_animation_root(entity, &child_of, |e| roots.contains(e)).is_none() {
+            continue;
+        }
+        commands.entity(entity).try_insert(AnimationPlayer::default());
+        wire_animation_target_path(&mut commands, entity, entity, Vec::new(), &children, &names);
+    }
+}
+
+// Recurses down from `entity`, building the same ancestor Name path
+// bevy_gltf's collect_path would (root's own name first, one push per
+// level going down — see wire_player_model_scene_animation_targets' own
+// doc comment) and inserting the resulting (AnimationTargetId,
+// AnimatedBy(player)) pair onto every named descendant, `player` included.
+fn wire_animation_target_path(
+    commands: &mut Commands,
+    player: Entity,
+    entity: Entity,
+    mut path: Vec<Name>,
+    children: &Query<&Children>,
+    names: &Query<&Name>,
+) {
+    let Ok(name) = names.get(entity) else { return };
+    path.push(name.clone());
+    commands.entity(entity).try_insert((AnimationTargetId::from_names(path.iter()), AnimatedBy(player)));
+    if let Ok(kids) = children.get(entity) {
+        for &child in kids {
+            wire_animation_target_path(commands, player, child, path.clone(), children, names);
+        }
     }
 }
 
