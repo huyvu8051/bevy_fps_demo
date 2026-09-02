@@ -4,6 +4,10 @@ Campaign 1 "Ground Zero", Map 4/5. Xem GDD.md mục 14.3. Cùng legend với
 Map 1. Map ngoài trời, **sightline dài nhất Campaign 1** — thiết kế chủ
 đích để giới thiệu vũ khí tầm xa.
 
+⚠️ **v3 — diện tích x4 + zombie lộ x12 + spawn theo nhịp:** xem
+`map04_dimensions.md`. **Zombie "ẩn" giả chết KHÔNG x12** — giữ nguyên
+3 con (gắn với gầm xe cụ thể trong bố cục).
+
 ---
 
 ## Khu A — Đầu cầu (dốc lên) [Build-up]
@@ -21,7 +25,8 @@ Map 1. Map ngoài trời, **sightline dài nhất Campaign 1** — thiết kế 
                                  ═══ (lên tới mặt cầu chính)
 ```
 
-- **Mật độ:** 1 zombie — Build-up, mặt cầu còn thoáng.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1) — Build-up, mặt cầu còn
+  thoáng.
 
 ---
 
@@ -48,9 +53,9 @@ Map 1. Map ngoài trời, **sightline dài nhất Campaign 1** — thiết kế 
                                  ═══
 ```
 
-- **Mật độ:** 3 zombie lộ sẵn + 3 zombie "ẩn" (giả chết, dùng lại animation
-  Idle/Crawl có sẵn theo đúng ghi chú GDD) = 6 tổng, mật độ vừa nhưng bất
-  ngờ cao.
+- **Mật độ (v3, x12 zombie lộ):** 36 zombie lộ sẵn (v1: 3) + **3 zombie
+  "ẩn"** (KHÔNG x12, giữ nguyên — giả chết, dùng lại animation Idle/Crawl
+  có sẵn theo đúng ghi chú GDD) = 39 tổng.
 - **Item:** 1 ammo + 1 med kit (trong xe cứu thương).
 - **Ghi chú thiết kế:** xe cộ dày đặc vừa là **cover** vừa là **nơi giấu
   địch** — buộc người chơi di chuyển chậm/cẩn thận thay vì chạy thẳng qua,
@@ -78,7 +83,8 @@ Map 1. Map ngoài trời, **sightline dài nhất Campaign 1** — thiết kế 
                                  ═══
 ```
 
-- **Mật độ:** 1 zombie, đặt xa để minh họa tầm bắn — Peak Fade.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1), đặt xa để minh họa tầm bắn —
+  Peak Fade.
 - **Item:** vũ khí sniper (điểm mốc gameplay, giống cách Map 2 giới thiệu
   vũ khí thứ 2).
 - **Ghi chú:** đoạn này **không có xe che chắn** — đối lập trực tiếp với
@@ -107,16 +113,16 @@ Map 1. Map ngoài trời, **sightline dài nhất Campaign 1** — thiết kế 
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map04_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Zombie lộ | Zombie ẩn | Ammo | Med kit | Vũ khí |
+| Khu vực | Tag pacing | Zombie lộ (v1→v3) | Zombie ẩn (không x12) | Ammo | Med kit | Vũ khí |
 |---|---|---|---|---|---|---|
-| A. Đầu cầu | Build-up | 1 | 0 | 0 | 0 | 0 |
-| B. Giữa cầu | **Sustain Peak** | 3 | 3 | 1 | 1 | 0 |
-| C. Cuối cầu thoáng | Peak Fade | 1 | 0 | 0 | 0 | 1 (sniper) |
-| D. Cuối cầu/Relax | Relax | 0 | 0 | 0 | 0 | 0 |
-| **Tổng** | | **5** | **3** | **1** | **1** | **1** |
+| A. Đầu cầu | Build-up | 1 → **12** | 0 | 0 | 0 | 0 |
+| B. Giữa cầu | **Sustain Peak** | 3 → **36** | 3 | 1 | 1 | 0 |
+| C. Cuối cầu thoáng | Peak Fade | 1 → **12** | 0 | 0 | 0 | 1 (sniper) |
+| D. Cuối cầu/Relax | Relax | 0 → 0 | 0 | 0 | 0 | 0 |
+| **Tổng** | | **5 → 60** | **3** | **1** | **1** | **1** |
 
-Map ngắn hơn Map 1-3 về mật độ tổng (8 zombie), bù lại bằng **địa hình
-obstacle course + zombie ẩn** tạo cảm giác nguy hiểm không tương xứng với
-con số thô — đúng dụng ý thiết kế đã ghi trong GDD.
+Map ngắn hơn Map 1-3 về mật độ tổng (v1: 8 zombie → v3: 63), bù lại bằng
+**địa hình obstacle course + zombie ẩn** tạo cảm giác nguy hiểm không
+tương xứng với con số thô — đúng dụng ý thiết kế đã ghi trong GDD.

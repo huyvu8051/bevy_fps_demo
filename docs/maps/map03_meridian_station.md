@@ -5,6 +5,10 @@ Map 1. Đây là map **đầu tiên giới thiệu zombie đặc biệt** (Boome
 mục 17.5/17.18) — không gian hẹp/tối được thiết kế chủ đích để tận dụng
 đúng điểm mạnh của cơ chế nổ/khói mù trong không gian kín.
 
+⚠️ **v3 — diện tích x4 + zombie thường x12 + spawn theo nhịp:** xem
+`map03_dimensions.md`. **Boomer-style KHÔNG x12** — giữ nguyên 2 con
+(set-piece cố định, xem ghi chú trong file dimensions).
+
 ---
 
 ## Khu A — Khu soát vé & Sân ga vào [Build-up]
@@ -29,7 +33,8 @@ mục 17.5/17.18) — không gian hẹp/tối được thiết kế chủ đích
                                  ↓
 ```
 
-- **Mật độ:** 2 zombie — Build-up, vẫn còn đủ sáng để quan sát rõ.
+- **Mật độ (v3, x12):** 24 zombie (v1: 2) — Build-up, vẫn còn đủ sáng
+  để quan sát rõ.
 - **Item:** 1 ammo (sân ga).
 - **Ghi chú:** đây là điểm chuyển tông quan trọng — ánh sáng khẩn cấp
   (vàng, yếu) là tín hiệu thị giác báo trước "sắp tối hơn nhiều".
@@ -61,8 +66,9 @@ mục 17.5/17.18) — không gian hẹp/tối được thiết kế chủ đích
                                  ═══
 ```
 
-- **Mật độ:** 2 zombie thường + **2 Boomer-style** (`💥`) — đây là lần đầu
-  loại địch đặc biệt xuất hiện trong toàn game.
+- **Mật độ (v3, x12 zombie thường):** 24 zombie thường (v1: 2) + **2
+  Boomer-style** (`💥`, KHÔNG x12, giữ nguyên) — đây là lần đầu loại
+  địch đặc biệt xuất hiện trong toàn game.
 - **Item:** 3 điểm pickup xen kẽ (2 ammo + 1 med kit) dọc đường ray, đúng
   ghi chú GDD "duy trì nhịp di chuyển liên tục thay vì dồn vào 1 điểm".
 - **Ghi chú thiết kế quan trọng:** cả 2 Boomer đặt **ngay sau khúc cua**
@@ -101,7 +107,7 @@ mục 17.5/17.18) — không gian hẹp/tối được thiết kế chủ đích
 └──────────────────────────────────────────────────────────┘
 ```
 
-- **Mật độ:** 1 zombie, tối thiểu.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1), tối thiểu.
 - **Ghi chú:** ánh sáng sân ga đến được thiết kế **sáng hơn hẳn** ga vào
   (khác biệt trực quan rõ rệt) — nhấn mạnh cảm giác "thoát khỏi bóng tối"
   đúng như GDD mô tả, không chỉ là hết địch mà còn là thay đổi cảm xúc
@@ -109,15 +115,16 @@ mục 17.5/17.18) — không gian hẹp/tối được thiết kế chủ đích
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map03_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Zombie thường | Boomer | Ammo | Med kit |
+| Khu vực | Tag pacing | Zombie thường (v1→v3) | Boomer (không x12) | Ammo | Med kit |
 |---|---|---|---|---|---|
-| A. Soát vé/sân ga vào | Build-up | 2 | 0 | 1 | 0 |
-| B. Đường hầm | **Sustain Peak** | 2 | **2** | 2 | 1 |
-| C. Ga đến | Peak Fade/Relax | 1 | 0 | 0 | 0 |
-| **Tổng** | | **5** | **2** | **3** | **1** |
+| A. Soát vé/sân ga vào | Build-up | 2 → **24** | 0 | 1 | 0 |
+| B. Đường hầm | **Sustain Peak** | 2 → **24** | **2** | 2 | 1 |
+| C. Ga đến | Peak Fade/Relax | 1 → **12** | 0 | 0 | 0 |
+| **Tổng** | | **5 → 60** | **2** | **3** | **1** |
 
-Tổng zombie thường **thấp nhất Campaign 1 tới giờ** (5, so với 19 ở Map 1
-và 15 ở Map 2) — bù lại bằng **địa hình khó** (tối, hẹp) + Boomer, đúng
-triết lý thiết kế "độ khó không chỉ tới từ số lượng địch".
+Tổng zombie thường **thấp nhất Campaign 1 tới giờ** (5→60, so với
+19→228 ở Map 1 và 15→180 ở Map 2) — bù lại bằng **địa hình khó** (tối,
+hẹp) + Boomer (giữ nguyên 2, không x12), đúng triết lý thiết kế "độ khó
+không chỉ tới từ số lượng địch".

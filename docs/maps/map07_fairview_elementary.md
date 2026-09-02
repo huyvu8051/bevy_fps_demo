@@ -11,6 +11,9 @@ Campaign 2 "Vành đai", Map 7/20 (Map 2/5 của campaign). Xem GDD.md mục
 map trường học này **nên dùng model giáo viên/nhân viên trường**, KHÔNG
 dùng model học sinh — quyết định cuối cùng khi thật sự sản xuất asset.
 
+⚠️ **v3 — diện tích x4 + zombie thường x12 + spawn theo nhịp:** xem
+`map07_dimensions.md`. **Smoker-style KHÔNG x12** — giữ nguyên 1 con.
+
 ---
 
 ## Khu A — Sân trường [Build-up]
@@ -31,7 +34,7 @@ dùng model học sinh — quyết định cuối cùng khi thật sự sản xu
                                  ═══ Vào tòa nhà lớp học
 ```
 
-- **Mật độ:** 1 zombie — Build-up.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1) — Build-up.
 - **Ghi chú:** xe phụ huynh đậu vội là chi tiết dẫn dắt trực tiếp vào
   briefing map ("không phải diễn tập") — người chơi thấy bằng chứng vật
   lý trước khi nghe log xác nhận.
@@ -58,7 +61,7 @@ dùng model học sinh — quyết định cuối cùng khi thật sự sản xu
                                 ↑ Cầu thang lên tầng 2
 ```
 
-- **Mật độ:** 1 zombie.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1).
 - **Item:** 1 med kit (phòng y tế trường, theo đúng GDD).
 
 ---
@@ -85,8 +88,9 @@ dùng model học sinh — quyết định cuối cùng khi thật sự sản xu
                                 ↑ Lên khu nhà thể chất (nối trên cao)
 ```
 
-- **Mật độ:** 2 zombie thường + **1 Smoker** (ẩn trong Lớp 2B, không lộ
-  diện cho tới khi kéo dây).
+- **Mật độ (v3, x12 zombie thường):** 24 zombie thường (v1: 2) + **1
+  Smoker** (KHÔNG x12, giữ nguyên — ẩn trong Lớp 2B, không lộ diện cho
+  tới khi kéo dây).
 - **Ghi chú thiết kế:** hành lang **dài, tuyến tính** — địa hình lý tưởng
   cho Smoker vì nạn nhân bị kéo không thể thoát nhanh, buộc đồng đội phải
   phản ứng (bắn đứt dây) thay vì nạn nhân tự thoát được.
@@ -115,7 +119,7 @@ dùng model học sinh — quyết định cuối cùng khi thật sự sản xu
                                  ═══
 ```
 
-- **Mật độ:** 1 zombie, Peak Fade.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1), Peak Fade.
 - **Ghi chú:** đây là 1 mystery nhỏ không giải thích (đúng nguyên tắc GDD
   "không cần nói hết") — gợi trí tò mò mà không cần thêm nội dung phức
   tạp.
@@ -143,13 +147,13 @@ dùng model học sinh — quyết định cuối cùng khi thật sự sản xu
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map07_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Zombie thường | Smoker | Ammo | Med kit | Audio log |
+| Khu vực | Tag pacing | Zombie thường (v1→v3) | Smoker (không x12) | Ammo | Med kit | Audio log |
 |---|---|---|---|---|---|---|
-| A. Sân trường | Build-up | 1 | 0 | 0 | 0 | — |
-| B. Hành lang T1/Thư viện | Build-up | 1 | 0 | 0 | 1 | — |
-| C. Hành lang T2 | **Sustain Peak** | 2 | **1** | 0 | 0 | — |
-| D. Thư viện T2 | Peak Fade | 1 | 0 | 0 | 0 | — |
-| E. Nhà thể chất | Relax | 0 | 0 | 0 | 0 | — |
-| **Tổng** | | **5** | **1** | **0** | **1** | **L7 (loa phát thanh, không gắn vị trí cụ thể — nghe khi vào sân)** |
+| A. Sân trường | Build-up | 1 → **12** | 0 | 0 | 0 | — |
+| B. Hành lang T1/Thư viện | Build-up | 1 → **12** | 0 | 0 | 1 | — |
+| C. Hành lang T2 | **Sustain Peak** | 2 → **24** | **1** | 0 | 0 | — |
+| D. Thư viện T2 | Peak Fade | 1 → **12** | 0 | 0 | 0 | — |
+| E. Nhà thể chất | Relax | 0 → 0 | 0 | 0 | 0 | — |
+| **Tổng** | | **5 → 60** | **1** | **0** | **1** | **L7 (loa phát thanh, không gắn vị trí cụ thể — nghe khi vào sân)** |

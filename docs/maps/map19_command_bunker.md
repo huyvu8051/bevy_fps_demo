@@ -13,6 +13,11 @@ mục 14.6. Cùng legend với Map 16, thêm:
 14.6 để hiểu vì sao đây là ngoại lệ có chủ đích, không phải vi phạm
 nguyên tắc "chỉ kể qua log" (mục 14.8).
 
+⚠️ **v3 — diện tích x4 + zombie thường x12:** xem `map19_dimensions.md`.
+**Lính BRDF và chỉ huy BRDF KHÔNG x12** — giữ nguyên tuyệt đối, chỉ huy
+đặc biệt tuyệt đối không nhân bản (là 1 sự kiện kịch bản, không phải
+combat đếm số).
+
 ---
 
 ## Hành lang ngoài [Build-up → SUSTAIN PEAK — lính phòng thủ dày nhất game]
@@ -33,8 +38,9 @@ nguyên tắc "chỉ kể qua log" (mục 14.8).
                                  ═══ Vào phòng chỉ huy
 ```
 
-- **Mật độ:** 2 zombie + **5 lính BRDF** — cao nhất toàn game về số
-  lượng lính, đúng vai trò "khu vực bảo vệ quyết liệt nhất".
+- **Mật độ (v3, x12 zombie):** 24 zombie (v1: 2) + **5 lính BRDF**
+  (KHÔNG x12, giữ nguyên) — vẫn cao nhất toàn game về số lượng lính,
+  đúng vai trò "khu vực bảo vệ quyết liệt nhất".
 - **Không có item pickup** — áp lực thời gian đã bắt đầu ngầm từ đây
   (dù đếm ngược tự hủy chưa chính thức kích hoạt).
 
@@ -103,10 +109,10 @@ nguyên tắc "chỉ kể qua log" (mục 14.8).
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map19_dimensions.md` cho chi tiết)
 
-| Khu vực | Tag pacing | Zombie | Lính BRDF | Chỉ huy | Ghi chú |
+| Khu vực | Tag pacing | Zombie (v1→v3) | Lính BRDF (không x12) | Chỉ huy (không x12) | Ghi chú |
 |---|---|---|---|---|---|
-| A. Hành lang ngoài | Build-up/Sustain | 2 | **5** | 0 | — |
-| B. Phòng chỉ huy | **Sustain Peak (kịch bản)** | 0 | 0 | **1 (thoát)** | L19, kích hoạt tự hủy |
-| **Tổng** | | **2** | **5** | **1** | Không Relax, nối thẳng Map 20 |
+| A. Hành lang ngoài | Build-up/Sustain | 2 → **24** | **5** | 0 | — |
+| B. Phòng chỉ huy | **Sustain Peak (kịch bản)** | 0 → 0 | 0 | **1 (thoát)** | L19, kích hoạt tự hủy |
+| **Tổng** | | **2 → 24** | **5** | **1** | Không Relax, nối thẳng Map 20 |

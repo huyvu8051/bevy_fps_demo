@@ -12,6 +12,9 @@ phải hành trình di chuyển dài. Cấu trúc pacing cũng khác: không có
 "Peak Fade" truyền thống (boss chết = kết thúc đột ngột, đúng bản chất
 climax).
 
+⚠️ **v3 — diện tích x4 + zombie thường x12:** xem `map05_dimensions.md`.
+**Boss (Tank-style) KHÔNG x12** — giữ nguyên 1 con.
+
 ---
 
 ## Tầng 1-2 Gara (leo lên) [Build-up]
@@ -35,7 +38,8 @@ climax).
                ↑ Lên bãi đáp trực thăng (nóc gara)
 ```
 
-- **Mật độ:** 3 zombie lẻ tẻ — dọn dẹp nhanh, không phải cao trào.
+- **Mật độ (v3, x12):** 36 zombie (v1: 3) — dọn dẹp nhanh, không phải
+  cao trào.
 - **Item:** 1 ammo + 1 med kit — đây chính là **"safe room" trước boss**
   (không có SR chính thức riêng ở đây, gộp luôn vào tầng gara cuối, đúng
   ghi chú GDD "khu vực ngay trước bãi đáp... đầy đủ đạn/med kit").
@@ -72,8 +76,8 @@ climax).
 └───────────────────────────────┬────────────────────────────┘
 ```
 
-- **Mật độ:** 0 zombie thường + **1 Boss** — toàn bộ độ khó dồn vào 1
-  encounter, không pha trộn.
+- **Mật độ:** 0 zombie thường + **1 Boss** (không x12, giữ nguyên) —
+  toàn bộ độ khó dồn vào 1 encounter, không pha trộn.
 - **Kiến trúc:** 4 cột bê tông đối xứng làm vật cản né đòn — bố cục hỗ
   trợ co-op 4 người dàn ra các góc khác nhau thay vì dồn cục 1 chỗ.
 - **Không có "Peak Fade":** boss chết → chuyển thẳng sang Relax, đúng
@@ -111,14 +115,14 @@ climax).
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map05_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Zombie | Boss | Ammo | Med kit |
+| Khu vực | Tag pacing | Zombie (v1→v3) | Boss (không x12) | Ammo | Med kit |
 |---|---|---|---|---|---|
-| Gara tầng 1-2 | Build-up | 3 | 0 | 1 | 1 |
-| Bãi đáp | **Sustain Peak (Boss)** | 0 | **1** | 0 | 0 |
-| Kết thúc | Relax | 0 | 0 | 0 | 0 |
-| **Tổng** | | **3** | **1 boss** | **1** | **1** |
+| Gara tầng 1-2 | Build-up | 3 → **36** | 0 | 1 | 1 |
+| Bãi đáp | **Sustain Peak (Boss)** | 0 → 0 | **1** | 0 | 0 |
+| Kết thúc | Relax | 0 → 0 | 0 | 0 | 0 |
+| **Tổng** | | **3 → 36** | **1 boss** | **1** | **1** |
 
 Map ngắn nhất Campaign 1 về nội dung di chuyển (chỉ 3 khu vực, so với 4-6
 ở các map trước) nhưng **độ khó dồn hết vào 1 encounter duy nhất** — đúng
@@ -126,18 +130,21 @@ vai trò "climax cuối campaign", không cần độ dài để tạo cường 
 
 ---
 
-## So sánh tổng thể Campaign 1 (Map 1-5)
+## So sánh tổng thể Campaign 1 (Map 1-5, v1 → v3 sau x4 diện tích + x12 zombie thường)
 
-| Map | Zombie thường | Đặc biệt | Boss | Ammo | Med kit | Vũ khí mới |
+| Map | Zombie thường (v1→v3) | Đặc biệt (không x12) | Boss (không x12) | Ammo | Med kit | Vũ khí mới |
 |---|---|---|---|---|---|---|
-| 1. Highrise | 19 | 0 | 0 | 3 | 1 | 0 |
-| 2. Meridian Plaza | 15 | 0 | 0 | 1 | 0 | 1 (súng ngắn) |
-| 3. Meridian Station | 5 | 2 (Boomer) | 0 | 3 | 1 | 0 |
-| 4. Route 9 Overpass | 8 | 0 | 0 | 1 | 1 | 1 (sniper) |
-| 5. Terminus Overlook | 3 | 0 | 1 (Tank) | 1 | 1 | 0 |
-| **Tổng Campaign 1** | **50** | **2** | **1** | **9** | **4** | **2** |
+| 1. Highrise | 19 → **228** | 0 | 0 | 3 | 1 | 0 |
+| 2. Meridian Plaza | ~15 → **180** | 0 | 0 | 1 | 0 | 1 (súng ngắn) |
+| 3. Meridian Station | 5 → **60** | 2 (Boomer) | 0 | 3 | 1 | 0 |
+| 4. Route 9 Overpass | 5 → **60** | 3 (ẩn) | 0 | 1 | 1 | 1 (sniper) |
+| 5. Terminus Overlook | 3 → **36** | 0 | 1 (Tank) | 1 | 1 | 0 |
+| **Tổng Campaign 1** | **47 → 564** | **5** | **1** | **9** | **4** | **2** |
 
 Đường cong độ khó **không tuyến tính tăng dần đều** — dao động theo chủ
 đích (Map 1-2 đông về SỐ LƯỢNG, Map 3-4 khó về ĐỊA HÌNH/cơ chế, Map 5 dồn
 vào 1 ĐIỂM duy nhất) — tránh nhàm chán do lặp lại cùng 1 kiểu thử thách,
 đúng nguyên tắc pacing đa dạng thay vì chỉ tăng số lượng zombie mỗi map.
+Zombie đặc biệt/boss/ẩn giữ nguyên tuyệt đối qua v1→v3 (xem
+`map05_dimensions.md` cho nguyên tắc đầy đủ, áp dụng xuyên suốt Campaign
+2-4).

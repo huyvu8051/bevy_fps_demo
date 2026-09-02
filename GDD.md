@@ -1025,11 +1025,18 @@ throwable: pipe bomb/molotov/bile bomb).
   phục (2-3 variant/archetype) + tuỳ chọn lệch nhẹ máu/tốc độ, không phải
   8 loại địch nói trên tăng thêm — mục đích thuần thị giác, để mỗi map
   không lặp lại đúng 1 hình ảnh zombie xuyên suốt 20 map.
-- **Vũ khí:** **~12 khẩu**, đủ nhóm vai trò như L4D (pistol khởi đầu x2,
-  shotgun x2, rifle x3-4 — AK47 hiện có là 1 trong số này, sniper x2, SMG
-  x2, melee) + **throwable** (pipe bomb thu hút zombie, molotov đốt diện
-  rộng) — **cộng thêm** attachment system (đã chốt ở mục 5) gắn lên từng
-  khẩu, tạo variety nhân lên gấp bội so với chỉ 12 khẩu cố định của L4D.
+- **Vũ khí:** nâng lên **~41 vũ khí** (quyết định 2026-09-01, chi tiết ở
+  `docs/WEAPON_ARSENAL.md`) — 36 súng + 4 throwable + 1 vũ khí thực
+  nghiệm gắn cốt truyện, hơn hẳn ~16 súng của L4D1+2 gộp lại. Phân theo
+  **13 handling class** (súng ngắn/SMG/shotgun/AR/DMR/sniper/LMG/nỏ/
+  phóng lựu/phun lửa/cận chiến nhẹ/cận chiến nặng/cưa máy) — animation
+  player chỉ cần gen **theo class** (Fire/Reload/ADS), không phải theo
+  từng khẩu, nên số súng tăng gấp 3+ mà chi phí animation gần như không
+  đổi, đúng đòn bẩy đã dùng cho archetype zombie ở mục trên. AK47 hiện có
+  là 1 khẩu trong nhóm AR. **Cộng thêm** attachment system (đã chốt ở
+  mục 5) áp **theo class** (không phải theo từng khẩu) gắn lên từng
+  khẩu, tạo variety nhân lên gấp bội nữa. Giai đoạn 1 (mục 16) vẫn chỉ
+  cần AK47 + 1-2 khẩu khác — 41 khẩu là target Giai đoạn 3.
 
 ⚠️ **Ghi chú thực tế bắt buộc phải nêu:** scope này **lớn hơn nhiều** so
 với timeline 3 tháng solo dev đã chốt ở mục 1 — 20 map + 8 loại địch (mỗi

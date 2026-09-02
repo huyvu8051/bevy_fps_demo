@@ -4,6 +4,9 @@ Campaign 3 "Vùng công nghiệp", Map 15/20 (Map 5/5, **kết thúc campaign**)
 Xem GDD.md mục 14.5. Cùng legend với Map 5/10 (Boss `👹`, Tank-style tái
 xuất lần 3).
 
+⚠️ **v3 — diện tích x4 + zombie thường x12:** xem `map15_dimensions.md`.
+**Boss KHÔNG x12** — giữ nguyên 1 con.
+
 ---
 
 ## Khu A — Dọc hàng rào ngoài [Build-up]
@@ -27,7 +30,7 @@ xuất lần 3).
                                  ═══ Tới khu safe room trước boss
 ```
 
-- **Mật độ:** 1 zombie — Build-up.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1) — Build-up.
 - **Ghi chú lore:** xác lính BRDF chết vì đạn (không phải bị cắn) là chi
   tiết quan trọng — gieo ý tưởng "ngay cả BRDF cũng không đồng lòng" cho
   Campaign 4.
@@ -78,7 +81,8 @@ xuất lần 3).
 └───────────────────────────────┬────────────────────────────┘
 ```
 
-- **Mật độ:** 0 zombie thường + **1 Boss** (encounter #3).
+- **Mật độ:** 0 zombie thường + **1 Boss** (KHÔNG x12, giữ nguyên —
+  encounter #3).
 
 ---
 
@@ -107,29 +111,30 @@ xuất lần 3).
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map15_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Zombie | Boss | Ammo | Med kit | Audio log |
+| Khu vực | Tag pacing | Zombie (v1→v3) | Boss (không x12) | Ammo | Med kit | Audio log |
 |---|---|---|---|---|---|---|
-| A. Hàng rào ngoài | Build-up | 1 | 0 | 0 | 0 | — |
-| B. Khu hậu cần | Build-up | 0 | 0 | 1 | 1 | L15 |
-| C. Sân lô cốt (Boss) | **Sustain Peak** | 0 | **1** | 0 | 0 | — |
-| **Tổng** | | **1** | **1 boss** | **1** | **1** | **1** |
+| A. Hàng rào ngoài | Build-up | 1 → **12** | 0 | 0 | 0 | — |
+| B. Khu hậu cần | Build-up | 0 → 0 | 0 | 1 | 1 | L15 |
+| C. Sân lô cốt (Boss) | **Sustain Peak** | 0 → 0 | **1** | 0 | 0 | — |
+| **Tổng** | | **1 → 12** | **1 boss** | **1** | **1** | **1** |
 
 ---
 
-## So sánh tổng thể Campaign 3 (Map 11-15)
+## So sánh tổng thể Campaign 3 (Map 11-15, v1 → v3 sau x4 diện tích + x12 zombie thường)
 
-| Map | Zombie thường | Đặc biệt | Boss | Ammo | Med kit |
+| Map | Zombie thường (v1→v3) | Đặc biệt (không x12) | Boss (không x12) | Ammo | Med kit |
 |---|---|---|---|---|---|
-| 11. Ironloom Textile Mill | 6 | 0 | 0 | 1 | 1 |
-| 12. Blackridge Freight Yard | 7 | 0 | 0 | 1 | 1 |
-| 13. Cold Storage 7 | 4 | 1 (Witch) | 0 | 0 | 1 |
-| 14. Refinery Loop | 5 | 0 | 0 | 1 | 1 |
-| 15. Perimeter Fence Alpha | 1 | 0 | 1 (Tank) | 1 | 1 |
-| **Tổng Campaign 3** | **23** | **1** | **1** | **4** | **5** |
+| 11. Ironloom Textile Mill | 6 → **72** | 0 | 0 | 1 | 1 |
+| 12. Blackridge Freight Yard | 7 → **84** | 0 | 0 | 1 | 1 |
+| 13. Cold Storage 7 | 4 → **48** | 1 (Witch) | 0 | 0 | 1 |
+| 14. Refinery Loop | 5 → **60** | 0 | 0 | 1 | 1 |
+| 15. Perimeter Fence Alpha | 1 → **12** | 0 | 1 (Tank) | 1 | 1 |
+| **Tổng Campaign 3** | **23 → 276** | **1** | **1** | **4** | **5** |
 
-Tổng zombie thường tương đương Campaign 2 (23 vs 22) nhưng phân bố đều
-hơn (không có map nào cực đông như Map 1/2 của Campaign 1) — đúng chiến
-lược "campaign giữa game" giữ nhịp độ ổn định, dồn kịch tính cho Campaign
-4 (cao trào cuối cùng).
+Tổng zombie thường tương đương Campaign 2 sau scale (276 vs 264) nhưng
+phân bố đều hơn (không có map nào cực đông như Map 1/2 của Campaign 1)
+— đúng chiến lược "campaign giữa game" giữ nhịp độ ổn định, dồn kịch
+tính cho Campaign 4 (cao trào cuối cùng). Đặc biệt/boss giữ nguyên
+tuyệt đối qua v1→v3.

@@ -4,6 +4,10 @@ Campaign 4 "Cổng thành", Map 17/20 (Map 2/5 của campaign). Xem GDD.md
 mục 14.6. Cùng legend với Map 16. **Cấu trúc không gian giống Map 1 có
 chủ đích** — tạo cảm giác "quay vòng" sau hành trình dài quanh thành phố.
 
+⚠️ **v3 — diện tích x4 + zombie thường x12:** xem `map17_dimensions.md`
+(tái dùng footprint 48x32 của Map 1, đúng chủ đích "giống Map 1"). **Lính
+BRDF KHÔNG x12** — giữ nguyên.
+
 ---
 
 ## Khu A — Sảnh hành chính [Build-up]
@@ -22,7 +26,8 @@ chủ đích** — tạo cảm giác "quay vòng" sau hành trình dài quanh th
                                 ↑ Lên khu văn phòng chỉ huy
 ```
 
-- **Mật độ:** 1 lính BRDF — Build-up.
+- **Mật độ:** 1 lính BRDF (không x12, giữ nguyên) — Build-up. Không
+  zombie thường ở khu này (0x12=0).
 
 ---
 
@@ -44,8 +49,9 @@ chủ đích** — tạo cảm giác "quay vòng" sau hành trình dài quanh th
                                  ═══ Phòng lưu trữ
 ```
 
-- **Mật độ:** 2 zombie + **3 lính BRDF** — mật độ lính tăng so với Map
-  16, đúng ghi chú GDD "bảo vệ khu vực nhạy cảm hơn".
+- **Mật độ (v3, x12 zombie):** 24 zombie (v1: 2) + **3 lính BRDF**
+  (KHÔNG x12, giữ nguyên) — mật độ lính tăng so với Map 16, đúng ghi
+  chú GDD "bảo vệ khu vực nhạy cảm hơn".
 
 ---
 
@@ -79,7 +85,8 @@ chủ đích** — tạo cảm giác "quay vòng" sau hành trình dài quanh th
                                  ═══
 ```
 
-- **Mật độ:** 1 lính BRDF, Peak Fade.
+- **Mật độ:** 1 lính BRDF (không x12, giữ nguyên), Peak Fade. Không
+  zombie thường ở khu này.
 - **Item:** `L17` — **tài liệu then chốt nhất toàn game** (xem GDD 14.6
   cho nội dung đầy đủ báo cáo #BR-001).
 
@@ -106,12 +113,12 @@ chủ đích** — tạo cảm giác "quay vòng" sau hành trình dài quanh th
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map17_dimensions.md` cho chi tiết)
 
-| Khu vực | Tag pacing | Zombie | Lính BRDF | Ammo | Med kit | Tài liệu |
+| Khu vực | Tag pacing | Zombie (v1→v3) | Lính BRDF (không x12) | Ammo | Med kit | Tài liệu |
 |---|---|---|---|---|---|---|
-| A. Sảnh | Build-up | 0 | 1 | 0 | 0 | — |
-| B. VP chỉ huy | **Sustain Peak** | 2 | **3** | 0 | 0 | — |
-| C. Phòng lưu trữ | Peak Fade | 0 | 1 | 0 | 0 | L17 |
-| D. Phòng nghỉ | Relax | 0 | 0 | 1 | 1 | — |
-| **Tổng** | | **2** | **5** | **1** | **1** | **1** |
+| A. Sảnh | Build-up | 0 → 0 | 1 | 0 | 0 | — |
+| B. VP chỉ huy | **Sustain Peak** | 2 → **24** | **3** | 0 | 0 | — |
+| C. Phòng lưu trữ | Peak Fade | 0 → 0 | 1 | 0 | 0 | L17 |
+| D. Phòng nghỉ | Relax | 0 → 0 | 0 | 1 | 1 | — |
+| **Tổng** | | **2 → 24** | **5** | **1** | **1** | **1** |

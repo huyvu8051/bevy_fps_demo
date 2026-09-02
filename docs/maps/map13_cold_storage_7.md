@@ -11,6 +11,9 @@ GDD.md mục 14.5. Cùng legend với Map 1, thêm:
 Fade→Relax như thông thường — thay vào đó, "Relax" chính là **khoảnh
 khắc căng thẳng tĩnh** khi đi ngang Witch (xem GDD 14.5).
 
+⚠️ **v3 — diện tích x4 + zombie thường x12:** xem `map13_dimensions.md`.
+**Witch-style KHÔNG x12** — giữ nguyên 1 con.
+
 ---
 
 ## Khu A — Khu nhận hàng [Build-up]
@@ -30,7 +33,7 @@ khắc căng thẳng tĩnh** khi đi ngang Witch (xem GDD 14.5).
                                  ═══ Vào hành lang chính
 ```
 
-- **Mật độ:** 1 zombie — Build-up.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1) — Build-up.
 
 ---
 
@@ -53,8 +56,8 @@ khắc căng thẳng tĩnh** khi đi ngang Witch (xem GDD 14.5).
                                  ═══ Tới phòng lạnh sâu nhất
 ```
 
-- **Mật độ:** 3 zombie thường — Sustain Peak thông thường (chưa gặp
-  Witch ở đây).
+- **Mật độ (v3, x12):** 36 zombie thường (v1: 3) — Sustain Peak thông
+  thường (chưa gặp Witch ở đây).
 - **Ghi chú:** mật độ zombie thường ở khu này **THẤP hơn** các map khác
   cùng vai trò Sustain Peak — vì đỉnh điểm căng thẳng thật của map nằm ở
   Khu C (Witch), không phải ở đây.
@@ -94,7 +97,8 @@ khắc căng thẳng tĩnh** khi đi ngang Witch (xem GDD 14.5).
                                  ═══
 ```
 
-- **Mật độ:** 0 zombie thường + **1 Witch** — đây là điểm nhấn chính của
+- **Mật độ:** 0 zombie thường + **1 Witch** (KHÔNG x12, giữ nguyên) —
+  đây là điểm nhấn chính của
   toàn map, KHÔNG cạnh tranh sự chú ý với zombie thường khác.
 - **Item:** `L13`, 1 med kit (thưởng cho lựa chọn đối đầu).
 - **Lựa chọn người chơi:** đi vòng an toàn (không phần thưởng) hoặc liều
@@ -123,16 +127,16 @@ khắc căng thẳng tĩnh** khi đi ngang Witch (xem GDD 14.5).
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map13_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Zombie thường | Witch | Ammo | Med kit | Audio log |
+| Khu vực | Tag pacing | Zombie thường (v1→v3) | Witch (không x12) | Ammo | Med kit | Audio log |
 |---|---|---|---|---|---|---|
-| A. Nhận hàng | Build-up | 1 | 0 | 0 | 0 | — |
-| B. Hành lang chính | Sustain Peak (nhẹ) | 3 | 0 | 0 | 0 | — |
-| C. Phòng lạnh sâu | **Đặc biệt (căng thẳng tĩnh)** | 0 | **1** | 0 | 1 | L13 |
-| D. Sau phòng lạnh | Peak Fade/Relax | 0 | 0 | 0 | 0 | — |
-| **Tổng** | | **4** | **1** | **0** | **1** | **1** |
+| A. Nhận hàng | Build-up | 1 → **12** | 0 | 0 | 0 | — |
+| B. Hành lang chính | Sustain Peak (nhẹ) | 3 → **36** | 0 | 0 | 0 | — |
+| C. Phòng lạnh sâu | **Đặc biệt (căng thẳng tĩnh)** | 0 → 0 | **1** | 0 | 1 | L13 |
+| D. Sau phòng lạnh | Peak Fade/Relax | 0 → 0 | 0 | 0 | 0 | — |
+| **Tổng** | | **4 → 48** | **1** | **0** | **1** | **1** |
 
-Map có mật độ zombie thường thấp nhất Campaign 3 tính tới giờ (4) — đúng
-chủ đích GDD "mật độ zombie thường THẤP nhất map này (Witch là mối đe dọa
-chính, không cần đông zombie thường cạnh tranh sự chú ý)".
+Map có mật độ zombie thường thấp nhất Campaign 3 tính tới giờ (4→48) —
+đúng chủ đích GDD "mật độ zombie thường THẤP nhất map này (Witch là mối
+đe dọa chính, không cần đông zombie thường cạnh tranh sự chú ý)".

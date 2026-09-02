@@ -3,6 +3,9 @@
 Campaign 3 "Vùng công nghiệp", Map 11/20 (Map 1/5 của campaign). Xem
 GDD.md mục 14.5. Cùng legend với Map 1.
 
+⚠️ **v3 — diện tích x4 + zombie x12 + spawn theo nhịp:** xem
+`map11_dimensions.md` (map này không có địch đặc biệt/boss).
+
 ---
 
 ## Khu A — Khu văn phòng nhà máy [Build-up]
@@ -23,7 +26,7 @@ GDD.md mục 14.5. Cùng legend với Map 1.
                                  ═══ Vào khu dây chuyền
 ```
 
-- **Mật độ:** 1 zombie — Build-up.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1) — Build-up.
 
 ---
 
@@ -50,7 +53,8 @@ GDD.md mục 14.5. Cùng legend với Map 1.
                                  ═══
 ```
 
-- **Mật độ:** 4 zombie, dồn trong không gian máy móc — Sustain Peak.
+- **Mật độ (v3, x12):** 48 zombie (v1: 4), dồn trong không gian máy móc
+  — Sustain Peak.
 - **Ghi chú:** khu vực có dấu hiệu người sống sót mới trú ẩn KHÔNG dẫn
   tới gặp gỡ trực tiếp (giữ đúng nguyên tắc không thêm NPC chiến đấu) —
   chỉ là 1 chi tiết deco tạo cảm giác thế giới sống.
@@ -79,7 +83,7 @@ GDD.md mục 14.5. Cùng legend với Map 1.
                                  ═══
 ```
 
-- **Mật độ:** 1 zombie, Peak Fade.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1), Peak Fade.
 - **Item:** `L11`, 1 ammo (tủ đồ bảo hộ), 1 med kit (phòng y tế).
 
 ---
@@ -103,12 +107,12 @@ GDD.md mục 14.5. Cùng legend với Map 1.
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map11_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Zombie | Ammo | Med kit | Audio log |
+| Khu vực | Tag pacing | Zombie (v1→v3) | Ammo | Med kit | Audio log |
 |---|---|---|---|---|---|
-| A. Văn phòng | Build-up | 1 | 0 | 0 | — |
-| B. Dây chuyền | **Sustain Peak** | 4 | 0 | 0 | — |
-| C. Kho vải | Peak Fade | 1 | 1 | 1 | L11 |
-| D. Bãi bốc dỡ | Relax | 0 | 0 | 0 | — |
-| **Tổng** | | **6** | **1** | **1** | **1** |
+| A. Văn phòng | Build-up | 1 → **12** | 0 | 0 | — |
+| B. Dây chuyền | **Sustain Peak** | 4 → **48** | 0 | 0 | — |
+| C. Kho vải | Peak Fade | 1 → **12** | 1 | 1 | L11 |
+| D. Bãi bốc dỡ | Relax | 0 → 0 | 0 | 0 | — |
+| **Tổng** | | **6 → 72** | **1** | **1** | **1** |

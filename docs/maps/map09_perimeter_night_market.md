@@ -12,6 +12,9 @@ chạng vạng) — tương phản có chủ đích. Không gian đông đúc/ch
 các quầy hàng là địa hình lý tưởng để Jockey nguy hiểm thật sự (bị tách
 khỏi nhóm giữa mê cung quầy hàng, không thấy đồng đội ngay).
 
+⚠️ **v3 — diện tích x4 + zombie thường x12 + spawn theo nhịp:** xem
+`map09_dimensions.md`. **Jockey-style KHÔNG x12** — giữ nguyên 1 con.
+
 ---
 
 ## Khu A — Lối vào chợ [Build-up — đèn còn sáng 1 phần]
@@ -29,7 +32,8 @@ khỏi nhóm giữa mê cung quầy hàng, không thấy đồng đội ngay).
                                  ═══ Vào giữa chợ
 ```
 
-- **Mật độ:** 1 zombie — Build-up, vẫn còn 1 phần ánh sáng.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1) — Build-up, vẫn còn 1 phần
+  ánh sáng.
 
 ---
 
@@ -56,8 +60,9 @@ khỏi nhóm giữa mê cung quầy hàng, không thấy đồng đội ngay).
                                  ═══
 ```
 
-- **Mật độ:** 4 zombie thường + **1 Jockey** — mật độ cao nhất Campaign 2
-  tính tới giờ, đúng "đêm + chật hẹp = nguy hiểm nhất".
+- **Mật độ (v3, x12 zombie thường):** 48 zombie thường (v1: 4) + **1
+  Jockey** (KHÔNG x12, giữ nguyên) — mật độ cao nhất Campaign 2 tính
+  tới giờ, đúng "đêm + chật hẹp = nguy hiểm nhất".
 - **Item:** `L9`.
 - **Ghi chú thiết kế:** bố cục quầy hàng **cố ý không đối xứng, nhiều lối
   rẽ** — khác các map trước có đường đi rõ ràng, ở đây sự hỗn loạn không
@@ -79,7 +84,7 @@ khỏi nhóm giữa mê cung quầy hàng, không thấy đồng đội ngay).
                                  ═══
 ```
 
-- **Mật độ:** 1 zombie, Peak Fade.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1), Peak Fade.
 - **Ghi chú lore:** chi tiết nhỏ này là 1 trong các gợi ý sớm nhất về bản
   chất thật của BRDF (trước khi twist rõ ràng hơn ở Campaign 3-4).
 
@@ -107,16 +112,16 @@ khỏi nhóm giữa mê cung quầy hàng, không thấy đồng đội ngay).
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map09_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Zombie thường | Jockey | Ammo | Med kit | Audio log |
+| Khu vực | Tag pacing | Zombie thường (v1→v3) | Jockey (không x12) | Ammo | Med kit | Audio log |
 |---|---|---|---|---|---|---|
-| A. Lối vào | Build-up | 1 | 0 | 0 | 0 | — |
-| B. Giữa chợ | **Sustain Peak** | 4 | **1** | 0 | 0 | L9 |
-| C. Khu đụng độ | Peak Fade | 1 | 0 | 0 | 0 | — |
-| D. Bãi đậu xe tải | Relax | 0 | 0 | 1 | 1 | — |
-| **Tổng** | | **6** | **1** | **1** | **1** | **1** |
+| A. Lối vào | Build-up | 1 → **12** | 0 | 0 | 0 | — |
+| B. Giữa chợ | **Sustain Peak** | 4 → **48** | **1** | 0 | 0 | L9 |
+| C. Khu đụng độ | Peak Fade | 1 → **12** | 0 | 0 | 0 | — |
+| D. Bãi đậu xe tải | Relax | 0 → 0 | 0 | 1 | 1 | — |
+| **Tổng** | | **6 → 72** | **1** | **1** | **1** | **1** |
 
-Mật độ zombie thường cao nhất Campaign 2 (6, so với 3/5/5 ở Map 6-8) —
-đúng chốt GDD "mật độ cao nhất Campaign 2" nhờ kết hợp yếu tố đêm + không
-gian chật hẹp.
+Mật độ zombie thường cao nhất Campaign 2 (6→72, so với 36/60/60 ở Map
+6-8) — đúng chốt GDD "mật độ cao nhất Campaign 2" nhờ kết hợp yếu tố đêm
++ không gian chật hẹp.

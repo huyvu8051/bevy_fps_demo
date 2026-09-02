@@ -13,6 +13,11 @@ tuyến tính tốc độ cao**, KHÔNG có Build-up truyền thống — bắt 
 trong trạng thái khẩn cấp, tiếp nối trực tiếp từ Map 19 (không có
 Safe Room/Extract giữa 2 map, xem map19).
 
+⚠️ **v3 — diện tích x4 + zombie thường x12:** xem `map20_dimensions.md`
+— gồm cả quyết định đã chốt về timer đếm ngược (giữ nguyên số phút,
+buff tốc độ player thay vì đổi số). **Boss cuối KHÔNG x12** — giữ
+nguyên 1 con.
+
 ---
 
 ## Đoạn 1 — Hành lang sập dần [Bắt đầu NGAY trong Sustain Peak]
@@ -36,7 +41,8 @@ Safe Room/Extract giữa 2 map, xem map19).
                                  ═══ Qua khu phòng thí nghiệm cháy
 ```
 
-- **Mật độ:** 2 zombie — tối thiểu, tốc độ chạy trốn là trọng tâm.
+- **Mật độ (v3, x12):** 24 zombie (v1: 2) — tối thiểu tương đối, tốc độ
+  chạy trốn vẫn là trọng tâm.
 
 ---
 
@@ -57,7 +63,7 @@ Safe Room/Extract giữa 2 map, xem map19).
                                  ═══ Tới hành lang chính dẫn ra ngoài
 ```
 
-- **Mật độ:** 1 zombie.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1).
 
 ---
 
@@ -83,8 +89,8 @@ Safe Room/Extract giữa 2 map, xem map19).
                                  ═══ Sau khi hạ boss
 ```
 
-- **Mật độ:** 0 zombie + **1 Boss cuối** (biến thể mạnh nhất trong 4 lần
-  xuất hiện Tank-style xuyên suốt game).
+- **Mật độ:** 0 zombie + **1 Boss cuối** (KHÔNG x12, giữ nguyên — biến
+  thể mạnh nhất trong 4 lần xuất hiện Tank-style xuyên suốt game).
 - **Ghi chú thiết kế quan trọng:** không gian hẹp hơn hẳn 3 arena boss
   trước (Map 5/10/15 đều có 4 vật cản đối xứng, rộng rãi) — đây là **thử
   thách khó nhất về mặt cơ chế** (ít chỗ né) kết hợp với **áp lực thời
@@ -137,40 +143,40 @@ Safe Room/Extract giữa 2 map, xem map19).
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map20_dimensions.md` cho chi tiết)
 
-| Đoạn | Tag pacing | Zombie | Boss | Ghi chú |
+| Đoạn | Tag pacing | Zombie (v1→v3) | Boss (không x12) | Ghi chú |
 |---|---|---|---|---|
-| 1. Hành lang sập | Sustain Peak (tẩu thoát) | 2 | 0 | Chướng ngại vật lý, không combat nặng |
-| 2. Phòng TN cháy | Sustain Peak | 1 | 0 | — |
-| 3. Boss cuối | **ĐỈNH ĐIỂM** | 0 | **1 (mạnh nhất)** | Không gian hẹp, áp lực thời gian |
-| 4. Cửa thoát | Peak Fade cực ngắn | 0 | 0 | L20 (monologue text) |
-| **Tổng** | | **3** | **1 boss cuối** | Không pickup mới toàn map |
+| 1. Hành lang sập | Sustain Peak (tẩu thoát) | 2 → **24** | 0 | Chướng ngại vật lý, không combat nặng |
+| 2. Phòng TN cháy | Sustain Peak | 1 → **12** | 0 | — |
+| 3. Boss cuối | **ĐỈNH ĐIỂM** | 0 → 0 | **1 (mạnh nhất)** | Không gian hẹp, áp lực thời gian |
+| 4. Cửa thoát | Peak Fade cực ngắn | 0 → 0 | 0 | L20 (monologue text) |
+| **Tổng** | | **3 → 36** | **1 boss cuối** | Không pickup mới toàn map |
 
 ---
 
-## So sánh tổng thể Campaign 4 (Map 16-20)
+## So sánh tổng thể Campaign 4 (Map 16-20, v1 → v3 sau x4 diện tích + x12 zombie thường)
 
-| Map | Zombie | Lính BRDF | Chỉ huy | Boss |
+| Map | Zombie (v1→v3) | Lính BRDF (không x12) | Chỉ huy (không x12) | Boss (không x12) |
 |---|---|---|---|---|
-| 16. Main Gatehouse | 5 | 2 | 0 | 0 |
-| 17. Sector 3 Admin Block | 2 | 5 | 0 | 0 |
-| 18. Subterranean Lab Alpha | 8 (+3 biến thể) | 0 | 0 | 0 |
-| 19. Command Bunker | 2 | 5 | 1 (thoát) | 0 |
-| 20. Final Breach | 3 | 0 | 0 | 1 (mạnh nhất) |
-| **Tổng Campaign 4** | **20 (+3 biến thể)** | **12** | **1** | **1** |
+| 16. Main Gatehouse | 5 → **60** | 2 | 0 | 0 |
+| 17. Sector 3 Admin Block | 2 → **24** | 5 | 0 | 0 |
+| 18. Subterranean Lab Alpha | 8→**96** (+3→**36** biến thể) | 0 | 0 | 0 |
+| 19. Command Bunker | 2 → **24** | 5 | 1 (thoát) | 0 |
+| 20. Final Breach | 3 → **36** | 0 | 0 | 1 (mạnh nhất) |
+| **Tổng Campaign 4** | **20→240** (+3→**36** biến thể) | **12** | **1** | **1** |
 
 ---
 
-## So sánh CUỐI CÙNG toàn bộ 4 Campaign (Map 1-20)
+## So sánh CUỐI CÙNG toàn bộ 4 Campaign (Map 1-20, v1 → v3 sau x4 diện tích + x12 zombie thường)
 
-| Campaign | Zombie thường | Đặc biệt | Lính/Chỉ huy BRDF | Boss |
+| Campaign | Zombie thường (v1→v3) | Đặc biệt (không x12) | Lính/Chỉ huy BRDF (không x12) | Boss (không x12) |
 |---|---|---|---|---|
-| 1. Ground Zero | 50 | 2 (Boomer) | 0 | 1 |
-| 2. Vành đai | 22 | 4 (Hunter/Smoker/Spitter/Jockey) | 0 | 1 |
-| 3. Vùng công nghiệp | 23 | 1 (Witch) | 0 | 1 |
-| 4. Cổng thành | 23 | 0 | 13 | 1 (mạnh nhất) |
-| **TỔNG TOÀN GAME** | **118** | **7** | **13** | **4 lần Tank + 1 chỉ huy** |
+| 1. Ground Zero | 47 → **564** | 5 (Boomer 2, ẩn 3) | 0 | 1 |
+| 2. Vành đai | 22 → **264** | 4 (Hunter/Smoker/Spitter/Jockey) | 0 | 1 |
+| 3. Vùng công nghiệp | 23 → **276** | 1 (Witch) | 0 | 1 |
+| 4. Cổng thành | 20 → **240** (+36 biến thể lab) | 0 | 13 | 1 (mạnh nhất) |
+| **TỔNG TOÀN GAME** | **112 → 1344** (+36 biến thể lab) | **10** | **13** | **4 lần Tank + 1 chỉ huy + 1 boss cuối** |
 
 **Đường cong thiết kế tổng thể:** Campaign 1 mở màn bằng SỐ LƯỢNG (đô thị
 đông đúc, người chơi làm quen combat cơ bản) → Campaign 2 chuyển sang ĐA
@@ -180,3 +186,9 @@ BẢN CHẤT ĐỊCH (con người thay vì chỉ zombie) kết hợp ÁP LỰC 
 (escape sequence) làm cao trào kết thúc — đúng nguyên tắc "mỗi campaign 1
 bản sắc riêng, không lặp lại công thức", nhất quán xuyên suốt toàn bộ
 20 map đã thiết kế.
+
+**v3 (diện tích x4 + zombie thường x12) giữ nguyên đường cong này** —
+mọi tỉ lệ giữa campaign/map không đổi, chỉ số tuyệt đối tăng đồng đều.
+Toàn bộ địch đặc biệt/boss/lính/chỉ huy BRDF **giữ nguyên số lượng gốc
+tuyệt đối** xuyên suốt cả 20 map — chi tiết đầy đủ ở từng
+`mapNN_dimensions.md`.

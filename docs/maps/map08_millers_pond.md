@@ -10,6 +10,9 @@ Campaign 2 "Vành đai", Map 8/20 (Map 3/5 của campaign). Xem GDD.md mục
 Không gian **ngoài trời mở nhất Campaign 2** — thiết kế chủ đích để giới
 thiệu Spitter (cần đủ chỗ né vùng nguy hiểm, không hợp không gian hẹp).
 
+⚠️ **v3 — diện tích x4 + zombie thường x12 + spawn theo nhịp:** xem
+`map08_dimensions.md`. **Spitter-style KHÔNG x12** — giữ nguyên 1 con.
+
 ---
 
 ## Khu A — Đường chạy bộ vào công viên [Build-up]
@@ -27,7 +30,7 @@ thiệu Spitter (cần đủ chỗ né vùng nguy hiểm, không hợp không gi
                                  ═══
 ```
 
-- **Mật độ:** 1 zombie — Build-up.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1) — Build-up.
 
 ---
 
@@ -52,7 +55,8 @@ thiệu Spitter (cần đủ chỗ né vùng nguy hiểm, không hợp không gi
                                  ═══
 ```
 
-- **Mật độ:** 2 zombie thường + **1 Spitter** (đứng xa, không cận chiến).
+- **Mật độ (v3, x12 zombie thường):** 24 zombie thường (v1: 2) + **1
+  Spitter** (KHÔNG x12, giữ nguyên — đứng xa, không cận chiến).
 - **Ghi chú thiết kế:** khác Hunter (cần nhảy từ trên cao) và Smoker (cần
   hành lang hẹp), Spitter cần **không gian mở đủ rộng để người chơi có
   chỗ né** — đây là lý do map này được chọn giới thiệu nó, đúng nguyên
@@ -75,7 +79,7 @@ thiệu Spitter (cần đủ chỗ né vùng nguy hiểm, không hợp không gi
                                  ═══
 ```
 
-- **Mật độ:** 1 zombie.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1).
 - **Ghi chú lore:** khu vực này KHÔNG bắt buộc đi qua (đường vòng tùy
   chọn) — chứa manh mối giả thuyết "dịch lây qua nguồn nước" (GDD 14.4,
   không xác nhận là sự thật chính thức, chỉ là 1 giả thuyết trong lore).
@@ -101,7 +105,7 @@ thiệu Spitter (cần đủ chỗ né vùng nguy hiểm, không hợp không gi
                                  ═══
 ```
 
-- **Mật độ:** 1 zombie, Peak Fade.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1), Peak Fade.
 - **Item:** `L8`, 1 ammo + 1 med kit (gazebo).
 
 ---
@@ -124,13 +128,13 @@ thiệu Spitter (cần đủ chỗ né vùng nguy hiểm, không hợp không gi
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map08_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Zombie thường | Spitter | Ammo | Med kit | Audio log |
+| Khu vực | Tag pacing | Zombie thường (v1→v3) | Spitter (không x12) | Ammo | Med kit | Audio log |
 |---|---|---|---|---|---|---|
-| A. Đường vào | Build-up | 1 | 0 | 0 | 0 | — |
-| B. Khu mở cạnh hồ | **Sustain Peak** | 2 | **1** | 0 | 0 | — |
-| C. Trạm xử lý nước (tùy chọn) | Sustain Peak | 1 | 0 | 0 | 0 | — |
-| D. Phía xa hồ | Peak Fade | 1 | 0 | 1 | 1 | L8 |
-| E. Bãi đỗ xe | Relax | 0 | 0 | 0 | 0 | — |
-| **Tổng** | | **5** | **1** | **1** | **1** | **1** |
+| A. Đường vào | Build-up | 1 → **12** | 0 | 0 | 0 | — |
+| B. Khu mở cạnh hồ | **Sustain Peak** | 2 → **24** | **1** | 0 | 0 | — |
+| C. Trạm xử lý nước (tùy chọn) | Sustain Peak | 1 → **12** | 0 | 0 | 0 | — |
+| D. Phía xa hồ | Peak Fade | 1 → **12** | 0 | 1 | 1 | L8 |
+| E. Bãi đỗ xe | Relax | 0 → 0 | 0 | 0 | 0 | — |
+| **Tổng** | | **5 → 60** | **1** | **1** | **1** | **1** |

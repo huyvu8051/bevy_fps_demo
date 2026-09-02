@@ -6,6 +6,12 @@ Map 1 (`docs/maps/map01_highrise.md`).
 Map này chia theo **khu vực** thay vì tầng (chủ yếu 1 mặt bằng, trừ khu
 bãi đỗ xe cuối map) — không gian mở hơn hẳn Map 1.
 
+⚠️ **v3 — diện tích x4 + zombie x12 + spawn theo nhịp:** xem
+`map02_dimensions.md` cho footprint mét cụ thể + bảng nhịp spawn từng
+khu. Số "Mật độ" dưới đây đã cập nhật theo v3 — số trong ASCII mockup
+(nhãn `Z`/`Zx2`...) vẫn giữ nguyên hình minh hoạ bố cục, không phản ánh
+đúng số lượng thật sau x12.
+
 ---
 
 ## Khu A — Lối vào quảng trường [Build-up]
@@ -26,8 +32,8 @@ bãi đỗ xe cuối map) — không gian mở hơn hẳn Map 1.
                                  ═══
 ```
 
-- **Mật độ:** 1 zombie — đúng Build-up, cho người chơi quan sát không
-  gian mở trước khi vào quảng trường.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1) — đúng Build-up, cho người
+  chơi quan sát không gian mở trước khi vào quảng trường.
 - **Item:** 1 ammo (cửa hàng tiện lợi).
 
 ---
@@ -65,9 +71,10 @@ bãi đỗ xe cuối map) — không gian mở hơn hẳn Map 1.
                                  ═══
 ```
 
-- **Mật độ:** ~13 zombie (cao nhất Campaign 1 tính tới thời điểm này) —
-  spawn đồng loạt từ nhiều hướng khi chạm `X`, đúng thiết kế "phục kích
-  vị trí" trong GDD 14.3 (khác Map 1 F3 vốn dùng trigger hành động rõ
+- **Mật độ (v3, x12):** 156 zombie (v1: ~13, cao nhất Campaign 1 tính
+  tới thời điểm này) — 2 đợt 78+78 (xem `map02_dimensions.md`), spawn
+  đồng loạt từ nhiều hướng khi chạm `X`, đúng thiết kế "phục kích vị
+  trí" trong GDD 14.3 (khác Map 1 F3 vốn dùng trigger hành động rõ
   ràng — ở đây trigger là 1 vùng vô hình, không có dấu hiệu báo trước).
 - **Item:** `L2` (audio log #2, cửa hàng đồ điện tử).
 - **Ghi chú thiết kế:** quảng trường mở khiến người chơi dễ bị bao vây
@@ -97,7 +104,7 @@ bãi đỗ xe cuối map) — không gian mở hơn hẳn Map 1.
                                  ═══
 ```
 
-- **Mật độ:** 1 zombie lẻ, giảm mạnh — đúng Peak Fade.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1), giảm mạnh — đúng Peak Fade.
 - **Item:** `A2` — vũ khí thứ 2 (không phải ammo thường), điểm mốc gameplay
   quan trọng (đầu tiên người chơi có lựa chọn vũ khí trong toàn Campaign
   1). **Không có ammo/med kit thường ở khu này** — đúng ghi chú GDD "đạn
@@ -134,17 +141,17 @@ bãi đỗ xe cuối map) — không gian mở hơn hẳn Map 1.
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map02_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Số zombie | Ammo | Vũ khí | Audio log |
+| Khu vực | Tag pacing | Số zombie (v1→v3) | Ammo | Vũ khí | Audio log |
 |---|---|---|---|---|---|
-| A. Lối vào | Build-up | 1 | 1 | 0 | — |
-| B. Quảng trường | **Sustain Peak** | ~13 (đồng loạt) | 0 | 0 | L2 |
-| C. Rào chắn | Peak Fade | 1 | 0 | 1 (A2) | — |
-| D. Bãi đỗ xe | Relax | 0 | 0 | 0 | — |
-| **Tổng** | | **~15 zombie** | **1** | **1** | **1** |
+| A. Lối vào | Build-up | 1 → **12** | 1 | 0 | — |
+| B. Quảng trường | **Sustain Peak** | ~13 → **156** (2 đợt) | 0 | 0 | L2 |
+| C. Rào chắn | Peak Fade | 1 → **12** | 0 | 1 (A2) | — |
+| D. Bãi đỗ xe | Relax | 0 → 0 | 0 | 0 | — |
+| **Tổng** | | **~15 → 180 zombie** | **1** | **1** | **1** |
 
-So với Map 1 (~19 zombie, 3 ammo, 1 med kit): tổng zombie giảm nhẹ nhưng
-**dồn cực đậm vào 1 điểm** (quảng trường) thay vì rải đều — tạo cảm giác
-cường độ cao trào mạnh hơn dù tổng số ít hơn, đúng nguyên tắc "peak" thật
-sự gây ấn tượng thay vì chỉ đơn thuần tăng số lượng.
+So với Map 1 (~19→228 zombie, 3 ammo, 1 med kit): tổng zombie giảm nhẹ
+nhưng **dồn cực đậm vào 1 điểm** (quảng trường) thay vì rải đều — tạo
+cảm giác cường độ cao trào mạnh hơn dù tổng số ít hơn, đúng nguyên tắc
+"peak" thật sự gây ấn tượng thay vì chỉ đơn thuần tăng số lượng.

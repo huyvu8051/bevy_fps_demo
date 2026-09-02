@@ -4,6 +4,10 @@ Campaign 4 "Cổng thành", Map 18/20 (Map 3/5 của campaign). Xem GDD.md
 mục 14.6. Cùng legend với Map 16. **Tối tăm/ám ảnh nhất toàn game** —
 nơi rò rỉ dịch bệnh thật sự bắt đầu.
 
+⚠️ **v3 — diện tích x4 + zombie x12:** xem `map18_dimensions.md`. Cả
+zombie thường VÀ biến thể phòng thí nghiệm đều x12 (biến thể lab chỉ là
+model zombie thường đổi texture, không phải địch có AI riêng).
+
 ---
 
 ## Khu A — Khu tiếp nhận/thay đồ bảo hộ [Build-up]
@@ -23,7 +27,7 @@ nơi rò rỉ dịch bệnh thật sự bắt đầu.
                                  ═══ Vào khu phòng thí nghiệm
 ```
 
-- **Mật độ:** 1 zombie — Build-up.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1) — Build-up.
 
 ---
 
@@ -56,8 +60,9 @@ nơi rò rỉ dịch bệnh thật sự bắt đầu.
                                  ═══
 ```
 
-- **Mật độ:** ~9 zombie (6 thường + 3 biến thể phòng thí nghiệm) —
-  **cao nhất toàn game**, đúng lore "nơi rò rỉ bắt đầu".
+- **Mật độ (v3, x12):** 108 zombie (v1: ~9 = 6 thường + 3 biến thể,
+  x12 cả 2 loại → 72 thường + 36 biến thể) — **cao nhất toàn game**,
+  đúng lore "nơi rò rỉ bắt đầu".
 - **Ghi chú lore then chốt:** lồng "LAZARUS - Subject 0" là điểm khởi
   nguồn trực quan của toàn bộ cốt truyện — đặt giữa map, không thể bỏ
   qua.
@@ -80,7 +85,7 @@ nơi rò rỉ dịch bệnh thật sự bắt đầu.
                                  ═══
 ```
 
-- **Mật độ:** 1 zombie, Peak Fade.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1), Peak Fade.
 - **Item:** `L18` — log tác động cảm xúc mạnh nhất game (xem GDD 14.6).
 
 ---
@@ -109,17 +114,17 @@ nơi rò rỉ dịch bệnh thật sự bắt đầu.
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map18_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Zombie thường | Biến thể lab | Ammo | Med kit | Audio log |
+| Khu vực | Tag pacing | Zombie thường (v1→v3) | Biến thể lab (v1→v3) | Ammo | Med kit | Audio log |
 |---|---|---|---|---|---|---|
-| A. Thay đồ bảo hộ | Build-up | 1 | 0 | 0 | 0 | — |
-| B. Phòng thí nghiệm | **Sustain Peak** | 6 | **3** | 0 | 0 | — |
-| C. Hành lang thoát hiểm | Peak Fade | 1 | 0 | 0 | 0 | L18 |
-| D. Trạm an toàn sinh học | Relax | 0 | 0 | 1 | 1 | — |
-| **Tổng** | | **8** | **3** | **1** | **1** | **1** |
+| A. Thay đồ bảo hộ | Build-up | 1 → **12** | 0 | 0 | 0 | — |
+| B. Phòng thí nghiệm | **Sustain Peak** | 6 → **72** | 3 → **36** | 0 | 0 | — |
+| C. Hành lang thoát hiểm | Peak Fade | 1 → **12** | 0 | 0 | 0 | L18 |
+| D. Trạm an toàn sinh học | Relax | 0 → 0 | 0 | 1 | 1 | — |
+| **Tổng** | | **8 → 96** | **3 → 36** | **1** | **1** | **1** |
 
-**Tổng địch (11) là cao nhất toàn game tính tới thời điểm này**, đúng
-chốt GDD "mật độ cao nhất toàn game" — cân bằng bằng việc khan hiếm
-ammo/med kit nghiêm trọng để tạo áp lực sinh tồn thật sự đúng lúc cốt
-truyện nặng nề nhất.
+**Tổng địch (132) vẫn cao nhất toàn game** sau x12, đúng chốt GDD "mật
+độ cao nhất toàn game" — cân bằng bằng việc khan hiếm ammo/med kit
+nghiêm trọng (giữ nguyên số lượng, không x12) để tạo áp lực sinh tồn
+thật sự đúng lúc cốt truyện nặng nề nhất.

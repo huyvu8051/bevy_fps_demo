@@ -11,6 +11,10 @@ chính**). Xem GDD.md mục 14.6. Cùng legend với Map 1, thêm:
 Map đầu tiên **lính BRDF thật sự xuất hiện làm địch** — khác hoàn toàn
 với các campaign trước, nơi BRDF chỉ tồn tại qua xác chết/dấu vết.
 
+⚠️ **v3 — diện tích x4 + zombie thường x12:** xem `map16_dimensions.md`.
+**Lính BRDF KHÔNG x12** — giữ nguyên số lượng gốc (địch có AI/hành vi
+riêng, không phải horde).
+
 ---
 
 ## Khu A — Ngoài hàng rào chính [Build-up — vẫn chỉ có zombie]
@@ -28,8 +32,8 @@ với các campaign trước, nơi BRDF chỉ tồn tại qua xác chết/dấu 
                                  ═══ Vào trạm gác
 ```
 
-- **Mật độ:** 2 zombie thường, KHÔNG có lính BRDF ở đây — Build-up giữ
-  nguyên "bình thường" trước khi tạo bất ngờ ở Khu B.
+- **Mật độ (v3, x12):** 24 zombie thường (v1: 2), KHÔNG có lính BRDF ở
+  đây — Build-up giữ nguyên "bình thường" trước khi tạo bất ngờ ở Khu B.
 
 ---
 
@@ -56,9 +60,9 @@ với các campaign trước, nơi BRDF chỉ tồn tại qua xác chết/dấu 
                                  ═══
 ```
 
-- **Mật độ:** 2 zombie thường + **2 lính BRDF** (số lượng nhỏ theo đúng
-  GDD "không đông như zombie horde, vai trò khác — nguy hiểm hơn từng cá
-  thể").
+- **Mật độ (v3, x12 zombie thường):** 24 zombie thường (v1: 2) + **2
+  lính BRDF** (KHÔNG x12, giữ nguyên — số lượng nhỏ theo đúng GDD "không
+  đông như zombie horde, vai trò khác — nguy hiểm hơn từng cá thể").
 - **Item:** `L16`.
 - **Cơ chế:** lính rơi lại đạn khi hạ (nguồn đạn mới, khác hẳn pickup dân
   sự) — không cần đặt ammo pickup cố định ở khu này.
@@ -84,7 +88,7 @@ với các campaign trước, nơi BRDF chỉ tồn tại qua xác chết/dấu 
                                  ═══
 ```
 
-- **Mật độ:** 1 zombie, Peak Fade.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1), Peak Fade.
 
 ---
 
@@ -107,12 +111,12 @@ với các campaign trước, nơi BRDF chỉ tồn tại qua xác chết/dấu 
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map16_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Zombie | Lính BRDF | Audio log |
+| Khu vực | Tag pacing | Zombie (v1→v3) | Lính BRDF (không x12) | Audio log |
 |---|---|---|---|---|
-| A. Ngoài hàng rào | Build-up | 2 | 0 | — |
-| B. Trạm gác chính | **Sustain Peak** | 2 | **2** | L16 |
-| C. Sân trong | Peak Fade | 1 | 0 | — |
-| D. Trạm gác phụ | Relax | 0 | 0 | — |
-| **Tổng** | | **5** | **2** | **1** |
+| A. Ngoài hàng rào | Build-up | 2 → **24** | 0 | — |
+| B. Trạm gác chính | **Sustain Peak** | 2 → **24** | **2** | L16 |
+| C. Sân trong | Peak Fade | 1 → **12** | 0 | — |
+| D. Trạm gác phụ | Relax | 0 → 0 | 0 | — |
+| **Tổng** | | **5 → 60** | **2** | **1** |

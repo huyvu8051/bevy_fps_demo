@@ -3,6 +3,9 @@
 Campaign 3 "Vùng công nghiệp", Map 12/20 (Map 2/5 của campaign). Xem
 GDD.md mục 14.5. Cùng legend với Map 1.
 
+⚠️ **v3 — diện tích x4 + zombie x12 + spawn theo nhịp:** xem
+`map12_dimensions.md` (map này không có địch đặc biệt/boss).
+
 ---
 
 ## Khu A — Lối vào bãi container [Build-up — vẫn thấy toàn cảnh]
@@ -21,7 +24,8 @@ GDD.md mục 14.5. Cùng legend với Map 1.
                                  ═══ Vào sâu trong mê cung
 ```
 
-- **Mật độ:** 1 zombie — Build-up, vẫn thấy cần trục làm mốc định hướng.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1) — Build-up, vẫn thấy cần trục
+  làm mốc định hướng.
 
 ---
 
@@ -51,8 +55,8 @@ GDD.md mục 14.5. Cùng legend với Map 1.
                                  ═══
 ```
 
-- **Mật độ:** 5 zombie — cao nhất map, không gian hẹp giữa container tạo
-  điều kiện phục kích từ góc khuất.
+- **Mật độ (v3, x12):** 60 zombie (v1: 5) — cao nhất map, không gian
+  hẹp giữa container tạo điều kiện phục kích từ góc khuất.
 - **Item:** 1 ammo + 1 med kit (container thường).
 - **Ghi chú lore:** dãy container 447-460 là chi tiết liên kết trực tiếp
   Map 13 (Cold Storage 7) — thứ đã ra khỏi container này chính là thứ
@@ -74,7 +78,7 @@ GDD.md mục 14.5. Cùng legend với Map 1.
                                  ═══
 ```
 
-- **Mật độ:** 1 zombie, Peak Fade.
+- **Mật độ (v3, x12):** 12 zombie (v1: 1), Peak Fade.
 - **Item:** `L12`.
 
 ---
@@ -98,12 +102,12 @@ GDD.md mục 14.5. Cùng legend với Map 1.
 
 ---
 
-## Tổng kết số liệu
+## Tổng kết số liệu (v1 → v3, xem `map12_dimensions.md` cho nhịp spawn chi tiết)
 
-| Khu vực | Tag pacing | Zombie | Ammo | Med kit | Audio log |
+| Khu vực | Tag pacing | Zombie (v1→v3) | Ammo | Med kit | Audio log |
 |---|---|---|---|---|---|
-| A. Lối vào | Build-up | 1 | 0 | 0 | — |
-| B. Mê cung container | **Sustain Peak** | 5 | 1 | 1 | L12 |
-| C. Gần cần trục | Peak Fade | 1 | 0 | 0 | — |
-| D. Dưới cần trục | Relax | 0 | 0 | 0 | — |
-| **Tổng** | | **7** | **1** | **1** | **1** |
+| A. Lối vào | Build-up | 1 → **12** | 0 | 0 | — |
+| B. Mê cung container | **Sustain Peak** | 5 → **60** | 1 | 1 | L12 |
+| C. Gần cần trục | Peak Fade | 1 → **12** | 0 | 0 | — |
+| D. Dưới cần trục | Relax | 0 → 0 | 0 | 0 | — |
+| **Tổng** | | **7 → 84** | **1** | **1** | **1** |
