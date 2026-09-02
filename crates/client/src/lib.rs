@@ -1535,7 +1535,6 @@ impl Plugin for GamePlugin {
                     toggle_inspect_mode,
                     toggle_camera_mode,
                     sync_third_person_camera,
-                    wire_player_model_skeleton_bones,
                 )
                     .chain(),
             )
@@ -1557,7 +1556,7 @@ impl Plugin for GamePlugin {
                 // orders this whole group after freeze_zombie_animations and
                 // before whatever follows it, same as if it were flat.
                 (
-                    wire_player_model_scene_animation_targets,
+                    wire_player_model_scene_nodes,
                     wire_player_model_animations,
                     update_remote_player_model_animation,
                     update_local_player_model_animation,

@@ -82,37 +82,11 @@ pub(crate) struct PlayerModelSkeletonBones {
     pub(crate) right_upper_leg: Option<Entity>,
 }
 
-// See PlayerModelSkeletonBones' own doc comment. Same "walk up ChildOf from
-// a freshly-named bone" idiom as wire_zombie_hitbox_bones — cheap-rejects
-// any name that isn't one of the two bones this cares about before paying
-// for the walk.
-pub(crate) fn wire_player_model_skeleton_bones(
-    child_of: Query<&ChildOf>,
-    mut roots: Query<&mut PlayerModelSkeletonBones, With<PlayerModelAnimRoot>>,
-    new_names: Query<(Entity, &Name), Added<Name>>,
-) {
-    for (bone_entity, name) in &new_names {
-        let n = name.as_str();
-        if n != "LeftUpLeg" && n != "RightUpLeg" {
-            continue;
-        }
-        let mut current = bone_entity;
-        for _ in 0..20 {
-            if let Ok(mut bones) = roots.get_mut(current) {
-                match n {
-                    "LeftUpLeg" => bones.left_upper_leg = Some(bone_entity),
-                    "RightUpLeg" => bones.right_upper_leg = Some(bone_entity),
-                    _ => {}
-                }
-                break;
-            }
-            let Ok(parent) = child_of.get(current) else {
-                break;
-            };
-            current = parent.0;
-        }
-    }
-}
+// See PlayerModelSkeletonBones' own doc comment — the actual lookup lives
+// in wire_player_model_scene_nodes now, merged with the mesh/anim-split
+// wiring below since both react to the exact same Added<Name> set (every
+// freshly-named node in a PlayerModel's spawned scene) and used to run as
+// two separate systems each re-scanning it.
 
 // Was a plain bool (Walk vs Idle only) before Run/Shoot/Death got wired up
 // — same shape/reasoning as ZombiePose. Shoot/Death aren't part of the
@@ -866,51 +840,72 @@ pub(crate) fn wire_zombie_animations(
 // extract_glb_mesh_only.py/extract_glb_animations.py, which both carry
 // every node's own name through verbatim. Both the mesh-only file
 // (soldier_meshy.glb) and the animation-only file (mixamo_base.glb) share
-// this exact root name — required for wire_player_model_scene_animation_targets
-// below to compute the same AnimationTargetId hashes the animation clips
-// were baked against (see its own doc comment).
+// this exact root name — required for wire_player_model_scene_nodes below
+// to compute the same AnimationTargetId hashes the animation clips were
+// baked against (see that fn's own doc comment).
 const PLAYER_MODEL_SCENE_ROOT_NAME: &str = "target_character";
 
-// PlayerModelTuning.mesh (soldier_meshy.glb) carries zero animations of its
-// own since docs/CHARACTER_IMPORT_CHECKLIST.md's mesh/anim split —
-// build_player_model_anim instead loads every clip from
-// PlayerModelTuning.anim_source (mixamo_base.glb). bevy_gltf's own loader
-// only ever inserts AnimationPlayer/AnimationTargetId/AnimatedBy for a
-// scene that has animations IN THAT SAME FILE (see
-// bevy_gltf::loader::mod.rs's `animation_roots` — computed purely from
-// `gltf.animations()`), so spawning the mesh-only scene produces NONE of
-// that wiring on its own. This system does it by hand instead, exactly
-// mirroring what bevy_gltf would have done for a combined file:
-//   - insert AnimationPlayer on the scene's root node (PLAYER_MODEL_SCENE_ROOT_NAME)
-//   - insert (AnimationTargetId, AnimatedBy(root)) on every descendant,
-//     with the ID hashed from the full ancestor Name path INCLUDING the
-//     root's own name — see bevy_gltf's collect_path
-//     (loader/gltf_ext/scene.rs), which does exactly this starting from
-//     `[]` at the scene root and pushing each node's name going down.
-// Once AnimationPlayer exists here, wire_player_model_animations'
-// Added<AnimationPlayer> query picks it up exactly as if bevy_gltf had
-// inserted it itself — same AnimationGraphHandle/play() wiring either way.
-pub(crate) fn wire_player_model_scene_animation_targets(
+// Everything that reacts to a freshly-named node somewhere in a
+// PlayerModel's spawned mesh scene — merged into one system (previously
+// two: wire_player_model_skeleton_bones + wire_player_model_scene_animation_targets)
+// since both only ever cared about entries in this exact same Added<Name>
+// set and gained nothing from scanning it twice:
+//
+// - LeftUpLeg/RightUpLeg -> PlayerModelSkeletonBones (see its own doc
+//   comment) — apply_player_model_travel_twist (movement_combat.rs) reads
+//   these to leg-twist for diagonal/backward movement.
+// - PLAYER_MODEL_SCENE_ROOT_NAME -> manually wires AnimationPlayer +
+//   (AnimationTargetId, AnimatedBy) down the whole subtree. Needed because
+//   PlayerModelTuning.mesh (soldier_meshy.glb) carries zero animations of
+//   its own since docs/CHARACTER_IMPORT_CHECKLIST.md's mesh/anim split —
+//   build_player_model_anim instead loads every clip from
+//   PlayerModelTuning.anim_source (mixamo_base.glb) — and bevy_gltf's own
+//   loader only ever inserts that wiring for a scene that has animations
+//   IN THAT SAME FILE (see bevy_gltf::loader::mod.rs's `animation_roots`,
+//   computed purely from `gltf.animations()`), so spawning the mesh-only
+//   scene produces none of it on its own. This mirrors exactly what
+//   bevy_gltf would have inserted for a combined file: AnimationPlayer on
+//   the scene's root node, and on every descendant an AnimationTargetId
+//   hashed from the full ancestor Name path INCLUDING the root's own name
+//   — see bevy_gltf's collect_path (loader/gltf_ext/scene.rs), which does
+//   the same starting from `[]` at the scene root and pushing each node's
+//   name going down. Once AnimationPlayer exists here,
+//   wire_player_model_animations' Added<AnimationPlayer> query picks it up
+//   exactly as if bevy_gltf had inserted it itself.
+pub(crate) fn wire_player_model_scene_nodes(
     mut commands: Commands,
     child_of: Query<&ChildOf>,
     children: Query<&Children>,
     names: Query<&Name>,
-    roots: Query<(), With<PlayerModelAnimRoot>>,
+    mut roots: Query<&mut PlayerModelSkeletonBones, With<PlayerModelAnimRoot>>,
     new_names: Query<Entity, Added<Name>>,
 ) {
     for entity in &new_names {
         let Ok(name) = names.get(entity) else { continue };
-        if name.as_str() != PLAYER_MODEL_SCENE_ROOT_NAME {
-            continue;
+        match name.as_str() {
+            "LeftUpLeg" | "RightUpLeg" => {
+                let Some(root) = find_animation_root(entity, &child_of, |e| roots.contains(e)) else {
+                    continue;
+                };
+                let Ok(mut bones) = roots.get_mut(root) else { continue };
+                if name.as_str() == "LeftUpLeg" {
+                    bones.left_upper_leg = Some(entity);
+                } else {
+                    bones.right_upper_leg = Some(entity);
+                }
+            }
+            PLAYER_MODEL_SCENE_ROOT_NAME => {
+                // Confirms this is actually a PlayerModel's own mesh scene
+                // (not some unrelated glb reusing the same root node name)
+                // before touching anything.
+                if find_animation_root(entity, &child_of, |e| roots.contains(e)).is_none() {
+                    continue;
+                }
+                commands.entity(entity).try_insert(AnimationPlayer::default());
+                wire_animation_target_path(&mut commands, entity, entity, Vec::new(), &children, &names);
+            }
+            _ => {}
         }
-        // Confirms this is actually a PlayerModel's own mesh scene (not
-        // some unrelated glb that happens to reuse the same root node
-        // name) before touching anything.
-        if find_animation_root(entity, &child_of, |e| roots.contains(e)).is_none() {
-            continue;
-        }
-        commands.entity(entity).try_insert(AnimationPlayer::default());
-        wire_animation_target_path(&mut commands, entity, entity, Vec::new(), &children, &names);
     }
 }
 
