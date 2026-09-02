@@ -38,6 +38,10 @@
         idle: 5,
         walk: 22,
         run: 16,
+        // Played instead of `run` while moving backward (LocalPlayerMoveAxis.y
+        // < 0) — see CharacterAnimIndices' own doc comment (lib.rs). soldier.glb
+        // also ships Run_Left (18) / Run_Right (19), currently unused.
+        run_back: 17,
         shoot: 1,
         death: 0,
     ),

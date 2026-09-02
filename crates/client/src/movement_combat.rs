@@ -621,9 +621,10 @@ pub(crate) fn send_player_input(
     // Tuples of SystemParams are themselves valid SystemParams, so nesting
     // sidesteps the limit without restructuring anything else — Autopilot/
     // AutopilotIntent are folded into the same tuple for the same reason.
-    (mut local_moving, mut local_sprinting, autopilot, intent, editor): (
+    (mut local_moving, mut local_sprinting, mut local_move_axis, autopilot, intent, editor): (
         ResMut<LocalPlayerMoving>,
         ResMut<LocalPlayerSprinting>,
+        ResMut<LocalPlayerMoveAxis>,
         Res<Autopilot>,
         Res<AutopilotIntent>,
         // Same `Option` reasoning as grab_cursor's own editor param — only
@@ -691,6 +692,7 @@ pub(crate) fn send_player_input(
     };
     local_moving.0 = move_axis != Vec2::ZERO;
     local_sprinting.0 = sprinting;
+    local_move_axis.0 = move_axis;
 
     *sequence += 1;
     let dt = time.delta_secs();
@@ -812,7 +814,102 @@ pub(crate) fn sync_player_model(
     transform.rotation = Quat::from_rotation_y(yaw + tuning.facing_deg.to_radians());
 }
 
-const PLAYER_CHARACTER_RON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/characters/soldier/character.ron");
+// Lets a single straight-ahead Walk/Run clip stand in for every travel
+// direction: rotates just the two leg-chain roots (UpperLeg.L/UpperLeg.R —
+// see PlayerModelSkeletonBones' own doc comment for the real measured bone
+// tree) toward where LocalPlayerMoveAxis says the player is actually
+// walking/strafing/backing into. Hips/spine/arms are NOT touched — they're
+// a completely separate branch off Body, not descendants of the legs at
+// all, so the torso already faces the aim direction correctly
+// (sync_player_model sets that on the whole model's root) with nothing to
+// counter-rotate. (An earlier version of this rotated Hips thinking it was
+// the legs' parent, then tried to counter-rotate Abdomen back for the
+// torso — both bones are actually on the SAME spine branch, so that
+// doubled up into visible tumbling instead of a clean leg-only twist.)
+//
+// Runs in PostUpdate, after Bevy's own animation systems have written this
+// frame's sampled clip pose onto the legs but before transform propagation
+// reads it for skinning/rendering — see this fn's own .after()/.before()
+// at registration (lib.rs) for the exact ordering.
+//
+// LOCAL PLAYER ONLY for now: NetTransform doesn't replicate a remote
+// player's own move_axis (only moving/sprinting bools), so there's nothing
+// to compute a remote travel angle from yet — see
+// PlayerModelSkeletonBones' own doc comment.
+//
+// A bone's local rotation lives in its PARENT's local axes, which this rig
+// (like most Maya/Blender-authored ones) does NOT keep aligned with world
+// space at every joint — "rotate around world Y" isn't the same axis as
+// "rotate around this bone's own Y" once you're several joints deep, so a
+// raw `Quat::from_rotation_y(angle)` premultiplied straight onto local
+// rotation spins around whatever skewed axis the mismatch produces instead
+// of a clean yaw. Converting the desired WORLD-space yaw into the correct
+// LOCAL-space rotation first, via the bone's parent's current
+// GlobalTransform (local_correction = parent_rot⁻¹ * world_yaw *
+// parent_rot), fixes that regardless of the bone's own axis orientation.
+// Parent GlobalTransform is one frame stale here (this runs before this
+// frame's own transform propagation) — fine for something that only
+// tracks slow-changing camera yaw, not worth the extra bookkeeping to
+// avoid.
+fn local_yaw_correction(parent_rotation: Quat, world_angle: f32) -> Quat {
+    let world_yaw = Quat::from_rotation_y(world_angle);
+    parent_rotation.inverse() * world_yaw * parent_rotation
+}
+
+// Normalizes an angle (radians) to (-π, π] — used to re-baseline the
+// travel angle around 180° (straight back) instead of 0° (straight
+// forward) when anim.run_back is the one actually playing.
+fn wrap_to_pi(angle: f32) -> f32 {
+    let two_pi = std::f32::consts::TAU;
+    let wrapped = (angle + std::f32::consts::PI).rem_euclid(two_pi) - std::f32::consts::PI;
+    wrapped
+}
+
+pub(crate) fn apply_player_model_travel_twist(
+    move_axis: Res<LocalPlayerMoveAxis>,
+    sprinting: Res<LocalPlayerSprinting>,
+    bones: Query<&PlayerModelSkeletonBones, With<PlayerModel>>,
+    child_of: Query<&ChildOf>,
+    globals: Query<&GlobalTransform>,
+    mut transforms: Query<&mut Transform>,
+) {
+    let Ok(bones) = bones.single() else {
+        return;
+    };
+    let axis = move_axis.0;
+    if axis == Vec2::ZERO {
+        return;
+    }
+    // 0 = forward, +90° = right strafe, ±180° = backward, -90° = left
+    // strafe — matches the 8-directional angle scheme
+    // docs/PLAYER_ANIMATION_PLAN.md's strafe-locomotion set already uses.
+    // Negated: confirmed backwards when actually tested (diagonal travel
+    // twisted the legs the wrong way) — same "sign guessed from the math,
+    // wrong in practice" story as this codebase's own lean-roll sign
+    // (movement_combat.rs's apply_view_recoil comment).
+    let angle = -axis.x.atan2(axis.y);
+    // update_local_player_model_animation swaps to anim.run_back (a real
+    // backward-run clip) under this exact condition — see
+    // CharacterAnimIndices.run_back's own doc comment (lib.rs). When that's
+    // playing, the legs are already animated facing backward, so twist
+    // relative to THAT baseline (180°) instead of forward (0°), or a
+    // diagonal-back direction would get double-counted: once by run_back
+    // already facing back, again by a twist still measured from forward.
+    // Walk has no such backward clip, so it always twists from forward —
+    // an accepted gap, see run_back's own doc comment.
+    let running_backward = sprinting.0 && axis.y < 0.0;
+    let angle = if running_backward { wrap_to_pi(angle - std::f32::consts::PI) } else { angle };
+
+    // Both legs get the SAME angle (no counter-rotation — see this fn's
+    // own doc comment for why one isn't needed).
+    for bone in [bones.left_upper_leg, bones.right_upper_leg] {
+        let Some(bone) = bone else { continue };
+        let Ok(parent) = child_of.get(bone) else { continue };
+        let Ok(parent_global) = globals.get(parent.0) else { continue };
+        let Ok(mut t) = transforms.get_mut(bone) else { continue };
+        t.rotation = local_yaw_correction(parent_global.rotation(), angle) * t.rotation;
+    }
+}
 
 // EDITOR=1-only: Comma/Period nudge PlayerModelTuning.scale, Minus/Equal
 // nudge y_offset — see PlayerModelTuning's own doc comment. Meant to be
@@ -838,15 +935,19 @@ pub(crate) fn nudge_player_model_tuning(keys: Res<ButtonInput<KeyCode>>, mut tun
 }
 
 // F9: writes PlayerModelTuning's current (possibly nudged) scale/y_offset/
-// facing_deg back into character.ron, rewriting the WHOLE file (not just
-// those 3 numbers) so id/display_name/lore_ref/mesh/animations/audio —
-// carried unchanged in PlayerModelTuning purely for this — survive the
-// round-trip instead of getting clobbered. Same "eyeball it live, F9
-// saves" loop as save_zombie_meshy_showcase_transform (zombie_client.rs),
-// just saving a live-nudged Resource instead of a live-dragged Transform:
-// sync_player_model overwrites PlayerModel's own Transform every frame, so
-// there'd be nothing meaningful to read a hand-dragged value back FROM
-// there the way the zombie showcase (never overwritten per-frame) allows.
+// facing_deg back into the ACTIVE character's own character.ron (derived
+// from tuning.mesh via character_dir_from_mesh_path — not always
+// soldier's: character_cycle_button, settings_menu.rs, can switch which
+// character is loaded into PlayerModelTuning at runtime), rewriting the
+// WHOLE file (not just those 3 numbers) so id/display_name/lore_ref/mesh/
+// animations/audio — carried unchanged in PlayerModelTuning purely for
+// this — survive the round-trip instead of getting clobbered. Same
+// "eyeball it live, F9 saves" loop as save_zombie_meshy_showcase_transform
+// (zombie_client.rs), just saving a live-nudged Resource instead of a
+// live-dragged Transform: sync_player_model overwrites PlayerModel's own
+// Transform every frame, so there'd be nothing meaningful to read a
+// hand-dragged value back FROM there the way the zombie showcase (never
+// overwritten per-frame) allows.
 pub(crate) fn save_player_model_tuning(
     keys: Res<ButtonInput<KeyCode>>,
     tuning: Res<PlayerModelTuning>,
@@ -855,9 +956,6 @@ pub(crate) fn save_player_model_tuning(
     if !keys.just_pressed(KeyCode::F9) {
         return;
     }
-    // Reuses the same formatter player_anim_editor.rs's mesh-file-browser
-    // Save button calls for any OTHER character's character.ron — see
-    // format_character_ron's own doc comment (lib.rs).
     let out = format_character_ron(&CharacterRon {
         id: tuning.id.clone(),
         display_name: tuning.display_name.clone(),
@@ -869,14 +967,16 @@ pub(crate) fn save_player_model_tuning(
         animations: tuning.animations.clone(),
         audio: tuning.audio.clone(),
     });
-    match std::fs::write(PLAYER_CHARACTER_RON, out) {
+    let dir = character_dir_from_mesh_path(&tuning.mesh);
+    let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/{}/character.ron"), dir);
+    match std::fs::write(&path, out) {
         Ok(()) => {
-            info!("saved soldier character.ron -> {PLAYER_CHARACTER_RON}");
-            toast.ok_also("F9: saved soldier character.ron", " + soldier");
+            info!("saved {} character.ron -> {path}", tuning.id);
+            toast.ok_also("F9: saved character.ron", &format!(" + {}", tuning.id));
         }
         Err(e) => {
-            error!("F9 soldier character.ron save failed writing {PLAYER_CHARACTER_RON}: {e}");
-            toast.err(format!("F9: soldier character.ron save FAILED — {e}"));
+            error!("F9 {} character.ron save failed writing {path}: {e}", tuning.id);
+            toast.err(format!("F9: {} character.ron save FAILED — {e}", tuning.id));
         }
     }
 }

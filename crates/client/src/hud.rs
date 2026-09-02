@@ -26,14 +26,16 @@ use crate::*;
 #[derive(Resource, Default)]
 pub(crate) struct InspectMode(pub(crate) bool);
 
-// Debug/dev: toggled by KeyP. Shows debug_panel_actions' hotkeys plus
-// current state of every other debug toggle, via update_debug_panel.
-#[derive(Resource, Default)]
-pub(crate) struct DebugPanelVisible(bool);
-
-// Marks the debug panel's text node so update_debug_panel can find it.
-#[derive(Component)]
-pub(crate) struct DebugPanelText;
+// Was DebugPanelVisible/DebugPanelText (KeyP) — a read-only text overlay
+// showing every debug toggle's state + a keyboard cheat-sheet. Removed:
+// the Settings menu (F1) already has a real button for every one of those
+// toggles/actions (CheatNoclipButton, CheatHitboxesButton,
+// cheat_zombie_health_buttons, debug_bot_buttons, etc. — settings_menu.rs),
+// so the panel had become a pure duplicate. The underlying toggles
+// (Noclip, ShowHitboxes, GodMode, ...) and their raw keyboard shortcuts
+// (toggle_debug_flags) are untouched — only this KeyP status display and
+// its number-key-gated twin (debug_panel_actions, now also removed) are
+// gone, per "centralize into one menu" (chat history).
 
 // Marks the always-visible health readout so update_health_ui can find it.
 #[derive(Component)]
@@ -412,129 +414,9 @@ pub(crate) struct CrosshairLine {
 #[derive(Component)]
 pub(crate) struct CrosshairRoot;
 
-pub(crate) fn spawn_debug_panel(commands: &mut Commands) {
-    commands.spawn((
-        Text::new(""),
-        TextFont {
-            font_size: 16.0,
-            ..default()
-        },
-        TextColor(Color::srgb(0.6, 1.0, 0.6)),
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(16.0),
-            top: Val::Px(60.0),
-            display: Display::None,
-            ..default()
-        },
-        GlobalZIndex(STATIC_UI_Z_INDEX),
-        DebugPanelText,
-    ));
-}
-
-// Bundles the ~10 debug-toggle resource reads update_debug_panel needs
-// into one param — that fn was already at Bevy's 16-param system function
-// limit (see HitMarkerAssets' own doc comment for the same constraint hit
-// elsewhere), and the refresh-throttle Local pushed it over.
-#[derive(SystemParam)]
-pub(crate) struct DebugPanelToggles<'w> {
-    noclip: Res<'w, Noclip>,
-    freeze: Res<'w, FreezeZombies>,
-    show_hitboxes: Res<'w, ShowHitboxes>,
-    god_mode: Res<'w, GodMode>,
-    aim_blur: Res<'w, AimBlurEnabled>,
-    dof_focal_alt: Res<'w, AimDofFocalDistanceAlt>,
-    zombie_anim_disabled: Res<'w, ZombieAnimDisabled>,
-    zombie_health_bars_hidden: Res<'w, ZombieHealthBarsHidden>,
-    zombie_lod_disabled: Res<'w, ZombieLodDisabled>,
-    player_model_visible: Res<'w, PlayerModelVisible>,
-    autopilot: Res<'w, Autopilot>,
-    autopilot_state: Res<'w, AutopilotState>,
-}
-
-pub(crate) fn update_debug_panel(
-    panel_visible: Res<DebugPanelVisible>,
-    toggles: DebugPanelToggles,
-    timings: Res<PerfTimings>,
-    debug_bots: Query<&DebugBot>,
-    selected_bot: Res<SelectedDebugBot>,
-    zombies: Query<(), With<Zombie>>,
-    mut text: Query<(&mut Text, &mut Node), With<DebugPanelText>>,
-    time: Res<Time>,
-    mut refresh_elapsed: Local<f32>,
-) {
-    let Ok((mut text, mut node)) = text.single_mut() else {
-        return;
-    };
-    if !panel_visible.0 {
-        node.display = Display::None;
-        return;
-    }
-    node.display = Display::Flex;
-
-    // A human reading debug text doesn't need it re-formatted 120x/sec —
-    // this was pure wasted string allocation every single frame the panel
-    // happened to be open. 10Hz is still imperceptibly "live".
-    *refresh_elapsed += time.delta_secs();
-    if *refresh_elapsed < 0.1 {
-        return;
-    }
-    *refresh_elapsed = 0.0;
-
-    let on_off = |b: bool| if b { "ON" } else { "OFF" };
-    let focal_distance = if toggles.dof_focal_alt.0 {
-        AIM_DOF_FOCAL_DISTANCE_B
-    } else {
-        AIM_DOF_FOCAL_DISTANCE_A
-    };
-    text.0 = format!(
-        "[DEBUG PANEL] (P to close)\n\
-         N: Noclip [{}]\n\
-         F: Freeze zombies [{}]\n\
-         H: Show hitboxes [{}]\n\
-         G: God mode [{}]\n\
-         B: Blur when aiming [{}]\n\
-         V: Blur focal distance [{:.2}m]\n\
-         1: Spawn zombie in front of player\n\
-         2: Kill all zombies\n\
-         3: Set nearest zombie to 1 HP\n\
-         4: Heal nearest zombie to full\n\
-         5: Spawn another {} zombies\n\
-         M: Zombie animation [{}]\n\
-         J: Zombie health bars [{}]\n\
-         K: Zombie LOD (distance shortcut) [{}]\n\
-         T: Player model (debug visual) [{}]\n\
-         I: Autopilot [{}] | Aiming: {}\n\
-         6: Spawn debug bot at crosshair+2m | [/]: select prev/next bot\n\
-         9: Move selected bot to crosshair | O: Despawn selected bot\n\
-         Debug bots: {} (selected: {})\n\
-         move_zombies: {:.2}ms | health bars: {:.2}ms | zombies: {} (near: {})\n\
-         Zombies alive: {}",
-        on_off(toggles.noclip.0),
-        on_off(toggles.freeze.0),
-        on_off(toggles.show_hitboxes.0),
-        on_off(toggles.god_mode.0),
-        on_off(toggles.aim_blur.0),
-        focal_distance,
-        ZOMBIE_SPAWNS.len(),
-        on_off(!toggles.zombie_anim_disabled.0),
-        on_off(!toggles.zombie_health_bars_hidden.0),
-        on_off(!toggles.zombie_lod_disabled.0),
-        on_off(toggles.player_model_visible.0),
-        on_off(toggles.autopilot.0),
-        toggles.autopilot_state.aiming_region.unwrap_or("-"),
-        debug_bots.iter().count(),
-        selected_bot.0.map_or("none".to_string(), |id| id.to_string()),
-        timings.move_zombies_ms,
-        timings.health_bars_ms,
-        timings.zombie_count,
-        timings.near_zombie_count,
-        zombies.iter().count(),
-    );
-}
-
-// Sets whichever zombie is closest to `from` to `value` HP — shared by the
-// Digit3 (near-death) and Digit4 (full heal) debug actions.
+// Sets whichever zombie is closest to `from` to `value` HP — shared by
+// settings_menu.rs's cheat_zombie_health_buttons (Heal Nearest / 1HP
+// Nearest).
 pub(crate) fn set_nearest_zombie_health(
     zombies: &mut Query<(&Transform, &mut Health), With<Zombie>>,
     from: Vec3,
@@ -547,106 +429,6 @@ pub(crate) fn set_nearest_zombie_health(
     });
     if let Some((_, mut health)) = nearest {
         health.0 = value;
-    }
-}
-
-// Only live while the panel is open (see DebugPanelVisible/KeyP), so number
-// keys don't do anything unexpected during normal play.
-pub(crate) fn debug_panel_actions(
-    mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-    panel_visible: Res<DebugPanelVisible>,
-    asset_server: Res<AssetServer>,
-    player: Query<&Transform, With<Player>>,
-    camera: Query<&FpsCamera>,
-    camera_transform: Query<&Transform, (With<FpsCamera>, Without<Player>)>,
-    spatial_query: SpatialQuery,
-    mut zombies: Query<(&Transform, &mut Health), With<Zombie>>,
-    all_zombies: Query<Entity, With<Zombie>>,
-    debug_bots: Query<&DebugBot>,
-    mut selected_bot: ResMut<SelectedDebugBot>,
-) {
-    if !panel_visible.0 {
-        return;
-    }
-    let Ok(player_transform) = player.single() else {
-        return;
-    };
-
-    if keys.just_pressed(KeyCode::Digit1) {
-        let forward = camera
-            .single()
-            .map(|cam| Quat::from_rotation_y(cam.yaw) * Vec3::NEG_Z)
-            .unwrap_or(Vec3::NEG_Z);
-        spawn_local_zombie(&mut commands, &asset_server, player_transform.translation + forward * 2.0);
-    }
-    if keys.just_pressed(KeyCode::Digit2) {
-        for entity in &all_zombies {
-            commands.entity(entity).try_despawn();
-        }
-    }
-    if keys.just_pressed(KeyCode::Digit3) {
-        set_nearest_zombie_health(&mut zombies, player_transform.translation, 1.0);
-    }
-    if keys.just_pressed(KeyCode::Digit4) {
-        set_nearest_zombie_health(&mut zombies, player_transform.translation, ZOMBIE_MAX_HEALTH);
-    }
-    if keys.just_pressed(KeyCode::Digit5) {
-        // Real spawning is a server decision now — just ask for more.
-        commands.client_trigger(SpawnMoreZombies);
-    }
-
-    // 6: spawn a fake NetPlayer ("debug bot") a couple meters in front of
-    // the local player, so multi-player zombie targeting can be tested
-    // without a second real client — see on_net_player_replicated for how
-    // it becomes visible. (Was KeyC, which collided with the always-on
-    // crouch toggle — moved to the 6-9 range alongside the other
-    // panel-only debug actions, same as 1-5.)
-    if keys.just_pressed(KeyCode::Digit6) {
-        let forward = camera
-            .single()
-            .map(|cam| Quat::from_rotation_y(cam.yaw) * Vec3::NEG_Z)
-            .unwrap_or(Vec3::NEG_Z);
-        commands.client_trigger(SpawnDebugBot {
-            at: player_transform.translation + forward * 2.0,
-        });
-    }
-    // [ / ]: cycle the selected bot through whichever ids are currently
-    // replicated (sorted for a stable, predictable cycle order).
-    if keys.just_pressed(KeyCode::BracketLeft) || keys.just_pressed(KeyCode::BracketRight) {
-        let mut ids: Vec<u32> = debug_bots.iter().map(|bot| bot.0).collect();
-        ids.sort_unstable();
-        if !ids.is_empty() {
-            let forward = keys.just_pressed(KeyCode::BracketRight);
-            let next_index = match selected_bot.0.and_then(|current| ids.iter().position(|&id| id == current)) {
-                Some(index) if forward => (index + 1) % ids.len(),
-                Some(index) => (index + ids.len() - 1) % ids.len(),
-                None => 0,
-            };
-            selected_bot.0 = Some(ids[next_index]);
-        }
-    }
-    // 9: move the selected bot to wherever the local player is aiming
-    // (same forward raycast gun_view_animation/shoot already use). Was
-    // KeyX, which collided with the always-on prone toggle.
-    if keys.just_pressed(KeyCode::Digit9) {
-        if let Some(id) = selected_bot.0 {
-            if let Ok(camera_transform) = camera_transform.single() {
-                let filter = SpatialQueryFilter::default();
-                let target = spatial_query
-                    .cast_ray(camera_transform.translation, camera_transform.forward(), MAX_SHOT_DISTANCE, true, &filter)
-                    .map(|hit| camera_transform.translation + camera_transform.forward() * hit.distance)
-                    .unwrap_or(camera_transform.translation + camera_transform.forward() * 5.0);
-                commands.client_trigger(MoveDebugBot { id, target });
-            }
-        }
-    }
-    // O: despawn the selected bot.
-    if keys.just_pressed(KeyCode::KeyO) {
-        if let Some(id) = selected_bot.0 {
-            commands.client_trigger(DespawnDebugBot { id });
-            selected_bot.0 = None;
-        }
     }
 }
 
@@ -769,7 +551,6 @@ pub(crate) fn toggle_debug_flags(
     mut freeze: ResMut<FreezeZombies>,
     mut show_hitboxes: ResMut<ShowHitboxes>,
     mut god_mode: ResMut<GodMode>,
-    mut panel_visible: ResMut<DebugPanelVisible>,
     mut aim_blur: ResMut<AimBlurEnabled>,
     mut dof_focal_alt: ResMut<AimDofFocalDistanceAlt>,
     mut zombie_anim_disabled: ResMut<ZombieAnimDisabled>,
@@ -791,9 +572,6 @@ pub(crate) fn toggle_debug_flags(
     }
     if keys.just_pressed(KeyCode::KeyG) {
         god_mode.0 = !god_mode.0;
-    }
-    if keys.just_pressed(KeyCode::KeyP) {
-        panel_visible.0 = !panel_visible.0;
     }
     if keys.just_pressed(KeyCode::KeyB) {
         aim_blur.0 = !aim_blur.0;

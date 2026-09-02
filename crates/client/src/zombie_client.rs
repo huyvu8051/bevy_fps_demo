@@ -59,6 +59,62 @@ pub(crate) struct PlayerModelAnimRoot;
 #[derive(Component)]
 pub(crate) struct PlayerModelAnimationPlayer(pub(crate) Entity);
 
+// Found the same way (walk up from a newly-spawned named bone to the
+// PlayerModelAnimRoot ancestor, mirroring wire_zombie_hitbox_bones' own
+// pattern in crates/shared/src/zombie.rs) — soldier.glb's own rig, NOT
+// Mixamo-named like the zombies. Measured the ACTUAL parent/child tree
+// directly from the glb (not guessed from the flat joint name list, which
+// misled the first cut of this — Hips and Abdomen are BOTH on the spine
+// branch, Hips -> Abdomen -> Torso -> Chest -> arms/head; legs are a
+// completely separate branch, UpperLeg.L/UpperLeg.R attach straight to
+// Body, not to Hips at all):
+//   Body -> Hips -> Abdomen -> Torso -> Chest -> (Neck/Head, L/R Shoulder->arm)
+//   Body -> UpperLeg.L -> LowerLeg.L -> Foot.L
+//   Body -> UpperLeg.R -> LowerLeg.R -> Foot.R
+// apply_player_model_travel_twist (movement_combat.rs) only touches the two
+// UpperLeg bones — rotating the actual leg-chain roots toward the real
+// travel direction — and leaves Hips/spine/arms alone entirely: the torso
+// already faces the aim direction correctly (sync_player_model sets that
+// on the whole model's root), so there's nothing to counter-rotate back
+// there like the first (wrong) cut of this tried to.
+#[derive(Component, Default)]
+pub(crate) struct PlayerModelSkeletonBones {
+    pub(crate) left_upper_leg: Option<Entity>,
+    pub(crate) right_upper_leg: Option<Entity>,
+}
+
+// See PlayerModelSkeletonBones' own doc comment. Same "walk up ChildOf from
+// a freshly-named bone" idiom as wire_zombie_hitbox_bones — cheap-rejects
+// any name that isn't one of the two bones this cares about before paying
+// for the walk.
+pub(crate) fn wire_player_model_skeleton_bones(
+    child_of: Query<&ChildOf>,
+    mut roots: Query<&mut PlayerModelSkeletonBones, With<PlayerModelAnimRoot>>,
+    new_names: Query<(Entity, &Name), Added<Name>>,
+) {
+    for (bone_entity, name) in &new_names {
+        let n = name.as_str();
+        if n != "UpperLeg.L" && n != "UpperLeg.R" {
+            continue;
+        }
+        let mut current = bone_entity;
+        for _ in 0..20 {
+            if let Ok(mut bones) = roots.get_mut(current) {
+                match n {
+                    "UpperLeg.L" => bones.left_upper_leg = Some(bone_entity),
+                    "UpperLeg.R" => bones.right_upper_leg = Some(bone_entity),
+                    _ => {}
+                }
+                break;
+            }
+            let Ok(parent) = child_of.get(current) else {
+                break;
+            };
+            current = parent.0;
+        }
+    }
+}
+
 // Was a plain bool (Walk vs Idle only) before Run/Shoot/Death got wired up
 // — same shape/reasoning as ZombiePose. Shoot/Death aren't part of the
 // continuous state this tracks (they're one-shot, played directly by
@@ -251,8 +307,45 @@ pub(crate) struct PlayerModelAnim {
     pub(crate) idle: AnimationNodeIndex,
     pub(crate) walk: AnimationNodeIndex,
     pub(crate) run: AnimationNodeIndex,
+    // Played instead of `run` while moving backward — see
+    // CharacterAnimIndices.run_back's own doc comment (lib.rs).
+    pub(crate) run_back: AnimationNodeIndex,
     pub(crate) shoot: AnimationNodeIndex,
     pub(crate) death: AnimationNodeIndex,
+}
+
+// Builds a fresh PlayerModelAnim from tuning's current mesh + animation
+// indices — used both by setup()'s initial spawn and by
+// character_cycle_button (settings_menu.rs) to rebuild this resource from
+// scratch when the active character switches (a different mesh's clips
+// live at different indices, so the old AnimationGraph's nodes would point
+// at the wrong — or nonexistent — clips for the new one).
+pub(crate) fn build_player_model_anim(
+    asset_server: &AssetServer,
+    graphs: &mut Assets<AnimationGraph>,
+    tuning: &PlayerModelTuning,
+) -> PlayerModelAnim {
+    let clips: Vec<Handle<AnimationClip>> = [
+        tuning.animations.idle,
+        tuning.animations.walk,
+        tuning.animations.run,
+        tuning.animations.run_back,
+        tuning.animations.shoot,
+        tuning.animations.death,
+    ]
+    .into_iter()
+    .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(tuning.mesh.clone())))
+    .collect();
+    let (graph, nodes) = AnimationGraph::from_clips(clips);
+    PlayerModelAnim {
+        graph: graphs.add(graph),
+        idle: nodes[0],
+        walk: nodes[1],
+        run: nodes[2],
+        run_back: nodes[3],
+        shoot: nodes[4],
+        death: nodes[5],
+    }
 }
 
 // Shared by the initial spawn in setup() and respawn_zombies, so a killed
@@ -855,9 +948,17 @@ pub(crate) fn update_local_player_model_animation(
     over: Res<PlayerModelPoseOverride>,
     moving: Res<LocalPlayerMoving>,
     sprinting: Res<LocalPlayerSprinting>,
+    move_axis: Res<LocalPlayerMoveAxis>,
     mut roots: Query<(&PlayerModelAnimationPlayer, &mut PlayerModelPose), (With<PlayerModelAnimRoot>, With<PlayerModel>)>,
     anim: Res<PlayerModelAnim>,
     mut players: Query<&mut AnimationPlayer>,
+    // Whether Run was last played as anim.run_back rather than anim.run —
+    // *pose alone can't tell (both are PlayerModelPose::Run), so reversing
+    // direction while already sprinting would otherwise fall through the
+    // `new_pose == *pose` early-return below and never actually swap the
+    // playing clip. Not worth a real Resource for a single bool only this
+    // fn reads/writes.
+    mut last_run_back: Local<bool>,
 ) {
     // See PlayerModelPoseOverride's own doc comment — while set, a manual
     // pose (F2 inspector, EDITOR=1) would get stomped back to whatever
@@ -875,16 +976,26 @@ pub(crate) fn update_local_player_model_animation(
     } else {
         PlayerModelPose::Idle
     };
-    if new_pose == *pose {
+    // See CharacterAnimIndices.run_back's own doc comment (lib.rs) — Walk
+    // has no backward clip to switch to, so this only matters for Run.
+    let run_back = new_pose == PlayerModelPose::Run && move_axis.0.y < 0.0;
+    if new_pose == *pose && run_back == *last_run_back {
         return;
     }
     *pose = new_pose;
+    *last_run_back = run_back;
     if let Ok(mut player) = players.get_mut(link.0) {
         player.stop_all();
         let node = match new_pose {
             PlayerModelPose::Idle => anim.idle,
             PlayerModelPose::Walk => anim.walk,
-            PlayerModelPose::Run => anim.run,
+            PlayerModelPose::Run => {
+                if run_back {
+                    anim.run_back
+                } else {
+                    anim.run
+                }
+            }
         };
         player.play(node).repeat();
     }

@@ -82,8 +82,8 @@ pub(crate) struct AutopilotState {
     pub(crate) target: Option<Entity>,
     retarget_timer: f32,
     /// Which body region random_aim_point picked for the current target —
-    /// purely a HUD/debug label (see update_debug_panel's "Aiming: {}"
-    /// line), never read for anything gameplay-affecting.
+    /// purely a HUD/debug label, never read for anything
+    /// gameplay-affecting.
     pub(crate) aiming_region: Option<&'static str>,
     /// Counts down after `target` changes to a different zombie (see
     /// AUTOPILOT_TARGET_SWITCH_HOLD_MIN/MAX's own doc comment) — fire is

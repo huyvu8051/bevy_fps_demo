@@ -13,10 +13,9 @@
 use bevy::prelude::*;
 use crate::*;
 
-// Toggled by F1 or tapping SettingsToggleButton (desktop key + touch button,
-// since this is a real user-facing menu, unlike the debug panel above which
-// is keyboard-only). Drives the settings panel's Node.display in
-// update_settings_menu, same show/hide pattern as DebugPanelVisible.
+// Toggled by F1 or tapping SettingsToggleButton (desktop key + touch
+// button). Drives the settings panel's Node.display in
+// update_settings_menu.
 // OPEN_SETTINGS_MENU=1 starts the game with it already open — same idea as
 // TOUCH_UI_PREVIEW/MAP_ID: a launch-time override so this (and, on iOS, the
 // cadisplaylink Metal renderer's own draw of it) can be visually verified
@@ -405,6 +404,32 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     ));
                     spawn_cheat_action_button(row, "+", SensitivityIncButton);
                 });
+                page.spawn((
+                    Text::new("Character"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|row| {
+                    row.spawn((
+                        Text::new("Soldier"),
+                        TextFont {
+                            font_size: 16.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        CharacterNameText,
+                    ));
+                    spawn_cheat_action_button(row, "Đổi", CharacterCycleButton);
+                });
                 // Same debug-build-only gate as page 0's "Cheats" section
                 // above — Kill All / Heal Nearest / 1HP Nearest are testing
                 // tools, not something a real player should have.
@@ -428,10 +453,9 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_action_button(row, "Heal Nearest", HealNearestButton);
                         spawn_cheat_action_button(row, "1HP Nearest", NearDeathNearestButton);
                     });
-                    // Mobile equivalents of debug_panel_actions' Digit1
-                    // (spawn 1 local zombie) and the Digit6/[/]/Digit9/O
-                    // "debug bot" fake-NetPlayer testing tools — see
-                    // debug_bot_buttons' own doc comment.
+                    // Spawn-one-zombie and the "debug bot" fake-NetPlayer
+                    // testing tools — see debug_bot_buttons' own doc
+                    // comment.
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
                         column_gap: Val::Px(8.0),
@@ -529,6 +553,11 @@ pub(crate) struct SensitivityIncButton;
 #[derive(Component)]
 pub(crate) struct SensitivityText;
 
+#[derive(Component)]
+pub(crate) struct CharacterCycleButton;
+#[derive(Component)]
+pub(crate) struct CharacterNameText;
+
 // Client's own best guess at the server's current zombie population
 // target, so the cheat panel has a number to show and step from without
 // waiting on a round-trip — SetZombieCount is fire-and-forget (see its own
@@ -603,9 +632,9 @@ pub(crate) struct CheatNavDebugButton;
 
 // Changed<Interaction>-gated like every other touch button in this file —
 // each tap flips the same resource the matching desktop key
-// (N/G/F/H/B/M/J/K/T respectively) does. The full merged set of desktop
-// debug_panel_actions' keyboard-only toggles — none of them were reachable
-// on mobile at all before (no keyboard), see this fn's own callers.
+// (N/G/F/H/B/M/J/K/T respectively) does. None of these toggles were
+// reachable on mobile at all before (no keyboard), see this fn's own
+// callers.
 pub(crate) fn cheat_toggle_buttons(
     mut commands: Commands,
     mut noclip: ResMut<Noclip>,
@@ -937,12 +966,9 @@ pub(crate) struct HealNearestButton;
 #[derive(Component)]
 pub(crate) struct NearDeathNearestButton;
 
-// Same 3 actions as debug_panel_actions' Digit5/Digit4/Digit3. Health writes
-// here have the same caveat the desktop keys already had — Health is
-// server-authoritative/replicated, so a client-side write like
-// set_nearest_zombie_health's is cosmetic and gets overwritten by the next
-// replication update; pre-existing behavior, not something new introduced
-// by wiring it to a button instead of a key.
+// Health writes here are cosmetic — Health is server-authoritative/
+// replicated, so a client-side write like set_nearest_zombie_health's gets
+// overwritten by the next replication update.
 pub(crate) fn cheat_zombie_health_buttons(
     mut commands: Commands,
     player: Query<&Transform, With<Player>>,
@@ -965,8 +991,7 @@ pub(crate) fn cheat_zombie_health_buttons(
     }
 }
 
-// Mobile equivalent of debug_panel_actions' Digit1 — spawns one local-only
-// zombie 2m in front of the player, same as the desktop key.
+// Spawns one local-only zombie 2m in front of the player.
 pub(crate) fn cheat_spawn_zombie_button(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -984,11 +1009,8 @@ pub(crate) fn cheat_spawn_zombie_button(
     spawn_local_zombie(&mut commands, &asset_server, player_transform.translation + forward * 2.0);
 }
 
-// Mobile equivalent of debug_panel_actions' Digit6/BracketLeft/
-// BracketRight/Digit9/KeyO — same body, just per-button instead of
-// per-key. See that fn's own comments for why each action exists (fake
-// NetPlayer "debug bot" for testing multiplayer zombie targeting without a
-// second real client).
+// Spawns/selects/moves/despawns a fake NetPlayer "debug bot" for testing
+// multiplayer zombie targeting without a second real client.
 pub(crate) fn debug_bot_buttons(
     mut commands: Commands,
     player: Query<&Transform, With<Player>>,
@@ -1102,6 +1124,85 @@ pub(crate) fn update_sensitivity_text(scale: Res<SensitivityScale>, mut text: Qu
     }
     for mut text in &mut text {
         text.0 = format!("{:.2}x", scale.0);
+    }
+}
+
+// Which entry in AVAILABLE_CHARACTER_DIRS (lib.rs) is currently loaded into
+// PlayerModelTuning/PlayerModelAnim — character_cycle_button owns this,
+// update_character_name_text just displays it.
+#[derive(Resource)]
+pub(crate) struct ActiveCharacterDir(pub(crate) String);
+
+impl Default for ActiveCharacterDir {
+    fn default() -> Self {
+        Self(AVAILABLE_CHARACTER_DIRS[0].to_string())
+    }
+}
+
+// "Đổi" cycles AVAILABLE_CHARACTER_DIRS (lib.rs) and does everything a
+// character switch needs in one place:
+//   1. Reload PlayerModelTuning (scale/offset/facing/animation mapping)
+//      from the new character's own character.ron.
+//   2. Rebuild PlayerModelAnim's AnimationGraph — a different mesh's clips
+//      live at different indices, so the OLD graph's nodes would point at
+//      the wrong (or out-of-range) clips otherwise.
+//   3. Despawn + respawn the local debug PlayerModel with the new mesh —
+//      SceneRoot's Handle<Scene> isn't swappable in place, and a stale
+//      AnimationPlayer/skeleton from the old scene graph would linger
+//      alongside the new one otherwise.
+//   4. Same despawn + respawn for every ALREADY-CONNECTED remote player's
+//      model child (on_net_player_replicated only spawns fresh ones for
+//      players who join/reconnect AFTER this point — existing ones need
+//      this loop or they'd keep showing the old character forever).
+pub(crate) fn character_cycle_button(
+    mut commands: Commands,
+    btn: Query<&Interaction, (With<CharacterCycleButton>, Changed<Interaction>)>,
+    mut active: ResMut<ActiveCharacterDir>,
+    asset_server: Res<AssetServer>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
+    mut tuning: ResMut<PlayerModelTuning>,
+    mut anim: ResMut<PlayerModelAnim>,
+    local_model: Query<Entity, With<PlayerModel>>,
+    remote_model_roots: Query<(Entity, &ChildOf), (With<PlayerModelAnimRoot>, Without<PlayerModel>)>,
+) {
+    if !btn.iter().any(|i| *i == Interaction::Pressed) {
+        return;
+    }
+
+    let current_index = AVAILABLE_CHARACTER_DIRS.iter().position(|d| *d == active.0).unwrap_or(0);
+    active.0 = AVAILABLE_CHARACTER_DIRS[(current_index + 1) % AVAILABLE_CHARACTER_DIRS.len()].to_string();
+
+    *tuning = PlayerModelTuning::load(&active.0);
+    *anim = build_player_model_anim(&asset_server, &mut graphs, &tuning);
+
+    if let Ok(entity) = local_model.single() {
+        commands.entity(entity).despawn();
+    }
+    commands.spawn((
+        Name::new("PlayerModel (local, debug — KeyT/CameraMode)"),
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(tuning.mesh.clone()))),
+        Transform::from_scale(Vec3::splat(tuning.scale)),
+        Visibility::Hidden,
+        PlayerModel,
+        PlayerModelAnimRoot,
+        PlayerModelSkeletonBones::default(),
+    ));
+
+    for (old_model, child_of) in &remote_model_roots {
+        let net_player = child_of.0;
+        commands.entity(old_model).despawn();
+        commands.entity(net_player).with_children(|parent| {
+            spawn_remote_player_model(parent, &asset_server, &tuning);
+        });
+    }
+}
+
+pub(crate) fn update_character_name_text(tuning: Res<PlayerModelTuning>, mut text: Query<&mut Text, With<CharacterNameText>>) {
+    if !tuning.is_changed() {
+        return;
+    }
+    for mut text in &mut text {
+        text.0 = tuning.display_name.clone();
     }
 }
 

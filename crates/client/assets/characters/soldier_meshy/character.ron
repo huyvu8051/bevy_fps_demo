@@ -1,39 +1,39 @@
-// Metadata for the "soldier_meshy" character — a Meshy AI-generated
-// survivor mesh (see docs/PLAYER_ANIMATION_PLAN.md's Meshy prompt), added
-// as an alternative to the shipped "soldier" (crates/client/src/lib.rs's
-// PLAYER_MODEL_PATH) — NOT yet wired in as the active player model.
+// Metadata for the "soldier_meshy" character — see docs/CHARACTER_IMPORT_CHECKLIST.md's
+// "Scale and origin" section for why this can't just trust the mesh's native
+// scale/pivot.
 //
-// Original Meshy export was two ~55MB glb files (a 8192x8192 PNG texture
-// each) — compressed to this one file (texture resized to 2048x2048 JPEG,
-// ~1.6MB total) by patching the glb's embedded image buffer directly
-// (chat history has the exact script). Bundles both the mesh AND all 16
-// generated animation clips.
+// This mesh shipped lying on its back, facing the camera instead of away
+// from it (a Meshy-export quirk zombie_meshy.glb also had) — both fixed
+// PERMANENTLY in the asset itself with scripts/normalize_glb_root_rotation.py
+// (X +90° to stand it up, then Y +180° to face the right way, composed
+// together into the scene root node's own rotation — see that script's own
+// doc comment). facing_deg stays 0.0 below because of that, same as it
+// would for any other fully-normalized mesh; if a fresh re-export of this
+// asset ever needs re-normalizing, redo both axes in one run rather than
+// reaching for a runtime facing_deg workaround.
 //
-// scale/y_offset/facing_deg below are UNMEASURED placeholders (0.0/1.0/0)
-// — use the "Player Animations" editor window (EDITOR=1, F2, Window ->
-// Open window -> Player Animations) to pick this file from its mesh
-// dropdown and tune them for real, same F9-save workflow as `soldier`'s
-// own character.ron.
+// scale/y_offset are F9-tunable (EDITOR=1): third-person (KeyU),
+// Comma/Period nudges scale, Minus/Equal nudges y_offset — see
+// nudge_player_model_tuning/save_player_model_tuning
+// (crates/client/src/movement_combat.rs). `animations` isn't nudge-able,
+// only hand-edited.
 (
     id: "soldier_meshy",
     display_name: "Soldier (Meshy)",
     lore_ref: "docs/characters/soldier.md",
 
     mesh: "characters/soldier_meshy/mesh/soldier_meshy.glb",
-    scale: 1.0,
-    y_offset: 0.0,
+    // See docs/CHARACTER_IMPORT_CHECKLIST.md before replacing this mesh.
+    scale: 1.04,
+    y_offset: -0.76,
     facing_deg: 0.0,
 
-    // None of these are confirmed — this rig's clips came out with messy
-    // auto-generated names (hash IDs, "Walk_Backward_with_Bow_1_inplace",
-    // etc.) and NO dedicated Idle or Death clip at all. Placeholder indices
-    // (0 for everything) until picked for real in the editor window's
-    // clip-name list.
     animations: (
-        idle: 0,
-        walk: 0,
-        run: 0,
-        shoot: 0,
+        idle: 15,
+        walk: 15,
+        run: 4,
+        run_back: 11,
+        shoot: 3,
         death: 0,
     ),
 

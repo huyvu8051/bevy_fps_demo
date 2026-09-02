@@ -359,20 +359,34 @@ pub(crate) fn on_net_player_replicated(
     // SceneRoot, or Bevy's visibility-propagation hook warns (B0004).
     commands.entity(entity).insert(Visibility::default());
     commands.entity(entity).with_children(|parent| {
-        parent.spawn((
-            Name::new("PlayerModel (remote NetPlayer)"),
-            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(PLAYER_MODEL_PATH))),
-            // Reads PlayerModelTuning (see its own doc comment) at spawn
-            // time only — unlike the local player's sync_player_model, no
-            // per-frame system re-applies this, so a live nudge (Comma/
-            // Period/Minus/Equal, EDITOR=1) only reaches remote players who
-            // join/reconnect after the nudge, not ones already on screen.
-            Transform::from_xyz(0.0, tuning.y_offset, 0.0)
-                .with_rotation(Quat::from_rotation_y(tuning.facing_deg.to_radians()))
-                .with_scale(Vec3::splat(tuning.scale)),
-            PlayerModelAnimRoot,
-        ));
+        spawn_remote_player_model(parent, &asset_server, &tuning);
     });
+}
+
+// Factored out of on_net_player_replicated so character_cycle_button
+// (settings_menu.rs) can respawn every EXISTING remote player's model with
+// a freshly-switched character's mesh/tuning, not just newly-joining ones.
+pub(crate) fn spawn_remote_player_model(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer, tuning: &PlayerModelTuning) {
+    parent.spawn((
+        Name::new("PlayerModel (remote NetPlayer)"),
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(tuning.mesh.clone()))),
+        // Reads PlayerModelTuning (see its own doc comment) at spawn
+        // time only — unlike the local player's sync_player_model, no
+        // per-frame system re-applies this, so a live nudge (Comma/
+        // Period/Minus/Equal, EDITOR=1) only reaches remote players who
+        // join/reconnect after the nudge, not ones already on screen.
+        Transform::from_xyz(0.0, tuning.y_offset, 0.0)
+            .with_rotation(Quat::from_rotation_y(tuning.facing_deg.to_radians()))
+            .with_scale(Vec3::splat(tuning.scale)),
+        PlayerModelAnimRoot,
+        // Wired the same way for remote players (see
+        // wire_player_model_skeleton_bones) even though
+        // apply_player_model_travel_twist only reads it for the local
+        // model right now — NetTransform doesn't replicate a move_axis
+        // to derive a remote player's own travel-vs-facing angle from
+        // yet, only moving/sprinting bools.
+        PlayerModelSkeletonBones::default(),
+    ));
 }
 
 // The local player's own replicated pose is copied straight through,

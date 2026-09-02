@@ -1,5 +1,7 @@
 use avian3d::prelude::*;
 use bevy::animation::graph::AnimationGraph;
+use bevy::app::AnimationSystems;
+use bevy::transform::TransformSystems;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::RenderTarget;
 use bevy::ecs::system::SystemParam;
@@ -627,18 +629,15 @@ const ZOMBIE_ATTACK_DAMAGE: f32 = 12.0;
 // too far from the root (unscaled) and nowhere near where the outer
 // capsule/visible mesh actually are. See its own doc comment.
 
-// "Soldier" by Quaternius (poly.pizza, CC-BY 3.0) —
-// https://poly.pizza/m/oAArCNHjFB — keep this attribution if shared/published.
-// Purely a debug visual for now (KeyT toggles it, see PlayerModelVisible) —
-// third-person games would parent something like this to every player, but
-// this project is first-person-only, so it's just there to eyeball whether
-// the local player's own position/orientation tracking looks right without
-// needing a second client. Unlike ZOMBIE_SCALE, this model's own node
-// hierarchy already bakes in a correcting scale (exported at 100x, common
-// for Blender-authored rigs), so it's spawned at Bevy's default scale (1.0)
-// — not independently calibrated against anything in-game, so it may need
-// visual tuning.
-const PLAYER_MODEL_PATH: &str = "characters/soldier/mesh/soldier.glb";
+// Soldier's default mesh — "Soldier" by Quaternius (poly.pizza, CC-BY 3.0)
+// — https://poly.pizza/m/oAArCNHjFB — keep this attribution if
+// shared/published. Visible either via KeyT (PlayerModelVisible, a debug
+// toggle) or CameraMode::ThirdPerson (KeyU) — real third-person now, not
+// just a debug-only visual the way it started before that camera existed.
+// The mesh path itself lives in PlayerModelTuning.mesh, not a fixed const
+// here — character_cycle_button (settings_menu.rs) can switch which
+// character.ron (and therefore which mesh) is active at runtime, see
+// AVAILABLE_CHARACTER_DIRS' own doc comment.
 
 // Damage number popup: spawned at the hit point, drifts straight up in
 // world space, and fades out over its lifetime.
@@ -932,6 +931,16 @@ struct LocalPlayerMoving(bool);
 // model's own Run pose.
 #[derive(Resource, Default)]
 struct LocalPlayerSprinting(bool);
+
+// Raw move_axis from this frame's own input (send_player_input) — used by
+// apply_player_model_travel_twist (movement_combat.rs) to rotate the local
+// debug model's hips toward the real travel direction while the Run/Walk
+// clip stays a single straight-ahead animation. x = strafe right(+)/
+// left(-), y = forward(+)/backward(-), same convention
+// shared::movement::simulate_player_step rotates by camera yaw — a
+// Vec2::ZERO here means "not moving", not "moving straight ahead".
+#[derive(Resource, Default)]
+struct LocalPlayerMoveAxis(Vec2);
 
 // Which debug bot (see shared::DebugBot) the C/[/]/X/O debug panel keybinds
 // currently act on — client-only, never sent over the network.
@@ -1379,7 +1388,6 @@ impl Plugin for GamePlugin {
         .init_resource::<ShowAutopilotTarget>()
         .init_resource::<ShowHitMarkers>()
         .init_resource::<ShowBulletTracers>()
-        .init_resource::<DebugPanelVisible>()
         .init_resource::<SettingsMenuVisible>()
         .init_resource::<SettingsMenuScrollState>()
         .init_resource::<SettingsMenuPageIndex>()
@@ -1404,6 +1412,7 @@ impl Plugin for GamePlugin {
         .init_resource::<SelectedDebugBot>()
         .init_resource::<LocalPlayerMoving>()
 .init_resource::<LocalPlayerSprinting>()
+.init_resource::<LocalPlayerMoveAxis>()
         .init_resource::<TouchControlsEnabled>()
         .init_resource::<TouchMoveState>()
         .init_resource::<TouchMoveAxis>()
@@ -1417,6 +1426,7 @@ impl Plugin for GamePlugin {
         .init_resource::<TouchSprintHeld>()
         .init_resource::<TouchLeanHeld>()
         .init_resource::<SensitivityScale>()
+        .init_resource::<ActiveCharacterDir>()
         .init_resource::<KillCount>()
         .init_resource::<MapSelectionPending>()
         .init_resource::<RecentlyHitZombies>()
@@ -1478,6 +1488,8 @@ impl Plugin for GamePlugin {
                     update_zombie_count_text,
                     sensitivity_buttons,
                     update_sensitivity_text,
+                    character_cycle_button,
+                    update_character_name_text,
                     auto_maintain_button,
                     update_auto_maintain_button_color,
                     update_touch_controls_idle_hidden,
@@ -1500,7 +1512,6 @@ impl Plugin for GamePlugin {
                     toggle_noclip.run_if(debug_keys_allowed),
                     toggle_player_stance,
                     toggle_debug_flags.run_if(debug_keys_allowed),
-                    debug_panel_actions.run_if(debug_keys_allowed),
                     autopilot_pick_target,
                     autopilot_think,
                     mouse_look,
@@ -1524,7 +1535,14 @@ impl Plugin for GamePlugin {
                 // tuple slot instead of a 21st+ flat entry. Still fully
                 // ordered: .chain() on this outer tuple runs the entire inner
                 // chain before this.
-                (count_local_kills, toggle_inspect_mode, toggle_camera_mode, sync_third_person_camera).chain(),
+                (
+                    count_local_kills,
+                    toggle_inspect_mode,
+                    toggle_camera_mode,
+                    sync_third_person_camera,
+                    wire_player_model_skeleton_bones,
+                )
+                    .chain(),
             )
                 .chain(),
             (
@@ -1562,7 +1580,6 @@ impl Plugin for GamePlugin {
                 update_crosshair,
                 set_hitbox_gizmo_depth_bias,
                 draw_zombie_hitboxes,
-                update_debug_panel,
                 despawn_hit_markers,
                 despawn_muzzle_flashes,
                 despawn_bullet_tracers,
@@ -1574,6 +1591,18 @@ impl Plugin for GamePlugin {
                 .chain(),
         )
             .chain(),
+    );
+    // Must run after Bevy's own animation systems have written this
+    // frame's sampled clip pose onto Hips/spine but before transform
+    // propagation reads it for skinning/rendering — Update's own
+    // `.chain()` above can't express that (Bevy's AnimationSystems set
+    // runs in PostUpdate, not Update), so this gets its own PostUpdate
+    // registration. See apply_player_model_travel_twist's own doc comment.
+    app.add_systems(
+        PostUpdate,
+        apply_player_model_travel_twist
+            .after(AnimationSystems)
+            .before(TransformSystems::Propagate),
     );
     }
 }
@@ -1890,11 +1919,12 @@ fn setup(
     // Transform or its avian3d collider.
     commands.spawn((
         Name::new("PlayerModel (local, debug — KeyT/CameraMode)"),
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(PLAYER_MODEL_PATH))),
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(player_model_tuning.mesh.clone()))),
         Transform::from_translation(player_spawn).with_scale(Vec3::splat(player_model_tuning.scale)),
         Visibility::Hidden,
         PlayerModel,
         PlayerModelAnimRoot,
+        PlayerModelSkeletonBones::default(),
     ));
 
     // Per-kind 5-pose gameplay graphs (mirrors the server's
@@ -1905,25 +1935,7 @@ fn setup(
     // these (one zombie pinned per clip); harmless everywhere else.
     commands.insert_resource(build_zombie_kind_anims(&asset_server, &mut graphs));
 
-    let player_model_clips: Vec<Handle<AnimationClip>> = [
-        player_model_tuning.animations.idle,
-        player_model_tuning.animations.walk,
-        player_model_tuning.animations.run,
-        player_model_tuning.animations.shoot,
-        player_model_tuning.animations.death,
-    ]
-    .into_iter()
-    .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(PLAYER_MODEL_PATH)))
-    .collect();
-    let (player_model_graph, player_model_nodes) = AnimationGraph::from_clips(player_model_clips);
-    commands.insert_resource(PlayerModelAnim {
-        graph: graphs.add(player_model_graph),
-        idle: player_model_nodes[0],
-        walk: player_model_nodes[1],
-        run: player_model_nodes[2],
-        shoot: player_model_nodes[3],
-        death: player_model_nodes[4],
-    });
+    commands.insert_resource(build_player_model_anim(&asset_server, &mut graphs, &player_model_tuning));
 
     let (review_yaw, review_pitch) = review_yaw_pitch();
     let camera = commands
@@ -2118,7 +2130,6 @@ fn setup(
     spawn_ping_ui(&mut commands);
     spawn_compass_ui(&mut commands);
     spawn_inspect_ui(&mut commands);
-    spawn_debug_panel(&mut commands);
     spawn_settings_menu(&mut commands);
     spawn_settings_toggle_button(&mut commands);
     spawn_mouse_ui_lock_indicator(&mut commands);
@@ -2773,6 +2784,19 @@ pub(crate) struct CharacterAnimIndices {
     pub(crate) run: usize,
     pub(crate) shoot: usize,
     pub(crate) death: usize,
+    // Played instead of `run` while LocalPlayerMoveAxis.y < 0 (see
+    // update_local_player_model_animation) — apply_player_model_travel_twist
+    // (movement_combat.rs) then twists the legs relative to straight-back
+    // instead of straight-forward. Both character.ron files set this
+    // explicitly (soldier.glb: 17 = Run_Back); #[serde(default)] (-> 0,
+    // NOT "same as run") only guards a hypothetical future character.ron
+    // that predates this field — set it for real before relying on it,
+    // clip 0 is Death on soldier.glb. Walk has no back variant to switch
+    // to at all (no Walk_Back clip in soldier.glb), so it keeps using the
+    // forward Walk clip + full-range leg twist for every direction
+    // including backward — an accepted "good enough for now" gap.
+    #[serde(default)]
+    pub(crate) run_back: usize,
 }
 
 // Mirrors character.ron's shape. Only `scale`/`y_offset`/`facing_deg`/
@@ -2794,12 +2818,46 @@ pub(crate) struct CharacterRon {
     pub(crate) audio: Vec<String>,
 }
 
-fn load_character_ron() -> CharacterRon {
-    let text = shared::read_ron_data_file!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/assets/characters/soldier/character.ron"
-    ));
-    ron::de::from_str(&text).unwrap_or_else(|e| panic!("failed to parse soldier character.ron: {e}"))
+// Every switchable player character, in cycle order — "Đổi nhân vật"
+// (character_cycle_button, settings_menu.rs) walks this list. A dir here
+// (e.g. "characters/soldier") is both an asset path prefix AND the id
+// load_character_ron_by_dir keys its wasm32 include_str! match arm on —
+// adding a new character means adding both a character.ron + mesh under
+// this dir AND a match arm below, in the same commit.
+pub(crate) const AVAILABLE_CHARACTER_DIRS: &[&str] = &["characters/soldier", "characters/soldier_meshy"];
+
+// Generalizes the old hardcoded-to-soldier loader so character_cycle_button
+// can switch to any dir in AVAILABLE_CHARACTER_DIRS at runtime, not just
+// load soldier's once at Startup. Same wasm32-vs-native split
+// shared::read_ron_data_file! already does (see its own doc comment) but
+// hand-written here since that macro needs a *literal* path token for its
+// include_str! branch — it can't take one built from a runtime `dir`
+// argument the way std::fs::read_to_string's native branch can.
+fn load_character_ron_by_dir(dir: &str) -> CharacterRon {
+    #[cfg(target_arch = "wasm32")]
+    let text: &str = match dir {
+        "characters/soldier" => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/characters/soldier/character.ron"))
+        }
+        "characters/soldier_meshy" => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/characters/soldier_meshy/character.ron"))
+        }
+        other => panic!("load_character_ron_by_dir: unknown character dir {other:?} — add an include_str! arm here to match a new entry in AVAILABLE_CHARACTER_DIRS"),
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let text = std::fs::read_to_string(format!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/{}/character.ron"), dir))
+        .unwrap_or_else(|e| panic!("failed to read {dir}/character.ron: {e}"));
+    ron::de::from_str(&text).unwrap_or_else(|e| panic!("failed to parse {dir}/character.ron: {e}"))
+}
+
+// "characters/foo/mesh/foo.glb" -> "characters/foo" — character.ron always
+// lives one level up from the mesh/ subfolder. Used by
+// save_player_model_tuning (movement_combat.rs) to save back to whichever
+// character is CURRENTLY active (PlayerModelTuning.mesh), not always
+// soldier's — a leftover from before character-switching existed, when
+// there was only ever one possible active file.
+pub(crate) fn character_dir_from_mesh_path(mesh_path: &str) -> String {
+    mesh_path.rsplit_once("/mesh/").map(|(dir, _)| dir.to_string()).unwrap_or_default()
 }
 
 // Used by save_player_model_tuning (movement_combat.rs) to write
@@ -2830,6 +2888,7 @@ pub(crate) fn format_character_ron(c: &CharacterRon) -> String {
          \u{20}       idle: {idle},\n\
          \u{20}       walk: {walk},\n\
          \u{20}       run: {run},\n\
+         \u{20}       run_back: {run_back},\n\
          \u{20}       shoot: {shoot},\n\
          \u{20}       death: {death},\n\
          \u{20}   ),\n\
@@ -2846,6 +2905,7 @@ pub(crate) fn format_character_ron(c: &CharacterRon) -> String {
         idle = c.animations.idle,
         walk = c.animations.walk,
         run = c.animations.run,
+        run_back = c.animations.run_back,
         shoot = c.animations.shoot,
         death = c.animations.death,
         audio = c.audio.iter().map(|a| format!("\"{a}\"")).collect::<Vec<_>>().join(", "),
@@ -2874,9 +2934,11 @@ pub(crate) struct PlayerModelTuning {
     pub(crate) audio: Vec<String>,
 }
 
-impl Default for PlayerModelTuning {
-    fn default() -> Self {
-        let c = load_character_ron();
+impl PlayerModelTuning {
+    // See AVAILABLE_CHARACTER_DIRS' own doc comment — `dir` must be one of
+    // its entries.
+    pub(crate) fn load(dir: &str) -> Self {
+        let c = load_character_ron_by_dir(dir);
         Self {
             scale: c.scale,
             y_offset: c.y_offset,
@@ -2888,6 +2950,12 @@ impl Default for PlayerModelTuning {
             mesh: c.mesh,
             audio: c.audio,
         }
+    }
+}
+
+impl Default for PlayerModelTuning {
+    fn default() -> Self {
+        Self::load(AVAILABLE_CHARACTER_DIRS[0])
     }
 }
 
