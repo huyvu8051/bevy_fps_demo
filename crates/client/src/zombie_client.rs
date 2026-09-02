@@ -208,6 +208,7 @@ impl ZombieKindGameplayAnim {
 pub(crate) struct ZombieAnim {
     classic: ZombieKindGameplayAnim,
     meshy: ZombieKindGameplayAnim,
+    soldier: ZombieKindGameplayAnim,
 }
 
 impl ZombieAnim {
@@ -215,6 +216,7 @@ impl ZombieAnim {
         match kind {
             ZombieKind::Classic => &self.classic,
             ZombieKind::Meshy => &self.meshy,
+            ZombieKind::Soldier => &self.soldier,
         }
     }
 }
@@ -235,6 +237,7 @@ pub(crate) fn build_zombie_anim(asset_server: &AssetServer, graphs: &mut Assets<
     ZombieAnim {
         classic: build(ZombieKind::Classic),
         meshy: build(ZombieKind::Meshy),
+        soldier: build(ZombieKind::Soldier),
     }
 }
 
@@ -246,6 +249,7 @@ pub(crate) fn build_zombie_anim(asset_server: &AssetServer, graphs: &mut Assets<
 pub(crate) struct ZombieKindAnims {
     classic: (Handle<AnimationGraph>, Vec<AnimationNodeIndex>),
     meshy: (Handle<AnimationGraph>, Vec<AnimationNodeIndex>),
+    soldier: (Handle<AnimationGraph>, Vec<AnimationNodeIndex>),
 }
 
 impl ZombieKindAnims {
@@ -253,6 +257,7 @@ impl ZombieKindAnims {
         match kind {
             ZombieKind::Classic => &self.classic,
             ZombieKind::Meshy => &self.meshy,
+            ZombieKind::Soldier => &self.soldier,
         }
     }
 }
@@ -271,6 +276,7 @@ pub(crate) fn build_zombie_kind_anims(
     ZombieKindAnims {
         classic: build(ZombieKind::Classic),
         meshy: build(ZombieKind::Meshy),
+        soldier: build(ZombieKind::Soldier),
     }
 }
 
@@ -391,15 +397,15 @@ pub(crate) fn spawn_local_zombie(commands: &mut Commands, asset_server: &AssetSe
     spawn_zombie_health_bar(commands, zombie_entity);
 }
 
-// Scenario::ItemGallery animation-review rig: two rows of stationary
-// zombies (one row per mesh kind), one zombie per animation clip of that
-// kind, each pinned to loop its one clip (ZombieShowcaseClip →
-// wire_zombie_animations). Client-local like spawn_local_zombie — no
-// NetTransform / ZombieMotion, so movement / pose / LOD systems all skip
-// them and they just stand and cycle their clip. Called from setup()'s
-// ItemGallery branch alongside spawn_item_gallery_test_props.
+// Scenario::ItemGallery animation-review rig: one row of stationary
+// zombies per mesh kind, one zombie per animation clip of that kind, each
+// pinned to loop its one clip (ZombieShowcaseClip → wire_zombie_animations).
+// Client-local like spawn_local_zombie — no NetTransform / ZombieMotion, so
+// movement / pose / LOD systems all skip them and they just stand and
+// cycle their clip. Called from setup()'s ItemGallery branch alongside
+// spawn_item_gallery_test_props.
 pub(crate) fn spawn_item_gallery_zombie_showcase(commands: &mut Commands, asset_server: &AssetServer) {
-    for (row, kind) in [ZombieKind::Classic, ZombieKind::Meshy].into_iter().enumerate() {
+    for (row, kind) in [ZombieKind::Classic, ZombieKind::Meshy, ZombieKind::Soldier].into_iter().enumerate() {
         let count = zombie_kind_clip_count(kind);
         let row_z = shared::ITEM_GALLERY_ZOMBIE_ROW_Z[row];
         for (i, (x, z)) in shared::item_gallery_zombie_row(count, row_z).into_iter().enumerate() {
@@ -423,62 +429,12 @@ pub(crate) fn spawn_item_gallery_zombie_showcase(commands: &mut Commands, asset_
     }
 }
 
-// Definition (not just its registration in ItemGalleryCarsPlugin::build)
-// is wasm32-gated too — see that fn's own doc comment for why an EDITOR=1
-// F9 saver can't exist there at all.
-#[cfg(not(target_arch = "wasm32"))]
-const ZOMBIE_MESHY_TRANSFORM_RON: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/data/zombie_meshy_transform.ron");
-
-// F9 (EDITOR=1, ItemGallery): reads a live meshy showcase zombie's
-// mesh-child scale / rotation / Y-offset and writes them to
-// zombie_meshy_transform.ron, so "rotate/scale/nudge it in the editor,
-// eyeball, repeat" ends with a real save. All 7 meshy showcase zombies
-// share one transform, so any one is read. The root Y is physics-owned
-// (gravity), so only the mesh child matters here. Runs on the same F9 as
-// the car handler.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn save_zombie_meshy_showcase_transform(
-    keys: Res<ButtonInput<KeyCode>>,
-    roots: Query<(&Children, &ZombieKind), With<ZombieShowcaseClip>>,
-    child_tf: Query<&Transform, (With<SceneRoot>, Without<ZombieShowcaseClip>)>,
-    mut toast: ResMut<F9SaveToast>,
-) {
-    if !keys.just_pressed(KeyCode::F9) {
-        return;
-    }
-    let Some((children, _)) = roots.iter().find(|(_, k)| **k == ZombieKind::Meshy) else {
-        return; // not the ItemGallery showcase — nothing to save
-    };
-    let Some(mesh) = children.iter().find_map(|c| child_tf.get(c).ok()) else {
-        return;
-    };
-
-    let (ry, rx, rz) = mesh.rotation.to_euler(EulerRot::YXZ);
-    let out = format!(
-        "// Meshy showcase zombie transform — Scenario::ItemGallery only.\n\
-         //   (scale, mesh_y, rot_x_deg, rot_y_deg, rot_z_deg)\n\
-         // F9 (EDITOR=1) writes this; hand-editing works too.\n\
-         ({}, {}, {}, {}, {})\n",
-        ron_f32(mesh.scale.x),
-        ron_f32(mesh.translation.y),
-        ron_f32(rx.to_degrees()),
-        ron_f32(ry.to_degrees()),
-        ron_f32(rz.to_degrees()),
-    );
-    match std::fs::write(ZOMBIE_MESHY_TRANSFORM_RON, out) {
-        Ok(()) => {
-            info!("saved meshy zombie transform -> {ZOMBIE_MESHY_TRANSFORM_RON}");
-            // Runs after the car handler in the Update tuple — fold into
-            // its "saved N cars" line if that one just succeeded.
-            toast.ok_also("F9: saved meshy zombie transform", " + meshy zombie");
-        }
-        Err(e) => {
-            error!("F9 meshy zombie save failed writing {ZOMBIE_MESHY_TRANSFORM_RON}: {e}");
-            toast.err(format!("F9: meshy zombie save FAILED — {e}"));
-        }
-    }
-}
+// save_zombie_meshy_showcase_transform (F9 RON-tuning for the meshy/soldier
+// showcase rows) was removed along with zombie_meshy_transform.ron /
+// zombie_soldier_transform.ron — this project no longer eyeball-tunes a
+// mesh's placement at runtime and saves it to a RON file; scale/offset/
+// rotation get baked directly into the .glb instead (see
+// scripts/bake_mesh_transform.py) before it's ever added to the game.
 
 // No collider here anymore — hit detection is server-authoritative now
 // (crates/server's handle_fire_shot raycasts against its own zombie
@@ -783,25 +739,34 @@ pub(crate) fn update_zombie_lod(
     timings.near_zombie_count = near_count;
 }
 
-// Name of zombie_meshy.glb's own glTF scene root node — same Meshy export
+// Scene root node name shared by every split-mesh/anim zombie rig so far
+// (currently just zombie_soldier — zombie_meshy went back to a single
+// combined file, see its own path const's doc comment) — same Meshy export
 // convention (and coincidentally the same literal value) as
-// PLAYER_MODEL_SCENE_ROOT_NAME below, but kept as its own const since
-// there's no actual guarantee the two files' root names stay in sync (they
-// come from separate Meshy exports). ZOMBIE_PATH (Classic) is untouched —
-// this only matters for the Meshy rig.
-const ZOMBIE_MESHY_SCENE_ROOT_NAME: &str = "target_character";
+// PLAYER_MODEL_SCENE_ROOT_NAME below, kept as its own const since there's
+// no actual guarantee every Meshy export's root name stays in sync (they
+// come from separate exports; zombie_soldier's needed a manual rename via
+// scripts/rename_glb_root_node.py to match at all). ZOMBIE_PATH (Classic)
+// and the current ZOMBIE_MESHY_PATH are both untouched, single combined
+// files — this only matters for a rig whose MESH file has zero animations
+// of its own.
+const ZOMBIE_SPLIT_SCENE_ROOT_NAME: &str = "target_character";
 
-// Mirror of wire_player_model_scene_nodes' animation-target half for
-// zombie_meshy.glb, which got the exact same mesh/anim split (see
-// ZOMBIE_MESHY_ANIM_PATH's own doc comment, crates/shared/src/zombie.rs):
-// the mesh file carries zero animations of its own, so bevy_gltf never adds
-// AnimationPlayer/AnimationTargetId/AnimatedBy when spawning it (that
-// wiring only happens for a scene with animations in the SAME file — see
-// bevy_gltf::loader::mod.rs's `animation_roots`). This does it by hand
-// instead, exactly as wire_player_model_scene_nodes does for the player
-// model — see that fn's own doc comment for the full mechanism. Classic
-// zombies need none of this (ZOMBIE_PATH stays a single combined file).
-pub(crate) fn wire_zombie_meshy_scene_animation_targets(
+// Mirror of wire_player_model_scene_nodes' animation-target half, for
+// whichever zombie kind's mesh got the same mesh/anim split soldier_meshy
+// did (see ZOMBIE_SOLDIER_ANIM_PATH's own doc comment,
+// crates/shared/src/zombie.rs): a mesh-only file carries zero animations of
+// its own, so bevy_gltf never adds AnimationPlayer/AnimationTargetId/
+// AnimatedBy when spawning it (that wiring only happens for a scene with
+// animations in the SAME file — see bevy_gltf::loader::mod.rs's
+// `animation_roots`). This does it by hand instead, exactly as
+// wire_player_model_scene_nodes does for the player model — see that fn's
+// own doc comment for the full mechanism. Matching purely by root NAME
+// (not by ZombieKind) means this is a harmless no-op — bevy_gltf's own
+// wiring already covers it, and re-inserting the same values changes
+// nothing — for any zombie kind whose mesh ISN'T split (Classic, current
+// zombie_meshy); it only does real work for a kind that needs it.
+pub(crate) fn wire_zombie_scene_animation_targets(
     mut commands: Commands,
     child_of: Query<&ChildOf>,
     children: Query<&Children>,
@@ -811,7 +776,7 @@ pub(crate) fn wire_zombie_meshy_scene_animation_targets(
 ) {
     for entity in &new_names {
         let Ok(name) = names.get(entity) else { continue };
-        if name.as_str() != ZOMBIE_MESHY_SCENE_ROOT_NAME {
+        if name.as_str() != ZOMBIE_SPLIT_SCENE_ROOT_NAME {
             continue;
         }
         // Confirms this is actually a Zombie's own mesh scene (not some

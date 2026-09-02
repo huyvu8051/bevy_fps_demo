@@ -1544,7 +1544,7 @@ impl Plugin for GamePlugin {
                 restart_game.run_if(debug_keys_allowed),
                 restart_button,
                 map_select_button,
-                wire_zombie_meshy_scene_animation_targets,
+                wire_zombie_scene_animation_targets,
                 wire_zombie_animations,
                 wire_zombie_hitbox_bones,
                 wire_gun_mesh,

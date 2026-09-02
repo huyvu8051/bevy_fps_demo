@@ -942,13 +942,12 @@ pub(crate) fn nudge_player_model_tuning(keys: Res<ButtonInput<KeyCode>>, mut tun
 // character is loaded into PlayerModelTuning at runtime), rewriting the
 // WHOLE file (not just those 3 numbers) so id/display_name/lore_ref/mesh/
 // animations/audio — carried unchanged in PlayerModelTuning purely for
-// this — survive the round-trip instead of getting clobbered. Same
-// "eyeball it live, F9 saves" loop as save_zombie_meshy_showcase_transform
-// (zombie_client.rs), just saving a live-nudged Resource instead of a
-// live-dragged Transform: sync_player_model overwrites PlayerModel's own
-// Transform every frame, so there'd be nothing meaningful to read a
-// hand-dragged value back FROM there the way the zombie showcase (never
-// overwritten per-frame) allows.
+// this — survive the round-trip instead of getting clobbered. sync_player_model
+// overwrites PlayerModel's own Transform every frame, so this reads the
+// live-nudged PlayerModelTuning Resource instead — there'd be nothing
+// meaningful to read back from the Transform itself the way
+// save_item_gallery_car_physics_on_key reads a hand-dragged one (never
+// overwritten per-frame).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn save_player_model_tuning(
     keys: Res<ButtonInput<KeyCode>>,

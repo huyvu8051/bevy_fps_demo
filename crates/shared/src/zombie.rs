@@ -128,7 +128,11 @@ const MESHY_HITBOX_SLOTS: &[(&str, HitboxSetter)] = &[
 pub fn zombie_hitbox_bone_slots(kind: ZombieKind) -> &'static [(&'static str, HitboxSetter)] {
     match kind {
         ZombieKind::Classic => CLASSIC_HITBOX_SLOTS,
-        ZombieKind::Meshy => MESHY_HITBOX_SLOTS,
+        // zombie_soldier shares zombie_meshy's exact same 26-node Mixamo
+        // rig (verified node-for-node before wiring it up — see
+        // ZOMBIE_SOLDIER_PATH's own doc comment), so the same slot mapping
+        // applies unchanged.
+        ZombieKind::Meshy | ZombieKind::Soldier => MESHY_HITBOX_SLOTS,
     }
 }
 
@@ -355,83 +359,80 @@ pub const ZOMBIE_ANIM_WALK: usize = 4;
 // (zombie_kind_for_phase, crates/server) for a ~50/50 mix of both rigs.
 pub const ZOMBIE_MESHY_PATH: &str = "characters/zombie_meshy/mesh/zombie_meshy.glb";
 
-// Split from ZOMBIE_MESHY_PATH the same way soldier_meshy's mesh/anim split
-// works (docs/CHARACTER_IMPORT_CHECKLIST.md, scripts/extract_glb_mesh_only.py
-// + extract_glb_animations.py): the mesh file above carries zero animations
-// of its own now, every clip lives here instead. Same "target_character"
-// scene root name as soldier_meshy's split (both Meshy exports use that
-// convention) — see crates/client's wire_zombie_meshy_scene_animation_targets
-// for the manual AnimationPlayer/AnimationTargetId wiring this split
-// requires (bevy_gltf only adds that automatically for a file that has
-// animations in itself). ZOMBIE_PATH (Classic) stays a single combined
-// file — only Meshy has been split so far.
-pub const ZOMBIE_MESHY_ANIM_PATH: &str = "characters/zombie_meshy/anims/mixamo_base.glb";
+// --- Third zombie mesh: a Meshy "Full body game ready" biped, reskinned
+// as a soldier zombie ---
+//
+// Same 26-node Mixamo-named rig as soldier_meshy/zombie_meshy (root
+// renamed "Armature" -> "target_character" via scripts/rename_glb_root_node.py
+// to match, and verified node-for-node identical ancestor-path hierarchy
+// before wiring this up), so unlike zombie_meshy it's split from the start
+// (scripts/extract_glb_mesh_only.py) and shares soldier_meshy's own
+// animation library rather than shipping any clips of its own — see
+// ZOMBIE_SOLDIER_ANIM_PATH below.
+pub const ZOMBIE_SOLDIER_PATH: &str = "characters/zombie_soldier/mesh/zombie_soldier.glb";
 
-/// Which glTF file a kind's animation clips should be loaded from — same
-/// file as the mesh for Classic (never split), the separate anim-only file
-/// for Meshy (see ZOMBIE_MESHY_ANIM_PATH's own doc comment).
+// The TRUE shared animation library — one physical file under
+// characters/_shared_anims/, not a per-character copy, pointed at by both
+// this and soldier_meshy's own character.ron `anim_source` field (used to
+// be two separate byte-identical copies kept in sync by hand via
+// scripts/merge_glb_animations.py; consolidated into one real shared file
+// instead). See wire_zombie_scene_animation_targets (crates/client) for
+// the manual AnimationPlayer/AnimationTargetId wiring a split mesh always
+// needs (bevy_gltf only auto-adds that for a file that has animations in
+// itself) — and note that matching bone names/hierarchy isn't sufficient
+// on its own for a character to safely point here: each joint's own REST
+// rotation convention has to match too (see character.ron's own comment
+// for a verified case where it didn't).
+pub const ZOMBIE_SOLDIER_ANIM_PATH: &str = "characters/_shared_anims/mixamo_base.glb";
+
+/// Which glTF file a kind's animation clips should be loaded from — the
+/// mesh's own file for Classic/Meshy (neither split), the separate
+/// anim-only library for Soldier (see ZOMBIE_SOLDIER_ANIM_PATH's own doc
+/// comment).
 pub fn zombie_kind_anim_path(kind: ZombieKind) -> &'static str {
     match kind {
         ZombieKind::Classic => ZOMBIE_PATH,
-        ZombieKind::Meshy => ZOMBIE_MESHY_ANIM_PATH,
+        ZombieKind::Meshy => ZOMBIE_MESHY_PATH,
+        ZombieKind::Soldier => ZOMBIE_SOLDIER_ANIM_PATH,
     }
 }
 
-// Eyeball-tuned placement for the meshy rig — its glTF ships lying on its
-// back (bind pose ~flat in Y, long in Z) at an unknown scale, so the right
-// numbers can only be found by eye (F2 editor). Stored in a RON file rather
-// than compiled in so F9 can save edits back — see zombie_meshy_transform()
-// and crates/client's save_zombie_meshy_showcase_transform.
-//
-// Tuple layout: (scale, mesh_y, rot_x_deg, rot_y_deg, rot_z_deg)
-//   scale    — uniform scale of the mesh child
-//   mesh_y   — Y offset of the mesh child relative to the (physics-settled)
-//              root, to line the meshy rig's feet up with the floor — the
-//              classic rig's equivalent is the baked-in ZOMBIE_MODEL_Y_OFFSET
-//   rot_*    — X/Y/Z euler degrees (EulerRot::YXZ); X pitch stands it up,
-//              Y yaw faces it at the player
+// Meshy/Soldier's placement used to be a per-kind runtime scale/Y-offset/
+// rotation, eyeballed in the F2 editor and F9-saved to a RON file
+// (zombie_meshy_transform.ron / zombie_soldier_transform.ron — both now
+// deleted). Both meshes now carry that same correction baked permanently
+// into their own scene root node instead (scripts/bake_mesh_transform.py —
+// the general-purpose successor to normalize_glb_root_rotation.py, which
+// only ever handled rotation), so their mesh child needs no per-kind
+// transform of its own any more — see zombie_kind_mesh_transform.
+// zombie_soldier didn't need any correction to begin with (its bind pose
+// already ships standing upright); zombie_meshy's bake replicates its old
+// RON values exactly (scale 1.0 no-op, offset_y -1.0, rot_x 90°).
 
-fn zombie_meshy_transform_raw() -> (f32, f32, f32, f32, f32) {
-    static DATA: std::sync::OnceLock<(f32, f32, f32, f32, f32)> = std::sync::OnceLock::new();
-    *DATA.get_or_init(|| {
-        // Same CARGO_MANIFEST_DIR-relative resolution as the item-gallery
-        // car physics RON — see its own comment for why not CWD.
-        let text = crate::read_ron_data_file!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../client/assets/data/zombie_meshy_transform.ron"
-        ));
-        ron::de::from_str(&text).unwrap_or_else(|e| panic!("failed to parse meshy zombie transform: {e}"))
-    })
-}
-
-pub fn zombie_meshy_scale() -> f32 {
-    zombie_meshy_transform_raw().0
-}
-/// Y offset of the meshy mesh child relative to the zombie root.
-pub fn zombie_meshy_mesh_y() -> f32 {
-    zombie_meshy_transform_raw().1
-}
-/// X/Y/Z euler degrees.
-pub fn zombie_meshy_rot_deg() -> Vec3 {
-    let (_, _, x, y, z) = zombie_meshy_transform_raw();
-    Vec3::new(x, y, z)
-}
-
-/// Which of the two zombie meshes an entity uses. Replicated on gameplay
-/// zombies (server picks per-spawn, ~50/50 — see crates/server's
-/// spawn_zombies); the ItemGallery showcase rig sets it locally. Absence
-/// still means `Classic` (older call sites / client's `spawn_local_zombie`).
+/// Which of the three zombie meshes an entity uses. Replicated on gameplay
+/// zombies (server picks per-spawn, roughly evenly split — see
+/// crates/server's spawn_zombies); the ItemGallery showcase rig sets it
+/// locally. Absence still means `Classic` (older call sites / client's
+/// `spawn_local_zombie`).
 #[derive(Component, Clone, Copy, PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 pub enum ZombieKind {
     #[default]
     Classic,
     Meshy,
+    Soldier,
 }
 
-/// Deterministic ~50/50 pick from an entity's own `entity_phase` hash — the
-/// server tags each spawning zombie with this so a horde shows both rigs.
+/// Deterministic ~1/3-1/3-1/3 pick from an entity's own `entity_phase`
+/// hash — the server tags each spawning zombie with this so a horde shows
+/// all three rigs.
 pub fn zombie_kind_for_phase(phase: f32) -> ZombieKind {
-    if phase < 0.5 { ZombieKind::Classic } else { ZombieKind::Meshy }
+    if phase < 1.0 / 3.0 {
+        ZombieKind::Classic
+    } else if phase < 2.0 / 3.0 {
+        ZombieKind::Meshy
+    } else {
+        ZombieKind::Soldier
+    }
 }
 
 impl std::fmt::Display for ZombieKind {
@@ -439,6 +440,7 @@ impl std::fmt::Display for ZombieKind {
         f.write_str(match self {
             ZombieKind::Classic => "classic",
             ZombieKind::Meshy => "meshy",
+            ZombieKind::Soldier => "soldier",
         })
     }
 }
@@ -454,39 +456,35 @@ pub fn zombie_kind_mesh_path(kind: ZombieKind) -> &'static str {
     match kind {
         ZombieKind::Classic => ZOMBIE_PATH,
         ZombieKind::Meshy => ZOMBIE_MESHY_PATH,
+        ZombieKind::Soldier => ZOMBIE_SOLDIER_PATH,
     }
 }
 
-/// How many animation clips the kind's glTF file ships — one showcase
-/// zombie is spawned per clip.
+/// How many animation clips the kind's anim source (zombie_kind_anim_path)
+/// ships — one showcase zombie is spawned per clip.
 pub fn zombie_kind_clip_count(kind: ZombieKind) -> usize {
     match kind {
         ZombieKind::Classic => 5,
         ZombieKind::Meshy => 7,
+        // mixamo_base.glb's clip count (soldier_meshy/zombie_soldier's own
+        // copy) — see docs/CHARACTER_IMPORT_CHECKLIST.md if this drifts.
+        ZombieKind::Soldier => 19,
     }
 }
 
 /// Local transform for the mesh child under a zombie root, per kind. Classic
 /// keeps the exact transform on_zombie_spawned / zombie_mesh_bundle already
-/// used (`ZOMBIE_MODEL_Y_OFFSET` + `ZOMBIE_SCALE`); meshy uses its own
-/// eyeball-tuned consts above (Y placement is on the root instead — see
-/// `zombie_kind_showcase_root_y`).
+/// used (`ZOMBIE_MODEL_Y_OFFSET` + `ZOMBIE_SCALE`); meshy/soldier need none
+/// — their placement is baked into the mesh file itself (see
+/// zombie_kind_anim_path's own doc comment above; root Y placement is on
+/// the zombie root instead — see `zombie_kind_showcase_root_y`).
 pub fn zombie_kind_mesh_transform(kind: ZombieKind) -> Transform {
     match kind {
-        ZombieKind::Classic => {
-            Transform::from_xyz(0.0, ZOMBIE_MODEL_Y_OFFSET, 0.0).with_scale(Vec3::splat(ZOMBIE_SCALE))
-        }
-        ZombieKind::Meshy => {
-            let r = zombie_meshy_rot_deg();
-            Transform::from_xyz(0.0, zombie_meshy_mesh_y(), 0.0)
-                .with_rotation(Quat::from_euler(
-                    EulerRot::YXZ,
-                    r.y.to_radians(),
-                    r.x.to_radians(),
-                    r.z.to_radians(),
-                ))
-                .with_scale(Vec3::splat(zombie_meshy_scale()))
-        }
+        ZombieKind::Classic => Transform::from_xyz(0.0, ZOMBIE_MODEL_Y_OFFSET, 0.0).with_scale(Vec3::splat(ZOMBIE_SCALE)),
+        // Meshy/Soldier need no scale/offset/rotation here at all — both
+        // are baked into their own mesh's scene root node now (see
+        // ZOMBIE_SOLDIER_ANIM_PATH's own doc comment above).
+        ZombieKind::Meshy | ZombieKind::Soldier => Transform::IDENTITY,
     }
 }
 
@@ -494,11 +492,12 @@ pub fn zombie_kind_mesh_transform(kind: ZombieKind) -> Transform {
 /// physics (walk-through, like every zombie: bare Collider, no RigidBody)
 /// so the floor is a fixed known height. Classic: cancel the capsule-center
 /// `ZOMBIE_MODEL_Y_OFFSET` baked into its mesh child so the feet land on
-/// Y=0. Meshy: 0 — its mesh child's own `mesh_y` carries the whole offset.
+/// Y=0. Meshy/Soldier: 0 — their mesh child's own `mesh_y` carries the
+/// whole offset.
 pub fn zombie_kind_showcase_root_y(kind: ZombieKind) -> f32 {
     match kind {
         ZombieKind::Classic => -ZOMBIE_MODEL_Y_OFFSET,
-        ZombieKind::Meshy => 0.0,
+        ZombieKind::Meshy | ZombieKind::Soldier => 0.0,
     }
 }
 
@@ -513,11 +512,14 @@ pub fn zombie_kind_gameplay_mesh_transform(kind: ZombieKind) -> Transform {
     zombie_kind_mesh_transform(kind)
 }
 
-/// Clip indices into a kind's glTF for the 5 gameplay poses, in order
-/// `[idle, walk, run, crawl, bite]`. Classic maps 1:1 to its named
-/// `ZOMBIE_ANIM_*`; Meshy only has real Walking (6) / Running (5) clips, so
-/// idle/crawl/bite fall back to its first Text-to-Motion clip until more
-/// are generated.
+/// Clip indices into a kind's anim source (zombie_kind_anim_path) for the 5
+/// gameplay poses, in order `[idle, walk, run, crawl, bite]`. Classic maps
+/// 1:1 to its named `ZOMBIE_ANIM_*`; Meshy only has real Walking (6) /
+/// Running (5) clips, so idle/crawl/bite fall back to its first
+/// Text-to-Motion clip until more are generated. Soldier shares
+/// soldier_meshy's mixamo_base.glb indices (Walking=15, Running=4) — same
+/// "no real crawl/bite yet" gap, Run_and_Shoot (3) stands in for bite as a
+/// closer-than-nothing attack motion.
 pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; 5] {
     match kind {
         ZombieKind::Classic => [
@@ -528,6 +530,7 @@ pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; 5] {
             ZOMBIE_ANIM_BITE,
         ],
         ZombieKind::Meshy => [0, 6, 5, 0, 0],
+        ZombieKind::Soldier => [15, 15, 4, 15, 3],
     }
 }
 

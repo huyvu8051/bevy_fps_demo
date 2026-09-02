@@ -58,12 +58,13 @@ impl Plugin for ItemGalleryCarsPlugin {
                         // F2 overlay itself is open and could claim the
                         // same keys for something else later.
                         save_item_gallery_car_physics_on_key.run_if(debug_keys_allowed),
-                        // Same F9 keypress also saves the shared meshy
-                        // showcase zombie transform (zombie_client.rs), and
-                        // the soldier model's own tuning (movement_combat.rs)
-                        // — Comma/Period/Minus/Equal nudge that one live
-                        // first, see nudge_player_model_tuning's own comment.
-                        save_zombie_meshy_showcase_transform.run_if(debug_keys_allowed),
+                        // Same F9 keypress also saves the soldier model's
+                        // own tuning (movement_combat.rs) — Comma/Period/
+                        // Minus/Equal nudge that one live first, see
+                        // nudge_player_model_tuning's own comment. (Zombie
+                        // meshes no longer have an F9-tunable RON transform
+                        // — scale/offset/rotation get baked into the .glb
+                        // instead, see scripts/bake_mesh_transform.py.)
                         nudge_player_model_tuning.run_if(debug_keys_allowed),
                         save_player_model_tuning.run_if(debug_keys_allowed),
                         tick_f9_toast,
@@ -237,7 +238,7 @@ pub(crate) fn round4(v: f32) -> f32 {
 
 /// f32 -> RON float literal: shortest form, but always with a decimal
 /// point (`1` is an int in RON and won't parse into an f32 field). Shared
-/// with save_zombie_meshy_showcase_transform.
+/// with save_player_model_tuning (movement_combat.rs).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn ron_f32(v: f32) -> String {
     let s = format!("{}", round4(v));

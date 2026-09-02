@@ -34,7 +34,7 @@ use shared::{
     DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, INTERP_DELAY_SECS,
     LAG_COMPENSATION_MAX_SECS, PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
     PROTOCOL_ID,
-    ZombieKind, zombie_kind_for_phase, zombie_kind_mesh_path, zombie_kind_gameplay_mesh_transform, zombie_kind_pose_clips,
+    ZombieKind, zombie_kind_for_phase, zombie_kind_mesh_path, zombie_kind_anim_path, zombie_kind_gameplay_mesh_transform, zombie_kind_pose_clips,
     ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
     ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
     ZOMBIE_TURN_RATE_DEG,
@@ -1404,6 +1404,7 @@ impl ServerZombieKindAnim {
 struct ServerZombieAnim {
     classic: ServerZombieKindAnim,
     meshy: ServerZombieKindAnim,
+    soldier: ServerZombieKindAnim,
 }
 
 impl ServerZombieAnim {
@@ -1411,6 +1412,7 @@ impl ServerZombieAnim {
         match kind {
             ZombieKind::Classic => &self.classic,
             ZombieKind::Meshy => &self.meshy,
+            ZombieKind::Soldier => &self.soldier,
         }
     }
 }
@@ -1421,7 +1423,12 @@ fn setup_server_zombie_anim(
     mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
     let mut build = |kind: ZombieKind| {
-        let path = zombie_kind_mesh_path(kind);
+        // zombie_kind_anim_path, not zombie_kind_mesh_path: the two only
+        // differ for a kind whose mesh got split from its animations (see
+        // ZOMBIE_SOLDIER_ANIM_PATH's own doc comment, crates/shared) —
+        // zombie_kind_pose_clips' indices are always into the anim path,
+        // and a split mesh file has zero clips of its own to load here.
+        let path = zombie_kind_anim_path(kind);
         let clips: Vec<Handle<AnimationClip>> = zombie_kind_pose_clips(kind)
             .into_iter()
             .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(path)))
@@ -1435,6 +1442,7 @@ fn setup_server_zombie_anim(
     commands.insert_resource(ServerZombieAnim {
         classic: build(ZombieKind::Classic),
         meshy: build(ZombieKind::Meshy),
+        soldier: build(ZombieKind::Soldier),
     });
 }
 
