@@ -131,8 +131,9 @@ use nav_debug::*;
 // shared's `Scenario::map_kind()` — and matched on in setup() /
 // network_setup's map_select_button, mirroring the server's own
 // spawn_arena_colliders. `spawn_test_arena` builds MapKind::Arena;
-// shared::map1_level_pieces + spawn_map1_lights build MapKind::Building;
-// shared::item_gallery_level_pieces builds MapKind::ItemGallery.
+// shared::campaign_level_pieces(map_id) + spawn_map1_lights (map_id 1
+// only) build MapKind::Campaign(map_id); shared::item_gallery_level_pieces
+// builds MapKind::ItemGallery.
 
 // "AK47 with Scope" by Wolf Schevelenbos (Sketchfab, CC-BY 4.0) —
 // https://sketchfab.com/3d-models/ak47-with-scope-d4d9720f3677485b958ceecc02f7965c
@@ -1771,10 +1772,15 @@ fn setup(
             spawn_item_gallery_test_props(&mut commands, &asset_server);
             spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
         }
-        MapKind::Building => {
-            let (pieces, panels) = shared::map1_level_pieces();
+        MapKind::Campaign(map_id) => {
+            let (pieces, panels) = shared::campaign_level_pieces(map_id);
             spawn_level_pieces(&mut commands, pieces, panels);
-            if dynamic_lights_enabled() {
+            // spawn_map1_lights is hand-tuned for Map 1's own floors — only
+            // map_id 1 has real geometry today anyway (campaign_level_pieces
+            // panics otherwise), so this stays gated on it rather than
+            // running for every campaign map. A future map with its own
+            // lighting design gets its own spawn_map<id>_lights here.
+            if map_id == 1 && dynamic_lights_enabled() {
                 spawn_map1_lights(&mut commands);
             }
         }

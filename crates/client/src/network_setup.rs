@@ -733,8 +733,8 @@ pub(crate) fn map_select_button(
                 spawn_item_gallery_test_props(&mut commands, &asset_server);
                 spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
             }
-            MapKind::Building => {
-                let (pieces, panels) = shared::map1_level_pieces();
+            MapKind::Campaign(map_id) => {
+                let (pieces, panels) = shared::campaign_level_pieces(map_id);
                 spawn_level_pieces(&mut commands, pieces, panels);
             }
             MapKind::Arena => {

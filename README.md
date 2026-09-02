@@ -41,6 +41,7 @@ Có thể chạy nhiều client cùng lúc (nhiều terminal) để test multipl
 | `MAP_ID=0..5` | server + client | Chọn scenario (0 = game thật; 2 = arena + zombie; 5 = ItemGallery). Port server = `5031 + MAP_ID`; client tự tính khớp. Không set ở client → hiện menu chọn map. |
 | `RENDER_SCALE=0.1..1.0` | client | Scale render 3D (mặc định 0.4). Chỉnh live được trong Settings menu. |
 | `EDITOR=1` | client | Bật `bevy_editor_pls` (F2). Desktop-only. |
+| `ZOMBIE_COUNT=0..` | server | Số zombie baseline lúc start (mặc định 10). `ZOMBIE_COUNT=0` để mở map thuần xem/edit hình học, không có zombie/combat gì cả — dùng cùng `EDITOR=1` khi edit map. |
 | `SIM_LATENCY_MS=<ms>` | server và/hoặc client | Giả lập độ trễ 1 chiều (delay chiều gửi). Set 2 bên → RTT ≈ 2× giá trị. |
 | `SIM_LATENCY_JITTER_MS=<ms>` | server và/hoặc client | Random `0..=jitter` cộng thêm mỗi gói (mô phỏng jitter mạng thật). |
 | `SIM_PACKET_LOSS_PCT=<0..100>` | server và/hoặc client | % gói tin gửi bị drop (channel reliable sẽ tự retransmit). |

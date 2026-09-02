@@ -21,7 +21,7 @@ use shared::{
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount,
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
-    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, random_map1_zombie_spawn_pos,
+    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, campaign_zombie_spawn_pos,
     MapKind, scenario_player_spawn,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
@@ -343,7 +343,7 @@ fn start_server(mut commands: Commands, channels: Res<RepliconChannels>, scenari
 fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_server: Res<AssetServer>) {
     match scenario.map_kind() {
         MapKind::ItemGallery => spawn_item_gallery_level_pieces(&mut commands, &asset_server),
-        MapKind::Building => spawn_map1_level_pieces(&mut commands),
+        MapKind::Campaign(map_id) => spawn_campaign_level_pieces(&mut commands, map_id),
         MapKind::Arena => {
             spawn_flat_arena_colliders(&mut commands, scenario.map_id());
             // Kept on: desktop/iOS clients still render + expect to collide
@@ -408,8 +408,12 @@ fn spawn_flat_arena_colliders(commands: &mut Commands, map_id: u8) {
 // runs the real authoritative physics, but no longer decides/replicates
 // what a level LOOKS like — the client builds that independently from
 // the exact same shared data.
-fn spawn_map1_level_pieces(commands: &mut Commands) {
-    let (pieces, panels) = shared::map1_level_pieces();
+// Generalized over `map_id` (shared::campaign_level_pieces reads
+// map<id>_level_pieces.ron) — was `spawn_map1_level_pieces`, hardcoded to
+// Map 1 only. Every id goes through the exact same call now; only the RON
+// file backing a given id differs (today, only map_id 1 has one).
+fn spawn_campaign_level_pieces(commands: &mut Commands, map_id: u8) {
+    let (pieces, panels) = shared::campaign_level_pieces(map_id);
     spawn_collider_pieces(commands, pieces, panels);
 }
 
@@ -1020,12 +1024,18 @@ fn column_footprint(x: f32, z: f32) -> Vec<Vec2> {
 // ZombieCountUi mirrors this locally so the UI has something to show/adjust
 // without waiting on a round-trip). 10, not ZOMBIE_SPAWNS.len() (100) — set
 // low for on-device perf testing; bump via the cheat panel's +/- buttons.
+// Overridable via ZOMBIE_COUNT env var (read once at Startup, same pattern
+// as MAP_ID/scenario_from_env) — `ZOMBIE_COUNT=0` is the quick way to open
+// a map with EDITOR=1 for pure geometry editing, no combat/AI running at
+// all (still spawns 0 zombies even with AutoMaintainZombies on, since
+// tick_respawns/maintain_zombie_population only top up TOWARD the target).
 #[derive(Resource)]
 struct ZombieTargetCount(u32);
 
 impl Default for ZombieTargetCount {
     fn default() -> Self {
-        Self(10)
+        let count = std::env::var("ZOMBIE_COUNT").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
+        Self(count)
     }
 }
 
@@ -1048,15 +1058,16 @@ impl Default for AutoMaintainZombies {
 #[derive(Resource, Default)]
 struct NextZombieSpawnIndex(usize);
 
-// Picks the right spawn scatter for the map: Map 1's own 4 real floors on
-// MapKind::Building, the flat arena's generic grid otherwise. Every
+// Picks the right spawn scatter for the map: a campaign map's own real
+// floors (currently only map_id 1 has any — see campaign_zombie_spawn_pos)
+// on MapKind::Campaign, the flat arena's generic grid otherwise. Every
 // baseline zombie spawn call site (initial spawn, tick-based respawn,
 // manual SetZombieCount) goes through this instead of calling the raw fns
 // directly, so none can drift back to spawning zombies in the void between
-// Map 1's floors.
+// a campaign map's floors.
 fn zombie_spawn_pos_for(kind: MapKind, seed: usize) -> Vec3 {
     match kind {
-        MapKind::Building => random_map1_zombie_spawn_pos(seed),
+        MapKind::Campaign(map_id) => campaign_zombie_spawn_pos(map_id, seed),
         MapKind::Arena | MapKind::ItemGallery => random_zombie_spawn_pos(seed),
     }
 }

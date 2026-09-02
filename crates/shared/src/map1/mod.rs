@@ -316,6 +316,29 @@ pub fn random_map1_zombie_spawn_pos(seed: usize) -> Vec3 {
     Vec3::new(x, y, z)
 }
 
+/// `MapKind::Campaign(map_id)` counterpart to `random_map1_zombie_spawn_pos`
+/// — same generalization relationship as `campaign_level_pieces` has to
+/// `map1_level_pieces` above. This is ONLY the sandbox-style "scatter
+/// baseline population" spawn (`ZOMBIE_SPAWNS`-equivalent) — real campaign
+/// play should use the scripted wave system instead (see
+/// `docs/ZOMBIE_SPAWN_SYSTEM.md`, not implemented yet), which doesn't call
+/// this at all. This function only exists so `MapKind::Campaign` maps
+/// still have SOME zombie spawn behavior for dev/debug purposes (F2
+/// editor, manual `SetZombieCount`) before their real wave data exists.
+/// Only `map_id: 1` has real floor bounds to scatter within; any other id
+/// panics — same reasoning as `campaign_level_pieces`' panic branch.
+pub fn campaign_zombie_spawn_pos(map_id: u8, seed: usize) -> Vec3 {
+    if map_id == 1 {
+        return random_map1_zombie_spawn_pos(seed);
+    }
+    panic!(
+        "no sandbox zombie spawn bounds for campaign map_id {map_id} — \
+         only map_id 1 has floor geometry today; this map needs its wave \
+         data (docs/ZOMBIE_SPAWN_SYSTEM.md) before real play anyway, not a \
+         sandbox scatter fallback"
+    )
+}
+
 // --- Giếng thang bộ "4 góc cuộn" — nối các tầng CHỒNG THẬT (cùng tâm
 // X/Z, chỉ khác cao độ) thay cho ramp_between() (vốn giả định 2 tầng nằm
 // xéo dọc Z, cách nhau đúng RAMP_RUN). G/F2/F3 giờ dùng chung 1
@@ -541,6 +564,12 @@ pub fn map1_level_pieces_computed() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
 /// (`map1_level_pieces_computed()` ở trên chỉ còn là nguồn sinh ra file
 /// RON này, xem doc comment của nó). Đọc 1 lần rồi cache, giống hệt
 /// `arena_layout`/`item_gallery_car_physics_raw`.
+///
+/// Giữ lại tên riêng cho Map 1 cụ thể (thay vì gọi thẳng
+/// `campaign_level_pieces(1)`) vì đây vẫn là map DUY NHẤT có 1 bộ builder
+/// tham số hoá thật (`map1_level_pieces_computed` ở trên) đứng sau file
+/// RON này — regenerate_level_piece_ron (level_piece.rs) cần 1 cái tên cụ
+/// thể để gọi, không đi qua map_id chung.
 pub fn map1_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
     static DATA: std::sync::OnceLock<(Vec<BoxPiece>, Vec<PanelPiece>)> = std::sync::OnceLock::new();
     DATA.get_or_init(|| {
@@ -548,4 +577,58 @@ pub fn map1_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
         crate::level_piece::level_pieces_from_ron(&text)
     })
     .clone()
+}
+
+/// Hình học của `MapKind::Campaign(map_id)` bất kỳ, đọc từ
+/// `crates/client/assets/data/map<map_id>_level_pieces.ron` — bản tổng
+/// quát hoá của `map1_level_pieces()` ở trên theo đúng cách `arena_layout`
+/// (arena.rs) đã tổng quát hoá arena theo `map_id`: thêm map campaign mới
+/// (2-20, xem `docs/maps/mapNN_dimensions.md`) chỉ cần thêm 1 file RON,
+/// KHÔNG cần thêm hàm/nhánh Rust nào — mọi call site (server's
+/// `spawn_campaign_level_pieces`, client's map-switch handlers) đều gọi
+/// đúng 1 hàm này bất kể `map_id` là bao nhiêu.
+///
+/// `map_id: 1` vẫn thực chất đọc đúng `map1_level_pieces.ron` (chuyển tiếp
+/// qua `map1_level_pieces()` ở trên, không đọc lại file — giữ đúng 1
+/// nguồn thật duy nhất cho Map 1). Mọi `map_id` khác panic rõ ràng — CHƯA
+/// có map nào trong số 2-20 được code thật (chỉ mới có
+/// `docs/maps/mapNN_dimensions.md` ở mức thiết kế), thêm 1 map nghĩa là
+/// tạo `map<id>_level_pieces.ron` (viết tay theo đúng dữ liệu đã có trong
+/// doc thiết kế map đó, giống cách `arena_layout_map2.ron` được viết tay/
+/// F9-save, không cần 1 `map<id>_level_pieces_computed()` tham số hoá như
+/// Map 1 đã có — quá tốn công cho 19 map còn lại) rồi xoá nhánh panic của
+/// đúng id đó bên dưới.
+pub fn campaign_level_pieces(map_id: u8) -> (Vec<BoxPiece>, Vec<PanelPiece>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::collections::HashMap;
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::sync::{Mutex, OnceLock};
+    if map_id == 1 {
+        return map1_level_pieces();
+    }
+    #[cfg(target_arch = "wasm32")]
+    panic!(
+        "no wasm-embedded level pieces RON for campaign map_id {map_id} — \
+         only map_id 1 has one today; add a match arm here once map<id>_level_pieces.ron exists \
+         (same as arena.rs's load_arena_layout does per Arena map id)"
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static CACHE: OnceLock<Mutex<HashMap<u8, (Vec<BoxPiece>, Vec<PanelPiece>)>>> = OnceLock::new();
+        let mut cache = CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock().expect("campaign level pieces cache poisoned");
+        if let Some(pieces) = cache.get(&map_id) {
+            return pieces.clone();
+        }
+        let path = format!("{}/../client/assets/data/map{map_id}_level_pieces.ron", env!("CARGO_MANIFEST_DIR"));
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "no level pieces RON for campaign map_id {map_id} at {path}: {e} — \
+                 this map isn't implemented yet, see docs/maps/map{map_id:02}_dimensions.md \
+                 for its design numbers"
+            )
+        });
+        let pieces = crate::level_piece::level_pieces_from_ron(&text);
+        cache.insert(map_id, pieces.clone());
+        pieces
+    }
 }
