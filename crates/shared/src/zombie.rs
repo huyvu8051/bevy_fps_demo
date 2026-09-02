@@ -345,14 +345,37 @@ pub const ZOMBIE_ANIM_IDLE: usize = 2;
 pub const ZOMBIE_ANIM_RUN: usize = 3;
 pub const ZOMBIE_ANIM_WALK: usize = 4;
 
-// --- Second zombie mesh (Scenario::ItemGallery animation-review rig only) ---
+// --- Second zombie mesh ---
 //
 // A fully separate Meshy-generated zombie — different 24-joint rig, 7 clips
-// (0..4 Text-to-Motion, 5=Running, 6=Walking) — NOT wired into gameplay:
-// only spawn_item_gallery_zombie_showcase (crates/client) uses it, to stand
-// one instance per clip next to the classic zombie's own row so the two
-// rigs' animations can be eyeballed side by side. See commit bf3614c.
+// (0..4 Text-to-Motion, 5=Running, 6=Walking). Originally added purely for
+// spawn_item_gallery_zombie_showcase (crates/client, one instance per clip,
+// to eyeball its animations next to the classic zombie's own row — see
+// commit bf3614c) but later also wired into real gameplay spawns
+// (zombie_kind_for_phase, crates/server) for a ~50/50 mix of both rigs.
 pub const ZOMBIE_MESHY_PATH: &str = "characters/zombie_meshy/mesh/zombie_meshy.glb";
+
+// Split from ZOMBIE_MESHY_PATH the same way soldier_meshy's mesh/anim split
+// works (docs/CHARACTER_IMPORT_CHECKLIST.md, scripts/extract_glb_mesh_only.py
+// + extract_glb_animations.py): the mesh file above carries zero animations
+// of its own now, every clip lives here instead. Same "target_character"
+// scene root name as soldier_meshy's split (both Meshy exports use that
+// convention) — see crates/client's wire_zombie_meshy_scene_animation_targets
+// for the manual AnimationPlayer/AnimationTargetId wiring this split
+// requires (bevy_gltf only adds that automatically for a file that has
+// animations in itself). ZOMBIE_PATH (Classic) stays a single combined
+// file — only Meshy has been split so far.
+pub const ZOMBIE_MESHY_ANIM_PATH: &str = "characters/zombie_meshy/anims/mixamo_base.glb";
+
+/// Which glTF file a kind's animation clips should be loaded from — same
+/// file as the mesh for Classic (never split), the separate anim-only file
+/// for Meshy (see ZOMBIE_MESHY_ANIM_PATH's own doc comment).
+pub fn zombie_kind_anim_path(kind: ZombieKind) -> &'static str {
+    match kind {
+        ZombieKind::Classic => ZOMBIE_PATH,
+        ZombieKind::Meshy => ZOMBIE_MESHY_ANIM_PATH,
+    }
+}
 
 // Eyeball-tuned placement for the meshy rig — its glTF ships lying on its
 // back (bind pose ~flat in Y, long in Z) at an unknown scale, so the right

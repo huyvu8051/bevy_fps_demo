@@ -221,7 +221,7 @@ impl ZombieAnim {
 
 pub(crate) fn build_zombie_anim(asset_server: &AssetServer, graphs: &mut Assets<AnimationGraph>) -> ZombieAnim {
     let mut build = |kind: ZombieKind| {
-        let path = zombie_kind_mesh_path(kind);
+        let path = zombie_kind_anim_path(kind);
         let clips: Vec<Handle<AnimationClip>> = zombie_kind_pose_clips(kind)
             .into_iter()
             .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(path)))
@@ -263,7 +263,7 @@ pub(crate) fn build_zombie_kind_anims(
 ) -> ZombieKindAnims {
     let mut build = |kind: ZombieKind| {
         let clips: Vec<Handle<AnimationClip>> = (0..zombie_kind_clip_count(kind))
-            .map(|i| asset_server.load(GltfAssetLabel::Animation(i).from_asset(zombie_kind_mesh_path(kind))))
+            .map(|i| asset_server.load(GltfAssetLabel::Animation(i).from_asset(zombie_kind_anim_path(kind))))
             .collect();
         let (graph, nodes) = AnimationGraph::from_clips(clips);
         (graphs.add(graph), nodes)
@@ -781,6 +781,48 @@ pub(crate) fn update_zombie_lod(
     timings.move_zombies_ms = perf_start.elapsed().as_secs_f32() * 1000.0;
     timings.zombie_count = total;
     timings.near_zombie_count = near_count;
+}
+
+// Name of zombie_meshy.glb's own glTF scene root node — same Meshy export
+// convention (and coincidentally the same literal value) as
+// PLAYER_MODEL_SCENE_ROOT_NAME below, but kept as its own const since
+// there's no actual guarantee the two files' root names stay in sync (they
+// come from separate Meshy exports). ZOMBIE_PATH (Classic) is untouched —
+// this only matters for the Meshy rig.
+const ZOMBIE_MESHY_SCENE_ROOT_NAME: &str = "target_character";
+
+// Mirror of wire_player_model_scene_nodes' animation-target half for
+// zombie_meshy.glb, which got the exact same mesh/anim split (see
+// ZOMBIE_MESHY_ANIM_PATH's own doc comment, crates/shared/src/zombie.rs):
+// the mesh file carries zero animations of its own, so bevy_gltf never adds
+// AnimationPlayer/AnimationTargetId/AnimatedBy when spawning it (that
+// wiring only happens for a scene with animations in the SAME file — see
+// bevy_gltf::loader::mod.rs's `animation_roots`). This does it by hand
+// instead, exactly as wire_player_model_scene_nodes does for the player
+// model — see that fn's own doc comment for the full mechanism. Classic
+// zombies need none of this (ZOMBIE_PATH stays a single combined file).
+pub(crate) fn wire_zombie_meshy_scene_animation_targets(
+    mut commands: Commands,
+    child_of: Query<&ChildOf>,
+    children: Query<&Children>,
+    names: Query<&Name>,
+    zombies: Query<(), With<Zombie>>,
+    new_names: Query<Entity, Added<Name>>,
+) {
+    for entity in &new_names {
+        let Ok(name) = names.get(entity) else { continue };
+        if name.as_str() != ZOMBIE_MESHY_SCENE_ROOT_NAME {
+            continue;
+        }
+        // Confirms this is actually a Zombie's own mesh scene (not some
+        // unrelated glb reusing the same root node name — the player
+        // model's soldier_meshy.glb, for one) before touching anything.
+        if find_animation_root(entity, &child_of, |e| zombies.contains(e)).is_none() {
+            continue;
+        }
+        commands.entity(entity).try_insert(AnimationPlayer::default());
+        wire_animation_target_path(&mut commands, entity, entity, Vec::new(), &children, &names);
+    }
 }
 
 // Determining the root type before touching anything (rather than assigning
