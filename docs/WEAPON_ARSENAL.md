@@ -181,7 +181,7 @@ không phải thiết kế riêng 36 lần:
 
 | Attachment | Áp dụng cho class nào | Hệ số |
 |---|---|---|
-| Ống ngắm đỏ / ống ngắm 4x | AR, DMR, Sniper, LMG | Giảm `BULLET_SPREAD` khi ADS |
+| Ống ngắm (xem bảng zoom tier riêng ngay dưới — không còn 1 tier "4x" chung) | AR, DMR, Sniper, LMG | Giảm `BULLET_SPREAD` khi ADS, tier cao hơn cộng thêm yêu cầu đứng yên |
 | Băng đạn mở rộng | Súng ngắn, SMG, AR, DMR, LMG | Cộng thêm vào `MAGAZINE_SIZE` |
 | Báng nặng / tay cầm chống giật | AR, DMR, Sniper, LMG, Battle Rifle | Giảm hệ số giật (`RECOIL_PITCH_KICK`/`RECOIL_ROLL_DEG`) |
 | Giảm thanh gắn thêm | Súng ngắn, SMG, AR (KHÔNG áp được cho khẩu ĐÃ giảm thanh sẵn — SMG Giảm Thanh/Bắn Tỉa Giảm Thanh không cần) | Giảm hệ số `PLAYER_THREAT_PER_SHOT`, không giảm damage |
@@ -191,6 +191,36 @@ Không thiết kế attachment riêng cho Cận chiến/Cưa máy/Súng phun l�
 nghiệm — không hợp logic (súng cận chiến không gắn ống ngắm).
 
 ---
+
+## Zoom tier ống ngắm — dựa theo ngưỡng thật ngoài đời
+
+Nguyên tắc thật (súng trường thật): dưới ~8x cầm tay ngắm vẫn ổn định;
+từ ~8x trở lên rung tay bình thường đã bị khuếch đại rõ trong tầm nhìn,
+ngoài đời cần tì/kê (bipod, nằm bắn) mới bắn chính xác được. Áp trực
+tiếp vào game thành 1 cơ chế thay vì chỉ đổi số `BULLET_SPREAD` phẳng —
+**đúng tinh thần "khớp vật lý thật" toàn bộ tài liệu vũ khí/zombie này
+đã theo từ đầu**, không phải chỉ đẹp số liệu.
+
+| Tier | Zoom | Class dùng | Cầm tay/di chuyển | Cơ chế thêm |
+|---|---|---|---|---|
+| 0 — Iron sight/red dot | 1x | Súng ngắn, SMG, Shotgun, Nỏ, Phóng lựu | Bắn/di chuyển tự do, không phạt | — |
+| 1 — LPVO thấp | 1-4x | AR, LMG | Bắn/di chuyển tự do, ADS khi đang chạy vẫn được (phạt spread nhẹ như hiện tại) | — |
+| 2 — Trung bình | 4-8x | DMR/Battle Rifle | ADS đứng yên ổn định; ADS khi đang di chuyển bị lắc ống ngắm rõ (`SCOPE_SWAY` tăng theo tốc độ di chuyển) — vẫn bắn được, chỉ khó ngắm hơn, không khoá cứng | — |
+| 3 — Cao (sniper) | 8-20x tuỳ khẩu (bolt-action rẻ ~8x, khẩu cao cấp cuối game ~16-20x) | Súng bắn tỉa (bolt-action) | ADS khi đang đứng/di chuyển: `SCOPE_SWAY` rất lớn, gần như không ngắm được mục tiêu nhỏ/xa | **Cơ chế "Brace" mới:** đứng yên hẳn ≥ 0.3s (không di chuyển, kể cả strafe nhẹ) → sway giảm dần về gần 0 sau ~1s "nín thở giữ ổn định" (giống Sniper Elite/Escape from Tarkov, không phải cơ chế lạ) — đây chính là "kê súng" ảo, không cần vật lý bipod thật |
+
+**Vì sao không dùng bipod vật lý thật (đặt xuống mặt phẳng cụ thể):**
+phức tạp hoá UI/animation không cần thiết cho scope FPS multiplayer nhịp
+nhanh — "đứng yên đủ lâu = ổn định" là xấp xỉ đơn giản, đúng cảm giác
+("cần kê mới bắn chính xác ở zoom cao") mà không cần dựng cơ chế đặt
+bipod/tìm bề mặt riêng.
+
+**Việc cần làm khi code:** thêm field `zoom_tier`/`scope_magnification`
+vào `Gun` component (giá trị tĩnh theo loại ống ngắm gắn, không phải
+theo khẩu súng — 1 khẩu DMR có thể gắn ống 1 trong tier 1/2 tuỳ
+attachment chọn); thêm `SCOPE_SWAY` const + hệ thống tính sway theo
+`(zoom_tier, moving, brace_timer)`; brace_timer là 1 component mới
+(`ScopeBrace { still_secs: f32 }`) tăng khi player đứng yên trong lúc
+ADS, reset khi di chuyển hoặc hết ADS.
 
 ## Đối chiếu GDD mục 5/15 — cần cập nhật số liệu
 
