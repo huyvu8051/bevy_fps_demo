@@ -364,26 +364,52 @@ pub const ZOMBIE_MESHY_PATH: &str = "characters/zombie_meshy/mesh/zombie_meshy.g
 //
 // Same 26-node Mixamo-named rig as soldier_meshy/zombie_meshy (root
 // renamed "Armature" -> "target_character" via scripts/rename_glb_root_node.py
-// to match, and verified node-for-node identical ancestor-path hierarchy
-// before wiring this up), so unlike zombie_meshy it's split from the start
-// (scripts/extract_glb_mesh_only.py) and shares soldier_meshy's own
-// animation library rather than shipping any clips of its own — see
-// ZOMBIE_SOLDIER_ANIM_PATH below.
+// to match), split from the start (scripts/extract_glb_mesh_only.py).
+//
+// POLICY (changed after a real incident — see ZOMBIE_SOLDIER_ANIM_PATH's
+// own doc comment): mesh and animation stay split into 2 files per
+// character (keeps the pipeline/tooling uniform, RON-editor-friendly,
+// small mesh files), but animation is NO LONGER shared across different
+// characters' rigs — each character gets its OWN dedicated anim file
+// now, even if that means less clip reuse. Matching bone names/hierarchy
+// between 2 DIFFERENT characters' rigs is not enough to safely share one
+// animation file — each joint's own REST rotation convention has to
+// match too, and 2 different Meshy exports (even same "Full body game
+// ready" template) aren't guaranteed to agree on that. Splitting mesh
+// from anim WITHIN one character's own files is still fine and still
+// done (that split never had this problem — it's the SAME rig's own
+// rest pose on both sides), only cross-character sharing is retired.
 pub const ZOMBIE_SOLDIER_PATH: &str = "characters/zombie_soldier/mesh/zombie_soldier.glb";
 
-// The TRUE shared animation library — one physical file under
-// characters/_shared_anims/, not a per-character copy, pointed at by both
-// this and soldier_meshy's own character.ron `anim_source` field (used to
-// be two separate byte-identical copies kept in sync by hand via
-// scripts/merge_glb_animations.py; consolidated into one real shared file
-// instead). See wire_zombie_scene_animation_targets (crates/client) for
-// the manual AnimationPlayer/AnimationTargetId wiring a split mesh always
-// needs (bevy_gltf only auto-adds that for a file that has animations in
-// itself) — and note that matching bone names/hierarchy isn't sufficient
-// on its own for a character to safely point here: each joint's own REST
-// rotation convention has to match too (see character.ron's own comment
-// for a verified case where it didn't).
-pub const ZOMBIE_SOLDIER_ANIM_PATH: &str = "characters/_shared_anims/mixamo_base.glb";
+// Soldier's OWN dedicated animation file — NOT shared with soldier_meshy/
+// zombie_meshy any more. Extracted (scripts/extract_glb_animations.py)
+// from the same fresh Meshy export zombie_soldier.glb's mesh itself came
+// from, so its clip's rest-pose baseline is guaranteed to match (it's
+// literally the same rig) — no retargeting needed or attempted.
+//
+// History: this used to point at characters/_shared_anims/mixamo_base.glb
+// (shared with soldier_meshy/zombie_meshy). That caused a real, confirmed
+// bug: mixamo_base.glb's clips set each joint's LOCAL rotation to an
+// ABSOLUTE value every keyframe (standard glTF/Mixamo animation, not a
+// delta from rest), calibrated against zombie_meshy's specific rest pose.
+// zombie_soldier's actual rest pose measured differently (Hips->Foot
+// world direction ran along Z instead of the expected -Y) — same class of
+// bug the Mixamo/Unreal/Godot community calls "T-pose vs A-pose
+// retargeting breaks unless both rigs share a rest pose" (bone names/
+// hierarchy matching alone is NOT enough). Symptoms: legs visibly bent/
+// floated wrong while running, torso hitbox spun continuously (see
+// wire_zombie_hitbox_bones). A same-session attempt to fix it by
+// rewriting zombie_soldier's rest rotations to match zombie_meshy's
+// (scripts/retarget_rest_pose.py) made it far WORSE in actual gameplay —
+// the mesh deformed into a stretched, distorted shape, not just posed
+// wrong — and was reverted rather than shipped. Root cause of that
+// deformation is still unknown (the rebuilt inverseBindMatrices math
+// checked out on paper); an earlier, separate attempt at this same
+// rest-pose-retarget fix (see retarget_rest_pose.py's own git history)
+// hit the same "still looks wrong" wall. Given 2 independent retarget
+// attempts both failed, the policy above (no more cross-character anim
+// sharing) replaces trying a third time.
+pub const ZOMBIE_SOLDIER_ANIM_PATH: &str = "characters/zombie_soldier/anims/soldier_running.glb";
 
 /// Which glTF file a kind's animation clips should be loaded from — the
 /// mesh's own file for Classic/Meshy (neither split), the separate
@@ -400,14 +426,68 @@ pub fn zombie_kind_anim_path(kind: ZombieKind) -> &'static str {
 // Meshy/Soldier's placement used to be a per-kind runtime scale/Y-offset/
 // rotation, eyeballed in the F2 editor and F9-saved to a RON file
 // (zombie_meshy_transform.ron / zombie_soldier_transform.ron — both now
-// deleted). Both meshes now carry that same correction baked permanently
-// into their own scene root node instead (scripts/bake_mesh_transform.py —
-// the general-purpose successor to normalize_glb_root_rotation.py, which
-// only ever handled rotation), so their mesh child needs no per-kind
-// transform of its own any more — see zombie_kind_mesh_transform.
-// zombie_soldier didn't need any correction to begin with (its bind pose
-// already ships standing upright); zombie_meshy's bake replicates its old
-// RON values exactly (scale 1.0 no-op, offset_y -1.0, rot_x 90°).
+// deleted). zombie_meshy carries that correction baked permanently into
+// its own scene root node instead (scripts/bake_mesh_transform.py — the
+// general-purpose successor to normalize_glb_root_rotation.py, rotation
+// only), since ITS raw Meshy export needed one (rot_x 90°, offset_y
+// -1.0) to stand upright. zombie_soldier does NOT — see the debugging
+// history below for why that isn't just an assumption.
+//
+// zombie_soldier debugging history (multiple wrong turns, kept here so
+// nobody repeats them):
+// 1. Original mesh shipped lying on its back — no rotation baked into
+//    root at all. Fixed by re-importing from a fresh Meshy export.
+// 2. Assumed (WRONG) that the new export needed the exact same bake
+//    zombie_meshy did (rot_x 90°, offset_y -1.0) and applied it blindly
+//    without checking the raw file first. This "fixed" the lying-down
+//    symptom enough to look upright ONLY because the mesh was, at the
+//    time, still driven by zombie_meshy's own SHARED animation (see
+//    ZOMBIE_SOLDIER_ANIM_PATH's doc comment) — that animation's absolute
+//    Hips rotation values happened to impose a standing-looking pose
+//    regardless of this mesh's own (now wrongly-rotated) rest geometry.
+//    Real symptom this masked: legs bent/floated wrong while running,
+//    torso hitbox spun continuously (wire_zombie_hitbox_bones tracks
+//    these same joints' live world rotation) — a genuine rest-pose
+//    mismatch against the shared animation's source rig, the same class
+//    of bug the Mixamo/Unreal/Godot community knows as "T-pose vs A-pose
+//    retargeting breaks unless both rigs share a rest pose".
+// 3. Tried `scripts/retarget_rest_pose.py` (copy zombie_meshy's per-joint
+//    rest rotations onto zombie_soldier's matching-named joints, rebuild
+//    inverseBindMatrices) to fix step 2's mismatch. Verified numerically
+//    that this fixed the Hips->Foot world direction — but in actual
+//    gameplay the mesh came out catastrophically deformed (limbs
+//    stretched into a distorted shape), far worse than step 2's bug.
+//    Reverted.
+// 4. Switched policy instead: gave zombie_soldier its OWN dedicated
+//    animation file (extracted from the same fresh Meshy export this
+//    mesh came from, so its rest pose is guaranteed to match — see
+//    ZOMBIE_SOLDIER_ANIM_PATH), no longer sharing any rig's animation
+//    across characters. This is when step 2's wrong rotation bake (still
+//    applied to the mesh) finally became visible on its own, undisguised
+//    by the shared animation's masking rotation: the character rendered
+//    face-down. Checked the RAW, un-baked export directly (world Hips/
+//    Foot/Head Y positions) and found it was ALREADY correctly
+//    oriented — no rotation needed at all. Step 2's rot_x 90° bake was
+//    never needed for this mesh; applying it rotated an already-correct
+//    standing mesh INTO a lying one. Fixed by re-extracting mesh-only +
+//    renaming the root (scripts/rename_glb_root_node.py) with NO
+//    rotation baked in.
+// 5. Rotation fixed, but now visibly floating ~1m above the ground (the
+//    raw export's own feet-at-y~=0.02 turned out to be relative to ITS
+//    OWN origin, not this game's root-height convention — a real, separate
+//    axis from step 4's rotation question, easy to conflate but not the
+//    same thing). Fixed with `scripts/bake_mesh_transform.py ... --offset-y
+//    -1.0` (rotation left at identity this time, only translation baked)
+//    — same numeric offset zombie_meshy happens to use, but arrived at by
+//    measuring THIS mesh in-game, not copied over blind (see step 2's
+//    mistake). zombie_kind_mesh_transform below returns Transform::IDENTITY
+//    for Soldier for the same reason as Meshy now: the correction is
+//    baked into the mesh's own root, not applied at runtime.
+//
+// Moral that cost real time more than once: verify a mesh's placement
+// in-engine (rotation AND ground height are separate questions) before
+// copying ANY other character's baked correction values onto it — "same
+// export pipeline" does not mean "same raw orientation/height convention".
 
 /// Which of the three zombie meshes an entity uses. Replicated on gameplay
 /// zombies (server picks per-spawn, roughly evenly split — see
@@ -466,9 +546,10 @@ pub fn zombie_kind_clip_count(kind: ZombieKind) -> usize {
     match kind {
         ZombieKind::Classic => 5,
         ZombieKind::Meshy => 7,
-        // mixamo_base.glb's clip count (soldier_meshy/zombie_soldier's own
-        // copy) — see docs/CHARACTER_IMPORT_CHECKLIST.md if this drifts.
-        ZombieKind::Soldier => 19,
+        // soldier_running.glb's own clip count — just the 1 real "running"
+        // clip Meshy shipped with this rig (see ZOMBIE_SOLDIER_ANIM_PATH's
+        // own doc comment: no longer sharing mixamo_base.glb's 19).
+        ZombieKind::Soldier => 1,
     }
 }
 
@@ -516,10 +597,12 @@ pub fn zombie_kind_gameplay_mesh_transform(kind: ZombieKind) -> Transform {
 /// gameplay poses, in order `[idle, walk, run, crawl, bite]`. Classic maps
 /// 1:1 to its named `ZOMBIE_ANIM_*`; Meshy only has real Walking (6) /
 /// Running (5) clips, so idle/crawl/bite fall back to its first
-/// Text-to-Motion clip until more are generated. Soldier shares
-/// soldier_meshy's mixamo_base.glb indices (Walking=15, Running=4) — same
-/// "no real crawl/bite yet" gap, Run_and_Shoot (3) stands in for bite as a
-/// closer-than-nothing attack motion.
+/// Text-to-Motion clip until more are generated. Soldier now has exactly 1
+/// real clip (its own dedicated Running animation — see
+/// ZOMBIE_SOLDIER_ANIM_PATH's own doc comment for why it no longer shares
+/// soldier_meshy's mixamo_base.glb) — index 0 stands in for every pose
+/// until more clips get generated FOR THIS SPECIFIC RIG (reusing another
+/// character's clip is exactly what caused the retired bug).
 pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; 5] {
     match kind {
         ZombieKind::Classic => [
@@ -530,7 +613,7 @@ pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; 5] {
             ZOMBIE_ANIM_BITE,
         ],
         ZombieKind::Meshy => [0, 6, 5, 0, 0],
-        ZombieKind::Soldier => [15, 15, 4, 15, 3],
+        ZombieKind::Soldier => [0, 0, 0, 0, 0],
     }
 }
 
