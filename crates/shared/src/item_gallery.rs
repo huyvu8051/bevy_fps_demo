@@ -180,6 +180,27 @@ pub const ITEM_GALLERY_CAR_PATHS: [&str; 16] = [
     "props/car_minivan/mesh/car_minivan_light.glb",
 ];
 
+/// Client-only VISUAL path for `ITEM_GALLERY_CAR_PATHS[index]` at a given
+/// texture-quality tier (0 = no texture at all — every image collapsed to
+/// a single flat color, for the most extreme peak-perf test; 1 =
+/// "potato", smallest real downsampled textures; 5 = original
+/// `_light.glb` resolution — see scripts/bake_texture_quality_levels.py,
+/// which baked every car's `_qN` sibling glb next to its `_light.glb` this
+/// way, for tiers 0..4). Geometry is byte-identical across every tier
+/// (only the embedded images were re-encoded smaller), so this only
+/// matters for what the CLIENT draws — the server (collider-only, never
+/// loads a texture) always uses `ITEM_GALLERY_CAR_PATHS` directly, never
+/// this fn, and gets the exact same collider regardless of quality tier.
+pub fn item_gallery_car_visual_path(index: usize, quality: u8) -> String {
+    let base = ITEM_GALLERY_CAR_PATHS[index];
+    if quality >= 5 {
+        return base.to_string();
+    }
+    let quality = quality.min(4);
+    let stem = base.strip_suffix(".glb").unwrap_or(base);
+    format!("{stem}_q{quality}.glb")
+}
+
 /// `(scale, y, x, z, rot_x_deg, rot_y_deg, rot_z_deg)` per car — the full
 /// entity Transform placement (uniform scale + translation x/y/z + rotation
 /// as X/Y/Z euler degrees, applied in `EulerRot::YXZ` order), same

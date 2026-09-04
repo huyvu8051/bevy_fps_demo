@@ -27,7 +27,7 @@ use bevy::transform::components::{GlobalTransform, Transform};
 use bevy::ui::widget::{Button, Text};
 use bevy::ui::{BackgroundColor, ComputedNode, Display, Interaction, Node, UiGlobalTransform, Val};
 
-use shared::{NetPlayer, Zombie};
+use shared::{NetPlayer, Zombie, ZombieKind};
 
 /// The headless real-game `App` has no `Window`/`RenderPlugin` at all (see
 /// `native_game_app.rs`'s own plugin-set doc comment), so `Camera::
@@ -655,6 +655,11 @@ pub struct LightSnapshot {
 pub struct SkinnedRenderState {
     pub transform: Transform,
     pub joint_matrices: Vec<[[f32; 4]; 4]>,
+    /// Which `SkinnedModelRegistry` entry this actor should draw as — only
+    /// meaningful for zombies (`ZombieKind::Classic` for every non-zombie
+    /// use of this struct, e.g. remote players, which pick their own fixed
+    /// "soldier" model name at the call site instead of reading this).
+    pub kind: ZombieKind,
 }
 
 /// Walks down from `root` (breadth-first, following `Children`) for the
@@ -805,7 +810,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // skinned mesh entity (that's several hierarchy levels down, inside
     // the asynchronously-loaded glTF scene).
     let mut zombie_state: SystemState<(
-        Query<(bevy::ecs::entity::Entity, &GlobalTransform), With<Zombie>>,
+        Query<(bevy::ecs::entity::Entity, &GlobalTransform, Option<&ZombieKind>), With<Zombie>>,
         Query<&Children>,
         Query<&SkinnedMesh>,
         Query<&GlobalTransform>,
@@ -814,12 +819,12 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     let (zombie_query, children_query, skinned_mesh_query, joint_globals, inverse_bindposes_assets) = zombie_state.get(world);
     snapshot.zombies = zombie_query
         .iter()
-        .map(|(entity, transform)| {
+        .map(|(entity, transform, kind)| {
             let joint_matrices = find_first_skinned_mesh(entity, &children_query, &skinned_mesh_query)
                 .and_then(|mesh_entity| skinned_mesh_query.get(mesh_entity).ok())
                 .map(|skinned| joint_matrices_for(skinned, &joint_globals, &inverse_bindposes_assets))
                 .unwrap_or_default();
-            SkinnedRenderState { transform: transform.compute_transform(), joint_matrices }
+            SkinnedRenderState { transform: transform.compute_transform(), joint_matrices, kind: kind.copied().unwrap_or_default() }
         })
         .collect();
 
@@ -871,7 +876,11 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
                 .and_then(|mesh_entity| remote_skinned_query.get(mesh_entity).ok())
                 .map(|skinned| joint_matrices_for(skinned, &remote_joint_globals, &remote_inverse_bindposes_assets))
                 .unwrap_or_default();
-            SkinnedRenderState { transform, joint_matrices }
+            // `kind` is meaningless for a remote player (not a zombie) —
+            // the call site that turns this into a SkinnedActorDraw always
+            // picks the fixed "soldier" model name for entries from this
+            // Vec, ignoring the field. Default (Classic) is just a filler.
+            SkinnedRenderState { transform, joint_matrices, kind: ZombieKind::default() }
         })
         .collect();
 

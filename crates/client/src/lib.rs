@@ -41,8 +41,8 @@ use shared::{
     MapKind, scenario_player_spawn,
     PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieMotion, ZombieShowcaseClip, wire_zombie_hitbox_bones,
-    zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_anim_path, zombie_kind_mesh_transform, zombie_kind_gameplay_mesh_transform,
-    zombie_kind_pose_clips, zombie_kind_showcase_root_y,
+    zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_anim_path,
+    zombie_kind_pose_clips,
     INTERP_DELAY_SECS, MAX_SHOT_DISTANCE,
     HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
     resolve_bone_world_positions, zombie_hit_damage_ray,
@@ -453,10 +453,10 @@ const AIM_DOF_APERTURE_F_STOPS: f32 = 11.0;
 // exposed in the UI. MIN_TEXTURE_PX guards against a degenerate/zero-size
 // render target on a tiny window at a low scale.
 const RESOLUTION_SCALE_PRESETS: [f32; 7] = [0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0];
-// Default 40% — the 3D scene renders into a 0.4x offscreen target and gets
+// Default 30% — the 3D scene renders into a 0.3x offscreen target and gets
 // upscaled to fill the window. Override per-run with RENDER_SCALE, or live
 // via the settings-menu presets.
-const RESOLUTION_SCALE_DEFAULT: f32 = 0.4;
+const RESOLUTION_SCALE_DEFAULT: f32 = 0.3;
 const RESOLUTION_SCALE_MIN_TEXTURE_PX: u32 = 64;
 
 /// Startup value for `RenderResolutionScale` — `RESOLUTION_SCALE_DEFAULT`
@@ -884,20 +884,69 @@ impl Default for MapShadowsOn {
     }
 }
 
-// Dynamic lighting is expensive on a warm laptop during walk-around /
-// editor sessions and adds nothing to judging prop scale, so desktop
-// defaults it OFF: no sun, no hall/map point lights — just the per-camera
-// AmbientLight (flat but everything stays clearly visible). `LIGHTS=1`
-// brings the light entities back; `SHADOWS=1` additionally re-enables
-// their shadow maps (the priciest part — point-light shadows are a 6-face
-// cubemap render each, per frame). Mobile (iOS/Android) always keeps full
-// lighting + shadows — this is purely a desktop dev-ergonomics / thermal
-// lever, not a shipped downgrade.
+// Runtime on/off for MainSun's own illuminance — same "resource drives a
+// component every frame" shape as MapMsaaOn/MapShadowsOn, added so the
+// settings-menu "Light" button (mobile has no LIGHTS=1 env var to set)
+// can toggle the dominant dynamic light without a restart. Scoped to
+// MainSun only, same as MapShadowsOn — the arena's own overhead PointLight
+// and Map 1's spawn_map1_lights still only ever spawn if
+// dynamic_lights_enabled() was true at Startup, unaffected by this button.
+#[derive(Resource)]
+struct MapLightsOn(bool);
+impl Default for MapLightsOn {
+    fn default() -> Self {
+        Self(dynamic_lights_enabled())
+    }
+}
+
+// Dynamic lighting + shadows are ON by default everywhere now (2026-09-04
+// — used to default OFF on desktop, opt-in via LIGHTS=1/SHADOWS=1, back
+// when there was no in-game way to turn them on short of an env var/
+// restart; the settings-menu Light/Shadow buttons — MapLightsOn/
+// MapShadowsOn, apply_map_render_toggles — now cover the "it's too hot on
+// my laptop" case at runtime instead). `LIGHTS=0`/`SHADOWS=0` opts back
+// out for a perf-testing run that wants them off from the very first
+// frame (before the in-game buttons are even reachable). Mobile
+// (iOS/Android) ignores both env vars and always keeps full lighting +
+// shadows regardless.
+/// 0 (no texture at all — every image collapsed to a flat color, the most
+/// extreme peak-perf test) through 1 ("potato", smallest real downsampled
+/// textures) to 5 (original resolution). Desktop defaults to 5; mobile
+/// defaults to 2 (no LIGHTS=1-style env var reachable from a real device
+/// install) — see scripts/bake_texture_quality_levels.py for how each
+/// car's `_qN` sibling glb was generated, and
+/// shared::item_gallery_car_visual_path for how a tier picks the right
+/// file. `TEXTURE_QUALITY=N` env overrides either default for a one-off
+/// perf test (any platform, clamped to 0..=5).
+pub(crate) fn texture_quality_default() -> u8 {
+    std::env::var("TEXTURE_QUALITY")
+        .ok()
+        .and_then(|s| s.trim().parse::<u8>().ok())
+        .map(|q| q.clamp(0, 5))
+        .unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) { 2 } else { 5 })
+}
+
+// Runtime-adjustable wrapper around texture_quality_default() — the
+// settings-menu Texture-quality buttons (TextureQualityButton,
+// texture_quality_buttons) flip this at runtime; changing it re-spawns
+// every ItemGalleryTestProp car at the new tier (see
+// respawn_item_gallery_cars_on_quality_change) since a car's texture is
+// baked into whichever SceneRoot asset it was spawned with, unlike
+// RenderResolutionScale which an offscreen render target re-reads every
+// frame.
+#[derive(Resource)]
+pub(crate) struct TextureQuality(pub(crate) u8);
+impl Default for TextureQuality {
+    fn default() -> Self {
+        Self(texture_quality_default())
+    }
+}
+
 pub(crate) fn dynamic_lights_enabled() -> bool {
-    cfg!(any(target_os = "ios", target_os = "android")) || std::env::var("LIGHTS").is_ok()
+    cfg!(any(target_os = "ios", target_os = "android")) || std::env::var("LIGHTS").map(|v| v != "0").unwrap_or(true)
 }
 pub(crate) fn light_shadows_enabled() -> bool {
-    cfg!(any(target_os = "ios", target_os = "android")) || std::env::var("SHADOWS").is_ok()
+    cfg!(any(target_os = "ios", target_os = "android")) || std::env::var("SHADOWS").map(|v| v != "0").unwrap_or(true)
 }
 
 /// AmbientLight brightness for the two scene cameras — bumped hard when
@@ -912,6 +961,11 @@ fn ambient_brightness() -> f32 {
 // unambiguously.
 #[derive(Component)]
 struct MainSun;
+
+// The sun's "on" illuminance — shared between its Startup spawn and
+// apply_map_render_toggles' runtime MapLightsOn toggle so the two can't
+// drift to different brightness values.
+const MAIN_SUN_ILLUMINANCE: f32 = 8_000.0;
 
 
 
@@ -1406,6 +1460,8 @@ impl Plugin for GamePlugin {
         .init_resource::<GunVisible>()
         .init_resource::<MapMsaaOn>()
         .init_resource::<MapShadowsOn>()
+        .init_resource::<MapLightsOn>()
+        .init_resource::<TextureQuality>()
         .init_resource::<ScopeCameraEnabled>()
         .init_resource::<SelectedDebugBot>()
         .init_resource::<LocalPlayerMoving>()
@@ -1469,6 +1525,10 @@ impl Plugin for GamePlugin {
                     update_settings_menu_pages,
                     update_mouse_ui_lock_indicator,
                     resolution_scale_buttons,
+                update_resolution_scale_button_colors,
+                texture_quality_buttons,
+                update_texture_quality_button_colors,
+                respawn_item_gallery_cars_on_quality_change,
                     resize_scene_render_target,
                     scroll_settings_menu,
                     touch_scroll_settings_menu,
@@ -1494,6 +1554,7 @@ impl Plugin for GamePlugin {
                 (
                     cheat_toggle_buttons_3,
                     autopilot_toggle_button,
+                light_toggle_button,
                     update_extra_toggle_colors,
                     cheat_spawn_zombie_button,
                     debug_bot_buttons,
@@ -1686,6 +1747,7 @@ fn setup(
     touch_enabled: Res<TouchControlsEnabled>,
     windows: Query<&Window, With<PrimaryWindow>>,
     player_model_tuning: Res<PlayerModelTuning>,
+    texture_quality: Res<TextureQuality>,
 ) {
     // First-frame camera/player position — see the PLAYER_SPAWN comment
     // above; the server's replicated NetTransform takes over almost
@@ -1860,7 +1922,7 @@ fn setup(
         MapKind::ItemGallery => {
             let (pieces, panels) = shared::item_gallery_level_pieces();
             spawn_level_pieces(&mut commands, pieces, panels);
-            spawn_item_gallery_test_props(&mut commands, &asset_server);
+            spawn_item_gallery_test_props(&mut commands, &asset_server, texture_quality.0);
             spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
         }
         MapKind::Campaign(map_id) => {
@@ -1877,30 +1939,38 @@ fn setup(
         }
         MapKind::Arena => {
             spawn_test_arena(&mut commands, &mut meshes, &mut materials, current_scenario().map_id());
-            // Temporarily hidden on web only: the web build force-starts on
+            // Temporarily hidden on web + iOS: the web build force-starts on
             // map 2 (StressTest, an Arena map — see wasm32 set_map_id(2) in
             // main() above), and the 16 meshy.ai car test props this spawns
             // add real vertex/texture weight for no gameplay reason there.
-            // Testing iPhone load/perf without them for now; desktop keeps
-            // its cars unchanged. Remove this cfg to restore always-on.
-            #[cfg(not(target_arch = "wasm32"))]
-            spawn_item_gallery_test_props(&mut commands, &asset_server);
+            // Also hidden on iOS for now (2026-09-04): needed to isolate a
+            // real-device zombie render glitch (a handful of zombies render
+            // wrong on Map 2) from the heavy car meshes, which were making
+            // the frame rate too choppy to tell whether the glitch was even
+            // reproducing — unrelated to that bug otherwise. Desktop keeps
+            // its cars unchanged. Remove target_os = "ios" here once the
+            // zombie glitch investigation is done.
+            #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+            spawn_item_gallery_test_props(&mut commands, &asset_server, texture_quality.0);
         }
     }
 
     // spawn_test_arena carries its own overhead light; Building gets
-    // spawn_map1_lights above. This is just the shared sun.
-    if dynamic_lights_enabled() {
-        commands.spawn((
-            DirectionalLight {
-                illuminance: 8_000.0,
-                shadows_enabled: light_shadows_enabled(),
-                ..default()
-            },
-            Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
-            MainSun,
-        ));
-    }
+    // spawn_map1_lights above. This is just the shared sun — always
+    // spawned now (not gated on dynamic_lights_enabled() like the point
+    // lights above still are) so the settings-menu "Light" button
+    // (MapLightsOn, apply_map_render_toggles) has an entity to toggle at
+    // runtime; illuminance starts at 0 when dynamic lights are off by
+    // default, matching the old skip-spawning-entirely behavior visually.
+    commands.spawn((
+        DirectionalLight {
+            illuminance: if dynamic_lights_enabled() { MAIN_SUN_ILLUMINANCE } else { 0.0 },
+            shadows_enabled: light_shadows_enabled(),
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
+        MainSun,
+    ));
 
     commands
         .spawn((

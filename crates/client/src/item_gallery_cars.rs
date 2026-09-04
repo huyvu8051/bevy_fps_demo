@@ -114,8 +114,14 @@ const ITEM_GALLERY_CAR_HIT_IMPULSE: f32 = 1.0;
 /// drawn regardless of the per-car scale hacks. The server builds the same
 /// hull off the same meshes (spawn_item_gallery_car_colliders) so hit
 /// registration and movement blocking agree with the client.
-pub(crate) fn spawn_item_gallery_test_props(commands: &mut Commands, asset_server: &AssetServer) {
-    for (path, physics) in shared::ITEM_GALLERY_CAR_PATHS.iter().zip(shared::item_gallery_car_physics()) {
+// `quality`: 1..=5, see texture_quality_default's own doc comment in
+// lib.rs — only affects which `_qN` sibling glb gets loaded for the
+// VISUAL mesh (shared::item_gallery_car_visual_path); the collider below
+// is built from whatever that same file's geometry is, which never
+// differs across tiers, so hit registration/physics stay identical
+// regardless of quality.
+pub(crate) fn spawn_item_gallery_test_props(commands: &mut Commands, asset_server: &AssetServer, quality: u8) {
+    for (i, (path, physics)) in shared::ITEM_GALLERY_CAR_PATHS.iter().zip(shared::item_gallery_car_physics()).enumerate() {
         // "props/car_sedan/mesh/car_sedan_light.glb" -> "car_sedan" — so the
         // dev editor's Hierarchy panel (bevy_editor_pls, F2) shows a real
         // label per car instead of an anonymous Entity id; picking-by-click
@@ -124,9 +130,10 @@ pub(crate) fn spawn_item_gallery_test_props(commands: &mut Commands, asset_serve
         // Hierarchy list is the only way to find a specific car to focus
         // (select it, press F) without guessing entity ids.
         let name = path.split('/').nth(1).unwrap_or(path);
+        let visual_path = shared::item_gallery_car_visual_path(i, quality);
         commands.spawn((
             Name::new(name.to_string()),
-            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(*path))),
+            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(visual_path))),
             Transform::from_xyz(physics.x, physics.y + ITEM_GALLERY_CAR_DROP_MARGIN, physics.z)
                 .with_rotation(physics.rotation)
                 .with_scale(Vec3::splat(physics.scale)),

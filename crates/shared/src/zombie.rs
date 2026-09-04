@@ -502,17 +502,34 @@ pub enum ZombieKind {
     Soldier,
 }
 
-/// Deterministic ~1/3-1/3-1/3 pick from an entity's own `entity_phase`
-/// hash — the server tags each spawning zombie with this so a horde shows
-/// all three rigs.
-pub fn zombie_kind_for_phase(phase: f32) -> ZombieKind {
-    if phase < 1.0 / 3.0 {
-        ZombieKind::Classic
-    } else if phase < 2.0 / 3.0 {
-        ZombieKind::Meshy
-    } else {
-        ZombieKind::Soldier
+/// Default [Classic, Meshy, Soldier] spawn-mix ratio — every real spawn
+/// site passes this to `zombie_kind_for_phase` rather than hand-rolling
+/// its own weights, so there's one obvious place to edit to change the
+/// mix game-wide. Equal thirds today; values don't need to sum to 1, only
+/// their ratio to each other matters (e.g. `[2.0, 1.0, 1.0]` for "twice as
+/// much Classic as either other kind").
+pub const ZOMBIE_KIND_WEIGHTS: [f32; 3] = [1.0, 1.0, 1.0];
+
+/// Deterministic weighted pick from an entity's own `entity_phase` hash
+/// (a uniform [0, 1) value) — the server tags each spawning zombie with
+/// this so a horde shows a mix of all three rigs. `weights` is
+/// `[Classic, Meshy, Soldier]`; pass `ZOMBIE_KIND_WEIGHTS` for the normal
+/// default mix, or a custom `[f32; 3]` for a one-off scenario (e.g. an
+/// isolation test that wants only one kind — `[1.0, 0.0, 0.0]`).
+pub fn zombie_kind_for_phase(phase: f32, weights: [f32; 3]) -> ZombieKind {
+    let total: f32 = weights.iter().sum();
+    if total <= 0.0 {
+        return ZombieKind::default();
     }
+    let target = phase * total;
+    let mut cumulative = 0.0;
+    for (kind, &weight) in [ZombieKind::Classic, ZombieKind::Meshy, ZombieKind::Soldier].into_iter().zip(&weights) {
+        cumulative += weight;
+        if target < cumulative {
+            return kind;
+        }
+    }
+    ZombieKind::Soldier
 }
 
 impl std::fmt::Display for ZombieKind {
@@ -553,45 +570,16 @@ pub fn zombie_kind_clip_count(kind: ZombieKind) -> usize {
     }
 }
 
-/// Local transform for the mesh child under a zombie root, per kind. Classic
-/// keeps the exact transform on_zombie_spawned / zombie_mesh_bundle already
-/// used (`ZOMBIE_MODEL_Y_OFFSET` + `ZOMBIE_SCALE`); meshy/soldier need none
-/// — their placement is baked into the mesh file itself (see
-/// zombie_kind_anim_path's own doc comment above; root Y placement is on
-/// the zombie root instead — see `zombie_kind_showcase_root_y`).
-pub fn zombie_kind_mesh_transform(kind: ZombieKind) -> Transform {
-    match kind {
-        ZombieKind::Classic => Transform::from_xyz(0.0, ZOMBIE_MODEL_Y_OFFSET, 0.0).with_scale(Vec3::splat(ZOMBIE_SCALE)),
-        // Meshy/Soldier need no scale/offset/rotation here at all — both
-        // are baked into their own mesh's scene root node now (see
-        // ZOMBIE_SOLDIER_ANIM_PATH's own doc comment above).
-        ZombieKind::Meshy | ZombieKind::Soldier => Transform::IDENTITY,
-    }
-}
-
-/// World Y for an ItemGallery showcase zombie's root — they have no
-/// physics (walk-through, like every zombie: bare Collider, no RigidBody)
-/// so the floor is a fixed known height. Classic: cancel the capsule-center
-/// `ZOMBIE_MODEL_Y_OFFSET` baked into its mesh child so the feet land on
-/// Y=0. Meshy/Soldier: 0 — their mesh child's own `mesh_y` carries the
-/// whole offset.
-pub fn zombie_kind_showcase_root_y(kind: ZombieKind) -> f32 {
-    match kind {
-        ZombieKind::Classic => -ZOMBIE_MODEL_Y_OFFSET,
-        ZombieKind::Meshy | ZombieKind::Soldier => 0.0,
-    }
-}
-
-/// Mesh-child transform for a networked GAMEPLAY zombie of this kind.
-/// Currently identical to `zombie_kind_mesh_transform` (showcase) for both
-/// kinds — a networked zombie's grounded root Y turns out to match the
-/// showcase root Y closely enough that no extra shift is needed. Kept as a
-/// distinct entry point so a per-context tweak (e.g. a separate meshy
-/// gameplay Y in the RON) has an obvious home. Tune the meshy feet via
-/// `mesh_y` in zombie_meshy_transform.ron.
-pub fn zombie_kind_gameplay_mesh_transform(kind: ZombieKind) -> Transform {
-    zombie_kind_mesh_transform(kind)
-}
+// zombie_kind_mesh_transform / zombie_kind_gameplay_mesh_transform /
+// zombie_kind_showcase_root_y used to live here, each a per-kind match
+// returning Transform::IDENTITY / 0.0 for every variant — removed
+// (2026-09-04) since there was nothing left to switch on: every kind's
+// scale/offset/rotation is baked directly into its own glb's scene root
+// node now (Classic's own bake — scripts/bake_mesh_transform.py --scale
+// 0.25 --offset-y -1.01835 — was the last holdout; see
+// zombie_kind_metal_model_name's own doc comment below for the real bug
+// that investigation was chasing). Call sites just use Transform::IDENTITY
+// / 0.0 directly now.
 
 /// Clip indices into a kind's anim source (zombie_kind_anim_path) for the 5
 /// gameplay poses, in order `[idle, walk, run, crawl, bite]`. Classic maps
@@ -614,6 +602,34 @@ pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; 5] {
         ],
         ZombieKind::Meshy => [0, 6, 5, 0, 0],
         ZombieKind::Soldier => [0, 0, 0, 0, 0],
+    }
+}
+
+/// `SkinnedModelRegistry` key the iOS native Metal renderer (a hand-written
+/// GPU path that never goes through `bevy_render` — see
+/// crates/client/src/cadisplaylink's own doc comments) registers/draws
+/// each kind's mesh under. Lives here, next to `zombie_kind_mesh_path`,
+/// rather than as its own match in native_metal_probe.rs, so the two
+/// "which glb is kind X" answers (bevy's own asset path vs. this custom
+/// renderer's registry key) can't independently drift apart the way they
+/// already did once: native_metal_probe.rs used to register only ONE
+/// zombie model ever, under a single hardcoded "zombie" name, and the
+/// per-frame draw call passed that same literal for every zombie
+/// regardless of its real `ZombieKind` — so on iOS, a Meshy or Soldier
+/// zombie's real (correct) per-joint skeleton got applied to Classic's
+/// mesh every time, producing a garbled render that looked kind-specific
+/// but was actually "right skeleton, wrong mesh, always Classic's."
+/// bevy_render/wgpu (desktop/web) never had this bug — that path always
+/// read `ZombieKind` off the entity via `zombie_kind_mesh_path` like
+/// everything else here — only this hand-rolled renderer needed its own
+/// name-keyed registry in the first place (see skinned_actor.rs's own doc
+/// comment for why: the renderer core is generic over "a named skinned
+/// actor", not aware of gameplay types like ZombieKind at all).
+pub fn zombie_kind_metal_model_name(kind: ZombieKind) -> &'static str {
+    match kind {
+        ZombieKind::Classic => "zombie_classic",
+        ZombieKind::Meshy => "zombie_meshy",
+        ZombieKind::Soldier => "zombie_soldier",
     }
 }
 

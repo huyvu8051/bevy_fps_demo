@@ -1583,15 +1583,21 @@ impl NativeMetalProbe {
             const FACING_DEG: f32 = 0.0;
             skinned_models.register("soldier", soldier_model, SCALE, Y_OFFSET, FACING_DEG.to_radians());
         }
-        let zombie_path = std::path::Path::new(&resource_path).join("assets/characters/zombie/mesh/zombie.glb");
-        if let Some(zombie_model) = super::skinned_gltf::load_skinned_gltf(&device, &zombie_path) {
-            skinned_models.register(
-                "zombie",
-                zombie_model,
-                shared::ZOMBIE_SCALE,
-                -(shared::ZOMBIE_RADIUS + shared::ZOMBIE_LENGTH / 2.0),
-                0.0,
-            );
+        // One registration per `ZombieKind`, under the name
+        // `shared::zombie_kind_metal_model_name` picks — see that fn's own
+        // doc comment for the real bug this replaced (a single Classic-
+        // only "zombie" registration silently drawn for every kind). All
+        // three glb files bake their own scale/offset/rotation into their
+        // own scene root now (see the comment where
+        // zombie_kind_mesh_transform used to live in crates/shared), so
+        // every registration here is scale 1.0 / offset 0.0 / facing 0.0 —
+        // the desktop/wgpu path's mesh-child Transform::IDENTITY, mirrored
+        // here.
+        for kind in [shared::ZombieKind::Classic, shared::ZombieKind::Meshy, shared::ZombieKind::Soldier] {
+            let path = std::path::Path::new(&resource_path).join("assets").join(shared::zombie_kind_mesh_path(kind));
+            if let Some(model) = super::skinned_gltf::load_skinned_gltf(&device, &path) {
+                skinned_models.register(shared::zombie_kind_metal_model_name(kind), model, 1.0, 0.0, 0.0);
+            }
         }
 
         // Real device metrics (bounds/scale computed above for the Metal
@@ -2343,7 +2349,7 @@ impl NativeMetalProbe {
             real_game_static_meshes = snapshot.static_meshes;
             real_game_extracted.extend(snapshot.zombies.into_iter().map(|z| super::skinned_actor::SkinnedActorDraw {
                 transform: z.transform,
-                model: "zombie",
+                model: shared::zombie_kind_metal_model_name(z.kind),
                 pose: super::skinned_actor::SkinnedActorPose::JointMatrices(z.joint_matrices),
             }));
             // Remote players: same real-per-joint-skeleton extraction as

@@ -75,6 +75,12 @@ pub(crate) struct SettingsMenuPageLabel;
 #[derive(Component)]
 pub(crate) struct ResolutionScaleButton(f32);
 
+// One per texture-quality tier (1..=5) — texture_quality_buttons reads
+// Interaction on these the same way ResolutionScaleButton does. See
+// TextureQuality's own doc comment in lib.rs for what each tier means.
+#[derive(Component)]
+pub(crate) struct TextureQualityButton(u8);
+
 #[derive(Component)]
 pub(crate) struct SettingsToggleButton;
 
@@ -225,6 +231,48 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     }
                 });
 
+                page.spawn((
+                    Text::new("Texture quality"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for tier in 0..=5u8 {
+                        row.spawn((
+                            Node {
+                                width: Val::Px(40.0),
+                                height: Val::Px(32.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                            Button,
+                            Interaction::default(),
+                            TextureQualityButton(tier),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new(tier.to_string()),
+                                TextFont {
+                                    font_size: 14.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    }
+                });
+
                 // Autopilot — real player-facing feature (see its own doc
                 // comment), so unlike everything in the "Cheats" section
                 // below this row is NOT debug-gated: it's the mobile
@@ -300,6 +348,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     .with_children(|row| {
                         spawn_cheat_toggle_button(row, "MSAA", CheatMsaaButton);
                         spawn_cheat_toggle_button(row, "Shadow", CheatShadowButton);
+            spawn_cheat_toggle_button(row, "Light", CheatLightButton);
                         spawn_cheat_toggle_button(row, "Scope", CheatScopeCameraButton);
                     });
                     page.spawn(Node {
@@ -509,6 +558,8 @@ pub(crate) struct CheatMsaaButton;
 #[derive(Component)]
 pub(crate) struct CheatShadowButton;
 #[derive(Component)]
+pub(crate) struct CheatLightButton;
+#[derive(Component)]
 pub(crate) struct CheatScopeCameraButton;
 #[derive(Component)]
 pub(crate) struct CheatKillAllButton;
@@ -658,6 +709,7 @@ pub(crate) fn apply_map_render_toggles(
     gun_visible: Res<GunVisible>,
     map_msaa: Res<MapMsaaOn>,
     map_shadows: Res<MapShadowsOn>,
+    map_lights: Res<MapLightsOn>,
     mut gun: Query<&mut Visibility, With<Gun>>,
     // FpsCamera, not Camera3d — the AK scope's own render-to-texture
     // camera (see setup()) is ALSO a Camera3d, which would make
@@ -677,6 +729,10 @@ pub(crate) fn apply_map_render_toggles(
     if let Ok(mut light) = sun.single_mut() {
         if light.shadows_enabled != map_shadows.0 {
             light.shadows_enabled = map_shadows.0;
+        }
+        let target_illuminance = if map_lights.0 { MAIN_SUN_ILLUMINANCE } else { 0.0 };
+        if light.illuminance != target_illuminance {
+            light.illuminance = target_illuminance;
         }
     }
 }
@@ -761,6 +817,16 @@ pub(crate) fn cheat_toggle_buttons_3(
 pub(crate) fn autopilot_toggle_button(mut autopilot: ResMut<Autopilot>, btn: Query<&Interaction, (With<AutopilotButton>, Changed<Interaction>)>) {
     if tapped(&btn) {
         autopilot.0 = !autopilot.0;
+    }
+}
+
+// Standalone for the same arity-ceiling reason as autopilot_toggle_button
+// — cheat_toggle_buttons was already close to Bevy's max system param
+// count (see cheat_toggle_buttons_2's own doc comment for the exact limit
+// this project already hit once).
+pub(crate) fn light_toggle_button(mut map_lights: ResMut<MapLightsOn>, btn: Query<&Interaction, (With<CheatLightButton>, Changed<Interaction>)>) {
+    if tapped(&btn) {
+        map_lights.0 = !map_lights.0;
     }
 }
 
@@ -867,6 +933,7 @@ pub(crate) fn update_extra_toggle_colors(
     scope_camera: Res<ScopeCameraEnabled>,
     show_tracers: Res<ShowBulletTracers>,
     inspect: Res<InspectMode>,
+    map_lights: Res<MapLightsOn>,
     mut buttons: Query<
         (
             &mut BackgroundColor,
@@ -878,6 +945,7 @@ pub(crate) fn update_extra_toggle_colors(
             Option<&CheatScopeCameraButton>,
             Option<&CheatShowTracersButton>,
             Option<&CheatInspectButton>,
+            Option<&CheatLightButton>,
         ),
         Or<(
             With<AutopilotButton>,
@@ -888,11 +956,12 @@ pub(crate) fn update_extra_toggle_colors(
             With<CheatScopeCameraButton>,
             With<CheatShowTracersButton>,
             With<CheatInspectButton>,
+            With<CheatLightButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, scope_camera_m, show_tracers_m, inspect_m) in &mut buttons {
+    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, scope_camera_m, show_tracers_m, inspect_m, light_m) in &mut buttons {
         let on = if auto_m.is_some() {
             autopilot.0
         } else if dof_m.is_some() {
@@ -907,8 +976,10 @@ pub(crate) fn update_extra_toggle_colors(
             scope_camera.0
         } else if show_tracers_m.is_some() {
             show_tracers.0
+        } else if inspect_m.is_some() {
+            inspect.0
         } else {
-            inspect_m.is_some() && inspect.0
+            light_m.is_some() && map_lights.0
         };
         *bg = BackgroundColor(color_for(on));
     }
@@ -1357,5 +1428,74 @@ pub(crate) fn resolution_scale_buttons(
             scale.0 = button.0;
         }
     }
+}
+
+// Same color-feedback idea as update_cheat_toggle_colors, but keyed off
+// which preset matches RenderResolutionScale's current value instead of a
+// plain bool — was entirely missing before (spawned with a fixed
+// BackgroundColor and never touched again), so every preset button always
+// looked unselected even though clicking one did change the resolution;
+// the exact `==` is safe here since `scale.0` is only ever set to a
+// `button.0` value directly (resolution_scale_buttons above), never
+// computed/interpolated.
+pub(crate) fn update_resolution_scale_button_colors(
+    scale: Res<RenderResolutionScale>,
+    mut buttons: Query<(&mut BackgroundColor, &ResolutionScaleButton)>,
+) {
+    for (mut bg, button) in &mut buttons {
+        let on = button.0 == scale.0;
+        *bg = BackgroundColor(if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) });
+    }
+}
+
+// Same Changed<Interaction>-gated tap-sets-the-resource shape as
+// resolution_scale_buttons.
+pub(crate) fn texture_quality_buttons(
+    mut quality: ResMut<TextureQuality>,
+    buttons: Query<(&Interaction, &TextureQualityButton), Changed<Interaction>>,
+) {
+    for (interaction, button) in &buttons {
+        if *interaction == Interaction::Pressed {
+            quality.0 = button.0;
+        }
+    }
+}
+
+// Same highlight-the-active-preset idea as update_resolution_scale_button_colors.
+pub(crate) fn update_texture_quality_button_colors(
+    quality: Res<TextureQuality>,
+    mut buttons: Query<(&mut BackgroundColor, &TextureQualityButton)>,
+) {
+    for (mut bg, button) in &mut buttons {
+        let on = button.0 == quality.0;
+        *bg = BackgroundColor(if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) });
+    }
+}
+
+// Unlike RenderResolutionScale (a render-target size the offscreen camera
+// re-reads every frame — see resize_scene_render_target), a car prop's
+// texture is baked into whichever SceneRoot asset it was spawned with —
+// changing TextureQuality alone doesn't touch an already-spawned car, so
+// this despawns and re-spawns every ItemGalleryTestProp at the new tier
+// whenever the resource actually changes. Gated on at least one existing
+// car so this never SPAWNS cars onto a map that doesn't have them (e.g.
+// tapping a quality button while on Map 1) — Changed<TextureQuality> would
+// otherwise fire once even on maps with zero cars.
+pub(crate) fn respawn_item_gallery_cars_on_quality_change(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    quality: Res<TextureQuality>,
+    existing: Query<Entity, With<ItemGalleryTestProp>>,
+) {
+    if !quality.is_changed() || quality.is_added() {
+        return;
+    }
+    if existing.iter().next().is_none() {
+        return;
+    }
+    for entity in &existing {
+        commands.entity(entity).despawn();
+    }
+    spawn_item_gallery_test_props(&mut commands, &asset_server, quality.0);
 }
 

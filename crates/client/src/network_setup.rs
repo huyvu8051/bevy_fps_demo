@@ -699,6 +699,7 @@ pub(crate) fn map_select_button(
     mut noclip: ResMut<Noclip>,
     mut autopilot: ResMut<Autopilot>,
     channels: Res<RepliconChannels>,
+    texture_quality: Res<TextureQuality>,
     // Every currently-spawned level-geometry entity (+ the ItemGallery car
     // test props, same reasoning) — despawned + rebuilt below for whichever
     // scenario was just picked. Needed because level geometry is now built
@@ -751,7 +752,7 @@ pub(crate) fn map_select_button(
             MapKind::ItemGallery => {
                 let (pieces, panels) = shared::item_gallery_level_pieces();
                 spawn_level_pieces(&mut commands, pieces, panels);
-                spawn_item_gallery_test_props(&mut commands, &asset_server);
+                spawn_item_gallery_test_props(&mut commands, &asset_server, texture_quality.0);
                 spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
             }
             MapKind::Campaign(map_id) => {
@@ -760,7 +761,7 @@ pub(crate) fn map_select_button(
             }
             MapKind::Arena => {
                 spawn_test_arena(&mut commands, &mut meshes, &mut materials, scenario.map_id());
-                spawn_item_gallery_test_props(&mut commands, &asset_server);
+                spawn_item_gallery_test_props(&mut commands, &asset_server, texture_quality.0);
             }
         }
         spawn_client_connection(&mut commands, &channels);

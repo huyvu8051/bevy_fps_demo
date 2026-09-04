@@ -34,7 +34,7 @@ use shared::{
     DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, INTERP_DELAY_SECS,
     LAG_COMPENSATION_MAX_SECS, PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
     PROTOCOL_ID,
-    ZombieKind, zombie_kind_for_phase, zombie_kind_mesh_path, zombie_kind_anim_path, zombie_kind_gameplay_mesh_transform, zombie_kind_pose_clips,
+    ZombieKind, zombie_kind_for_phase, ZOMBIE_KIND_WEIGHTS, zombie_kind_mesh_path, zombie_kind_anim_path, zombie_kind_pose_clips,
     ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
     ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
     ZOMBIE_TURN_RATE_DEG,
@@ -1311,10 +1311,11 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], ai_enabled: bool, dir
         zombie.insert((
             Transform::from_translation(spawn_pos),
             Zombie,
-            // ~50/50 Classic/Meshy from the same per-entity hash the
-            // path-recalc stagger uses — replicated, so the client builds
-            // the matching mesh (on_zombie_replicated / on_zombie_kind).
-            zombie_kind_for_phase(phase),
+            // ~1/3-1/3-1/3 Classic/Meshy/Soldier from the same per-entity
+            // hash the path-recalc stagger uses — replicated, so the
+            // client builds the matching mesh (on_zombie_replicated /
+            // on_zombie_kind).
+            zombie_kind_for_phase(phase, ZOMBIE_KIND_WEIGHTS),
             ZombieMotion {
                 path_recalc_timer: phase * ZOMBIE_PATH_RECALC_INTERVAL,
                 ..default()
@@ -1462,11 +1463,12 @@ fn on_zombie_spawned(
     let kind = kinds.get(entity).copied().unwrap_or_default();
     let scene = asset_server.load(GltfAssetLabel::Scene(0).from_asset(zombie_kind_mesh_path(kind)));
     commands.entity(entity).with_child((
-        // Per-kind child transform — MUST match crates/client's own
-        // zombie_mesh_bundle so the server's hit-detection skeleton lines
-        // up with what the client draws. See ZOMBIE_MODEL_Y_OFFSET /
-        // zombie_kind_gameplay_mesh_transform.
-        zombie_kind_gameplay_mesh_transform(kind),
+        // Always identity — every kind's scale/offset/rotation is baked
+        // into its own glb's scene root node (see the comment where
+        // zombie_kind_mesh_transform used to live in crates/shared/src/
+        // zombie.rs), so the server's hit-detection skeleton needs no
+        // per-kind correction of its own to match what the client draws.
+        Transform::IDENTITY,
         Visibility::default(),
         SceneRoot(scene),
     ));

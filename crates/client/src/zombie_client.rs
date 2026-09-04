@@ -372,7 +372,7 @@ pub(crate) fn on_zombie_kind_replicated(
         return;
     }
     let Ok(&kind) = kinds.get(entity) else { return };
-    commands.entity(entity).with_child(zombie_mesh_bundle(&asset_server, kind, true));
+    commands.entity(entity).with_child(zombie_mesh_bundle(&asset_server, kind));
 }
 
 // Debug-only: spawns a brand new, non-networked zombie purely on this
@@ -392,7 +392,7 @@ pub(crate) fn spawn_local_zombie(commands: &mut Commands, asset_server: &AssetSe
             Health(ZOMBIE_MAX_HEALTH),
             zombie_cosmetic_bundle(),
         ))
-        .with_child(zombie_mesh_bundle(asset_server, ZombieKind::Classic, true))
+        .with_child(zombie_mesh_bundle(asset_server, ZombieKind::Classic))
         .id();
     spawn_zombie_health_bar(commands, zombie_entity);
 }
@@ -414,17 +414,17 @@ pub(crate) fn spawn_item_gallery_zombie_showcase(commands: &mut Commands, asset_
                 // zombie (movement blocking is never actor-vs-actor here;
                 // crowd shove is steering-force + on-hit KnockbackVelocity).
                 // The floor is a fixed known height, so the root Y is placed
-                // directly (zombie_kind_showcase_root_y) instead of dropped.
+                // directly (always Y=0 — see zombie_mesh_bundle's own doc comment) instead of dropped.
                 .spawn((
                     Name::new(format!("zombie_{kind}_clip{i}")),
-                    Transform::from_xyz(x, zombie_kind_showcase_root_y(kind), z),
+                    Transform::from_xyz(x, 0.0, z),
                     Zombie,
                     kind,
                     ZombieShowcaseClip(i),
                     Health(ZOMBIE_MAX_HEALTH),
                     zombie_cosmetic_bundle(),
                 ))
-                .with_child(zombie_mesh_bundle(asset_server, kind, false));
+                .with_child(zombie_mesh_bundle(asset_server, kind));
         }
     }
 }
@@ -466,19 +466,13 @@ pub(crate) fn zombie_cosmetic_bundle() -> impl Bundle {
 // wire_zombie_hitbox_bones walk back up through ChildOf to find the Zombie
 // ancestor regardless of how many hops that takes, so this extra nesting
 // level doesn't break either of them.
-// `for_gameplay`: networked zombies (root at the grounded rest height
-// move_zombies keeps it at) need zombie_kind_gameplay_mesh_transform; the
-// ItemGallery showcase (fixed showcase root Y) needs the plain one. Same
-// for Classic either way.
-pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer, kind: ZombieKind, for_gameplay: bool) -> impl Bundle {
-    let transform = if for_gameplay {
-        zombie_kind_gameplay_mesh_transform(kind)
-    } else {
-        zombie_kind_mesh_transform(kind)
-    };
+// Always Transform::IDENTITY — every kind's own scale/offset/rotation is
+// baked into its own glb's scene root node (see the comment where
+// zombie_kind_mesh_transform used to live in crates/shared/src/zombie.rs).
+pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer, kind: ZombieKind) -> impl Bundle {
     (
         SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(zombie_kind_mesh_path(kind)))),
-        transform,
+        Transform::IDENTITY,
     )
 }
 
