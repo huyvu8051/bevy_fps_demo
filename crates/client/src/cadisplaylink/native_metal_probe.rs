@@ -2098,6 +2098,13 @@ impl NativeMetalProbe {
                     (matrix, model.compute_joint_matrices(*clip_index, *time))
                 }
             };
+            // Zero-length Metal buffer guard — see the main skinned-draw
+            // pass's own copy of this comment above for the real device
+            // crash this fixes (empty JointMatrices while a zombie's
+            // skinned mesh is still mid-async-load).
+            if joint_matrices.is_empty() {
+                continue;
+            }
             let joint_buffer = self.device.new_buffer_with_data(
                 joint_matrices.as_ptr() as *const _,
                 (joint_matrices.len() * std::mem::size_of::<[[f32; 4]; 4]>()) as u64,
@@ -2260,6 +2267,13 @@ impl NativeMetalProbe {
                     (matrix, model.compute_joint_matrices(*clip_index, *time))
                 }
             };
+            // Zero-length Metal buffer guard — see the main skinned-draw
+            // pass's own copy of this comment above for the real device
+            // crash this fixes (empty JointMatrices while a zombie's
+            // skinned mesh is still mid-async-load).
+            if joint_matrices.is_empty() {
+                continue;
+            }
             let joint_buffer = self.device.new_buffer_with_data(
                 joint_matrices.as_ptr() as *const _,
                 (joint_matrices.len() * std::mem::size_of::<[[f32; 4]; 4]>()) as u64,
@@ -2402,8 +2416,28 @@ impl NativeMetalProbe {
         }
         let real_game_meshes: Vec<RealGameMeshDraw> = real_game_static_meshes
             .iter()
-            .map(|mesh| {
+            .filter_map(|mesh| {
                 let verts = bake_static_mesh_vertices(mesh);
+                // A Metal buffer can never be zero-length (hard validation
+                // assertion, not just a warning — confirmed via a real
+                // device crash: "Cannot create buffer of zero length").
+                // bake_static_mesh_vertices can only produce this from an
+                // ExtractedMesh with empty positions AND empty indices —
+                // shouldn't happen for a real loaded Mesh asset, but skip
+                // defensively rather than crash the whole render loop over
+                // one bad mesh (every OTHER static mesh this frame would
+                // never draw either, since this closure runs inside the
+                // same per-frame map building the whole draw list).
+                if verts.is_empty() {
+                    bevy::log::warn!(
+                        "empty static mesh skipped: positions={} normals={} uvs={} indices={}",
+                        mesh.positions.len(),
+                        mesh.normals.len(),
+                        mesh.uvs.len(),
+                        mesh.indices.len()
+                    );
+                    return None;
+                }
                 let vertex_buffer = self.device.new_buffer_with_data(
                     verts.as_ptr() as *const _,
                     (verts.len() * std::mem::size_of::<super::gltf_scene::GltfVertex>()) as u64,
@@ -2416,7 +2450,7 @@ impl NativeMetalProbe {
                     mesh.transform.translation.y - self.camera_position[1],
                     mesh.transform.translation.z - self.camera_position[2],
                 ];
-                RealGameMeshDraw {
+                Some(RealGameMeshDraw {
                     vertex_buffer,
                     vertex_count: verts.len(),
                     base_color_factor: mesh.base_color,
@@ -2425,7 +2459,7 @@ impl NativeMetalProbe {
                     normal_texture,
                     is_blend: mesh.is_blend,
                     camera_dist_sq: d[0] * d[0] + d[1] * d[1] + d[2] * d[2],
-                }
+                })
             })
             .collect();
         let real_game_meshes_opt =

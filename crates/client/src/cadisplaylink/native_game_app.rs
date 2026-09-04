@@ -65,6 +65,24 @@ pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, sc
     // not exist" on the very first `app.update()`.
     app.add_plugins(bevy::mesh::MeshPlugin);
     app.add_plugins(bevy::image::ImagePlugin::default());
+    // `ImagePlugin::build()` only *preregisters* `ImageLoader` (reserves the
+    // jpg/png/... extension -> loader mapping so `asset_server.load()`
+    // doesn't panic immediately). The actual loader instance only gets
+    // registered via `register_asset_loader(ImageLoader::new(..))` inside
+    // `bevy_render`'s `TexturePlugin::finish()` (bundled in `RenderPlugin`,
+    // normally called by `App::run()`/`App::finish()` once a RenderApp
+    // exists) — never added here. Root cause of cars/particle textures
+    // never rendering on iOS: every `asset_server.load::<Image>()` call
+    // just queues forever against a loader that was promised but never
+    // instantiated, so `AssetServer::get_load_state()` reports
+    // `LoadState::Loading` indefinitely, confirmed via on-device logging.
+    // `.glb`-embedded images work because `GltfPlugin` decodes them itself
+    // without going through this deferred registration path. Register the
+    // loader ourselves with no compressed-texture support (we only load
+    // plain jpg/png here, never basis/ktx2/dds).
+    app.register_asset_loader(bevy::image::ImageLoader::new(
+        bevy::image::CompressedImageFormats::NONE,
+    ));
     // Also in DefaultPlugins' own list, also GPU-free (pure ECS data/
     // bookkeeping — the actual GPU work each does is entirely inside
     // render-world extraction systems that only run once a RenderApp
