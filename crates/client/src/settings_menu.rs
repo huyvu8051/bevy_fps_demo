@@ -1594,33 +1594,6 @@ pub(crate) fn suppress_ui_interaction_when_locked(locked: Res<MouseUiLocked>, mu
     }
 }
 
-// Same "run after multi_touch_button_interaction/ui_focus_system, before
-// every *_button consumer, force back to None" shape as
-// suppress_ui_interaction_when_locked above, for a different real bug:
-// multi_touch_button_interaction's own hit-test (necessary for a SECOND
-// simultaneous touch — see its own doc comment) has no notion of Z-order
-// at all, so a tap that visually lands on a settings-menu button also hit
-// whatever TouchControlButton (Sprint/Jump/Crouch/Lean/...) happens to sit
-// underneath it on screen — the menu panel doesn't actually occlude taps
-// from reaching what's behind it. `Without<SettingsToggleButton>` matters:
-// that one gear button carries BOTH SettingsToggleButton AND
-// TouchControlButton (see spawn_settings_toggle_button) since it's how the
-// menu gets opened AND closed — suppressing it here would make the menu
-// impossible to close by tapping the gear again while open.
-pub(crate) fn suppress_touch_controls_when_menu_open(
-    visible: Res<SettingsMenuVisible>,
-    mut buttons: Query<&mut Interaction, (With<TouchControlButton>, Without<SettingsToggleButton>)>,
-) {
-    if !visible.0 {
-        return;
-    }
-    for mut interaction in &mut buttons {
-        if *interaction != Interaction::None {
-            *interaction = Interaction::None;
-        }
-    }
-}
-
 // Display::None on a Button/the joystick base hides its entire subtree in
 // one write — border, text children, and (for the joystick) the knob child
 // all go with it, no separate per-component alpha bookkeeping needed. Also

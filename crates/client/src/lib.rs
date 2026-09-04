@@ -451,37 +451,25 @@ const AIM_DOF_APERTURE_F_STOPS: f32 = 11.0;
 // exposed in the UI. MIN_TEXTURE_PX guards against a degenerate/zero-size
 // render target on a tiny window at a low scale.
 const RESOLUTION_SCALE_PRESETS: [f32; 7] = [0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0];
-// Default 30% on desktop — the 3D scene renders into a 0.3x offscreen
-// target and gets upscaled to fill the window. Override per-run with
-// RENDER_SCALE, or live via the settings-menu presets. Mobile starts
-// higher (50%, see RESOLUTION_SCALE_DEFAULT_MOBILE) since
-// native_metal_probe.rs's own blit pass (unlike desktop's offscreen-Image
-// + separate full-res UI camera) scales the WHOLE frame including UI/HUD
-// text — 30% left mobile text noticeably blurrier than desktop ever was at
-// the same setting, for a renderer that already defaults its shadow/light
-// quality lower for perf reasons (see ShadowQuality/LightQuality's own
-// mobile-default doc comments).
+// Default 30% on every platform — the 3D scene (desktop) / whole frame
+// including UI (mobile, see native_metal_probe.rs's own blit pass) renders
+// into a 0.3x offscreen target and gets upscaled. Override per-run with
+// RENDER_SCALE, or live via the settings-menu presets.
 const RESOLUTION_SCALE_DEFAULT: f32 = 0.3;
-const RESOLUTION_SCALE_DEFAULT_MOBILE: f32 = 0.5;
 const RESOLUTION_SCALE_MIN_TEXTURE_PX: u32 = 64;
 
-/// Startup value for `RenderResolutionScale` — `RESOLUTION_SCALE_DEFAULT`/
-/// `RESOLUTION_SCALE_DEFAULT_MOBILE` unless `RENDER_SCALE` env overrides it
-/// (clamped to the sane 0.1..=1.0 range the offscreen target supports).
-/// The in-game settings-menu presets still change it at runtime from
-/// whatever this returns. Also feeds the offscreen game-camera render
-/// target (desktop) / native_metal_probe.rs's scene_color_texture
-/// (mobile).
+/// Startup value for `RenderResolutionScale` — `RESOLUTION_SCALE_DEFAULT`
+/// unless `RENDER_SCALE` env overrides it (clamped to the sane 0.1..=1.0
+/// range the offscreen target supports). The in-game settings-menu presets
+/// still change it at runtime from whatever this returns. Also feeds the
+/// offscreen game-camera render target (desktop) / native_metal_probe.rs's
+/// scene_color_texture (mobile).
 fn resolution_scale_default() -> f32 {
     std::env::var("RENDER_SCALE")
         .ok()
         .and_then(|s| s.trim().parse::<f32>().ok())
         .map(|s| s.clamp(0.1, 1.0))
-        .unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) {
-            RESOLUTION_SCALE_DEFAULT_MOBILE
-        } else {
-            RESOLUTION_SCALE_DEFAULT
-        })
+        .unwrap_or(RESOLUTION_SCALE_DEFAULT)
 }
 
 // AK47 scope: a second camera renders the actual zoomed-in view to a small
@@ -1627,7 +1615,6 @@ impl Plugin for GamePlugin {
                 multi_touch_button_interaction,
                 toggle_mouse_ui_lock,
                 suppress_ui_interaction_when_locked,
-                suppress_touch_controls_when_menu_open,
                 touch_move_axis,
                 update_joystick_knob_visual,
                 touch_look,

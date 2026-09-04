@@ -11,6 +11,8 @@
 // `use`/path, hence the glob rather than hunting down each one by hand.
 
 use bevy::input::touch::Touches;
+use bevy::picking::hover::HoverMap;
+use bevy::picking::pointer::PointerId;
 use bevy::prelude::*;
 use crate::*;
 
@@ -175,15 +177,18 @@ pub(crate) struct TouchGameplayInputs<'w> {
 // whichever touch ui_focus_system picked as "first" gets normal hover/press
 // handling, but every OTHER simultaneous touch is invisible to it — any
 // button under a second finger silently never becomes Interaction::Pressed.
-// This is a known community pain point, not a CADisplayLink-specific bug: a
-// popular touch-joystick crate (SergioRibera/virtual_joystick) works around
-// the exact same limitation by hand-testing Touches against node rects
-// instead of relying on Interaction at all. This system does the same,
-// narrower: it only forces Interaction::Pressed for actual Button entities
-// hit by a touch OTHER than the "first" one ui_focus_system already
-// manages — so it never fights ui_focus_system over the same touch, and
-// never touches non-Button nodes (the joystick base/knob, which aren't
-// Button, are naturally excluded by the With<Button> filter below).
+// This is a known community pain point, not a CADisplayLink-specific bug.
+// Reads real bevy_picking HoverMap now (ffi.rs's `touched()` feeds
+// WindowEvent::TouchInput into it, not just the raw TouchInput message
+// bevy_input's own Touches resource is built from) instead of a hand-rolled
+// ComputedNode::contains_point sweep across every Button on screen: HoverMap
+// already only contains each pointer's topmost, Z-order-respecting hit(s),
+// so a touch that visually lands on the settings menu (or anything else
+// drawn on top) no longer also presses whatever Button happens to sit
+// underneath it — no per-case manual suppression needed, this is correct
+// for any current or future overlapping UI. Only forces Interaction::
+// Pressed for a touch OTHER than the "first" one ui_focus_system already
+// manages, so it never fights ui_focus_system over the same touch.
 // Clearing back to None on release is already handled for free: bevy_ui's
 // own mouse_released check reacts to touches_input.any_just_released() —
 // ANY touch ending, not just the first — and resets every Pressed node to
@@ -191,33 +196,21 @@ pub(crate) struct TouchGameplayInputs<'w> {
 // Runs first (see both call sites) so button-tap systems reading
 // Changed<Interaction> later in the same Update tick see this frame's
 // change immediately, not one frame late.
-pub(crate) fn multi_touch_button_interaction(
-    touches: Res<Touches>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
-    mut buttons: Query<(&ComputedNode, &UiGlobalTransform, &mut Interaction), With<Button>>,
-) {
+pub(crate) fn multi_touch_button_interaction(touches: Res<Touches>, hover_map: Res<HoverMap>, mut buttons: Query<&mut Interaction, With<Button>>) {
     let Some(first_id) = touches.iter().next().map(|t| t.id()) else {
         return;
     };
-    let Ok(window) = primary_window.single() else {
-        return;
-    };
-    // node.contains_point expects physical-pixel coordinates, same as
-    // window.physical_cursor_position() — touch.position() is logical, so
-    // needs the same scale-factor conversion ui_focus_system itself applies
-    // to touches_input.first_pressed_position().
-    let scale_factor = window.scale_factor();
-    let other_touch_positions: Vec<Vec2> = touches
-        .iter()
-        .filter(|touch| touch.id() != first_id)
-        .map(|touch| touch.position() * scale_factor)
-        .collect();
-    if other_touch_positions.is_empty() {
-        return;
-    }
-    for (node, transform, mut interaction) in &mut buttons {
-        if other_touch_positions.iter().any(|&pos| node.contains_point(*transform, pos)) {
-            interaction.set_if_neq(Interaction::Pressed);
+    for touch in touches.iter() {
+        if touch.id() == first_id {
+            continue;
+        }
+        let Some(hits) = hover_map.get(&PointerId::Touch(touch.id())) else {
+            continue;
+        };
+        for &entity in hits.keys() {
+            if let Ok(mut interaction) = buttons.get_mut(entity) {
+                interaction.set_if_neq(Interaction::Pressed);
+            }
         }
     }
 }

@@ -71,13 +71,31 @@ pub(super) fn touched(app: &mut App, touch_id: u64, phase: TouchPhase, position:
     let Ok(entity) = windows.single() else {
         return;
     };
-    app.world_mut().write_message(TouchInput {
+    let input = TouchInput {
         window: entity,
         phase,
         position,
         force: None,
         id: touch_id,
-    });
+    };
+    // Also feed bevy_picking's own touch backend (touch_pick_events, which
+    // reads WindowEvent::TouchInput specifically, not the raw TouchInput
+    // message above — see native_game_app.rs's own `app.add_message::
+    // <WindowEvent>()` comment, which registered this message type
+    // expecting it to stay forever empty/a no-op since there's no real
+    // window/winit here to ever populate it). Writing it ourselves is
+    // enough: UiPickingPlugin (bundled inside UiPlugin, already added) and
+    // the rest of DefaultPickingPlugins (already added) don't need a real
+    // window, only this message and the synthetic PrimaryWindow entity
+    // `entity` already resolves to — so HoverMap starts reflecting real,
+    // Z-order-respecting topmost hits instead of staying permanently
+    // empty. multi_touch_button_interaction's own hand-rolled per-Button
+    // rect loop (needed for touches after the first, which bevy_ui's own
+    // focus system never looks at) can now check HoverMap instead of a
+    // raw rect-contains sweep across every Button on screen regardless of
+    // what's drawn on top of it.
+    app.world_mut().write_message(bevy::window::WindowEvent::TouchInput(input));
+    app.world_mut().write_message(input);
 }
 
 fn primary_window_entity(app: &mut App) -> Option<Entity> {
