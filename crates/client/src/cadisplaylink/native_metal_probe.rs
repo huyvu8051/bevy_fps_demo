@@ -2619,7 +2619,7 @@ impl NativeMetalProbe {
             self.msaa_enabled = snapshot.map_msaa_on;
             self.ensure_shadow_map_size(snapshot.shadow_quality);
             self.render_resolution_scale = snapshot.render_resolution_scale.clamp(0.1, 1.0);
-            self.apply_zombie_texture_quality(snapshot.texture_quality);
+            self.apply_zombie_texture_quality(snapshot.zombie_texture_quality);
             if let Some(cam) = &snapshot.camera {
                 self.camera_position = cam.eye;
                 self.camera_yaw = cam.yaw;

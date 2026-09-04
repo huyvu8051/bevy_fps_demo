@@ -362,15 +362,19 @@ pub struct RenderSnapshot {
     /// native_metal_probe.rs can render its own offscreen scene target at
     /// this scale and upscale-blit it into the real drawable instead.
     pub render_resolution_scale: f32,
-    /// The `TextureQuality` settings-menu tier (crate::lib, 0..=5) — the
-    /// car item-gallery props already read this via their own
-    /// respawn-on-change system, but this renderer's zombie/soldier
-    /// skinned models were loaded once at startup from a fixed embedded
-    /// texture and never touched it at all. Extracted so
+    /// The `ZombieTextureQuality` settings-menu tier (crate::lib, 0..=5,
+    /// separate from cars' own `TextureQuality`) — this renderer's zombie/
+    /// soldier skinned models were loaded once at startup from a fixed
+    /// embedded texture and never touched it at all. Extracted so
     /// native_metal_probe.rs's apply_zombie_texture_quality can re-upload
     /// each zombie kind's base_color_texture from
     /// shared::zombie_kind_texture_path's tiered JPEGs when this changes.
-    pub texture_quality: u8,
+    /// Cars don't need an equivalent snapshot field — their TextureQuality
+    /// is already fully applied ECS-side (respawn_item_gallery_cars_on_
+    /// quality_change bakes the tier's texture straight into a fresh
+    /// StandardMaterial at spawn time), so by the time this extraction
+    /// runs there's nothing left for the render layer to do.
+    pub zombie_texture_quality: u8,
 }
 
 /// A still-alive floating damage number, already positioned/faded by
@@ -956,10 +960,10 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     let mut resolution_scale_state: SystemState<Res<crate::RenderResolutionScale>> = SystemState::new(world);
     snapshot.render_resolution_scale = resolution_scale_state.get(world).0;
 
-    // Texture quality: see RenderSnapshot::texture_quality's own doc
-    // comment.
-    let mut texture_quality_state: SystemState<Res<crate::TextureQuality>> = SystemState::new(world);
-    snapshot.texture_quality = texture_quality_state.get(world).0;
+    // Zombie texture quality: see RenderSnapshot::zombie_texture_quality's
+    // own doc comment.
+    let mut zombie_texture_quality_state: SystemState<Res<crate::ZombieTextureQuality>> = SystemState::new(world);
+    snapshot.zombie_texture_quality = zombie_texture_quality_state.get(world).0;
 
     // Floating damage numbers: see FloatingDamageSnapshot's own doc comment.
     let mut damage_state: SystemState<

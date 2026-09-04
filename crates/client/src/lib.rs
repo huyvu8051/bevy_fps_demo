@@ -982,6 +982,34 @@ impl Default for TextureQuality {
     }
 }
 
+// Separate from TextureQuality above — cars and zombies are unrelated
+// assets on unrelated budgets (16 client-local decorative props vs.
+// however many server-replicated zombies are alive at once), so tying
+// them to one slider meant you couldn't turn zombie detail down without
+// also flattening every car, or vice versa. Same tier semantics/default
+// logic as TextureQuality (0 = flat single color, 5 = full res; mobile
+// starts at 2, desktop at 5) — see zombie_kind_texture_path (crates/
+// shared) for how a tier picks the right file, and
+// apply_zombie_texture_quality (crate::zombie_client / mobile's own copy
+// in native_metal_probe.rs) for where this actually gets applied.
+// `ZOMBIE_TEXTURE_QUALITY=N` env overrides the default for a one-off perf
+// test, independent of `TEXTURE_QUALITY` (cars).
+pub(crate) fn zombie_texture_quality_default() -> u8 {
+    std::env::var("ZOMBIE_TEXTURE_QUALITY")
+        .ok()
+        .and_then(|s| s.trim().parse::<u8>().ok())
+        .map(|q| q.clamp(0, 5))
+        .unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) { 2 } else { 5 })
+}
+
+#[derive(Resource)]
+pub(crate) struct ZombieTextureQuality(pub(crate) u8);
+impl Default for ZombieTextureQuality {
+    fn default() -> Self {
+        Self(zombie_texture_quality_default())
+    }
+}
+
 /// 1 (fewest triangles) to 5 (original geometry) — polygon quality for
 /// the same 16 car props, independent of TextureQuality above (see
 /// shared::item_gallery_car_mesh_path's own doc comment for why; on-
@@ -1528,6 +1556,7 @@ impl Plugin for GamePlugin {
         .init_resource::<ShadowQuality>()
         .init_resource::<LightQuality>()
         .init_resource::<TextureQuality>()
+        .init_resource::<ZombieTextureQuality>()
         .init_resource::<PolyQuality>()
         .init_resource::<ScopeCameraEnabled>()
         .init_resource::<SelectedDebugBot>()
@@ -1631,6 +1660,8 @@ impl Plugin for GamePlugin {
                     light_quality_buttons,
                     update_light_quality_button_colors,
                     apply_zombie_texture_quality,
+                    zombie_texture_quality_buttons,
+                    update_zombie_texture_quality_button_colors,
                 )
                     .chain(),
             )

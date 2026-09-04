@@ -476,8 +476,11 @@ pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer, kind: ZombieKind) -
     )
 }
 
-// Applies TextureQuality to already-spawned zombies by swapping each
-// kind's StandardMaterial.base_color_texture handle in place — cheap
+// Applies ZombieTextureQuality (separate resource from cars' own
+// TextureQuality — the two axes were split apart so turning zombie detail
+// down doesn't also flatten every car and vice versa) to already-spawned
+// zombies by swapping each kind's StandardMaterial.base_color_texture
+// handle in place — cheap
 // because bevy_gltf gives every SceneRoot instantiated from the same
 // Handle<Gltf> the SAME material asset (confirmed: a kind's zombies never
 // get their own per-entity material copy), so patching that ONE Assets<
@@ -491,7 +494,7 @@ pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer, kind: ZombieKind) -
 // any reason to read or write it.
 pub(crate) fn apply_zombie_texture_quality(
     asset_server: Res<AssetServer>,
-    texture_quality: Res<TextureQuality>,
+    texture_quality: Res<ZombieTextureQuality>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     zombies: Query<(Entity, &ZombieKind)>,
     children: Query<&Children>,

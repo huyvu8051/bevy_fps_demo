@@ -558,7 +558,8 @@ pub fn zombie_kind_mesh_path(kind: ZombieKind) -> &'static str {
 }
 
 /// `assets/`-relative path to a kind's base-color texture at a given
-/// `TextureQuality` tier (0..=5) — baked by scripts/bake_zombie_textures.py
+/// `ZombieTextureQuality` tier (0..=5, a separate resource from cars' own
+/// `TextureQuality`) — baked by scripts/bake_zombie_textures.py
 /// into `<kind_dir>/mesh/textures/base_color_q{N}.jpg`. Read by both
 /// render paths: desktop's `apply_zombie_texture_quality`
 /// (crates/client/src/zombie_client.rs) swaps the kind's shared
