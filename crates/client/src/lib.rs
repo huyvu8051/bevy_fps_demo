@@ -1581,6 +1581,7 @@ impl Plugin for GamePlugin {
         .init_resource::<CameraMode>()
         .init_resource::<PlayerModelTuning>()
         .init_resource::<GunVisible>()
+        .init_resource::<CarsVisible>()
         .init_resource::<MapMsaaOn>()
         .init_resource::<ShadowQuality>()
         .init_resource::<LightQuality>()
@@ -1695,6 +1696,7 @@ impl Plugin for GamePlugin {
                     apply_point_light_quality,
                     point_light_quality_buttons,
                     update_point_light_quality_button_colors,
+                    apply_cars_visible,
                 )
                     .chain(),
             )

@@ -545,6 +545,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 })
                 .with_children(|row| {
                     spawn_cheat_toggle_button(row, "Gun", CheatGunButton);
+                    spawn_cheat_toggle_button(row, "Cars", CheatCarsButton);
                 });
 
                 // Touch equivalent of the desktop debug panel's keyboard-only
@@ -794,6 +795,8 @@ pub(crate) struct CheatInspectButton;
 #[derive(Component)]
 pub(crate) struct CheatGunButton;
 #[derive(Component)]
+pub(crate) struct CheatCarsButton;
+#[derive(Component)]
 pub(crate) struct CheatMsaaButton;
 #[derive(Component)]
 pub(crate) struct CheatScopeCameraButton;
@@ -898,12 +901,14 @@ pub(crate) fn cheat_toggle_buttons(
     mut god_mode: ResMut<GodMode>,
     mut freeze: ResMut<FreezeZombies>,
     mut gun_visible: ResMut<GunVisible>,
+    mut cars_visible: ResMut<CarsVisible>,
     mut map_msaa: ResMut<MapMsaaOn>,
     noclip_btn: Query<&Interaction, (With<CheatNoclipButton>, Changed<Interaction>)>,
     inspect_btn: Query<&Interaction, (With<CheatInspectButton>, Changed<Interaction>)>,
     god_btn: Query<&Interaction, (With<CheatGodModeButton>, Changed<Interaction>)>,
     freeze_btn: Query<&Interaction, (With<CheatFreezeButton>, Changed<Interaction>)>,
     gun_btn: Query<&Interaction, (With<CheatGunButton>, Changed<Interaction>)>,
+    cars_btn: Query<&Interaction, (With<CheatCarsButton>, Changed<Interaction>)>,
     msaa_btn: Query<&Interaction, (With<CheatMsaaButton>, Changed<Interaction>)>,
 ) {
     if tapped(&noclip_btn) {
@@ -927,6 +932,9 @@ pub(crate) fn cheat_toggle_buttons(
     }
     if tapped(&gun_btn) {
         gun_visible.0 = !gun_visible.0;
+    }
+    if tapped(&cars_btn) {
+        cars_visible.0 = !cars_visible.0;
     }
     if tapped(&msaa_btn) {
         map_msaa.0 = !map_msaa.0;
@@ -1101,6 +1109,7 @@ pub(crate) fn update_cheat_toggle_colors(
     zombie_lod: Res<ZombieLodDisabled>,
     player_model: Res<PlayerModelVisible>,
     gun_visible: Res<GunVisible>,
+    cars_visible: Res<CarsVisible>,
     map_msaa: Res<MapMsaaOn>,
     mut buttons: Query<
         (
@@ -1115,6 +1124,7 @@ pub(crate) fn update_cheat_toggle_colors(
             Option<&CheatZombieLodButton>,
             Option<&CheatPlayerModelButton>,
             Option<&CheatGunButton>,
+            Option<&CheatCarsButton>,
             Option<&CheatMsaaButton>,
         ),
         Or<(
@@ -1128,12 +1138,13 @@ pub(crate) fn update_cheat_toggle_colors(
             With<CheatZombieLodButton>,
             With<CheatPlayerModelButton>,
             With<CheatGunButton>,
+            With<CheatCarsButton>,
             With<CheatMsaaButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, zombie_lod_m, player_model_m, gun_m, msaa_m) in
+    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, zombie_lod_m, player_model_m, gun_m, cars_m, msaa_m) in
         &mut buttons
     {
         let on = if noclip_m.is_some() {
@@ -1156,6 +1167,8 @@ pub(crate) fn update_cheat_toggle_colors(
             player_model.0
         } else if gun_m.is_some() {
             gun_visible.0
+        } else if cars_m.is_some() {
+            cars_visible.0
         } else {
             msaa_m.is_some() && map_msaa.0
         };

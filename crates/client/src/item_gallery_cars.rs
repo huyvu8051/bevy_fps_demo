@@ -25,6 +25,37 @@ use crate::*;
 #[derive(Component)]
 pub(crate) struct ItemGalleryTestProp;
 
+// Settings-menu "Cars" cheat toggle — same "hide, don't despawn" shape as
+// GunVisible (crate::movement_combat): a car still needs to exist (physics/
+// nav obstacle/hit detection all stay live) for testing without it
+// cluttering the view, unlike TextureQuality/PolyQuality which genuinely
+// rebuild the entity at a different asset tier.
+#[derive(Resource)]
+pub(crate) struct CarsVisible(pub(crate) bool);
+impl Default for CarsVisible {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+// Same resource-drives-a-component-every-frame shape as apply_map_render_
+// toggles' own GunVisible handling — cheap enough (one Query, gated on
+// Changed) not to need its own system split.
+pub(crate) fn apply_cars_visible(
+    visible: Res<CarsVisible>,
+    mut cars: Query<&mut Visibility, With<ItemGalleryTestProp>>,
+) {
+    if !visible.is_changed() {
+        return;
+    }
+    let target = if visible.0 { Visibility::Inherited } else { Visibility::Hidden };
+    for mut visibility in &mut cars {
+        if *visibility != target {
+            *visibility = target;
+        }
+    }
+}
+
 pub(crate) struct ItemGalleryCarsPlugin;
 
 impl Plugin for ItemGalleryCarsPlugin {
