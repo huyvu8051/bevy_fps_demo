@@ -6,9 +6,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::camera::RenderTarget;
 use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
-use bevy::picking::hover::HoverMap;
 use bevy::picking::mesh_picking::MeshPickingPlugin;
-use bevy::picking::pointer::PointerId;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
@@ -1629,6 +1627,7 @@ impl Plugin for GamePlugin {
                 multi_touch_button_interaction,
                 toggle_mouse_ui_lock,
                 suppress_ui_interaction_when_locked,
+                suppress_touch_controls_when_menu_open,
                 touch_move_axis,
                 update_joystick_knob_visual,
                 touch_look,

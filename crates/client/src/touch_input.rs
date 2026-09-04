@@ -696,25 +696,42 @@ pub(crate) fn touch_lean_buttons(mut lean: ResMut<TouchLeanHeld>, left_button: Q
 // the joystick's own base/knob visuals, which have no Button either) would
 // ALSO count as "over UI" and block touch_move_axis/touch_look, including
 // the joystick blocking its own drag.
-pub(crate) fn touch_over_ui(touch_id: u64, hover_map: &HoverMap, interactive: &Query<(), With<Interaction>>) -> bool {
-    hover_map
-        .get(&PointerId::Touch(touch_id))
-        .is_some_and(|hits| hits.keys().any(|&entity| interactive.contains(entity)))
+// Real replacement for what used to be a `touch_over_ui` check built on
+// bevy_picking's `HoverMap` — that map only ever gets populated by
+// bevy_picking's own `touch_pick_events` system, which reads
+// `WindowEvent::TouchInput`, and this app only ever emits the raw
+// `TouchInput` message (see ffi.rs's `touched()`), so `HoverMap` stayed
+// permanently empty and that check always returned false. Concretely this
+// meant touch_move_axis/touch_look claimed a touch that started ON TOP of
+// a real Button — the Fire button, the scope-zoom slider's own handle
+// area, Jump/Crouch/Lean/etc — as a joystick/look-drag too, on top of that
+// button's own tap/hold handling: holding Fire and dragging the same
+// finger fired AND spun the camera, same for the zoom slider. Same
+// ComputedNode::contains_point rect-check technique
+// multi_touch_button_interaction/touch_over_settings_menu already use,
+// just generalized to "any real Button", not one specific node.
+pub(crate) fn touch_over_touch_button(pos_physical: Vec2, buttons: &Query<(&ComputedNode, &UiGlobalTransform), With<Button>>) -> bool {
+    buttons.iter().any(|(node, transform)| node.contains_point(*transform, pos_physical))
 }
 
-// touch_over_ui above is a no-op in this custom CADisplayLink pipeline —
-// HoverMap only gets populated by bevy_picking's touch_pick_events system,
-// which reads WindowEvent::TouchInput, and this app only ever emits the
-// raw TouchInput message (see ffi.rs's touched()), so HoverMap stays
-// permanently empty and touch_over_ui always returns false. Concretely
-// this meant a touch starting anywhere on the LEFT half of the screen —
-// including on top of the open settings menu, which can span past the
-// midline — always got claimed by the joystick (touch_move_axis) first,
-// so the menu's own touch_scroll_settings_menu never got a chance to see
-// that touch. This hand-rolled rect check (same ComputedNode::contains_
-// point technique multi_touch_button_interaction/touch_scroll_settings_
-// menu already use) is a working substitute, scoped to just the one node
-// that actually needs excluding here.
+// The scope-zoom slider (TouchScopeZoomSliderTrack) needs its own check
+// alongside touch_over_touch_button above — it's deliberately NOT a
+// `Button` (touch_scope_zoom_drag reads raw Touches/rect-contains itself,
+// not Interaction), so the generic Button-based check above can't see it.
+// Gated on `touch_aiming` (same condition touch_scope_zoom_drag itself
+// checks before doing anything) rather than trusting the track's
+// Display::None-when-hidden state alone — bevy_ui doesn't recompute
+// layout for a Display::None node, so its ComputedNode can retain a
+// stale, real-looking rect from the last frame it WAS visible instead of
+// collapsing to zero size.
+pub(crate) fn touch_over_scope_zoom_slider(
+    pos_physical: Vec2,
+    touch_aiming: bool,
+    track: &Query<(&ComputedNode, &UiGlobalTransform), With<TouchScopeZoomSliderTrack>>,
+) -> bool {
+    touch_aiming && track.single().is_ok_and(|(node, transform)| node.contains_point(*transform, pos_physical))
+}
+
 pub(crate) fn touch_over_settings_menu(
     pos_physical: Vec2,
     visible: &SettingsMenuVisible,
@@ -726,8 +743,7 @@ pub(crate) fn touch_over_settings_menu(
 pub(crate) fn touch_move_axis(
     touches: Res<Touches>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    hover_map: Res<HoverMap>,
-    interactive: Query<(), With<Interaction>>,
+    buttons: Query<(&ComputedNode, &UiGlobalTransform), With<Button>>,
     mouse_ui_locked: Res<MouseUiLocked>,
     settings_visible: Res<SettingsMenuVisible>,
     settings_menu: Query<(&ComputedNode, &UiGlobalTransform), With<SettingsMenuRoot>>,
@@ -759,7 +775,7 @@ pub(crate) fn touch_move_axis(
     if state.touch_id.is_none() {
         if let Some(touch) = touches.iter_just_pressed().find(|touch| {
             touch.position().x < half_width
-                && !touch_over_ui(touch.id(), &hover_map, &interactive)
+                && !touch_over_touch_button(touch.position() * scale_factor, &buttons)
                 && !touch_over_settings_menu(touch.position() * scale_factor, &settings_visible, &settings_menu)
         }) {
             state.touch_id = Some(touch.id());
@@ -884,8 +900,9 @@ pub(crate) fn update_scope_zoom_slider_visual(zoom: Res<ScopeZoom>, mut handle: 
 pub(crate) fn touch_look(
     touches: Res<Touches>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    hover_map: Res<HoverMap>,
-    interactive: Query<(), With<Interaction>>,
+    buttons: Query<(&ComputedNode, &UiGlobalTransform), With<Button>>,
+    touch_aiming: Res<TouchAiming>,
+    zoom_slider_track: Query<(&ComputedNode, &UiGlobalTransform), With<TouchScopeZoomSliderTrack>>,
     mouse_ui_locked: Res<MouseUiLocked>,
     settings_visible: Res<SettingsMenuVisible>,
     settings_menu: Query<(&ComputedNode, &UiGlobalTransform), With<SettingsMenuRoot>>,
@@ -923,9 +940,11 @@ pub(crate) fn touch_look(
     }
     if state.touch_id.is_none() {
         if let Some(touch) = touches.iter_just_pressed().find(|touch| {
+            let pos_physical = touch.position() * scale_factor;
             touch.position().x >= half_width
-                && !touch_over_ui(touch.id(), &hover_map, &interactive)
-                && !touch_over_settings_menu(touch.position() * scale_factor, &settings_visible, &settings_menu)
+                && !touch_over_touch_button(pos_physical, &buttons)
+                && !touch_over_scope_zoom_slider(pos_physical, touch_aiming.0, &zoom_slider_track)
+                && !touch_over_settings_menu(pos_physical, &settings_visible, &settings_menu)
         }) {
             state.touch_id = Some(touch.id());
             state.last_pos = touch.position();
