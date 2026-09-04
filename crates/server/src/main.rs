@@ -19,7 +19,7 @@ use shared::{
     entity_phase, resolve_bone_world_positions, zombie_hit_damage_bones, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
-    SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount,
+    SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount,
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
     ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, campaign_zombie_spawn_pos,
     MapKind, scenario_player_spawn,
@@ -217,7 +217,9 @@ fn main() {
         .add_client_event::<ClearAllZombies>(Channel::Ordered)
         .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
         .add_client_event::<SetFreezeZombies>(Channel::Ordered)
+        .add_client_event::<SetDamageMultiplier>(Channel::Ordered)
         .init_resource::<FreezeZombiesServer>()
+        .init_resource::<DamageMultiplierServer>()
         .init_resource::<PendingRespawns>()
         .init_resource::<GameOver>()
         .init_resource::<DebugBotIdCounter>()
@@ -276,6 +278,7 @@ fn main() {
         .add_observer(on_clear_all_zombies)
         .add_observer(on_set_auto_maintain_zombies)
         .add_observer(on_set_freeze_zombies)
+.add_observer(on_set_damage_multiplier)
         .add_observer(on_player_died)
         .add_observer(on_request_restart)
         .add_observer(handle_fire_shot)
@@ -568,6 +571,20 @@ struct FreezeZombiesServer(bool);
 
 fn on_set_freeze_zombies(trigger: On<FromClient<SetFreezeZombies>>, mut freeze: ResMut<FreezeZombiesServer>) {
     freeze.0 = trigger.message.0;
+}
+
+// See SetDamageMultiplier's own doc comment (crates/shared/src/hitbox.rs)
+// for why this is a server-side resource, not client-local state.
+#[derive(Resource)]
+struct DamageMultiplierServer(f32);
+impl Default for DamageMultiplierServer {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+fn on_set_damage_multiplier(trigger: On<FromClient<SetDamageMultiplier>>, mut multiplier: ResMut<DamageMultiplierServer>) {
+    multiplier.0 = trigger.message.0.max(0.0);
 }
 
 // Server-only (not replicated) aggro state — see ZOMBIE_THREAT_DISTANCE_BONUS
@@ -896,6 +913,7 @@ fn debug_bot_fire(
     bone_transforms: Query<&GlobalTransform>,
     mut respawns: ResMut<PendingRespawns>,
     director_spawned: Query<(), With<DirectorSpawned>>,
+    damage_multiplier: Res<DamageMultiplierServer>,
 ) {
     for (transform, mut ai) in &mut bots {
         ai.fire_timer -= time.delta_secs();
@@ -936,7 +954,7 @@ fn debug_bot_fire(
         // stays on live (not history-rewound) bone positions — see this
         // function's own doc comment above.
         let resolved_bones = resolve_bone_world_positions(bones, |bone| bone_transforms.get(bone).ok().map(|g| g.translation()));
-        let damage = zombie_hit_damage_bones(hit_point, &resolved_bones, *zombie_transform.forward());
+        let damage = zombie_hit_damage_bones(hit_point, &resolved_bones, *zombie_transform.forward()) * damage_multiplier.0;
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {
@@ -1880,6 +1898,7 @@ fn handle_fire_shot(
     mut respawns: ResMut<PendingRespawns>,
     mut threats: Query<&mut PlayerThreat>,
     director_spawned: Query<(), With<DirectorSpawned>>,
+    damage_multiplier: Res<DamageMultiplierServer>,
 ) {
     // Gunfire is noise — it draws zombie attention even on a miss, so this
     // counts before the raycast below decides hit/miss.
@@ -2007,6 +2026,7 @@ fn handle_fire_shot(
             }
             continue;
         };
+        let damage = damage * damage_multiplier.0;
         // Occlusion: a wall between the muzzle and this hit point eats the
         // shot. Skip to the next candidate (a wall in front of this zombie is
         // almost always in front of any zombie behind it too, so the shot
@@ -2106,6 +2126,7 @@ fn handle_fire_shot(
             }
             return;
         };
+        let damage = damage * damage_multiplier.0;
         info!("[shot] inner bone capsule hit: zombie={entity} damage={damage:.1}");
         health.0 -= damage;
         let killed = health.0 <= 0.0;

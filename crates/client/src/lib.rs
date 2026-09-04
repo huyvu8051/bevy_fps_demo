@@ -37,7 +37,7 @@ use shared::{
     ZombieAnimationPlayer,
     PlayerDiedFx, PlayerFiredFx,
     MapKind, scenario_player_spawn,
-    PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
+    PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieMotion, ZombieShowcaseClip, wire_zombie_hitbox_bones,
     zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_anim_path,
     zombie_kind_pose_clips,
@@ -308,6 +308,15 @@ const MOUSE_SENSITIVITY: f32 = 0.002;
 const SENSITIVITY_SCALE_MIN: f32 = 0.25;
 const SENSITIVITY_SCALE_MAX: f32 = 3.0;
 const SENSITIVITY_SCALE_STEP: f32 = 0.25;
+// Settings-menu "Damage" +/- buttons — see SetDamageMultiplier's own doc
+// comment (crates/shared/src/hitbox.rs) for why the real value lives
+// server-side; DamageMultiplierUi below is just this client's own best
+// guess of the current server value (same "client's own best guess"
+// reasoning ZombieCountUi already uses), used for immediate button-tap
+// text feedback without waiting on a round trip.
+const DAMAGE_MULTIPLIER_MIN: f32 = 0.25;
+const DAMAGE_MULTIPLIER_MAX: f32 = 5.0;
+const DAMAGE_MULTIPLIER_STEP: f32 = 0.25;
 // Mouse turns slower while ADS'd — real scopes/sights make fine aim
 // adjustments feel twitchy at full sensitivity.
 const AIM_MOUSE_SENSITIVITY_MULTIPLIER: f32 = 0.5;
@@ -1498,6 +1507,7 @@ impl Plugin for GamePlugin {
         .add_client_event::<ClearAllZombies>(Channel::Ordered)
         .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
         .add_client_event::<SetFreezeZombies>(Channel::Ordered)
+        .add_client_event::<SetDamageMultiplier>(Channel::Ordered)
         .init_resource::<ZombieCountUi>()
         .init_resource::<AutoMaintainUi>()
         // Restored alongside the Update-schedule block above — this was
@@ -1593,6 +1603,7 @@ impl Plugin for GamePlugin {
         .init_resource::<TouchSprintHeld>()
         .init_resource::<TouchLeanHeld>()
         .init_resource::<SensitivityScale>()
+        .init_resource::<DamageMultiplierUi>()
         .init_resource::<KillCount>()
         .init_resource::<MapSelectionPending>()
         .init_resource::<RecentlyHitZombies>()
@@ -1660,6 +1671,8 @@ impl Plugin for GamePlugin {
                     update_zombie_count_text,
                     sensitivity_buttons,
                     update_sensitivity_text,
+                    damage_multiplier_buttons,
+                    update_damage_multiplier_text,
                     auto_maintain_button,
                     update_auto_maintain_button_color,
                     update_touch_controls_idle_hidden,

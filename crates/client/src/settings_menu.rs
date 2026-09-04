@@ -694,6 +694,33 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     ));
                     spawn_cheat_action_button(row, "+", SensitivityIncButton);
                 });
+                page.spawn((
+                    Text::new("Damage"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|row| {
+                    spawn_cheat_action_button(row, "-", DamageMultiplierDecButton);
+                    row.spawn((
+                        Text::new("1.00x"),
+                        TextFont {
+                            font_size: 16.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        DamageMultiplierText,
+                    ));
+                    spawn_cheat_action_button(row, "+", DamageMultiplierIncButton);
+                });
                 // Same debug-build-only gate as page 0's "Cheats" section
                 // above — Kill All / Heal Nearest / 1HP Nearest are testing
                 // tools, not something a real player should have.
@@ -816,6 +843,12 @@ pub(crate) struct SensitivityDecButton;
 pub(crate) struct SensitivityIncButton;
 #[derive(Component)]
 pub(crate) struct SensitivityText;
+#[derive(Component)]
+pub(crate) struct DamageMultiplierDecButton;
+#[derive(Component)]
+pub(crate) struct DamageMultiplierIncButton;
+#[derive(Component)]
+pub(crate) struct DamageMultiplierText;
 
 // Client's own best guess at the server's current zombie population
 // target, so the cheat panel has a number to show and step from without
@@ -830,6 +863,16 @@ pub(crate) struct ZombieCountUi(pub(crate) u32);
 // true to match AutoMaintainZombies' own server-side default.
 #[derive(Resource)]
 pub(crate) struct AutoMaintainUi(pub(crate) bool);
+
+// Same "client's own best guess" reasoning as ZombieCountUi — defaults to
+// 1.0 to match DamageMultiplierServer's own server-side default.
+#[derive(Resource)]
+pub(crate) struct DamageMultiplierUi(pub(crate) f32);
+impl Default for DamageMultiplierUi {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
 
 // True if any entity matching `T` was tapped/clicked this frame — shared by
 // every touch/click button in this file that just needs a plain
@@ -1417,6 +1460,44 @@ pub(crate) fn update_sensitivity_text(scale: Res<SensitivityScale>, mut text: Qu
     }
     for mut text in &mut text {
         text.0 = format!("{:.2}x", scale.0);
+    }
+}
+
+// Same Changed<Interaction>-gated tap-steps-a-value shape as
+// sensitivity_buttons, but fire-and-forget SetDamageMultiplier to the
+// server (same as zombie_count_buttons' own SetZombieCount) since the real
+// value is server-authoritative — see SetDamageMultiplier's own doc
+// comment in crates/shared/src/hitbox.rs.
+pub(crate) fn damage_multiplier_buttons(
+    mut commands: Commands,
+    mut multiplier: ResMut<DamageMultiplierUi>,
+    dec_btn: Query<&Interaction, (With<DamageMultiplierDecButton>, Changed<Interaction>)>,
+    inc_btn: Query<&Interaction, (With<DamageMultiplierIncButton>, Changed<Interaction>)>,
+) {
+    let mut changed = false;
+    for interaction in &dec_btn {
+        if *interaction == Interaction::Pressed {
+            multiplier.0 = (multiplier.0 - DAMAGE_MULTIPLIER_STEP).max(DAMAGE_MULTIPLIER_MIN);
+            changed = true;
+        }
+    }
+    for interaction in &inc_btn {
+        if *interaction == Interaction::Pressed {
+            multiplier.0 = (multiplier.0 + DAMAGE_MULTIPLIER_STEP).min(DAMAGE_MULTIPLIER_MAX);
+            changed = true;
+        }
+    }
+    if changed {
+        commands.client_trigger(SetDamageMultiplier(multiplier.0));
+    }
+}
+
+pub(crate) fn update_damage_multiplier_text(multiplier: Res<DamageMultiplierUi>, mut text: Query<&mut Text, With<DamageMultiplierText>>) {
+    if !multiplier.is_changed() {
+        return;
+    }
+    for mut text in &mut text {
+        text.0 = format!("{:.2}x", multiplier.0);
     }
 }
 

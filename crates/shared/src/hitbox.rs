@@ -2,6 +2,7 @@
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::zombie::{ZombieHitboxBones, ZOMBIE_RADIUS, ZOMBIE_SCALE_FACTOR};
 
@@ -16,6 +17,20 @@ pub const HEAD_DAMAGE: f32 = ZOMBIE_MAX_HEALTH; // always a one-shot kill
 pub const CHEST_DAMAGE: f32 = 1.5;
 pub const BELLY_DAMAGE: f32 = 1.0;
 pub const LIMB_DAMAGE: f32 = 0.5;
+
+// Settings-menu "Damage" +/- buttons — bullet damage is server-authoritative
+// (handle_fire_shot/debug_bot_fire in crates/server apply zombie_hit_damage_
+// bones/_ray's result to the real Health component), same reasoning
+// SetFreezeZombies' own doc comment gives for why this can't be a plain
+// client-local cosmetic flag: a client-only multiplier would change what
+// the local player's own hit-confirm/floating-damage numbers claim without
+// the zombie's REAL health actually dropping any faster, drifting from the
+// replicated Health the instant more than one player is in the game. One
+// global multiplier (not per-player), same as SetFreezeZombies — the
+// server is already scoped to one map/room, no "damage only for me" would
+// make sense.
+#[derive(Event, Clone, Copy, Serialize, Deserialize)]
+pub struct SetDamageMultiplier(pub f32);
 
 // Height bands (world-space meters, relative to the zombie's root) and a
 // lateral distance from the vertical axis through the root — the ORIGINAL
