@@ -246,9 +246,12 @@ pub(crate) fn spawn_zombie_hit_feedback(
     damage: f32,
     bone_for_blood: Option<(Entity, &GlobalTransform)>,
     killed: bool,
+    show_floating_damage: bool,
 ) {
     if damage > 0.0 {
-        spawn_floating_damage(commands, point, damage);
+        if show_floating_damage {
+            spawn_floating_damage(commands, point, damage);
+        }
         spawn_blood_effects(commands, blood_assets, spatial_query, time, point, normal, bone_for_blood, killed);
     } else {
         spawn_spark_effects(commands, spark_assets, time, point, normal);
@@ -605,6 +608,7 @@ pub(crate) fn on_shot_fx(
     globals: Query<&GlobalTransform>,
     show_hit_markers: Res<ShowHitMarkers>,
     show_tracers: Res<ShowBulletTracers>,
+    show_floating_damage: Res<ShowFloatingDamage>,
 ) {
     match *trigger.event() {
         ShotFx::ZombieHit { origin, point, normal, damage, killed } => {
@@ -644,7 +648,7 @@ pub(crate) fn on_shot_fx(
                     .and_then(|(_, _, bones)| nearest_zombie_bone(bones, point, &globals))
             };
             let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
-            spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed);
+            spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0);
         }
         ShotFx::SurfaceHit { origin, point, normal } => {
             if show_hit_markers.0 {

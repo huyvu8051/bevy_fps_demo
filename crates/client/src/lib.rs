@@ -778,6 +778,24 @@ impl Default for ShowHitMarkers {
     }
 }
 
+// Debug/dev: toggled by settings/cheats or env SHOW_FLOATING_DAMAGE. Gates
+// spawn_floating_damage entirely — same on/off-toggle shape as
+// ShowHitMarkers above, just for the floating damage-number text instead of
+// the hit-marker decal (the two are separate visuals, see
+// spawn_zombie_hit_feedback's own doc comment).
+#[derive(Resource)]
+struct ShowFloatingDamage(bool);
+
+impl Default for ShowFloatingDamage {
+    fn default() -> Self {
+        if let Ok(val) = std::env::var("SHOW_FLOATING_DAMAGE") {
+            Self(val == "1" || val.to_lowercase() == "true")
+        } else {
+            Self(true)
+        }
+    }
+}
+
 // Debug/dev: toggled by settings/cheats or env SHOW_BULLET_TRACERS. Gates
 // spawn_bullet_tracer entirely — same on/off-toggle shape as ShowHitMarkers
 // right above, just for the tracer streak instead of the hit-marker sphere.
@@ -1558,6 +1576,7 @@ impl Plugin for GamePlugin {
         .init_resource::<GodMode>()
         .init_resource::<ShowAutopilotTarget>()
         .init_resource::<ShowHitMarkers>()
+        .init_resource::<ShowFloatingDamage>()
         .init_resource::<ShowBulletTracers>()
         .init_resource::<SettingsMenuVisible>()
         .init_resource::<SettingsMenuScrollState>()
@@ -3250,6 +3269,7 @@ fn on_shot_confirmed(
     spatial_query: SpatialQuery,
     zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
+    show_floating_damage: Res<ShowFloatingDamage>,
 ) {
     let ShotConfirmed { point, normal, damage, killed } = *trigger.event();
     if damage > 0.0 {
@@ -3271,7 +3291,7 @@ fn on_shot_confirmed(
             .and_then(|(_, _, bones)| nearest_zombie_bone(bones, point, &globals))
     };
     let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
-    spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed);
+    spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0);
 }
 
 

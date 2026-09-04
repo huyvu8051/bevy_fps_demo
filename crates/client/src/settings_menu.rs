@@ -622,6 +622,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "LookAt", CheatLookAtTargetButton);
                         spawn_cheat_toggle_button(row, "TraceAim", CheatShowAutopilotTargetButton);
                         spawn_cheat_toggle_button(row, "HitMarks", CheatShowHitMarkersButton);
+                        spawn_cheat_toggle_button(row, "DmgNum", CheatShowFloatingDamageButton);
                         spawn_cheat_toggle_button(row, "Tracer", CheatShowTracersButton);
                     });
                     page.spawn(Node {
@@ -925,6 +926,8 @@ pub(crate) struct CheatShowAutopilotTargetButton;
 #[derive(Component)]
 pub(crate) struct CheatShowHitMarkersButton;
 #[derive(Component)]
+pub(crate) struct CheatShowFloatingDamageButton;
+#[derive(Component)]
 pub(crate) struct CheatShowTracersButton;
 // Flips NavDebugVisible (nav_debug.rs) — handled by nav_debug_toggle_button
 // / update_nav_debug_button_color there, not the cheat_toggle_buttons_*
@@ -1092,12 +1095,14 @@ pub(crate) fn cheat_toggle_buttons_3(
     mut look_only: ResMut<AutopilotLookOnly>,
     mut show_aim: ResMut<ShowAutopilotTarget>,
     mut show_markers: ResMut<ShowHitMarkers>,
+    mut show_floating_damage: ResMut<ShowFloatingDamage>,
     mut scope_camera: ResMut<ScopeCameraEnabled>,
     mut show_tracers: ResMut<ShowBulletTracers>,
     dof_alt_btn: Query<&Interaction, (With<CheatDofAltButton>, Changed<Interaction>)>,
     look_at_btn: Query<&Interaction, (With<CheatLookAtTargetButton>, Changed<Interaction>)>,
     show_aim_btn: Query<&Interaction, (With<CheatShowAutopilotTargetButton>, Changed<Interaction>)>,
     show_markers_btn: Query<&Interaction, (With<CheatShowHitMarkersButton>, Changed<Interaction>)>,
+    show_floating_damage_btn: Query<&Interaction, (With<CheatShowFloatingDamageButton>, Changed<Interaction>)>,
     scope_camera_btn: Query<&Interaction, (With<CheatScopeCameraButton>, Changed<Interaction>)>,
     show_tracers_btn: Query<&Interaction, (With<CheatShowTracersButton>, Changed<Interaction>)>,
 ) {
@@ -1112,6 +1117,9 @@ pub(crate) fn cheat_toggle_buttons_3(
     }
     if tapped(&show_markers_btn) {
         show_markers.0 = !show_markers.0;
+    }
+    if tapped(&show_floating_damage_btn) {
+        show_floating_damage.0 = !show_floating_damage.0;
     }
     if tapped(&show_tracers_btn) {
         show_tracers.0 = !show_tracers.0;
@@ -1231,6 +1239,7 @@ pub(crate) fn update_extra_toggle_colors(
     look_only: Res<AutopilotLookOnly>,
     show_aim: Res<ShowAutopilotTarget>,
     show_markers: Res<ShowHitMarkers>,
+    show_floating_damage: Res<ShowFloatingDamage>,
     scope_camera: Res<ScopeCameraEnabled>,
     show_tracers: Res<ShowBulletTracers>,
     inspect: Res<InspectMode>,
@@ -1242,6 +1251,7 @@ pub(crate) fn update_extra_toggle_colors(
             Option<&CheatLookAtTargetButton>,
             Option<&CheatShowAutopilotTargetButton>,
             Option<&CheatShowHitMarkersButton>,
+            Option<&CheatShowFloatingDamageButton>,
             Option<&CheatScopeCameraButton>,
             Option<&CheatShowTracersButton>,
             Option<&CheatInspectButton>,
@@ -1252,6 +1262,7 @@ pub(crate) fn update_extra_toggle_colors(
             With<CheatLookAtTargetButton>,
             With<CheatShowAutopilotTargetButton>,
             With<CheatShowHitMarkersButton>,
+            With<CheatShowFloatingDamageButton>,
             With<CheatScopeCameraButton>,
             With<CheatShowTracersButton>,
             With<CheatInspectButton>,
@@ -1259,7 +1270,7 @@ pub(crate) fn update_extra_toggle_colors(
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, scope_camera_m, show_tracers_m, inspect_m) in &mut buttons {
+    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, show_floating_damage_m, scope_camera_m, show_tracers_m, inspect_m) in &mut buttons {
         let on = if auto_m.is_some() {
             autopilot.0
         } else if dof_m.is_some() {
@@ -1270,6 +1281,8 @@ pub(crate) fn update_extra_toggle_colors(
             show_aim.0
         } else if show_markers_m.is_some() {
             show_markers.0
+        } else if show_floating_damage_m.is_some() {
+            show_floating_damage.0
         } else if scope_camera_m.is_some() {
             scope_camera.0
         } else if show_tracers_m.is_some() {
