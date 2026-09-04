@@ -675,12 +675,29 @@ fn log_client_disconnect(trigger: On<Remove, ConnectedClient>) {
 // attached ClientInput to — no separate client-id-to-entity map needed.
 fn apply_client_input(
     trigger: On<FromClient<ClientInput>>,
-    mut players: Query<(&mut ClientInput, &mut LastProcessedInput)>,
+    mut players: Query<(&mut ClientInput, &mut LastProcessedInput, &mut PlayerStance)>,
 ) {
     let Some(entity) = trigger.client_id.entity() else {
         return;
     };
-    if let Ok((mut input, mut last_processed)) = players.get_mut(entity) {
+    if let Ok((mut input, mut last_processed, mut stance)) = players.get_mut(entity) {
+        // Real bug, not just a stale-value nitpick: move_players reads this
+        // component (not input.stance, despite both existing right next to
+        // each other in the same query) to pick simulate_player_step's
+        // capsule length — spawn_player only ever sets it once, to
+        // PlayerStance::default() (Standing), and nothing updated it after
+        // that until this line, so the server's own authoritative capsule
+        // NEVER actually shrank for Crouching/Prone regardless of what the
+        // client claimed. The client's own local prediction (movement_
+        // combat.rs) DOES use the real current stance, so every tick spent
+        // crouched/prone had the client predicting one capsule height while
+        // the server's confirmed NetTransform reflected a different one —
+        // constant reconciliation "corrections" (visible stutter,
+        // specifically while crouched/prone, gone the moment there's no
+        // server to reconcile against). Same "trust the client, no anti-
+        // cheat goals" stance this project already takes for `noclip` (see
+        // ClientInput::noclip's own doc comment).
+        *stance = trigger.message.stance;
         *input = trigger.message;
         last_processed.0 = trigger.message.sequence;
     }

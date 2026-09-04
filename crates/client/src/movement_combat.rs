@@ -144,7 +144,7 @@ pub(crate) fn predict_player_movement(
         (&NetTransform, &LastProcessedInput),
         (With<NetPlayer>, With<LocalPlayer>, Without<Player>, Changed<LastProcessedInput>),
     >,
-    mut player: Query<(&mut Transform, &mut Player, &PlayerStance), Without<NetPlayer>>,
+    mut player: Query<(&mut Transform, &mut Player), Without<NetPlayer>>,
     mut pending: ResMut<PredictedInputs>,
     mut smooth: ResMut<PredictionSmooth>,
     mover: MoveAndSlide,
@@ -152,10 +152,9 @@ pub(crate) fn predict_player_movement(
     let Ok((net_transform, last_processed)) = local.single() else {
         return;
     };
-    let Ok((mut transform, mut player, stance)) = player.single_mut() else {
+    let Ok((mut transform, mut player)) = player.single_mut() else {
         return;
     };
-    let stance = *stance;
 
     // Drop every input the server has now confirmed; the last one's trailing
     // (vertical_velocity, grounded) is the authoritative baseline to replay from.
@@ -178,7 +177,17 @@ pub(crate) fn predict_player_movement(
     scratch_tf.translation = net_transform.translation;
     let mut scratch_player = Player { vertical_velocity: base_vv, grounded: base_grounded };
     for (_, input, dt, ..) in &pending.0 {
-        shared::movement::simulate_player_step(&mover, &mut scratch_tf, &mut scratch_player, stance, input, *dt);
+        // input.stance, not the player's CURRENT PlayerStance component —
+        // each pending input already carries whatever stance was active
+        // when it was generated (see ClientInput::stance's own doc
+        // comment), and replaying it with today's stance instead breaks
+        // determinism the instant the player toggles crouch/prone while any
+        // input is still unconfirmed: the capsule length simulate_player_step
+        // picks would silently disagree with what this exact input already
+        // produced once (both locally, when first predicted, and on the
+        // server), producing a spurious reconciliation snap on every replay
+        // until the queue drains.
+        shared::movement::simulate_player_step(&mover, &mut scratch_tf, &mut scratch_player, input.stance, input, *dt);
     }
 
     if transform.translation.distance(scratch_tf.translation) > RECONCILE_POS_THRESHOLD {
