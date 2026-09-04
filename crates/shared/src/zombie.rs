@@ -494,7 +494,7 @@ pub fn zombie_kind_anim_path(kind: ZombieKind) -> &'static str {
 /// crates/server's spawn_zombies); the ItemGallery showcase rig sets it
 /// locally. Absence still means `Classic` (older call sites / client's
 /// `spawn_local_zombie`).
-#[derive(Component, Clone, Copy, PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
+#[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Default, Debug, Serialize, Deserialize)]
 pub enum ZombieKind {
     #[default]
     Classic,
@@ -555,6 +555,27 @@ pub fn zombie_kind_mesh_path(kind: ZombieKind) -> &'static str {
         ZombieKind::Meshy => ZOMBIE_MESHY_PATH,
         ZombieKind::Soldier => ZOMBIE_SOLDIER_PATH,
     }
+}
+
+/// `assets/`-relative path to a kind's base-color texture at a given
+/// `TextureQuality` tier (0..=5) — baked by scripts/bake_zombie_textures.py
+/// into `<kind_dir>/mesh/textures/base_color_q{N}.jpg`. Read by both
+/// render paths: desktop's `apply_zombie_texture_quality`
+/// (crates/client/src/zombie_client.rs) swaps the kind's shared
+/// `StandardMaterial.base_color_texture` handle to whichever tier this
+/// returns; native_metal_probe.rs's own texture-quality handling re-
+/// uploads the `SkinnedModel`'s `base_color_texture` from the same file.
+/// Every kind's mesh.glb ships exactly one material with only a
+/// baseColorTexture (no normal/metallic-roughness slots at all — a real
+/// inspection of all three .glb files confirmed this, unlike cars which
+/// have all three), so this is the only texture-quality path zombies need.
+pub fn zombie_kind_texture_path(kind: ZombieKind, tier: u8) -> String {
+    let dir = match kind {
+        ZombieKind::Classic => "zombie",
+        ZombieKind::Meshy => "zombie_meshy",
+        ZombieKind::Soldier => "zombie_soldier",
+    };
+    format!("characters/{dir}/mesh/textures/base_color_q{}.jpg", tier.min(5))
 }
 
 /// How many animation clips the kind's anim source (zombie_kind_anim_path)

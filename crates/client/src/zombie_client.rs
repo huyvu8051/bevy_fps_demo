@@ -476,6 +476,64 @@ pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer, kind: ZombieKind) -
     )
 }
 
+// Applies TextureQuality to already-spawned zombies by swapping each
+// kind's StandardMaterial.base_color_texture handle in place — cheap
+// because bevy_gltf gives every SceneRoot instantiated from the same
+// Handle<Gltf> the SAME material asset (confirmed: a kind's zombies never
+// get their own per-entity material copy), so patching that ONE Assets<
+// StandardMaterial> entry updates every zombie of that kind at once, no
+// per-entity iteration or respawn needed — unlike
+// respawn_item_gallery_cars_on_quality_change, which has to fully rebuild
+// each car since a car's material is a client-built one-off, not shared.
+// `cached` is a Local, not a Resource — its whole purpose is remembering
+// "which Handle<StandardMaterial> did kind X's mesh end up with" across
+// frames, entirely internal to this one system, so no other system has
+// any reason to read or write it.
+pub(crate) fn apply_zombie_texture_quality(
+    asset_server: Res<AssetServer>,
+    texture_quality: Res<TextureQuality>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    zombies: Query<(Entity, &ZombieKind)>,
+    children: Query<&Children>,
+    mesh_materials: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut cached: Local<std::collections::HashMap<ZombieKind, Handle<StandardMaterial>>>,
+) {
+    for (entity, &kind) in &zombies {
+        if cached.contains_key(&kind) {
+            continue;
+        }
+        if let Some(handle) = find_material_in_descendants(entity, &children, &mesh_materials) {
+            cached.insert(kind, handle);
+        }
+    }
+    if !texture_quality.is_changed() {
+        return;
+    }
+    for (&kind, handle) in cached.iter() {
+        let texture: Handle<Image> = asset_server.load(shared::zombie_kind_texture_path(kind, texture_quality.0));
+        if let Some(material) = materials.get_mut(handle) {
+            material.base_color_texture = Some(texture);
+        }
+    }
+}
+
+// Depth-first search down from a Zombie root (or any entity) for the first
+// descendant carrying a StandardMaterial — the glTF scene's own mesh node,
+// however many hops down that turns out to be. Same shape as
+// wire_animation_target_path's own recursion (crate::zombie_client), just
+// hunting for a different component.
+fn find_material_in_descendants(
+    entity: Entity,
+    children: &Query<&Children>,
+    mesh_materials: &Query<&MeshMaterial3d<StandardMaterial>>,
+) -> Option<Handle<StandardMaterial>> {
+    if let Ok(material) = mesh_materials.get(entity) {
+        return Some(material.0.clone());
+    }
+    let kids = children.get(entity).ok()?;
+    kids.iter().find_map(|child| find_material_in_descendants(child, children, mesh_materials))
+}
+
 pub(crate) fn spawn_zombie_health_bar(commands: &mut Commands, zombie: Entity) {
     commands
         .spawn((

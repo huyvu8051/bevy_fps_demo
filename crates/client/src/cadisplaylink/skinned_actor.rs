@@ -45,6 +45,14 @@ impl SkinnedModelRegistry {
     pub fn get(&self, name: &str) -> Option<&SkinnedModelSlot> {
         self.0.get(name)
     }
+
+    /// For patching an already-registered model in place (mobile
+    /// TextureQuality handling — see native_metal_probe.rs's
+    /// apply_zombie_texture_quality) instead of re-parsing its whole .glb
+    /// from scratch just to swap a texture.
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut SkinnedModelSlot> {
+        self.0.get_mut(name)
+    }
 }
 
 /// How to get this frame's per-joint skinning matrices for one actor.

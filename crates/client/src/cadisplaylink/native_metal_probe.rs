@@ -1004,6 +1004,16 @@ pub struct NativeMetalProbe {
     // patrol probe path, which has no RenderResolutionScale resource to
     // read) until the first extraction.
     render_resolution_scale: f32,
+    // This frame's TextureQuality value (native_game_extract.rs), 0..=5 —
+    // see apply_zombie_texture_quality's own doc comment. `255` sentinel
+    // (not a real tier — TextureQuality is always clamped 0..=5) so the
+    // very first extraction always re-uploads every zombie kind's texture,
+    // same "always differs from any real value" trick shadow_quality's
+    // struct-literal init (5) doesn't need since 5 IS a real value there;
+    // this field needs an explicit non-value instead since 0 would
+    // wrongly skip re-uploading on a legitimate first-frame tier-0 default
+    // (mobile's TextureQuality default).
+    zombie_texture_quality: u8,
     // The offscreen target render_frame's 3D scene + UI overlay actually
     // draw into (at drawable_size * render_resolution_scale) — see
     // render_resolution_scale's own doc comment. `(0, 0)` sentinel so
@@ -1976,6 +1986,7 @@ impl NativeMetalProbe {
             msaa_enabled: false,
             shadow_quality: 5,
             render_resolution_scale: 1.0,
+            zombie_texture_quality: 255,
             scene_color_size: (0, 0),
             scene_color_texture,
             blit_pipeline,
@@ -2435,6 +2446,47 @@ impl NativeMetalProbe {
         tex
     }
 
+    // Re-uploads every zombie kind's base_color_texture from
+    // shared::zombie_kind_texture_path's tiered JPEG whenever
+    // TextureQuality actually changes — see zombie_texture_quality's own
+    // field doc comment for the sentinel-init reasoning. Desktop's
+    // equivalent (apply_zombie_texture_quality, crate::zombie_client)
+    // patches a shared bevy StandardMaterial instead; this renderer never
+    // touches bevy_render, so it re-uploads a raw metal::Texture and
+    // writes it directly onto every mesh in the registered SkinnedModel.
+    fn apply_zombie_texture_quality(&mut self, tier: u8) {
+        let tier = tier.min(5);
+        if tier == self.zombie_texture_quality {
+            return;
+        }
+        let resource_path = bundle_resource_path().unwrap_or_default();
+        for kind in [shared::ZombieKind::Classic, shared::ZombieKind::Meshy, shared::ZombieKind::Soldier] {
+            let rel_path = shared::zombie_kind_texture_path(kind, tier);
+            let path = std::path::Path::new(&resource_path).join("assets").join(&rel_path);
+            let bytes = match std::fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    eprintln!("[native_metal_probe] zombie texture read failed {path:?}: {err}");
+                    continue;
+                }
+            };
+            let decoded = match image::load_from_memory(&bytes) {
+                Ok(decoded) => decoded,
+                Err(err) => {
+                    eprintln!("[native_metal_probe] zombie texture decode failed {path:?}: {err}");
+                    continue;
+                }
+            };
+            let rgba = decoded.to_rgba8();
+            let texture = super::metal_texture::upload_texture(&self.device, rgba.width(), rgba.height(), rgba.as_raw());
+            let Some(slot) = self.skinned_models.get_mut(shared::zombie_kind_metal_model_name(kind)) else { continue };
+            for mesh in &mut slot.model.meshes {
+                mesh.base_color_texture = Some(texture.clone());
+            }
+        }
+        self.zombie_texture_quality = tier;
+    }
+
     // Pass 0 (see render_frame): renders the same geometry draw_scene does
     // into the sun's shadow map instead of the screen — depth-only, no
     // fragment shader, no lighting. The model_matrix/joint_matrices pose
@@ -2567,6 +2619,7 @@ impl NativeMetalProbe {
             self.msaa_enabled = snapshot.map_msaa_on;
             self.ensure_shadow_map_size(snapshot.shadow_quality);
             self.render_resolution_scale = snapshot.render_resolution_scale.clamp(0.1, 1.0);
+            self.apply_zombie_texture_quality(snapshot.texture_quality);
             if let Some(cam) = &snapshot.camera {
                 self.camera_position = cam.eye;
                 self.camera_yaw = cam.yaw;
