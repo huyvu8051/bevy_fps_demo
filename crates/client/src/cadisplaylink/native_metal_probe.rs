@@ -101,7 +101,13 @@ const FALLBACK_LIGHT: LightUniform = LightUniform {
 // Rust has no direct equivalent of Swift's `Bundle.main.resourcePath` —
 // reach into Foundation via objc the same way the rest of this module
 // already talks to UIKit/CAMetalLayer.
-fn bundle_resource_path() -> Option<String> {
+//
+// pub(crate): also called from lib.rs's load_character_ron_by_dir (real
+// device only — see that fn's own doc comment for the crash this fixed:
+// character.ron was being read via a CARGO_MANIFEST_DIR-relative path
+// that only resolves on the dev machine that built the app, not a real
+// device's sandboxed bundle).
+pub(crate) fn bundle_resource_path() -> Option<String> {
     unsafe {
         let bundle_class = class!(NSBundle);
         let bundle: *mut Object = msg_send![bundle_class, mainBundle];
@@ -1665,6 +1671,18 @@ impl NativeMetalProbe {
             color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::SourceAlpha);
             color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
             color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+            // Missing on a real device (confirmed via crash log): the quad
+            // PIP draws into the SAME render pass as the 3D scene (see
+            // build_sponza_descriptor's own comment on why the UI overlay
+            // shares 1 pass) — that pass has a Depth32Float attachment
+            // bound, so every pipeline used in it needs to declare the
+            // same depth format or Metal's validation layer rejects
+            // set_render_pipeline_state with "pixelFormat
+            // (MTLPixelFormatInvalid) does not match the framebuffer's
+            // pixelFormat (MTLPixelFormatDepth32Float)" — fatal on device,
+            // where that validation is enforced; happened to go unnoticed
+            // on Simulator.
+            descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
             descriptor.set_raster_sample_count(sample_count);
             descriptor
         }
@@ -1726,6 +1744,11 @@ impl NativeMetalProbe {
             color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::SourceAlpha);
             color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
             color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+            // Same missing-depth-format bug as build_quad_descriptor above
+            // (see its own comment) — the UI overlay (health bars, floating
+            // damage, touch controls) draws in the same Depth32Float-backed
+            // render pass as the 3D scene.
+            descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
             descriptor.set_raster_sample_count(sample_count);
             descriptor
         }
@@ -1892,10 +1915,10 @@ impl NativeMetalProbe {
 
     // The view's own size in points (not `drawable_size`'s physical
     // pixels — that's `sync_drawable_size`'s `bounds.size * contents_scale`).
-    // Needed for prime_camera_viewport and the UI overlay's NDC math, both
-    // of which must agree with the logical-pixel space `Node.left/.top`
-    // are laid out in (see prime_camera_viewport's own doc comment for why
-    // that's points, i.e. scale_factor 1.0, not physical pixels).
+    // Needed for prime_camera_viewport (which now also needs the real
+    // contents_scale alongside this — see its own doc comment for why
+    // both, not just points, are required for touch hit-testing to line
+    // up with the visually-drawn UI) and the UI overlay's NDC math.
     fn view_size_points(&self) -> (f32, f32) {
         unsafe {
             let raw_layer = self.layer.as_ptr() as *mut Object;
@@ -2277,7 +2300,7 @@ impl NativeMetalProbe {
         let mut real_game_extracted: Vec<super::skinned_actor::SkinnedActorDraw> = Vec::new();
         let (view_width_pts, view_height_pts) = self.view_size_points();
         if let Some(app) = &mut self.real_game_app {
-            prime_camera_viewport(app.world_mut(), view_width_pts, view_height_pts);
+            prime_camera_viewport(app.world_mut(), view_width_pts, view_height_pts, self.layer.contents_scale() as f32);
             app.update();
             let snapshot = extract_render_snapshot(app.world_mut());
             self.ui_floating_damage = snapshot.floating_damage;

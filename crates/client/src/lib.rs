@@ -2854,14 +2854,35 @@ pub(crate) const AVAILABLE_CHARACTER_DIRS: &[&str] = &["characters/soldier_meshy
 // argument the way std::fs::read_to_string's native branch can.
 fn load_character_ron_by_dir(dir: &str) -> CharacterRon {
     #[cfg(target_arch = "wasm32")]
-    let text: &str = match dir {
+    let text: String = match dir {
         "characters/soldier_meshy" => {
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/characters/soldier_meshy/character.ron"))
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/characters/soldier_meshy/character.ron")).to_string()
         }
         other => panic!("load_character_ron_by_dir: unknown character dir {other:?} — add an include_str! arm here to match a new entry in AVAILABLE_CHARACTER_DIRS"),
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    let text = std::fs::read_to_string(format!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/{}/character.ron"), dir))
+    // Real iOS device crash fixed here: CARGO_MANIFEST_DIR (below) is a
+    // build-time path baked into the binary — only resolves on the dev
+    // machine that built it, not a real device's sandboxed app bundle
+    // (confirmed via Xcode console: "failed to read characters/
+    // soldier_meshy/character.ron: No such file or directory (os error
+    // 2)", panicking across the Swift->Rust FFI boundary in
+    // native_metal_probe_create_real_game, which aborts the whole app
+    // since that call can't unwind). iOS needs NSBundle's OWN resource
+    // path instead (cadisplaylink::native_metal_probe::bundle_resource_path,
+    // already used the same way for the .glb assets in that same file) —
+    // simulator builds happened to still work because the simulator's
+    // "sandboxed" bundle path IS a real path on the host Mac's
+    // filesystem that just doesn't happen to collide with
+    // CARGO_MANIFEST_DIR, masking this until a real device was tested.
+    #[cfg(target_os = "ios")]
+    let text: String = {
+        let resource_path = crate::cadisplaylink::native_metal_probe::bundle_resource_path()
+            .unwrap_or_else(|| panic!("failed to read {dir}/character.ron: NSBundle.main.resourcePath was nil"));
+        let path = std::path::Path::new(&resource_path).join("assets").join(dir).join("character.ron");
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {dir}/character.ron at {path:?}: {e}"))
+    };
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+    let text: String = std::fs::read_to_string(format!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/{}/character.ron"), dir))
         .unwrap_or_else(|e| panic!("failed to read {dir}/character.ron: {e}"));
     ron::de::from_str(&text).unwrap_or_else(|e| panic!("failed to parse {dir}/character.ron: {e}"))
 }

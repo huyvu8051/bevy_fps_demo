@@ -573,7 +573,7 @@ pub fn map1_level_pieces_computed() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
 pub fn map1_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
     static DATA: std::sync::OnceLock<(Vec<BoxPiece>, Vec<PanelPiece>)> = std::sync::OnceLock::new();
     DATA.get_or_init(|| {
-        let text = crate::read_ron_data_file!(concat!(env!("CARGO_MANIFEST_DIR"), "/../client/assets/data/map1_level_pieces.ron"));
+        let text = crate::read_ron_data_file!("map1_level_pieces.ron");
         crate::level_piece::level_pieces_from_ron(&text)
     })
     .clone()
@@ -619,14 +619,37 @@ pub fn campaign_level_pieces(map_id: u8) -> (Vec<BoxPiece>, Vec<PanelPiece>) {
         if let Some(pieces) = cache.get(&map_id) {
             return pieces.clone();
         }
-        let path = format!("{}/../client/assets/data/map{map_id}_level_pieces.ron", env!("CARGO_MANIFEST_DIR"));
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-            panic!(
-                "no level pieces RON for campaign map_id {map_id} at {path}: {e} — \
-                 this map isn't implemented yet, see docs/maps/map{map_id:02}_dimensions.md \
-                 for its design numbers"
-            )
-        });
+        // Real iOS device needs NSBundle's own resource path — see
+        // read_ron_data_file!'s own doc comment (crate root) for the
+        // device crash this exact CARGO_MANIFEST_DIR pattern caused
+        // elsewhere; this loader is map_id-dynamic so it can't route
+        // through that macro (same reasoning as arena.rs's
+        // load_arena_layout, fixed the same way by hand).
+        #[cfg(target_os = "ios")]
+        let text = {
+            let resource_path = crate::ios_bundle_resource_path().unwrap_or_else(|| {
+                panic!("no level pieces RON for campaign map_id {map_id}: NSBundle.main.resourcePath was nil")
+            });
+            let path = std::path::Path::new(&resource_path).join(format!("assets/data/map{map_id}_level_pieces.ron"));
+            std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                panic!(
+                    "no level pieces RON for campaign map_id {map_id} at {path:?}: {e} — \
+                     this map isn't implemented yet, see docs/maps/map{map_id:02}_dimensions.md \
+                     for its design numbers"
+                )
+            })
+        };
+        #[cfg(not(target_os = "ios"))]
+        let text = {
+            let path = format!("{}/../client/assets/data/map{map_id}_level_pieces.ron", env!("CARGO_MANIFEST_DIR"));
+            std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                panic!(
+                    "no level pieces RON for campaign map_id {map_id} at {path}: {e} — \
+                     this map isn't implemented yet, see docs/maps/map{map_id:02}_dimensions.md \
+                     for its design numbers"
+                )
+            })
+        };
         let pieces = crate::level_piece::level_pieces_from_ron(&text);
         cache.insert(map_id, pieces.clone());
         pieces

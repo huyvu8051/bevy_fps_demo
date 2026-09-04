@@ -6221,6 +6221,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "getrandom 0.2.17",
+ "objc",
  "renet2_netcode",
  "ron 0.8.1",
  "serde",

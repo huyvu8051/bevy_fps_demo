@@ -136,8 +136,7 @@ pub fn item_gallery_level_pieces_computed() -> (Vec<BoxPiece>, Vec<PanelPiece>) 
 pub fn item_gallery_level_pieces() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
     static DATA: std::sync::OnceLock<(Vec<BoxPiece>, Vec<PanelPiece>)> = std::sync::OnceLock::new();
     DATA.get_or_init(|| {
-        let text =
-            crate::read_ron_data_file!(concat!(env!("CARGO_MANIFEST_DIR"), "/../client/assets/data/item_gallery_level_pieces.ron"));
+        let text = crate::read_ron_data_file!("item_gallery_level_pieces.ron");
         crate::level_piece::level_pieces_from_ron(&text)
     })
     .clone()
@@ -209,10 +208,7 @@ type CarPhysicsRow = (f32, f32, f32, f32, f32, f32, f32);
 fn item_gallery_car_physics_raw() -> &'static [CarPhysicsRow] {
     static DATA: std::sync::OnceLock<Vec<CarPhysicsRow>> = std::sync::OnceLock::new();
     DATA.get_or_init(|| {
-        let text = crate::read_ron_data_file!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../client/assets/data/item_gallery_car_physics.ron"
-        ));
+        let text = crate::read_ron_data_file!("item_gallery_car_physics.ron");
         ron::de::from_str(&text)
             .unwrap_or_else(|e| panic!("failed to parse item gallery car physics data: {e}"))
     })

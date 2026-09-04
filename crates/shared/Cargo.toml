@@ -20,3 +20,12 @@ avian3d = "0.6"
 # for every crate in the build graph that resolves to the same 0.2.x.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
+
+# Needed for ios_bundle_resource_path() (lib.rs) — real iOS devices need
+# NSBundle.main.resourcePath to find bundled RON data files;
+# CARGO_MANIFEST_DIR-relative std::fs reads (this crate's usual native
+# path) only resolve on the dev machine that built the app, not a
+# sandboxed device bundle. Same crate client already depends on for the
+# identical reason (cadisplaylink's bundle_resource_path).
+[target.'cfg(target_os = "ios")'.dependencies]
+objc = "0.2"

@@ -46,12 +46,37 @@ use shared::{NetPlayer, Zombie};
 /// than pulling in enough of WindowPlugin/RenderPlugin for the real system
 /// to apply, and is the same "extract/patch the minimum Bevy state a
 /// system needs" approach the rest of this module already uses.
-pub fn prime_camera_viewport(world: &mut bevy::ecs::world::World, width_pts: f32, height_pts: f32) {
+pub fn prime_camera_viewport(world: &mut bevy::ecs::world::World, width_pts: f32, height_pts: f32, scale_factor: f32) {
     let mut state: SystemState<Query<(&mut Camera, &mut Projection), With<crate::FpsCamera>>> = SystemState::new(world);
     let mut query = state.get_mut(world);
     let (w, h) = (width_pts.max(1.0), height_pts.max(1.0));
+    // `scale_factor` MUST match the real `window.scale_factor()` (see
+    // native_game_app.rs's WindowResolution::with_scale_factor_override) —
+    // this used to be hardcoded to 1.0, which was harmless while the
+    // Window itself also defaulted to scale_factor 1.0, but became a real
+    // bug once that Window got a real scale_factor_override (device's
+    // native scale, e.g. 3.0 on a 14 Pro Max): bevy_ui's own
+    // `ui_focus_system` (and this project's own `multi_touch_button_
+    // interaction`, see its doc comment) both convert a touch's LOGICAL
+    // position to PHYSICAL by multiplying by `window.scale_factor()`
+    // before hit-testing against `ComputedNode`/`UiGlobalTransform` — but
+    // `ComputedNode` itself is sized against THIS camera's own
+    // `target_info.scale_factor`, not the Window's. Leaving this at 1.0
+    // while the Window carries a real 3x override meant every UI node was
+    // laid out 3x smaller (in this "physical" space) than the touch
+    // hit-test assumed, so taps landed nowhere near their visually-correct
+    // button (confirmed via on-device logging: touch position exactly
+    // inside the button's OWN logically-reported rect, yet Interaction
+    // never changed — the physical-space rect bevy_ui actually hit-tests
+    // against was 3x smaller and shifted). `logical_rect` (used to build
+    // every on-screen draw snapshot) already divides back out by
+    // `inverse_scale_factor`, so fixing this here doesn't move anything
+    // visually — it only fixes hit-testing.
     let target_info = || {
-        Some(RenderTargetInfo { physical_size: bevy::math::UVec2::new(w as u32, h as u32), scale_factor: 1.0 })
+        Some(RenderTargetInfo {
+            physical_size: bevy::math::UVec2::new((w * scale_factor) as u32, (h * scale_factor) as u32),
+            scale_factor,
+        })
     };
     if let Ok((mut camera, mut projection)) = query.single_mut() {
         // No `camera.viewport` override — leaving it `None` means "the full

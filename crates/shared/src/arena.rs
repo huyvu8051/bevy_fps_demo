@@ -115,7 +115,20 @@ fn load_arena_layout(map_id: u8) -> Vec<ArenaBox> {
         other => panic!("no wasm-embedded arena layout RON for map_id {other} — add a match arm in load_arena_layout"),
     }
     .to_string();
-    #[cfg(not(target_arch = "wasm32"))]
+    // Real iOS device needs NSBundle's own resource path here, not a
+    // CARGO_MANIFEST_DIR-relative one — see read_ron_data_file!'s own doc
+    // comment (crate root) for the device crash this exact pattern caused
+    // elsewhere before this map_id-dynamic loader (which can't route
+    // through that macro — see this fn's own comment above) got the same
+    // fix applied by hand.
+    #[cfg(target_os = "ios")]
+    let text = {
+        let resource_path = crate::ios_bundle_resource_path()
+            .unwrap_or_else(|| panic!("failed to read arena layout data for map {map_id}: NSBundle.main.resourcePath was nil"));
+        let path = std::path::Path::new(&resource_path).join(format!("assets/data/arena_layout_map{map_id}.ron"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read arena layout data at {path:?}: {e}"))
+    };
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
     let text = {
         let path = format!("{}/../client/assets/data/arena_layout_map{map_id}.ron", env!("CARGO_MANIFEST_DIR"));
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read arena layout data at {path}: {e}"))
