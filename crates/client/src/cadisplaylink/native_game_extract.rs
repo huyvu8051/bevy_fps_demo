@@ -1166,6 +1166,21 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // is_blend below, not by whether a mesh belongs to the gun.
     let mut gun_visible_state: SystemState<Res<crate::GunVisible>> = SystemState::new(world);
     let gun_visible = gun_visible_state.get(world).0;
+    // Cars visibility: same "this headless App has no Visibility-
+    // propagation, GunVisible-style" gap as gun_visible above — the
+    // settings-menu "Cars" toggle (CarsVisible, crate::item_gallery_cars)
+    // only ever wrote the real ItemGalleryTestProp entities' Visibility
+    // component, which this extraction never reads at all, so it kept
+    // baking cars into static_meshes regardless of the toggle on mobile.
+    // Unlike the gun (whose mesh sits on a child entity, needing
+    // collect_descendants below), a car's Mesh3d/MeshMaterial3d live
+    // directly on the ItemGalleryTestProp entity itself — a plain
+    // With<ItemGalleryTestProp> check on the mesh_query entity is enough,
+    // no descendant walk needed.
+    let mut cars_visible_state: SystemState<Res<crate::CarsVisible>> = SystemState::new(world);
+    let cars_visible = cars_visible_state.get(world).0;
+    let mut car_entities_state: SystemState<Query<bevy::ecs::entity::Entity, With<crate::ItemGalleryTestProp>>> = SystemState::new(world);
+    let car_entities: std::collections::HashSet<bevy::ecs::entity::Entity> = car_entities_state.get(world).iter().collect();
     let gun_mesh_entities: std::collections::HashSet<bevy::ecs::entity::Entity> = {
         let mut gun_state: SystemState<(Query<bevy::ecs::entity::Entity, With<crate::Gun>>, Query<&Children>)> = SystemState::new(world);
         let (gun_query, children_query) = gun_state.get(world);
@@ -1187,6 +1202,10 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     for (entity, mesh3d, material3d, transform) in mesh_query.iter() {
         let is_gun = gun_mesh_entities.contains(&entity);
         if is_gun && !gun_visible {
+            continue;
+        }
+        let is_car = car_entities.contains(&entity);
+        if is_car && !cars_visible {
             continue;
         }
         let Some(mesh) = meshes.get(&mesh3d.0) else { continue };

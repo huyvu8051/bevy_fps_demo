@@ -168,7 +168,9 @@ pub fn entity_phase(entity: Entity) -> f32 {
 pub fn random_aim_point(bones: &BoneWorldPositions, target: Entity) -> Option<(Vec3, &'static str)> {
     let mut joints = Vec::new();
     if let Some(p) = bones.head {
-        joints.push((p, "Head"));
+        for _ in 0..5 {
+            joints.push((p, "Head"));
+        }
     }
     if let Some(p) = bones.belly {
         for _ in 0..35 {
@@ -176,7 +178,7 @@ pub fn random_aim_point(bones: &BoneWorldPositions, target: Entity) -> Option<(V
         }
     }
     if let Some(p) = bones.chest {
-        for _ in 0..35 {
+        for _ in 0..55 {
             joints.push((p, "Chest"));
         }
     }
