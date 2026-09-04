@@ -934,6 +934,35 @@ impl Default for LightQuality {
     }
 }
 
+// Runtime brightness quality for every static PointLight (the arena's own
+// overhead light, Map 1's garage/lobby/F2/F3 fixtures) — separate from
+// LightQuality above, which only ever scoped to MainSun (a real user
+// question: "what's the shiny highlight left after turning Shadow+Light
+// off on mobile?" — answer was these lights, which the Light slider never
+// touched at all, still rendering fully unshadowed once ShadowQuality hit
+// 0). Same 0..=5/level-5 tier semantics, own default (3, matching
+// LightQuality's own "look/glare call, not perf-first" reasoning — a
+// blown-out overhead light looks bad long before it's a real bottleneck).
+// Each PointLight's own spawn-time intensity is its "100%" reference,
+// stored on PointLightBaseIntensity right next to it — apply_point_light_
+// quality (crate::settings_menu) reads that back rather than hardcoding
+// one intensity for every fixture, since the arena/garage/lobby/F2/F3
+// lights all spawn at different base intensities already.
+#[derive(Resource)]
+pub(crate) struct PointLightQuality(pub(crate) u8);
+impl Default for PointLightQuality {
+    fn default() -> Self {
+        Self(if dynamic_lights_enabled() { 3 } else { 0 })
+    }
+}
+
+/// A `PointLight`'s own intensity at spawn time — see `PointLightQuality`'s
+/// own doc comment for why this needs to travel with the entity instead of
+/// being a single shared constant (every static light in this game spawns
+/// at its own base intensity).
+#[derive(Component)]
+pub(crate) struct PointLightBaseIntensity(pub(crate) f32);
+
 // Dynamic lighting + shadows are ON (level 5) by default everywhere now
 // (2026-09-04 — used to default OFF on desktop, opt-in via
 // LIGHTS=1/SHADOWS=1, back when there was no in-game way to turn them on
@@ -1555,6 +1584,7 @@ impl Plugin for GamePlugin {
         .init_resource::<MapMsaaOn>()
         .init_resource::<ShadowQuality>()
         .init_resource::<LightQuality>()
+        .init_resource::<PointLightQuality>()
         .init_resource::<TextureQuality>()
         .init_resource::<ZombieTextureQuality>()
         .init_resource::<PolyQuality>()
@@ -1662,6 +1692,9 @@ impl Plugin for GamePlugin {
                     apply_zombie_texture_quality,
                     zombie_texture_quality_buttons,
                     update_zombie_texture_quality_button_colors,
+                    apply_point_light_quality,
+                    point_light_quality_buttons,
+                    update_point_light_quality_button_colors,
                 )
                     .chain(),
             )
@@ -2523,6 +2556,7 @@ fn spawn_test_arena(
                 shadows_enabled: light_shadows_enabled(),
                 ..default()
             },
+            PointLightBaseIntensity(4_000_000.0),
             Transform::from_xyz(0.0, ARENA_WALL_HEIGHT - 0.2, 0.0),
             ArenaGeometry,
         ));
@@ -2547,6 +2581,7 @@ fn spawn_map1_lights(commands: &mut Commands) {
             shadows_enabled: light_shadows_enabled(),
             ..default()
         },
+        PointLightBaseIntensity(3_000_000.0),
         Transform::from_xyz(0.0, ARENA_WALL_HEIGHT - 0.2, 0.0),
     ));
 
@@ -2560,6 +2595,7 @@ fn spawn_map1_lights(commands: &mut Commands) {
                 shadows_enabled: light_shadows_enabled(),
                 ..default()
             },
+            PointLightBaseIntensity(4_500_000.0),
             Transform::from_xyz(lx, shared::FLOOR_HEIGHT + shared::LOBBY_WALL_HEIGHT - 0.3, lz),
         ));
     }
@@ -2578,6 +2614,7 @@ fn spawn_map1_lights(commands: &mut Commands) {
                 shadows_enabled: light_shadows_enabled(),
                 ..default()
             },
+            PointLightBaseIntensity(2_500_000.0),
             Transform::from_xyz(lx, shared::F2_ELEVATION + shared::F2_WALL_HEIGHT - 0.3, lz),
         ));
     }
@@ -2598,6 +2635,7 @@ fn spawn_map1_lights(commands: &mut Commands) {
                 shadows_enabled: light_shadows_enabled(),
                 ..default()
             },
+            PointLightBaseIntensity(2_500_000.0),
             Transform::from_xyz(lx, shared::F3_ELEVATION + shared::F3_WALL_HEIGHT - 0.3, lz),
         ));
     }

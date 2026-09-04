@@ -352,6 +352,16 @@ pub struct RenderSnapshot {
     /// `DirectionalLight.illuminance` to level/5, which only the desktop
     /// render path ever reads).
     pub light_quality: u8,
+    /// The `PointLightQuality` cheat-menu tier (crate::lib, 0..=5) — same
+    /// gap as `light_quality` above, for the arena's overhead `PointLight`
+    /// (`apply_point_light_quality`, crate::settings_menu, scales its
+    /// `intensity` back to spawn-time `PointLightBaseIntensity * level/5`,
+    /// which only the desktop render path ever reads). Split off from
+    /// `light_quality` because that one only ever scoped to MainSun — a
+    /// real user report ("shiny highlight left after turning Shadow+Light
+    /// off on mobile") turned out to be this same PointLight, previously
+    /// unreachable from any settings-menu control at all.
+    pub point_light_quality: u8,
     /// The `RenderResolutionScale` settings-menu value (crate::lib,
     /// 0.1..=1.0) — same gap as `shadow_quality`/`light_quality` above.
     /// Desktop's `resize_scene_render_target` (crate::settings_menu) only
@@ -954,6 +964,8 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     snapshot.shadow_quality = shadow_quality_state.get(world).0;
     let mut light_quality_state: SystemState<Res<crate::LightQuality>> = SystemState::new(world);
     snapshot.light_quality = light_quality_state.get(world).0;
+    let mut point_light_quality_state: SystemState<Res<crate::PointLightQuality>> = SystemState::new(world);
+    snapshot.point_light_quality = point_light_quality_state.get(world).0;
 
     // Resolution scale: see RenderSnapshot::render_resolution_scale's own
     // doc comment.

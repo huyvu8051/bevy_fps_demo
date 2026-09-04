@@ -79,11 +79,20 @@ impl LightUniform {
     // `uniforms.sunColor.rgb * sunDiffuse` term. Expected range 0.0..=1.0
     // (level/5), not clamped since a value outside that range would just
     // scale proportionally further, same as illuminance would.
-    fn from_snapshots(light: Option<&LightSnapshot>, sun: Option<&SunSnapshot>, sun_fraction: f32) -> Self {
-        let (position, range, color) = match light {
+    // `point_fraction` mirrors PointLightQuality's own desktop effect
+    // (apply_point_light_quality scales the real PointLight's intensity to
+    // PointLightBaseIntensity * level/5) — this renderer never reads
+    // intensity at all (LightSnapshot only ever extracts position/color/
+    // range, see its own doc comment), so scaling `color` by the same
+    // fraction here is the equivalent brightness change for the fragment
+    // shaders' `uniforms.lightColor.rgb * pointDiffuse`/`pointSpecular`
+    // terms.
+    fn from_snapshots(light: Option<&LightSnapshot>, sun: Option<&SunSnapshot>, sun_fraction: f32, point_fraction: f32) -> Self {
+        let (position, range, color_base) = match light {
             Some(l) => (l.position, l.range, [l.color[0], l.color[1], l.color[2], 0.0]),
             None => (FALLBACK_LIGHT.position, FALLBACK_LIGHT.range, FALLBACK_LIGHT.color),
         };
+        let color = [color_base[0] * point_fraction, color_base[1] * point_fraction, color_base[2] * point_fraction, color_base[3]];
         let (sun_dir, sun_color_base) = match sun {
             Some(s) => (s.direction, [s.color[0], s.color[1], s.color[2], 0.0]),
             None => (FALLBACK_LIGHT.sun_dir, FALLBACK_LIGHT.sun_color),
@@ -2639,8 +2648,12 @@ impl NativeMetalProbe {
             } else {
                 self.real_game_scope_active = false;
             }
-            self.real_game_light =
-                LightUniform::from_snapshots(snapshot.light.as_ref(), snapshot.sun.as_ref(), snapshot.light_quality.min(5) as f32 / 5.0);
+            self.real_game_light = LightUniform::from_snapshots(
+                snapshot.light.as_ref(),
+                snapshot.sun.as_ref(),
+                snapshot.light_quality.min(5) as f32 / 5.0,
+                snapshot.point_light_quality.min(5) as f32 / 5.0,
+            );
             real_game_static_meshes = snapshot.static_meshes;
             real_game_extracted.extend(snapshot.zombies.into_iter().map(|z| super::skinned_actor::SkinnedActorDraw {
                 transform: z.transform,
