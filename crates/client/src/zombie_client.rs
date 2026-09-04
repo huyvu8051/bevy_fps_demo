@@ -179,6 +179,19 @@ pub(crate) struct Gun {
 #[derive(Component)]
 pub(crate) struct GunMesh;
 
+// Marks the 2 mesh entities spawn_gun_mesh_parts (crate::lib) spawns
+// directly as children of the Gun entity (body + scope lens) — lets
+// respawn_gun_mesh_parts_on_quality_change find exactly those 2 entities to
+// despawn/respawn on a GunPolyQuality/GunTextureQuality change, without
+// touching the Gun entity itself (which carries live gameplay state: ammo,
+// recoil, reload progress — a respawn resetting THAT would be a real bug,
+// unlike ItemGalleryTestProp cars which carry no such state). Distinct from
+// GunMesh above (added generically to any Mesh3d descendant of Gun,
+// including these two, by wire_gun_mesh) — that one drives raycast-exclude/
+// RenderLayers, this one drives quality-tier respawn targeting.
+#[derive(Component)]
+pub(crate) struct GunMeshPart;
+
 // One AnimationGraph per ZombieKind for the 5 gameplay poses — mirrors the
 // server's ServerZombieAnim so client and server pick the same clip for a
 // pose. Meshy only has real Walking/Running clips; the rest fall back per

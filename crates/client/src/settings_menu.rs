@@ -87,6 +87,18 @@ pub(crate) struct TextureQualityButton(u8);
 #[derive(Component)]
 pub(crate) struct PolyQualityButton(u8);
 
+// One per AK47-texture-quality tier (0..=5) — same shape as
+// TextureQualityButton, but for the separate GunTextureQuality resource
+// (see its own doc comment in lib.rs).
+#[derive(Component)]
+pub(crate) struct GunTextureQualityButton(u8);
+
+// One per AK47-polygon-quality tier (1..=5) — same shape as
+// PolyQualityButton, but for the separate GunPolyQuality resource (see its
+// own doc comment in lib.rs).
+#[derive(Component)]
+pub(crate) struct GunPolyQualityButton(u8);
+
 // One per zombie-texture-quality tier (0..=5) — same shape as
 // TextureQualityButton, but for the separate ZombieTextureQuality
 // resource (see its own doc comment in lib.rs for why cars and zombies
@@ -333,6 +345,90 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                             Button,
                             Interaction::default(),
                             PolyQualityButton(tier),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new(tier.to_string()),
+                                TextFont {
+                                    font_size: 14.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    }
+                });
+
+                page.spawn((
+                    Text::new("Gun texture quality"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for tier in 0..=5u8 {
+                        row.spawn((
+                            Node {
+                                width: Val::Px(40.0),
+                                height: Val::Px(32.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                            Button,
+                            Interaction::default(),
+                            GunTextureQualityButton(tier),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new(tier.to_string()),
+                                TextFont {
+                                    font_size: 14.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    }
+                });
+
+                page.spawn((
+                    Text::new("Gun polygon quality"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for tier in 1..=5u8 {
+                        row.spawn((
+                            Node {
+                                width: Val::Px(40.0),
+                                height: Val::Px(32.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                            Button,
+                            Interaction::default(),
+                            GunPolyQualityButton(tier),
                         ))
                         .with_children(|btn| {
                             btn.spawn((
@@ -1860,6 +1956,54 @@ pub(crate) fn poly_quality_buttons(
 pub(crate) fn update_poly_quality_button_colors(
     quality: Res<PolyQuality>,
     mut buttons: Query<(&mut BackgroundColor, &PolyQualityButton)>,
+) {
+    for (mut bg, button) in &mut buttons {
+        let on = button.0 == quality.0;
+        *bg = BackgroundColor(if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) });
+    }
+}
+
+// Same Changed<Interaction>-gated tap-sets-the-resource shape as
+// texture_quality_buttons — independent resource, see GunTextureQuality's
+// own doc comment in lib.rs.
+pub(crate) fn gun_texture_quality_buttons(
+    mut quality: ResMut<GunTextureQuality>,
+    buttons: Query<(&Interaction, &GunTextureQualityButton), Changed<Interaction>>,
+) {
+    for (interaction, button) in &buttons {
+        if *interaction == Interaction::Pressed {
+            quality.0 = button.0;
+        }
+    }
+}
+
+pub(crate) fn update_gun_texture_quality_button_colors(
+    quality: Res<GunTextureQuality>,
+    mut buttons: Query<(&mut BackgroundColor, &GunTextureQualityButton)>,
+) {
+    for (mut bg, button) in &mut buttons {
+        let on = button.0 == quality.0;
+        *bg = BackgroundColor(if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) });
+    }
+}
+
+// Same Changed<Interaction>-gated tap-sets-the-resource shape as
+// poly_quality_buttons — independent resource, see GunPolyQuality's own
+// doc comment in lib.rs.
+pub(crate) fn gun_poly_quality_buttons(
+    mut quality: ResMut<GunPolyQuality>,
+    buttons: Query<(&Interaction, &GunPolyQualityButton), Changed<Interaction>>,
+) {
+    for (interaction, button) in &buttons {
+        if *interaction == Interaction::Pressed {
+            quality.0 = button.0;
+        }
+    }
+}
+
+pub(crate) fn update_gun_poly_quality_button_colors(
+    quality: Res<GunPolyQuality>,
+    mut buttons: Query<(&mut BackgroundColor, &GunPolyQualityButton)>,
 ) {
     for (mut bg, button) in &mut buttons {
         let on = button.0 == quality.0;

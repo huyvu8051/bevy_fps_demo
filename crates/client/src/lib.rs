@@ -140,14 +140,17 @@ use nav_debug::*;
 // Keep this attribution if the project is shared/published (license requirement).
 // Modeled in millimeters (bounding box ~970x87x386mm), hence the 0.001 scale
 // down to meters. Its long axis is local X, not the -Z Bevy viewmodels usually
-// assume, hence the extra Y rotation to point the barrel forward.
-const GUN_PATH: &str = "models/ak47_scope.glb";
+// assume, hence the extra Y rotation to point the barrel forward. See
+// gun_mesh_path/gun_texture_paths for the actual asset file layout
+// (models/ak47_scope/mesh/...) — GunPolyQuality/GunTextureQuality's own doc
+// comments cover why this went through a node-hierarchy-flattening pass
+// before poly/texture tiers could be baked from it.
 const GUN_OFFSET: Vec3 = Vec3::new(0.22, -0.28, -0.65);
 // Aim-down-sights pose while holding right mouse (see gun_view_animation) —
 // centered horizontally and pulled in close to the camera so the scope sits
-// roughly where the lens/eye would look through it. GUN_PATH's actual scope
-// position on the model isn't known (can't see the rendered model to
-// measure it), so this is a guess based on GUN_OFFSET's own general shape,
+// roughly where the lens/eye would look through it. The AK47 model's actual
+// scope position isn't known (can't see the rendered model to measure it),
+// so this is a guess based on GUN_OFFSET's own general shape,
 // not a calibrated value — may need nudging once actually seen in-game.
 // Y tuned in-game across several rounds (-0.05 -> -0.18 -> -0.28 -> -0.38
 // -> -0.25, the last one given as an exact value) — X/Z were confirmed
@@ -1077,6 +1080,174 @@ impl Default for PolyQuality {
     }
 }
 
+/// Same 1..=5 tier shape/defaults as PolyQuality above, for the AK47
+/// viewmodel instead of the 16 item-gallery cars — see gun_mesh_path's own
+/// doc comment for the file layout (`models/ak47_scope/mesh/ak47_scope_
+/// light_pN.glb`, image-stripped geometry, same gltfpack-based bake as
+/// cars). Independent of GunTextureQuality below for the same reason cars'
+/// two axes are independent (picking a low poly tier shouldn't force a low
+/// texture tier or vice versa) — unlike cars though, this single gun mesh
+/// needed its own node-hierarchy-flattened source file first (the original
+/// ak47_scope.glb's 2 meshes sit under a 4-level Sketchfab node chain with
+/// real transforms, not identity like cars' meshes — GltfAssetLabel::
+/// Primitive loading ignores node transforms entirely, so simplification/
+/// texture-tier baking needed a flattened "ak47_scope_light.glb" baseline
+/// with those transforms baked into the vertex data first).
+/// `GUN_POLY_QUALITY=N` env overrides either default.
+pub(crate) fn gun_poly_quality_default() -> u8 {
+    std::env::var("GUN_POLY_QUALITY")
+        .ok()
+        .and_then(|s| s.trim().parse::<u8>().ok())
+        .map(|q| q.clamp(1, 5))
+        .unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) { 2 } else { 5 })
+}
+
+#[derive(Resource)]
+pub(crate) struct GunPolyQuality(pub(crate) u8);
+impl Default for GunPolyQuality {
+    fn default() -> Self {
+        Self(gun_poly_quality_default())
+    }
+}
+
+/// Same 0..=5 tier shape/defaults as TextureQuality above, for the AK47
+/// viewmodel's 2 materials (body + scope lens) instead of cars — see
+/// gun_texture_paths' own doc comment for the file layout. `GUN_TEXTURE_
+/// QUALITY=N` env overrides either default.
+pub(crate) fn gun_texture_quality_default() -> u8 {
+    std::env::var("GUN_TEXTURE_QUALITY")
+        .ok()
+        .and_then(|s| s.trim().parse::<u8>().ok())
+        .map(|q| q.clamp(0, 5))
+        .unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) { 2 } else { 5 })
+}
+
+#[derive(Resource)]
+pub(crate) struct GunTextureQuality(pub(crate) u8);
+impl Default for GunTextureQuality {
+    fn default() -> Self {
+        Self(gun_texture_quality_default())
+    }
+}
+
+/// Client-only mesh path for the AK47 viewmodel at a given polygon-quality
+/// tier (1 = fewest triangles, 5 = the flattened-but-full-detail source) —
+/// same "geometry only, no material" shape as
+/// shared::item_gallery_car_mesh_path (GltfAssetLabel::Primitive loading,
+/// material built by hand from gun_texture_paths below).
+pub(crate) fn gun_mesh_path(poly_quality: u8) -> &'static str {
+    match poly_quality {
+        1 => "models/ak47_scope/mesh/ak47_scope_light_p1.glb",
+        2 => "models/ak47_scope/mesh/ak47_scope_light_p2.glb",
+        3 => "models/ak47_scope/mesh/ak47_scope_light_p3.glb",
+        4 => "models/ak47_scope/mesh/ak47_scope_light_p4.glb",
+        _ => "models/ak47_scope/mesh/ak47_scope_light.glb",
+    }
+}
+
+/// (base_color, normal, metallic_roughness) paths for the AK47's material
+/// `mat_index` (0 = body/"Material_37", 1 = scope lens/"Material_38") at a
+/// given texture-quality tier — mirrors shared::item_gallery_car_texture_
+/// paths, baked by the same resize+recompress approach
+/// (scripts-equivalent one-off, see crates/client/assets/models/ak47_scope/
+/// mesh/textures/). `mat_index == 1`'s base_color is a PNG, not JPEG,
+/// unlike every other slot — that material's real alpha channel (89..252,
+/// not fully opaque) drives the lens glass's `AlphaMode::Blend`; a JPEG
+/// re-encode would have silently flattened it to fully opaque.
+pub(crate) fn gun_texture_paths(mat_index: usize, texture_quality: u8) -> (String, String, String) {
+    let q = texture_quality.min(5);
+    let base_ext = if mat_index == 1 { "png" } else { "jpg" };
+    (
+        format!("models/ak47_scope/mesh/textures/mat{mat_index}_base_color_q{q}.{base_ext}"),
+        format!("models/ak47_scope/mesh/textures/mat{mat_index}_normal_q{q}.jpg"),
+        format!("models/ak47_scope/mesh/textures/mat{mat_index}_metallic_roughness_q{q}.jpg"),
+    )
+}
+
+/// Spawns the AK47's 2 real mesh entities (body mesh 0/material 0, scope
+/// lens mesh 1/material 1) as children of `gun_entity` — same "load
+/// geometry via GltfAssetLabel::Primitive, build the StandardMaterial by
+/// hand from separately-tiered texture files" shape as
+/// item_gallery_cars.rs's spawn_item_gallery_test_props, for the same
+/// reason (independent poly/texture quality tiers without a 5x6
+/// combinatorial file explosion). `gun_mesh_path`'s tier-5 file (and every
+/// lower tier baked from it) already has the original glTF's node-hierarchy
+/// transform flattened into the vertex data — GltfAssetLabel::Primitive
+/// ignores node transforms entirely, unlike GltfAssetLabel::Scene, so this
+/// only works because that flattening happened first (see GunPolyQuality's
+/// own doc comment).
+///
+/// Both materials keep `cull_mode: None` (the source glTF's own
+/// `doubleSided: true` on both) and route normal/metallic-roughness (+
+/// occlusion, packed into the same image as metallic-roughness per glTF
+/// convention) through linear (non-sRGB) loads — same reasoning as cars'
+/// own `linear` closure. Material 1 (scope lens) additionally sets
+/// `alpha_mode: AlphaMode::Blend` and reuses its base_color texture as
+/// `occlusion_texture` is NOT applicable there (occlusion for material 1
+/// comes from ITS OWN metallic-roughness image, same as material 0).
+fn spawn_gun_mesh_parts(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    materials: &mut Assets<StandardMaterial>,
+    gun_entity: Entity,
+    poly_quality: u8,
+    texture_quality: u8,
+) {
+    let mesh_path = gun_mesh_path(poly_quality);
+    let linear = |path: String| {
+        asset_server.load_with_settings(path, |settings: &mut bevy::image::ImageLoaderSettings| {
+            settings.is_srgb = false;
+        })
+    };
+    for mat_index in 0..2usize {
+        let (base_color_path, normal_path, metallic_roughness_path) = gun_texture_paths(mat_index, texture_quality);
+        let metallic_roughness_handle = linear(metallic_roughness_path);
+        let material = materials.add(StandardMaterial {
+            base_color_texture: Some(asset_server.load(base_color_path)),
+            normal_map_texture: Some(linear(normal_path)),
+            metallic_roughness_texture: Some(metallic_roughness_handle.clone()),
+            occlusion_texture: Some(metallic_roughness_handle),
+            cull_mode: None,
+            alpha_mode: if mat_index == 1 { AlphaMode::Blend } else { AlphaMode::Opaque },
+            ..default()
+        });
+        commands.spawn((
+            Name::new(if mat_index == 0 { "Gun body" } else { "Gun scope lens" }),
+            Mesh3d(asset_server.load(GltfAssetLabel::Primitive { mesh: mat_index, primitive: 0 }.from_asset(mesh_path))),
+            MeshMaterial3d(material),
+            Transform::IDENTITY,
+            GunMeshPart,
+            ChildOf(gun_entity),
+        ));
+    }
+}
+
+/// Same "despawn + respawn at the new tier" shape as
+/// respawn_item_gallery_cars_on_quality_change, targeting ONLY the 2
+/// GunMeshPart children (never the Gun entity itself — that one carries
+/// live gameplay state: ammo, recoil, reload progress, ADS blend — a
+/// respawn resetting THAT would drop the player's ammo/reload mid-game).
+fn respawn_gun_mesh_parts_on_quality_change(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    poly_quality: Res<GunPolyQuality>,
+    texture_quality: Res<GunTextureQuality>,
+    gun: Query<Entity, With<Gun>>,
+    existing_parts: Query<Entity, With<GunMeshPart>>,
+) {
+    let poly_changed = poly_quality.is_changed() && !poly_quality.is_added();
+    let texture_changed = texture_quality.is_changed() && !texture_quality.is_added();
+    if !poly_changed && !texture_changed {
+        return;
+    }
+    let Ok(gun_entity) = gun.single() else { return };
+    for entity in &existing_parts {
+        commands.entity(entity).despawn();
+    }
+    spawn_gun_mesh_parts(&mut commands, &asset_server, &mut materials, gun_entity, poly_quality.0, texture_quality.0);
+}
+
 pub(crate) fn dynamic_lights_enabled() -> bool {
     cfg!(any(target_os = "ios", target_os = "android")) || std::env::var("LIGHTS").map(|v| v != "0").unwrap_or(true)
 }
@@ -1604,6 +1775,8 @@ impl Plugin for GamePlugin {
         .init_resource::<TextureQuality>()
         .init_resource::<ZombieTextureQuality>()
         .init_resource::<PolyQuality>()
+        .init_resource::<GunTextureQuality>()
+        .init_resource::<GunPolyQuality>()
         .init_resource::<ScopeCameraEnabled>()
         .init_resource::<SelectedDebugBot>()
         .init_resource::<LocalPlayerMoving>()
@@ -1674,6 +1847,7 @@ impl Plugin for GamePlugin {
                 poly_quality_buttons,
                 update_poly_quality_button_colors,
                 respawn_item_gallery_cars_on_quality_change,
+                respawn_gun_mesh_parts_on_quality_change,
                     resize_scene_render_target,
                     scroll_settings_menu,
                     touch_scroll_settings_menu,
@@ -1696,6 +1870,10 @@ impl Plugin for GamePlugin {
                     update_auto_maintain_button_color,
                     update_touch_controls_idle_hidden,
                     hide_ui_when_locked,
+                    gun_texture_quality_buttons,
+                    update_gun_texture_quality_button_colors,
+                    gun_poly_quality_buttons,
+                    update_gun_poly_quality_button_colors,
                 )
                     .chain(),
                 (
@@ -1906,6 +2084,8 @@ fn setup(
     player_model_tuning: Res<PlayerModelTuning>,
     texture_quality: Res<TextureQuality>,
     poly_quality: Res<PolyQuality>,
+    gun_texture_quality: Res<GunTextureQuality>,
+    gun_poly_quality: Res<GunPolyQuality>,
 ) {
     // First-frame camera/player position — see the PLAYER_SPAWN comment
     // above; the server's replicated NetTransform takes over almost
@@ -2206,28 +2386,35 @@ fn setup(
         .id();
 
     // Viewmodel: parented to the camera so it stays fixed in the bottom-right
-    // of the screen regardless of where the player looks.
-    commands.spawn((
-        Name::new("Gun (first-person viewmodel)"),
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(GUN_PATH))),
-        Transform::from_translation(GUN_OFFSET)
-            .with_rotation(Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians()))
-            .with_scale(Vec3::splat(GUN_SCALE)),
-        Gun {
-            base_offset: GUN_OFFSET,
-            recoil: 0.0,
-            ammo: MAGAZINE_SIZE,
-            reload_remaining: 0.0,
-            ads_blend: 0.0,
-            wall_raise: 0.0,
-            shoulder_blend: 0.0,
-            recoil_roll: 0.0,
-            bob_phase: 0.0,
-            bob_blend: 0.0,
-            look_sway_roll: 0.0,
-        },
-        ChildOf(camera),
-    ));
+    // of the screen regardless of where the player looks. No mesh directly on
+    // this entity anymore — see spawn_gun_mesh_parts's own doc comment for
+    // why the 2 real mesh children are spawned separately (GunPolyQuality/
+    // GunTextureQuality can respawn just those without resetting this
+    // entity's own Gun component state).
+    let gun_entity = commands
+        .spawn((
+            Name::new("Gun (first-person viewmodel)"),
+            Transform::from_translation(GUN_OFFSET)
+                .with_rotation(Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians()))
+                .with_scale(Vec3::splat(GUN_SCALE)),
+            Visibility::default(),
+            Gun {
+                base_offset: GUN_OFFSET,
+                recoil: 0.0,
+                ammo: MAGAZINE_SIZE,
+                reload_remaining: 0.0,
+                ads_blend: 0.0,
+                wall_raise: 0.0,
+                shoulder_blend: 0.0,
+                recoil_roll: 0.0,
+                bob_phase: 0.0,
+                bob_blend: 0.0,
+                look_sway_roll: 0.0,
+            },
+            ChildOf(camera),
+        ))
+        .id();
+    spawn_gun_mesh_parts(&mut commands, &asset_server, &mut materials, gun_entity, gun_poly_quality.0, gun_texture_quality.0);
 
     // Third-person spectator camera (KeyU, see CameraMode) — a separate
     // entity from the real FpsCamera above rather than moving it, so aiming/
