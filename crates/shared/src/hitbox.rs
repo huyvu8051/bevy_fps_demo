@@ -171,12 +171,12 @@ pub fn random_aim_point(bones: &BoneWorldPositions, target: Entity) -> Option<(V
         joints.push((p, "Head"));
     }
     if let Some(p) = bones.belly {
-        for _ in 0..15 {
+        for _ in 0..35 {
             joints.push((p, "Belly"));
         }
     }
     if let Some(p) = bones.chest {
-        for _ in 0..15 {
+        for _ in 0..35 {
             joints.push((p, "Chest"));
         }
     }
