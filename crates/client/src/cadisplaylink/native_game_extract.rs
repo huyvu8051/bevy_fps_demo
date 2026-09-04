@@ -10,7 +10,7 @@
 //! this module compiles and is testable independent of Step 4's actual
 //! draw-call wiring.
 
-use bevy::asset::{AssetId, Assets};
+use bevy::asset::{AssetId, Assets, Handle};
 use bevy::camera::{Camera, Projection, RenderTargetInfo};
 use bevy::ecs::hierarchy::Children;
 use bevy::ecs::query::{With, Without};
@@ -129,6 +129,7 @@ pub fn prime_camera_viewport(world: &mut bevy::ecs::world::World, width_pts: f32
 /// pixel format isn't one of the common RGBA8 variants glTF base-color
 /// textures normally load as (extraction just skips it in that case,
 /// falling back to a flat-tinted draw rather than failing).
+#[derive(Clone)]
 pub struct ExtractedTexture {
     /// The source `Image` asset's own stable identity — used by the renderer
     /// to cache uploaded GPU textures keyed by WHICH image this is, not by
@@ -140,7 +141,15 @@ pub struct ExtractedTexture {
     pub id: AssetId<Image>,
     pub width: u32,
     pub height: u32,
-    pub rgba: Vec<u8>,
+    /// `Arc`, not `Vec<u8>` — see extract_render_snapshot's own
+    /// `decoded_texture_cache` for why: several `ExtractedMesh`es can share
+    /// the SAME source `Image` (e.g. every `ItemGalleryTestProp` car at the
+    /// "Meshy" quality tier shares one texture across all 16 entities), and
+    /// this field used to hold a fresh `data.clone()` per entity — 16 full
+    /// 2048x2048 RGBA copies (~16MB each) EVERY FRAME for what was
+    /// ultimately the same bytes 16 times over. `Arc` makes every entity
+    /// past the first a refcount bump instead of a memcpy.
+    pub rgba: std::sync::Arc<[u8]>,
 }
 
 /// One drawable static mesh — arena walls/floor (`spawn_test_arena`,
@@ -1223,6 +1232,34 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         Res<Assets<Image>>,
     )> = SystemState::new(world);
     let (mesh_query, meshes, materials, images) = mesh_state.get(world);
+    // Per-frame dedupe: several meshes can share the SAME `Image` asset —
+    // most dramatically, all 16 `ItemGalleryTestProp` cars at the "Meshy"
+    // poly/texture quality tier point at one shared base_color/normal
+    // texture (see shared::item_gallery_car_meshy_texture_paths). Without
+    // this, decoding a texture meant a fresh `data.clone()` PER ENTITY
+    // below — 16 full copies of the same ~16MB (2048x2048 RGBA) buffer
+    // every single frame for bytes that were already identical. Keyed by
+    // AssetId so it's still correct when different meshes legitimately use
+    // different textures (the normal case for every other car tier).
+    let mut decoded_texture_cache: std::collections::HashMap<AssetId<Image>, Option<ExtractedTexture>> = std::collections::HashMap::new();
+    let mut decode_texture = |handle: &Handle<Image>, images: &Assets<Image>| -> Option<ExtractedTexture> {
+        decoded_texture_cache
+            .entry(handle.id())
+            .or_insert_with(|| {
+                let image = images.get(handle)?;
+                let data = image.data.as_ref()?;
+                match image.texture_descriptor.format {
+                    TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => Some(ExtractedTexture {
+                        id: handle.id(),
+                        width: image.texture_descriptor.size.width,
+                        height: image.texture_descriptor.size.height,
+                        rgba: std::sync::Arc::from(data.as_slice()),
+                    }),
+                    _ => None,
+                }
+            })
+            .clone()
+    };
     for (entity, mesh3d, material3d, transform) in mesh_query.iter() {
         let is_gun = gun_mesh_entities.contains(&entity);
         if is_gun && !gun_visible {
@@ -1260,19 +1297,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         // decode to — anything else (compressed formats like KTX2/Basis,
         // etc.) this module has no reason to own a conversion for.
         let has_texture_handle = material.base_color_texture.is_some();
-        let texture = material.base_color_texture.as_ref().and_then(|handle| {
-            let image = images.get(handle)?;
-            let data = image.data.as_ref()?;
-            match image.texture_descriptor.format {
-                TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => Some(ExtractedTexture {
-                    id: handle.id(),
-                    width: image.texture_descriptor.size.width,
-                    height: image.texture_descriptor.size.height,
-                    rgba: data.clone(),
-                }),
-                _ => None,
-            }
-        });
+        let texture = material.base_color_texture.as_ref().and_then(|handle| decode_texture(handle, &images));
         // A material WITH a texture assigned that we couldn't decode (as
         // opposed to a material with no texture at all, which legitimately
         // renders via its flat base_color tint) previously fell back to an
@@ -1292,19 +1317,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         let normal_texture = if tangents.is_empty() {
             None
         } else {
-            material.normal_map_texture.as_ref().and_then(|handle| {
-                let image = images.get(handle)?;
-                let data = image.data.as_ref()?;
-                match image.texture_descriptor.format {
-                    TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => Some(ExtractedTexture {
-                        id: handle.id(),
-                        width: image.texture_descriptor.size.width,
-                        height: image.texture_descriptor.size.height,
-                        rgba: data.clone(),
-                    }),
-                    _ => None,
-                }
-            })
+            material.normal_map_texture.as_ref().and_then(|handle| decode_texture(handle, &images))
         };
 
         snapshot.static_meshes.push(ExtractedMesh {
