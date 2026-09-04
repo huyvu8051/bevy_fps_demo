@@ -307,7 +307,7 @@ const MOUSE_SENSITIVITY: f32 = 0.002;
 // constants), this one is meant to be changed by the player.
 const SENSITIVITY_SCALE_MIN: f32 = 0.25;
 const SENSITIVITY_SCALE_MAX: f32 = 3.0;
-const SENSITIVITY_SCALE_STEP: f32 = 0.25;
+const SENSITIVITY_SCALE_STEP: f32 = 0.5;
 // Settings-menu "Damage" +/- buttons — see SetDamageMultiplier's own doc
 // comment (crates/shared/src/hitbox.rs) for why the real value lives
 // server-side; DamageMultiplierUi below is just this client's own best
@@ -315,8 +315,8 @@ const SENSITIVITY_SCALE_STEP: f32 = 0.25;
 // reasoning ZombieCountUi already uses), used for immediate button-tap
 // text feedback without waiting on a round trip.
 const DAMAGE_MULTIPLIER_MIN: f32 = 0.25;
-const DAMAGE_MULTIPLIER_MAX: f32 = 5.0;
-const DAMAGE_MULTIPLIER_STEP: f32 = 0.25;
+const DAMAGE_MULTIPLIER_MAX: f32 = 20.0;
+const DAMAGE_MULTIPLIER_STEP: f32 = 0.5;
 // Mouse turns slower while ADS'd — real scopes/sights make fine aim
 // adjustments feel twitchy at full sensitivity.
 const AIM_MOUSE_SENSITIVITY_MULTIPLIER: f32 = 0.5;
