@@ -453,23 +453,37 @@ const AIM_DOF_APERTURE_F_STOPS: f32 = 11.0;
 // exposed in the UI. MIN_TEXTURE_PX guards against a degenerate/zero-size
 // render target on a tiny window at a low scale.
 const RESOLUTION_SCALE_PRESETS: [f32; 7] = [0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0];
-// Default 30% — the 3D scene renders into a 0.3x offscreen target and gets
-// upscaled to fill the window. Override per-run with RENDER_SCALE, or live
-// via the settings-menu presets.
+// Default 30% on desktop — the 3D scene renders into a 0.3x offscreen
+// target and gets upscaled to fill the window. Override per-run with
+// RENDER_SCALE, or live via the settings-menu presets. Mobile starts
+// higher (50%, see RESOLUTION_SCALE_DEFAULT_MOBILE) since
+// native_metal_probe.rs's own blit pass (unlike desktop's offscreen-Image
+// + separate full-res UI camera) scales the WHOLE frame including UI/HUD
+// text — 30% left mobile text noticeably blurrier than desktop ever was at
+// the same setting, for a renderer that already defaults its shadow/light
+// quality lower for perf reasons (see ShadowQuality/LightQuality's own
+// mobile-default doc comments).
 const RESOLUTION_SCALE_DEFAULT: f32 = 0.3;
+const RESOLUTION_SCALE_DEFAULT_MOBILE: f32 = 0.5;
 const RESOLUTION_SCALE_MIN_TEXTURE_PX: u32 = 64;
 
-/// Startup value for `RenderResolutionScale` — `RESOLUTION_SCALE_DEFAULT`
-/// unless `RENDER_SCALE` env overrides it (clamped to the sane 0.1..=1.0
-/// range the offscreen target supports). The in-game settings-menu presets
-/// still change it at runtime from whatever this returns. Also feeds the
-/// the offscreen game-camera render target.
+/// Startup value for `RenderResolutionScale` — `RESOLUTION_SCALE_DEFAULT`/
+/// `RESOLUTION_SCALE_DEFAULT_MOBILE` unless `RENDER_SCALE` env overrides it
+/// (clamped to the sane 0.1..=1.0 range the offscreen target supports).
+/// The in-game settings-menu presets still change it at runtime from
+/// whatever this returns. Also feeds the offscreen game-camera render
+/// target (desktop) / native_metal_probe.rs's scene_color_texture
+/// (mobile).
 fn resolution_scale_default() -> f32 {
     std::env::var("RENDER_SCALE")
         .ok()
         .and_then(|s| s.trim().parse::<f32>().ok())
         .map(|s| s.clamp(0.1, 1.0))
-        .unwrap_or(RESOLUTION_SCALE_DEFAULT)
+        .unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) {
+            RESOLUTION_SCALE_DEFAULT_MOBILE
+        } else {
+            RESOLUTION_SCALE_DEFAULT
+        })
 }
 
 // AK47 scope: a second camera renders the actual zoomed-in view to a small
@@ -905,18 +919,18 @@ impl Default for ShadowQuality {
 // dynamic light without a restart. Scoped to MainSun only, same as
 // ShadowQuality — the arena's own overhead PointLight and Map 1's
 // spawn_map1_lights still only ever spawn if dynamic_lights_enabled() was
-// true at Startup, unaffected by this. Mobile starts at 1 (on, dimmest)
-// for the same perf-headroom reason as ShadowQuality above — desktop still
-// follows dynamic_lights_enabled() (5 or 0 via LIGHTS=0).
+// true at Startup, unaffected by this. Defaults to 3 (60% brightness) on
+// EVERY platform, desktop included — unlike ShadowQuality above, this
+// isn't a perf knob first, it's a look/glare call (the sun at full
+// illuminance reads as blown-out on both desktop and mobile), so there's
+// no reason for desktop to start brighter than mobile the way it starts at
+// full ShadowQuality. Still 0 if dynamic_lights_enabled() is false (desktop
+// LIGHTS=0 opt-out from the very first frame).
 #[derive(Resource)]
 pub(crate) struct LightQuality(pub(crate) u8);
 impl Default for LightQuality {
     fn default() -> Self {
-        if cfg!(any(target_os = "ios", target_os = "android")) {
-            Self(1)
-        } else {
-            Self(if dynamic_lights_enabled() { 5 } else { 0 })
-        }
+        Self(if dynamic_lights_enabled() { 3 } else { 0 })
     }
 }
 
