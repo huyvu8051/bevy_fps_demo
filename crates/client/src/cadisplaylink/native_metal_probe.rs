@@ -582,6 +582,10 @@ const SHADOW_MAP_SIZE: u64 = 2048;
 // above (still used by the non-real-game toy/patrol probe path, which has
 // no ShadowQuality resource to read).
 const SHADOW_MAP_SIZES: [u64; 6] = [512, 512, 1024, 1536, 2048, 3072];
+// Same floor as desktop's RESOLUTION_SCALE_MIN_TEXTURE_PX (crate::lib) —
+// keeps a tiny drawable at a very low RenderResolutionScale from asking
+// Metal for a zero-size (or otherwise degenerate) scene_color_texture.
+const RENDER_SCALE_MIN_PX: u64 = 64;
 // Half-extent (world units) of the shadow frustum's ortho box, and how far
 // back along the light direction its "eye" sits — see render_frame's
 // "Pass 0" for the actual light_view_projection construction. Centered on
@@ -741,6 +745,49 @@ struct UiVertex {
 #[derive(Copy, Clone)]
 struct UiUniforms {
     tint: [f32; 4],
+}
+
+// Fullscreen upscale blit — samples scene_color_texture (rendered at
+// drawable_size * RenderResolutionScale, see that field's own doc comment)
+// stretched to fill the real drawable via a single opaque triangle-pair, no
+// depth test, no blending. Plain NDC positions (not real clip-space like
+// QUAD_SHADER_SOURCE's per-corner-projected scope PIP) since this quad
+// always covers the whole screen with no perspective involved.
+const BLIT_SHADER_SOURCE: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct BlitVertex {
+    packed_float2 position;
+    packed_float2 uv;
+};
+
+struct BlitVertexOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex BlitVertexOut blit_vertex(uint vid [[vertex_id]],
+                                  const device BlitVertex *verts [[buffer(0)]]) {
+    BlitVertexOut out;
+    BlitVertex v = verts[vid];
+    out.position = float4(v.position, 0.0, 1.0);
+    out.uv = v.uv;
+    return out;
+}
+
+fragment float4 blit_fragment(BlitVertexOut in [[stage_in]],
+                               texture2d<float> tex [[texture(0)]],
+                               sampler texSampler [[sampler(0)]]) {
+    return tex.sample(texSampler, in.uv);
+}
+"#;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct BlitVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
 }
 
 // A tiny built-in 5x7 dot-matrix font — just enough glyphs for floating
@@ -939,6 +986,36 @@ pub struct NativeMetalProbe {
     // ShadowQuality's own light_shadows_enabled() default) until the first
     // extraction.
     shadow_quality: u8,
+    // This frame's RenderResolutionScale value (crate::lib, 0.1..=1.0) —
+    // same "desktop-only resource, dead on this renderer" gap as
+    // map_msaa_on/shadow_quality/light_quality above. Desktop's
+    // RenderResolutionScale only ever resized a bevy_render Image asset
+    // used as an offscreen camera target (resize_scene_render_target,
+    // crate::settings_menu) — this renderer never touches bevy_render, so
+    // the whole 3D+UI frame is rendered straight into scene_color_texture
+    // at drawable_size * this scale, then upscale-blitted into the real
+    // drawable (see render_frame's final blit pass and
+    // ensure_scene_color_texture). Unlike desktop, this scales the UI too
+    // (not just the 3D scene) — a deliberate simplification: splitting UI
+    // into its own full-resolution pass would mean restructuring this
+    // renderer's single combined 3D+UI encoder, a much bigger change for
+    // marginally crisper HUD text at low scales. Defaults to 1.0 (matching
+    // this field's pre-extraction-safe value for the non-real-game toy/
+    // patrol probe path, which has no RenderResolutionScale resource to
+    // read) until the first extraction.
+    render_resolution_scale: f32,
+    // The offscreen target render_frame's 3D scene + UI overlay actually
+    // draw into (at drawable_size * render_resolution_scale) — see
+    // render_resolution_scale's own doc comment. `(0, 0)` sentinel so
+    // ensure_scene_color_texture always (re)allocates on the first call.
+    scene_color_size: (u64, u64),
+    scene_color_texture: metal::Texture,
+    // Fullscreen blit pipeline for the upscale pass — samples
+    // scene_color_texture with sponza_sampler's existing Linear/Linear
+    // filtering (no dedicated sampler needed, same filtering is exactly
+    // what an upscale blit wants).
+    blit_pipeline: Option<RenderPipelineState>,
+    blit_vertex_buffer: metal::Buffer,
     sponza_pipeline: Option<RenderPipelineState>,
     sponza_pipeline_no_msaa: Option<RenderPipelineState>,
     sponza_sampler: metal::SamplerState,
@@ -1767,6 +1844,61 @@ impl NativeMetalProbe {
             MTLResourceOptions::StorageModeShared,
         );
 
+        // Fullscreen NDC (-1..1) quad for the upscale blit pass — see
+        // BLIT_SHADER_SOURCE's own doc comment. render_frame's blit pass
+        // always draws into the real drawable at sample count 1 (never
+        // multisampled, no depth attachment at all), so unlike quad_pipeline
+        // above this needs only one pipeline variant, not an MSAA/no-MSAA
+        // pair.
+        let blit_pipeline = match device.new_library_with_source(BLIT_SHADER_SOURCE, &compile_options) {
+            Ok(library) => {
+                let vertex_fn = library.get_function("blit_vertex", None).unwrap();
+                let fragment_fn = library.get_function("blit_fragment", None).unwrap();
+                let descriptor = RenderPipelineDescriptor::new();
+                descriptor.set_vertex_function(Some(&vertex_fn));
+                descriptor.set_fragment_function(Some(&fragment_fn));
+                descriptor.color_attachments().object_at(0).unwrap().set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+                device.new_render_pipeline_state(&descriptor).ok()
+            }
+            Err(err) => {
+                eprintln!("[native_metal_probe] blit shader compile failed: {err}");
+                None
+            }
+        };
+        // Metal's viewport transform puts clip-space y=+1 at the render
+        // target's TOP raster row (same for scene_color_texture and the
+        // drawable — both are plain render-target textures, no per-target
+        // difference), but texture2d::sample's uv is top-left-origin/v-down
+        // (uv.y=0 samples that same top row). So a vertex at the TOP of
+        // this blit's target (position y=+1) must sample uv.y=0 to show
+        // scene_color_texture's top row there, and a BOTTOM vertex
+        // (position y=-1) must sample uv.y=1 — the opposite of a naive
+        // "position y tracks uv y" mapping, confirmed by an actual
+        // upside-down frame on device/Simulator before this fix.
+        let blit_verts = [
+            BlitVertex { position: [-1.0, -1.0], uv: [0.0, 1.0] },
+            BlitVertex { position: [1.0, -1.0], uv: [1.0, 1.0] },
+            BlitVertex { position: [1.0, 1.0], uv: [1.0, 0.0] },
+            BlitVertex { position: [-1.0, -1.0], uv: [0.0, 1.0] },
+            BlitVertex { position: [1.0, 1.0], uv: [1.0, 0.0] },
+            BlitVertex { position: [-1.0, 1.0], uv: [0.0, 0.0] },
+        ];
+        let blit_vertex_buffer = device.new_buffer_with_data(
+            blit_verts.as_ptr() as *const _,
+            (blit_verts.len() * std::mem::size_of::<BlitVertex>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        // 1x1 placeholder — ensure_scene_color_texture always reallocates
+        // on its first real call since scene_color_size starts at (0, 0),
+        // never matching a real drawable size.
+        let scene_color_placeholder_descriptor = metal::TextureDescriptor::new();
+        scene_color_placeholder_descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        scene_color_placeholder_descriptor.set_width(1);
+        scene_color_placeholder_descriptor.set_height(1);
+        scene_color_placeholder_descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        scene_color_placeholder_descriptor.set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        let scene_color_texture = device.new_texture(&scene_color_placeholder_descriptor);
+
         fn build_ui_descriptor(vertex_fn: &metal::FunctionRef, fragment_fn: &metal::FunctionRef, sample_count: u64) -> RenderPipelineDescriptor {
             let descriptor = RenderPipelineDescriptor::new();
             descriptor.set_vertex_function(Some(vertex_fn));
@@ -1843,6 +1975,11 @@ impl NativeMetalProbe {
             msaa_targets: super::metal_msaa::MsaaTargets::new(MSAA_SAMPLE_COUNT),
             msaa_enabled: false,
             shadow_quality: 5,
+            render_resolution_scale: 1.0,
+            scene_color_size: (0, 0),
+            scene_color_texture,
+            blit_pipeline,
+            blit_vertex_buffer,
             camera_position: [0.0, 2.5, 2.0],
             camera_yaw: 0.0,
             camera_pitch: -0.25,
@@ -2277,6 +2414,27 @@ impl NativeMetalProbe {
         self.shadow_quality = quality;
     }
 
+    // Resize-on-demand offscreen render target for render_frame's 3D+UI
+    // pass — see render_resolution_scale's own field doc comment. Returns
+    // an owned clone (cheap, retain-based, same pattern MsaaTargets'
+    // ensure_depth/ensure_color use) so callers don't hold a borrow of
+    // `self` across the rest of render_frame's &mut self calls.
+    fn ensure_scene_color_texture(&mut self, width: u64, height: u64) -> metal::Texture {
+        if (width, height) == self.scene_color_size {
+            return self.scene_color_texture.clone();
+        }
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        descriptor.set_width(width);
+        descriptor.set_height(height);
+        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        descriptor.set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        let tex = self.device.new_texture(&descriptor);
+        self.scene_color_texture = tex.clone();
+        self.scene_color_size = (width, height);
+        tex
+    }
+
     // Pass 0 (see render_frame): renders the same geometry draw_scene does
     // into the sun's shadow map instead of the screen — depth-only, no
     // fragment shader, no lighting. The model_matrix/joint_matrices pose
@@ -2408,6 +2566,7 @@ impl NativeMetalProbe {
             self.ui_map_select_texts = snapshot.map_select_texts;
             self.msaa_enabled = snapshot.map_msaa_on;
             self.ensure_shadow_map_size(snapshot.shadow_quality);
+            self.render_resolution_scale = snapshot.render_resolution_scale.clamp(0.1, 1.0);
             if let Some(cam) = &snapshot.camera {
                 self.camera_position = cam.eye;
                 self.camera_yaw = cam.yaw;
@@ -2463,14 +2622,31 @@ impl NativeMetalProbe {
         // otherwise conflict with the &mut self this needs.
         let msaa_enabled = self.msaa_enabled;
         let device = self.device.clone();
+        // render_width/render_height (not width/height) size every target
+        // the 3D+UI pass below actually draws into — see
+        // render_resolution_scale's own field doc comment for why (and why
+        // this scales the UI too, unlike desktop's RenderResolutionScale).
+        let render_width = ((width as f64 * self.render_resolution_scale as f64) as u64).max(RENDER_SCALE_MIN_PX);
+        let render_height = ((height as f64 * self.render_resolution_scale as f64) as u64).max(RENDER_SCALE_MIN_PX);
         let depth_texture = if msaa_enabled {
-            self.msaa_targets.ensure_depth(&device, width, height)
+            self.msaa_targets.ensure_depth(&device, render_width, render_height)
         } else {
-            self.msaa_targets.ensure_depth_no_msaa(&device, width, height)
+            self.msaa_targets.ensure_depth_no_msaa(&device, render_width, render_height)
         };
-        let msaa_color_texture = msaa_enabled.then(|| self.msaa_targets.ensure_color(&device, width, height));
+        let msaa_color_texture = msaa_enabled.then(|| self.msaa_targets.ensure_color(&device, render_width, render_height));
+        // The 3D scene + scope PIP + UI overlay below all draw into this
+        // (at render_width x render_height) instead of straight into the
+        // drawable — a final blit pass at the very end of this function
+        // upscales it into the drawable at the real width x height.
+        // `texture` keeps its old name so every existing draw_scene/UI/quad
+        // call site below (written when this always was the drawable
+        // itself) needs no further changes. Must happen before
+        // `next_drawable()` below — it needs `&mut self`, which can't
+        // coexist with `drawable`'s immutable borrow of `self.layer` (kept
+        // alive until `present_drawable` in the final blit pass).
+        let texture = self.ensure_scene_color_texture(render_width, render_height);
         let Some(drawable) = self.layer.next_drawable() else { return };
-        let texture = drawable.texture();
+        let drawable_texture = drawable.texture();
 
         for mesh in &real_game_static_meshes {
             // Same identity-keyed upload-once cache for both — see
@@ -2750,18 +2926,21 @@ impl NativeMetalProbe {
             scope_command_buffer.commit();
         }
 
-        // Pass 2: main camera straight to the drawable, then the scope
-        // texture composited as a picture-in-picture quad on top.
+        // Pass 2: main camera into scene_color_texture (render_width x
+        // render_height, not the drawable — see render_resolution_scale's
+        // own doc comment), then the scope texture composited as a
+        // picture-in-picture quad on top. render_frame's final blit pass
+        // upscales the whole thing into the real drawable afterward.
         let pass_descriptor = RenderPassDescriptor::new();
         let color_attachment = pass_descriptor.color_attachments().object_at(0).unwrap();
         if let Some(msaa_color_texture) = &msaa_color_texture {
             // Render into the multisampled texture, resolve straight into
-            // the real drawable — see MSAA_SAMPLE_COUNT's own doc comment.
+            // scene_color_texture — see MSAA_SAMPLE_COUNT's own doc comment.
             color_attachment.set_texture(Some(msaa_color_texture));
-            color_attachment.set_resolve_texture(Some(texture));
+            color_attachment.set_resolve_texture(Some(&texture));
             color_attachment.set_store_action(MTLStoreAction::MultisampleResolve);
         } else {
-            color_attachment.set_texture(Some(texture));
+            color_attachment.set_texture(Some(&texture));
             color_attachment.set_store_action(MTLStoreAction::Store);
         }
         color_attachment.set_load_action(MTLLoadAction::Clear);
@@ -3032,7 +3211,29 @@ impl NativeMetalProbe {
         }
 
         encoder.end_encoding();
-        command_buffer.present_drawable(drawable);
         command_buffer.commit();
+
+        // Pass 3: upscale-blit scene_color_texture (render_width x
+        // render_height, everything drawn above) into the real drawable
+        // (width x height) — see render_resolution_scale's own field doc
+        // comment. A no-op stretch when the scale is 1.0 (render_width ==
+        // width), still correctness-wise fine since it's just sampling 1:1.
+        let blit_command_buffer = self.queue.new_command_buffer();
+        if let Some(blit_pipeline) = &self.blit_pipeline {
+            let blit_pass_descriptor = RenderPassDescriptor::new();
+            let blit_color_attachment = blit_pass_descriptor.color_attachments().object_at(0).unwrap();
+            blit_color_attachment.set_texture(Some(drawable_texture));
+            blit_color_attachment.set_load_action(MTLLoadAction::DontCare);
+            blit_color_attachment.set_store_action(MTLStoreAction::Store);
+            let blit_encoder = blit_command_buffer.new_render_command_encoder(blit_pass_descriptor);
+            blit_encoder.set_render_pipeline_state(blit_pipeline);
+            blit_encoder.set_vertex_buffer(0, Some(&self.blit_vertex_buffer), 0);
+            blit_encoder.set_fragment_texture(0, Some(&texture));
+            blit_encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
+            blit_encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+            blit_encoder.end_encoding();
+        }
+        blit_command_buffer.present_drawable(drawable);
+        blit_command_buffer.commit();
     }
 }

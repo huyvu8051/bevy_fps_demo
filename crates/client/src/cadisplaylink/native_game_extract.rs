@@ -352,6 +352,16 @@ pub struct RenderSnapshot {
     /// `DirectionalLight.illuminance` to level/5, which only the desktop
     /// render path ever reads).
     pub light_quality: u8,
+    /// The `RenderResolutionScale` settings-menu value (crate::lib,
+    /// 0.1..=1.0) — same gap as `shadow_quality`/`light_quality` above.
+    /// Desktop's `resize_scene_render_target` (crate::settings_menu) only
+    /// ever resizes a bevy_render `Image` asset used as an offscreen
+    /// camera render target; this renderer never touches bevy_render at
+    /// all, so that resource previously had zero effect here regardless of
+    /// what the settings-menu slider was set to. Extracted so
+    /// native_metal_probe.rs can render its own offscreen scene target at
+    /// this scale and upscale-blit it into the real drawable instead.
+    pub render_resolution_scale: f32,
 }
 
 /// A still-alive floating damage number, already positioned/faded by
@@ -931,6 +941,11 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     snapshot.shadow_quality = shadow_quality_state.get(world).0;
     let mut light_quality_state: SystemState<Res<crate::LightQuality>> = SystemState::new(world);
     snapshot.light_quality = light_quality_state.get(world).0;
+
+    // Resolution scale: see RenderSnapshot::render_resolution_scale's own
+    // doc comment.
+    let mut resolution_scale_state: SystemState<Res<crate::RenderResolutionScale>> = SystemState::new(world);
+    snapshot.render_resolution_scale = resolution_scale_state.get(world).0;
 
     // Floating damage numbers: see FloatingDamageSnapshot's own doc comment.
     let mut damage_state: SystemState<
