@@ -10,6 +10,7 @@
 
 use bevy::asset::AssetId;
 use bevy::image::Image;
+use bevy::mesh::Mesh;
 use core_graphics::geometry::{CGRect, CGSize};
 use metal::foreign_types::ForeignType;
 use metal::{
@@ -180,6 +181,14 @@ struct Uniforms {
     float4x4 pointLightViewProjection;
     packed_float3 cameraPos;
     float _cameraPad;
+    // Identity for meshes whose own vertex buffer is already baked into
+    // world space CPU-side (arena walls/the gun — see RealGameMeshDraw::
+    // model_matrix's own doc comment), so this multiply is a no-op for
+    // them. The REAL per-instance transform for GPU-transformed meshes
+    // (cars): their vertex buffer is cached once in LOCAL space, and this
+    // is what places each instance in the world every draw instead of a
+    // CPU re-bake.
+    float4x4 modelMatrix;
 };
 
 struct VertexOut {
@@ -195,11 +204,17 @@ vertex VertexOut sponza_vertex(uint vid [[vertex_id]],
                                 constant Uniforms &uniforms [[buffer(1)]]) {
     VertexOut out;
     Vertex v = verts[vid];
-    out.position = uniforms.viewProjection * float4(float3(v.position), 1.0);
-    out.worldPos = float3(v.position);
-    out.normal = float3(v.normal);
+    float4 worldPos4 = uniforms.modelMatrix * float4(float3(v.position), 1.0);
+    out.position = uniforms.viewProjection * worldPos4;
+    out.worldPos = worldPos4.xyz;
+    out.normal = (uniforms.modelMatrix * float4(float3(v.normal), 0.0)).xyz;
     out.uv = float2(v.uv);
-    out.tangent = float4(v.tangent);
+    // xyz rotates like the normal above (w=0 drops translation); w itself
+    // is glTF's handedness sign, not a spatial component, so it carries
+    // straight through unchanged — same convention bake_static_mesh_
+    // vertices/bake_local_mesh_vertices already use for tangent.w.
+    float3 rotatedTangent = (uniforms.modelMatrix * float4(v.tangent.xyz, 0.0)).xyz;
+    out.tangent = float4(rotatedTangent, v.tangent.w);
     return out;
 }
 
@@ -338,6 +353,10 @@ struct SponzaUniforms {
     point_light_view_projection: [[f32; 4]; 4],
     camera_pos: [f32; 3],
     _camera_pad: f32,
+    // See MSL Uniforms::modelMatrix's own doc comment. Field order must
+    // match the MSL struct exactly — this is uploaded as raw bytes via
+    // set_vertex_bytes/set_fragment_bytes, no per-field marshaling.
+    model_matrix: [[f32; 4]; 4],
 }
 
 // Phase 2 of the wgpu-replacement plan: GPU skinning for
@@ -523,13 +542,19 @@ struct SponzaVertex {
 
 struct SponzaShadowUniforms {
     float4x4 lightViewProjection;
+    // Same role as SPONZA_SHADER_SOURCE's own Uniforms::modelMatrix —
+    // identity for CPU-baked-to-world-space meshes (walls/gun), the real
+    // per-instance transform for cars (cached LOCAL-space vertex buffer).
+    // SkinnedShadowUniforms above already has this exact field for the
+    // same reason (zombies' shadow pass).
+    float4x4 modelMatrix;
 };
 
 vertex float4 shadow_vertex_sponza(uint vid [[vertex_id]],
                                     const device SponzaVertex *verts [[buffer(0)]],
                                     constant SponzaShadowUniforms &uniforms [[buffer(1)]]) {
     SponzaVertex v = verts[vid];
-    return uniforms.lightViewProjection * float4(float3(v.position), 1.0);
+    return uniforms.lightViewProjection * uniforms.modelMatrix * float4(float3(v.position), 1.0);
 }
 
 struct SkinnedVertex {
@@ -565,6 +590,7 @@ vertex float4 shadow_vertex_skinned(uint vid [[vertex_id]],
 #[derive(Copy, Clone)]
 struct SponzaShadowUniforms {
     light_view_projection: [[f32; 4]; 4],
+    model_matrix: [[f32; 4]; 4],
 }
 
 #[repr(C)]
@@ -1121,6 +1147,17 @@ pub struct NativeMetalProbe {
     // image regardless of entity churn, and a lookup can never bind the
     // wrong texture to the wrong mesh.
     real_game_textures: std::collections::HashMap<AssetId<Image>, metal::Texture>,
+    // Identity-keyed the same way real_game_textures is (same "entity churn
+    // can't scramble an index-keyed cache" reasoning) — one LOCAL-space
+    // (not world-space) vertex buffer per unique `Mesh` asset, uploaded
+    // once and reused every frame that asset shows up again, for every
+    // ExtractedMesh with `is_gpu_transformed` set (currently just cars —
+    // see that field's own doc comment). The buffer never needs
+    // invalidating: a `Mesh` asset's own vertex data never changes after
+    // load, only the model-matrix uniform each draw call sends alongside
+    // it does. usize is the triangle-list vertex count (draw_primitives'
+    // own count, mirroring RealGameMeshDraw::vertex_count).
+    gpu_transformed_mesh_cache: std::collections::HashMap<AssetId<Mesh>, (metal::Buffer, usize)>,
     // Real-game mode only: the FpsCamera entity's actual world-space
     // rotation quaternion (xyzw), straight from GlobalTransform — includes
     // ViewRecoil's kick and Lean's roll, unlike camera_yaw/camera_pitch
@@ -1231,6 +1268,36 @@ fn bake_static_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::Glt
             [world_tangent.x, world_tangent.y, world_tangent.z, tw]
         };
         super::gltf_scene::GltfVertex { position: world_pos.to_array(), normal: world_normal.to_array(), uv, tangent }
+    };
+    if mesh.indices.is_empty() {
+        for idx in 0..mesh.positions.len() {
+            verts.push(vertex_at(idx));
+        }
+    } else {
+        for &idx in &mesh.indices {
+            verts.push(vertex_at(idx as usize));
+        }
+    }
+    verts
+}
+
+// Local-space twin of bake_static_mesh_vertices above, for
+// `is_gpu_transformed` meshes (cars) — leaves position/normal/tangent in
+// the source Mesh asset's own local space instead of applying
+// `mesh.transform`, since the vertex shader now does that multiply itself
+// every draw (see the Uniforms::modelMatrix this feeds — SPONZA_SHADER_
+// SOURCE's own doc comment on `modelMatrix`). This is what actually makes
+// caching the resulting buffer safe: a `Mesh` asset's local-space geometry
+// never changes after load, only which entity's transform gets multiplied
+// against it at draw time.
+fn bake_local_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::GltfVertex> {
+    let mut verts = Vec::new();
+    let vertex_at = |idx: usize| -> super::gltf_scene::GltfVertex {
+        let position = mesh.positions[idx];
+        let normal = if mesh.normals.is_empty() { [0.0, 1.0, 0.0] } else { mesh.normals[idx] };
+        let uv = if mesh.uvs.is_empty() { [0.0, 0.0] } else { mesh.uvs[idx] };
+        let tangent = if mesh.tangents.is_empty() { [1.0, 0.0, 0.0, 1.0] } else { mesh.tangents[idx] };
+        super::gltf_scene::GltfVertex { position, normal, uv, tangent }
     };
     if mesh.indices.is_empty() {
         for idx in 0..mesh.positions.len() {
@@ -1429,7 +1496,15 @@ struct RealGameMeshDraw<'a> {
     // renderer transparency pass. Squared to skip a sqrt() per mesh per
     // frame; only the relative ordering it produces is ever used.
     camera_dist_sq: f32,
+    // Identity for the old CPU-baked-to-world-space meshes (walls/gun) —
+    // multiplying by identity is a no-op, so their behavior is unchanged.
+    // The real transform for `is_gpu_transformed` meshes (cars), whose
+    // vertex_buffer above is cached in LOCAL space — see
+    // ExtractedMesh::is_gpu_transformed's own doc comment.
+    model_matrix: [[f32; 4]; 4],
 }
+
+const MAT4_IDENTITY: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
 
 impl NativeMetalProbe {
     // `view` is the raw UIView* handed over from Swift — same FFI contract
@@ -2016,6 +2091,7 @@ impl NativeMetalProbe {
             start_time: std::time::Instant::now(),
             real_game_app,
             real_game_textures: std::collections::HashMap::new(),
+            gpu_transformed_mesh_cache: std::collections::HashMap::new(),
             real_game_camera_rotation: [0.0, 0.0, 0.0, 1.0],
             real_game_ads_blend: 0.0,
             real_game_scope_zoom: 8.0,
@@ -2199,6 +2275,7 @@ impl NativeMetalProbe {
                 point_light_view_projection,
                 camera_pos,
                 _camera_pad: 0.0,
+                model_matrix: m.model_matrix,
             };
             encoder.set_vertex_buffer(0, Some(&m.vertex_buffer), 0);
             encoder.set_vertex_bytes(
@@ -2516,7 +2593,7 @@ impl NativeMetalProbe {
             if let Some(pipeline) = self.shadow_pipeline_sponza.as_ref() {
                 encoder.set_render_pipeline_state(pipeline);
                 for m in meshes {
-                    let uniforms = SponzaShadowUniforms { light_view_projection };
+                    let uniforms = SponzaShadowUniforms { light_view_projection, model_matrix: m.model_matrix };
                     encoder.set_vertex_buffer(0, Some(&m.vertex_buffer), 0);
                     encoder.set_vertex_bytes(1, std::mem::size_of::<SponzaShadowUniforms>() as u64, &uniforms as *const _ as *const _);
                     encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, m.vertex_count as u64);
@@ -2728,32 +2805,69 @@ impl NativeMetalProbe {
         let real_game_meshes: Vec<RealGameMeshDraw> = real_game_static_meshes
             .iter()
             .filter_map(|mesh| {
-                let verts = bake_static_mesh_vertices(mesh);
                 // A Metal buffer can never be zero-length (hard validation
                 // assertion, not just a warning — confirmed via a real
-                // device crash: "Cannot create buffer of zero length").
-                // bake_static_mesh_vertices can only produce this from an
-                // ExtractedMesh with empty positions AND empty indices —
-                // shouldn't happen for a real loaded Mesh asset, but skip
-                // defensively rather than crash the whole render loop over
-                // one bad mesh (every OTHER static mesh this frame would
-                // never draw either, since this closure runs inside the
-                // same per-frame map building the whole draw list).
-                if verts.is_empty() {
-                    bevy::log::warn!(
-                        "empty static mesh skipped: positions={} normals={} uvs={} indices={}",
-                        mesh.positions.len(),
-                        mesh.normals.len(),
-                        mesh.uvs.len(),
-                        mesh.indices.len()
+                // device crash: "Cannot create buffer of zero length"), so
+                // both branches below skip an empty bake defensively rather
+                // than crash the whole render loop over one bad mesh (every
+                // OTHER static mesh this frame would never draw either,
+                // since this closure runs inside the same per-frame map
+                // building the whole draw list).
+                let (vertex_buffer, vertex_count, model_matrix) = if mesh.is_gpu_transformed {
+                    // Cars — see ExtractedMesh::is_gpu_transformed's own
+                    // doc comment. Cache hit: reuse the buffer uploaded the
+                    // first time this exact Mesh asset was seen, no CPU
+                    // re-bake at all. Cache miss: bake once (local space,
+                    // no mesh.transform applied — the vertex shader
+                    // multiplies by modelMatrix itself now) and remember it.
+                    let mesh_id = mesh.mesh_id?;
+                    let (buffer, count) = match self.gpu_transformed_mesh_cache.get(&mesh_id) {
+                        Some(cached) => cached.clone(),
+                        None => {
+                            let verts = bake_local_mesh_vertices(mesh);
+                            if verts.is_empty() {
+                                bevy::log::warn!(
+                                    "empty GPU-transformed mesh skipped: positions={} normals={} uvs={} indices={}",
+                                    mesh.positions.len(),
+                                    mesh.normals.len(),
+                                    mesh.uvs.len(),
+                                    mesh.indices.len()
+                                );
+                                return None;
+                            }
+                            let buffer = self.device.new_buffer_with_data(
+                                verts.as_ptr() as *const _,
+                                (verts.len() * std::mem::size_of::<super::gltf_scene::GltfVertex>()) as u64,
+                                MTLResourceOptions::StorageModeShared,
+                            );
+                            let entry = (buffer, verts.len());
+                            self.gpu_transformed_mesh_cache.insert(mesh_id, entry.clone());
+                            entry
+                        }
+                    };
+                    (buffer, count, mesh.transform.to_matrix().to_cols_array_2d())
+                } else {
+                    // Arena walls/the gun — unchanged old path: CPU-bake to
+                    // world space fresh every frame, model_matrix stays
+                    // identity (a no-op multiply in the shader).
+                    let verts = bake_static_mesh_vertices(mesh);
+                    if verts.is_empty() {
+                        bevy::log::warn!(
+                            "empty static mesh skipped: positions={} normals={} uvs={} indices={}",
+                            mesh.positions.len(),
+                            mesh.normals.len(),
+                            mesh.uvs.len(),
+                            mesh.indices.len()
+                        );
+                        return None;
+                    }
+                    let buffer = self.device.new_buffer_with_data(
+                        verts.as_ptr() as *const _,
+                        (verts.len() * std::mem::size_of::<super::gltf_scene::GltfVertex>()) as u64,
+                        MTLResourceOptions::StorageModeShared,
                     );
-                    return None;
-                }
-                let vertex_buffer = self.device.new_buffer_with_data(
-                    verts.as_ptr() as *const _,
-                    (verts.len() * std::mem::size_of::<super::gltf_scene::GltfVertex>()) as u64,
-                    MTLResourceOptions::StorageModeShared,
-                );
+                    (buffer, verts.len(), MAT4_IDENTITY)
+                };
                 let texture = mesh.texture.as_ref().and_then(|t| self.real_game_textures.get(&t.id));
                 let normal_texture = mesh.normal_texture.as_ref().and_then(|t| self.real_game_textures.get(&t.id));
                 let d = [
@@ -2763,13 +2877,14 @@ impl NativeMetalProbe {
                 ];
                 Some(RealGameMeshDraw {
                     vertex_buffer,
-                    vertex_count: verts.len(),
+                    vertex_count,
                     base_color_factor: mesh.base_color,
                     emissive: mesh.emissive,
                     texture,
                     normal_texture,
                     is_blend: mesh.is_blend,
                     camera_dist_sq: d[0] * d[0] + d[1] * d[1] + d[2] * d[2],
+                    model_matrix,
                 })
             })
             .collect();

@@ -216,6 +216,30 @@ pub struct ExtractedMesh {
     /// comment for the full story of why an entity-hierarchy or alpha-
     /// value heuristic wasn't reliable enough.
     pub is_blend: bool,
+    /// The source `Mesh` asset's own stable identity — `None` unless
+    /// `is_gpu_transformed` is also true. Lets native_metal_probe.rs cache
+    /// one local-space vertex/index buffer per unique mesh (uploaded once,
+    /// reused every frame this same asset shows up again) instead of
+    /// re-baking to world space and re-uploading a fresh buffer every
+    /// single frame — see `is_gpu_transformed`'s own doc comment for which
+    /// meshes actually get this treatment and why.
+    pub mesh_id: Option<AssetId<Mesh>>,
+    /// True for meshes native_metal_probe.rs should transform on the GPU
+    /// via a per-draw model-matrix uniform (see `Self::transform` above)
+    /// instead of the older "bake_static_mesh_vertices CPU-transforms
+    /// every vertex into world space fresh every frame" path every other
+    /// static mesh (arena walls, the gun) still uses. Currently just
+    /// `ItemGalleryTestProp` cars: a real, measured mobile bottleneck —
+    /// 16 cars at up to ~62k triangles each (473k total) CPU-transformed
+    /// AND re-uploaded to a fresh GPU buffer every frame, vs. zombies'
+    /// skinned-mesh path (vertex buffer built once at load, only a small
+    /// per-frame joint-matrix buffer after that) — see PolyQuality's own
+    /// doc comment in crate::lib for the on-device profiling that first
+    /// found this. Arena walls/the gun stay on the old path deliberately:
+    /// walls are truly static already-baked-once geometry that was never
+    /// the actual cost, and revisiting the gun (a single low-poly mesh)
+    /// wasn't worth the extra risk for zero measurable benefit.
+    pub is_gpu_transformed: bool,
 }
 
 /// Camera pose. `eye` is the `FpsCamera` entity's own world-space
@@ -1306,6 +1330,8 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
                 material.alpha_mode,
                 AlphaMode::Blend | AlphaMode::Premultiplied | AlphaMode::Add | AlphaMode::Multiply
             ),
+            mesh_id: is_car.then(|| mesh3d.id()),
+            is_gpu_transformed: is_car,
         });
     }
 
