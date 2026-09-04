@@ -29,8 +29,7 @@ pub(crate) struct ItemGalleryCarsPlugin;
 
 impl Plugin for ItemGalleryCarsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(shake_item_gallery_car_on_hit)
-            .add_systems(Update, force_backface_culling_on_car_materials);
+        app.add_observer(shake_item_gallery_car_on_hit);
         // Dev-only: F9 writes every car's live scale/Y back into
         // crates/client/assets/data/item_gallery_car_physics.ron so the
         // "nudge in the editor, eyeball, repeat" loop ends with a real
@@ -114,13 +113,24 @@ const ITEM_GALLERY_CAR_HIT_IMPULSE: f32 = 1.0;
 /// drawn regardless of the per-car scale hacks. The server builds the same
 /// hull off the same meshes (spawn_item_gallery_car_colliders) so hit
 /// registration and movement blocking agree with the client.
-// `quality`: 1..=5, see texture_quality_default's own doc comment in
-// lib.rs — only affects which `_qN` sibling glb gets loaded for the
-// VISUAL mesh (shared::item_gallery_car_visual_path); the collider below
-// is built from whatever that same file's geometry is, which never
-// differs across tiers, so hit registration/physics stay identical
-// regardless of quality.
-pub(crate) fn spawn_item_gallery_test_props(commands: &mut Commands, asset_server: &AssetServer, quality: u8) {
+// `poly_quality`/`texture_quality`: 1..=5 / 0..=5 — two INDEPENDENT axes
+// (see shared::item_gallery_car_mesh_path's own doc comment for why
+// they're separate files rather than a combined `_qN.glb`). The mesh is
+// loaded as a bare `Handle<Mesh>` (GltfAssetLabel::Primitive, not
+// GltfAssetLabel::Scene — a poly-tier file has no material/scene graph
+// to speak of, see bake_poly_quality_levels.py) and the material is built
+// by hand from the separately-tiered texture images, so this spawns one
+// flat entity instead of a glTF scene subtree. `ColliderConstructor`
+// (not …Hierarchy) attaches straight to this same entity's own Mesh3d —
+// same collider regardless of either quality tier, since
+// `ConvexHullFromMesh` only needs A geometry, not the highest-detail one.
+pub(crate) fn spawn_item_gallery_test_props(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    materials: &mut Assets<StandardMaterial>,
+    poly_quality: u8,
+    texture_quality: u8,
+) {
     for (i, (path, physics)) in shared::ITEM_GALLERY_CAR_PATHS.iter().zip(shared::item_gallery_car_physics()).enumerate() {
         // "props/car_sedan/mesh/car_sedan_light.glb" -> "car_sedan" — so the
         // dev editor's Hierarchy panel (bevy_editor_pls, F2) shows a real
@@ -130,15 +140,40 @@ pub(crate) fn spawn_item_gallery_test_props(commands: &mut Commands, asset_serve
         // Hierarchy list is the only way to find a specific car to focus
         // (select it, press F) without guessing entity ids.
         let name = path.split('/').nth(1).unwrap_or(path);
-        let visual_path = shared::item_gallery_car_visual_path(i, quality);
+        let mesh_path = shared::item_gallery_car_mesh_path(i, poly_quality);
+        let (base_color_path, normal_path, metallic_roughness_path) = shared::item_gallery_car_texture_paths(i, texture_quality);
+        // normal/metallic-roughness textures carry linear (not sRGB) data
+        // — every other texture load in this project goes through
+        // bevy_gltf, which already sets this correctly per glTF's own
+        // material role; loading these as plain standalone images instead
+        // needs it spelled out by hand or the normal map comes out with
+        // visibly wrong (gamma-shifted) lighting.
+        let linear = |path: String| {
+            asset_server.load_with_settings(path, |settings: &mut bevy::image::ImageLoaderSettings| {
+                settings.is_srgb = false;
+            })
+        };
+        let material = materials.add(StandardMaterial {
+            base_color_texture: Some(asset_server.load(base_color_path)),
+            normal_map_texture: Some(linear(normal_path)),
+            metallic_roughness_texture: Some(linear(metallic_roughness_path)),
+            // Matches the old force_backface_culling_on_car_materials
+            // system's override of the source glb's own doubleSided:true
+            // material (which defaults to no culling) — kept as a
+            // straight construction-time value now that this project
+            // builds the material itself instead of importing the glTF's.
+            cull_mode: Some(Face::Back),
+            ..default()
+        });
         commands.spawn((
             Name::new(name.to_string()),
-            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(visual_path))),
+            Mesh3d(asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset(mesh_path))),
+            MeshMaterial3d(material),
             Transform::from_xyz(physics.x, physics.y + ITEM_GALLERY_CAR_DROP_MARGIN, physics.z)
                 .with_rotation(physics.rotation)
                 .with_scale(Vec3::splat(physics.scale)),
             RigidBody::Dynamic,
-            ColliderConstructorHierarchy::new(ColliderConstructor::ConvexHullFromMesh),
+            ColliderConstructor::ConvexHullFromMesh,
             LockedAxes::new().lock_rotation_x().lock_rotation_z(),
             LinearDamping(8.0),
             AngularDamping(8.0),
@@ -179,45 +214,12 @@ fn shake_item_gallery_car_on_hit(
     }
 }
 
-/// Meshy exports every car material with glTF's `doubleSided: true`, which
-/// Bevy's glTF loader turns into `cull_mode: None` — every triangle gets
-/// rasterized from both sides, including the far half of the mesh that's
-/// always fully occluded by the near half on a closed car body anyway (no
-/// open cabins/cockpits among these 16 — see PROP_IMPORT_CHECKLIST.md).
-/// That's backface culling (a free ~2x fragment-shading win per car)
-/// turned OFF for no benefit — this forces it back on for every material
-/// that ends up on one of our car meshes specifically, without touching
-/// doubleSided materials elsewhere (zombies/player/level geometry) that
-/// might actually need both sides rendered.
-///
-/// Runs every frame (not once at spawn) because the glTF scene's mesh
-/// entities — and their materials — don't exist yet the instant
-/// spawn_item_gallery_test_props() returns; they stream in over the
-/// following frames as the asset finishes loading, same reason
-/// wire_zombie_hitbox_bones (crates/shared/src/zombie.rs) polls
-/// Added<Name> instead of doing this once at spawn time.
-fn force_backface_culling_on_car_materials(
-    child_of: Query<&ChildOf>,
-    item_gallery_cars: Query<(), With<ItemGalleryTestProp>>,
-    new_materials: Query<(Entity, &MeshMaterial3d<StandardMaterial>), Added<MeshMaterial3d<StandardMaterial>>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    'material: for (mesh_entity, material_handle) in &new_materials {
-        let mut current = mesh_entity;
-        for _ in 0..20 {
-            if item_gallery_cars.contains(current) {
-                if let Some(material) = materials.get_mut(&material_handle.0) {
-                    material.cull_mode = Some(Face::Back);
-                }
-                continue 'material;
-            }
-            let Ok(parent) = child_of.get(current) else {
-                continue 'material;
-            };
-            current = parent.0;
-        }
-    }
-}
+// force_backface_culling_on_car_materials used to live here — no longer
+// needed (2026-09-04) now that spawn_item_gallery_test_props builds each
+// car's StandardMaterial by hand instead of importing the glTF's own (see
+// its own doc comment): cull_mode is just set directly at construction
+// now, so there's no glTF-imported doubleSided:true material left to
+// override after the fact.
 
 // --- F9: save live car Transform back to the RON file (EDITOR=1 only) ----
 //

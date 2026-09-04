@@ -337,6 +337,21 @@ pub struct RenderSnapshot {
     /// same button, now with a real effect on both render paths instead of
     /// just one.
     pub map_msaa_on: bool,
+    /// The `ShadowQuality` cheat-menu tier (crate::lib, 0..=5) — same
+    /// "resource only ever wired to bevy_render's own component, dead on
+    /// this renderer" gap as `map_msaa_on` above. `apply_map_render_toggles`
+    /// still updates the real `MainSun` `DirectionalLight.shadows_enabled`
+    /// every frame (desktop's render path reads it), but this renderer
+    /// never touches that component — extracted separately so
+    /// native_metal_probe.rs can pick its own shadow-map resolution (0 =
+    /// skip the shadow-caster draw passes entirely) instead.
+    pub shadow_quality: u8,
+    /// The `LightQuality` cheat-menu tier (crate::lib, 0..=5) — same gap as
+    /// `shadow_quality` above, for the sun's illuminance
+    /// (`apply_map_render_toggles` scales `MainSun`'s
+    /// `DirectionalLight.illuminance` to level/5, which only the desktop
+    /// render path ever reads).
+    pub light_quality: u8,
 }
 
 /// A still-alive floating damage number, already positioned/faded by
@@ -909,6 +924,13 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // MSAA toggle: see RenderSnapshot::map_msaa_on's own doc comment.
     let mut msaa_toggle_state: SystemState<Res<crate::MapMsaaOn>> = SystemState::new(world);
     snapshot.map_msaa_on = msaa_toggle_state.get(world).0;
+
+    // Shadow/Light quality tiers: see RenderSnapshot::shadow_quality/
+    // light_quality's own doc comments.
+    let mut shadow_quality_state: SystemState<Res<crate::ShadowQuality>> = SystemState::new(world);
+    snapshot.shadow_quality = shadow_quality_state.get(world).0;
+    let mut light_quality_state: SystemState<Res<crate::LightQuality>> = SystemState::new(world);
+    snapshot.light_quality = light_quality_state.get(world).0;
 
     // Floating damage numbers: see FloatingDamageSnapshot's own doc comment.
     let mut damage_state: SystemState<

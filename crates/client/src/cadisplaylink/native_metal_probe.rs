@@ -71,15 +71,29 @@ struct LightUniform {
 }
 
 impl LightUniform {
-    fn from_snapshots(light: Option<&LightSnapshot>, sun: Option<&SunSnapshot>) -> Self {
+    // `sun_fraction` mirrors the desktop render path's own LightQuality ->
+    // MainSun.illuminance = MAIN_SUN_ILLUMINANCE * level / 5 (see
+    // apply_map_render_toggles, crate::settings_menu) — this renderer never
+    // reads that component, so scaling sun_color by the same fraction here
+    // is the equivalent brightness level for the fragment shaders'
+    // `uniforms.sunColor.rgb * sunDiffuse` term. Expected range 0.0..=1.0
+    // (level/5), not clamped since a value outside that range would just
+    // scale proportionally further, same as illuminance would.
+    fn from_snapshots(light: Option<&LightSnapshot>, sun: Option<&SunSnapshot>, sun_fraction: f32) -> Self {
         let (position, range, color) = match light {
             Some(l) => (l.position, l.range, [l.color[0], l.color[1], l.color[2], 0.0]),
             None => (FALLBACK_LIGHT.position, FALLBACK_LIGHT.range, FALLBACK_LIGHT.color),
         };
-        let (sun_dir, sun_color) = match sun {
+        let (sun_dir, sun_color_base) = match sun {
             Some(s) => (s.direction, [s.color[0], s.color[1], s.color[2], 0.0]),
             None => (FALLBACK_LIGHT.sun_dir, FALLBACK_LIGHT.sun_color),
         };
+        let sun_color = [
+            sun_color_base[0] * sun_fraction,
+            sun_color_base[1] * sun_fraction,
+            sun_color_base[2] * sun_fraction,
+            sun_color_base[3],
+        ];
         LightUniform { position, range, color, sun_dir, _sun_pad: 0.0, sun_color }
     }
 }
@@ -560,6 +574,14 @@ struct SkinnedShadowUniforms {
 // PCF-filtered edges (see SPONZA_SHADER_SOURCE's shadowBias) without the
 // blocky look a smaller map would show up close.
 const SHADOW_MAP_SIZE: u64 = 2048;
+// Per-`ShadowQuality`-tier (crate::lib, 0..=5) shadow-map resolution —
+// index 0 is never actually sampled meaningfully (level 0 skips the
+// shadow-caster draw entirely, see `shadow_quality`'s own field doc
+// comment), kept as a real small size anyway rather than 0 so the texture
+// is never literally zero-sized. 5 matches the old fixed SHADOW_MAP_SIZE
+// above (still used by the non-real-game toy/patrol probe path, which has
+// no ShadowQuality resource to read).
+const SHADOW_MAP_SIZES: [u64; 6] = [512, 512, 1024, 1536, 2048, 3072];
 // Half-extent (world units) of the shadow frustum's ortho box, and how far
 // back along the light direction its "eye" sits — see render_frame's
 // "Pass 0" for the actual light_view_projection construction. Centered on
@@ -905,6 +927,18 @@ pub struct NativeMetalProbe {
     // above render_frame binds. Defaults matching MapMsaaOn's own Default
     // (false/off) until the first extraction.
     msaa_enabled: bool,
+    // This frame's ShadowQuality value (native_game_extract.rs), 0..=5 —
+    // 0 gates off Pass 0/0b (below) actually drawing shadow casters into
+    // shadow_map/shadow_map_point; both textures stay at their Clear-to-1.0
+    // (far plane) value from the pass descriptor's own load_action in that
+    // case, so sample_shadow's depth compare passes for every fragment
+    // (nothing is ever farther than the far plane) — i.e. "off" reads as
+    // fully lit everywhere, no shader changes needed. 1..=5 also picks
+    // shadow_map/shadow_map_point's actual resolution — see
+    // ensure_shadow_map_size and SHADOW_MAP_SIZES. Defaults to 5 (matching
+    // ShadowQuality's own light_shadows_enabled() default) until the first
+    // extraction.
+    shadow_quality: u8,
     sponza_pipeline: Option<RenderPipelineState>,
     sponza_pipeline_no_msaa: Option<RenderPipelineState>,
     sponza_sampler: metal::SamplerState,
@@ -1808,6 +1842,7 @@ impl NativeMetalProbe {
             ui_depth_state,
             msaa_targets: super::metal_msaa::MsaaTargets::new(MSAA_SAMPLE_COUNT),
             msaa_enabled: false,
+            shadow_quality: 5,
             camera_position: [0.0, 2.5, 2.0],
             camera_yaw: 0.0,
             camera_pitch: -0.25,
@@ -2210,6 +2245,38 @@ impl NativeMetalProbe {
         }
     }
 
+    // A depth-only, GPU-private texture at `size` — same descriptor shape
+    // used for both shadow_map and shadow_map_point (see shadow_map_point's
+    // own field doc comment for why the sun and point light need separate
+    // textures). Free function shape (no &self) so `new()` can call it
+    // before `self` exists, same as ensure_shadow_map_size below.
+    fn make_shadow_texture(device: &metal::Device, size: u64) -> metal::Texture {
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_pixel_format(MTLPixelFormat::Depth32Float);
+        descriptor.set_width(size);
+        descriptor.set_height(size);
+        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        descriptor.set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        device.new_texture(&descriptor)
+    }
+
+    // Recreates shadow_map/shadow_map_point at the new tier's resolution
+    // whenever ShadowQuality actually changes — cheap to call every frame
+    // (a no-op past the `==` check) since Metal render pipelines don't bake
+    // in target texture dimensions, only pixel formats, so resizing these
+    // two textures independently at runtime is safe without recreating any
+    // pipeline state.
+    fn ensure_shadow_map_size(&mut self, quality: u8) {
+        let quality = quality.min(5);
+        if quality == self.shadow_quality {
+            return;
+        }
+        let size = SHADOW_MAP_SIZES[quality as usize];
+        self.shadow_map = Self::make_shadow_texture(&self.device, size);
+        self.shadow_map_point = Self::make_shadow_texture(&self.device, size);
+        self.shadow_quality = quality;
+    }
+
     // Pass 0 (see render_frame): renders the same geometry draw_scene does
     // into the sun's shadow map instead of the screen — depth-only, no
     // fragment shader, no lighting. The model_matrix/joint_matrices pose
@@ -2340,6 +2407,7 @@ impl NativeMetalProbe {
             self.ui_map_select_buttons = snapshot.map_select_buttons;
             self.ui_map_select_texts = snapshot.map_select_texts;
             self.msaa_enabled = snapshot.map_msaa_on;
+            self.ensure_shadow_map_size(snapshot.shadow_quality);
             if let Some(cam) = &snapshot.camera {
                 self.camera_position = cam.eye;
                 self.camera_yaw = cam.yaw;
@@ -2359,7 +2427,8 @@ impl NativeMetalProbe {
             } else {
                 self.real_game_scope_active = false;
             }
-            self.real_game_light = LightUniform::from_snapshots(snapshot.light.as_ref(), snapshot.sun.as_ref());
+            self.real_game_light =
+                LightUniform::from_snapshots(snapshot.light.as_ref(), snapshot.sun.as_ref(), snapshot.light_quality.min(5) as f32 / 5.0);
             real_game_static_meshes = snapshot.static_meshes;
             real_game_extracted.extend(snapshot.zombies.into_iter().map(|z| super::skinned_actor::SkinnedActorDraw {
                 transform: z.transform,
@@ -2587,7 +2656,15 @@ impl NativeMetalProbe {
             let shadow_command_buffer = self.queue.new_command_buffer();
             let shadow_encoder = shadow_command_buffer.new_render_command_encoder(shadow_pass_descriptor);
             shadow_encoder.set_depth_stencil_state(&self.shadow_depth_state);
-            self.draw_shadow_casters(shadow_encoder, light_view_projection, &extracted, real_game_meshes_opt);
+            // Skipping the draw (not the pass) when shadows are off is
+            // enough — the pass descriptor's own Clear-to-1.0 load_action
+            // above already leaves shadow_map at the far plane everywhere,
+            // which sample_shadow's depth compare reads as "nothing is
+            // occluding" for every fragment. See shadow_quality's own
+            // field doc comment.
+            if self.shadow_quality > 0 {
+                self.draw_shadow_casters(shadow_encoder, light_view_projection, &extracted, real_game_meshes_opt);
+            }
             shadow_encoder.end_encoding();
             shadow_command_buffer.commit();
         }
@@ -2621,7 +2698,9 @@ impl NativeMetalProbe {
             let point_shadow_command_buffer = self.queue.new_command_buffer();
             let point_shadow_encoder = point_shadow_command_buffer.new_render_command_encoder(point_shadow_pass_descriptor);
             point_shadow_encoder.set_depth_stencil_state(&self.shadow_depth_state);
-            self.draw_shadow_casters(point_shadow_encoder, point_light_view_projection, &extracted, real_game_meshes_opt);
+            if self.shadow_quality > 0 {
+                self.draw_shadow_casters(point_shadow_encoder, point_light_view_projection, &extracted, real_game_meshes_opt);
+            }
             point_shadow_encoder.end_encoding();
             point_shadow_command_buffer.commit();
         }

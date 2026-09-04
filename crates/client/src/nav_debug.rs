@@ -44,6 +44,21 @@ pub(crate) struct ClientNavObstacle;
 #[derive(Component)]
 struct ClientCarNavBoxDone;
 
+/// Marks a per-car obstacle box specifically (ClientNavObstacle alone
+/// also covers arena pillars — spawn_test_arena's own use of it — so this
+/// is the only way to find and despawn JUST the car ones). Needed once
+/// cars could be despawned/respawned live (settings-menu texture/poly
+/// quality buttons, respawn_item_gallery_cars_on_quality_change): without
+/// this, every quality change left the old car's obstacle box behind
+/// forever (nothing despawned it), so a few toggles piled up duplicate,
+/// increasingly overlapping obstacle boxes at the same positions — which
+/// crashed vleue_navigator's async Constrained Delaunay Triangulation
+/// (spade) with a real, confirmed device panic
+/// (`assertion failed: !previous_region.is_empty() || from ==
+/// final_vertex`), not just a cosmetic leak.
+#[derive(Component)]
+pub(crate) struct ItemGalleryCarNavObstacle;
+
 pub(crate) struct NavDebugPlugin;
 
 impl Plugin for NavDebugPlugin {
@@ -171,6 +186,7 @@ fn spawn_client_car_nav_boxes(
             Collider::cuboid(size.x, size.y, size.z),
             Sensor,
             ClientNavObstacle,
+            ItemGalleryCarNavObstacle,
         ));
         commands.entity(car).insert(ClientCarNavBoxDone);
     }

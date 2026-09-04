@@ -81,6 +81,24 @@ pub(crate) struct ResolutionScaleButton(f32);
 #[derive(Component)]
 pub(crate) struct TextureQualityButton(u8);
 
+// One per polygon-quality tier (1..=5) — same shape as
+// TextureQualityButton, independent resource (see PolyQuality's own doc
+// comment in lib.rs).
+#[derive(Component)]
+pub(crate) struct PolyQualityButton(u8);
+
+// One per shadow-quality tier (0..=5, 0 = off) — same shape as
+// TextureQualityButton, independent resource (see ShadowQuality's own doc
+// comment in lib.rs).
+#[derive(Component)]
+pub(crate) struct ShadowQualityButton(u8);
+
+// One per light-quality tier (0..=5, 0 = off) — same shape as
+// ShadowQualityButton, independent resource (see LightQuality's own doc
+// comment in lib.rs).
+#[derive(Component)]
+pub(crate) struct LightQualityButton(u8);
+
 #[derive(Component)]
 pub(crate) struct SettingsToggleButton;
 
@@ -273,6 +291,132 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     }
                 });
 
+                page.spawn((
+                    Text::new("Polygon quality"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for tier in 1..=5u8 {
+                        row.spawn((
+                            Node {
+                                width: Val::Px(40.0),
+                                height: Val::Px(32.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                            Button,
+                            Interaction::default(),
+                            PolyQualityButton(tier),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new(tier.to_string()),
+                                TextFont {
+                                    font_size: 14.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    }
+                });
+
+                page.spawn((
+                    Text::new("Shadow quality"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for tier in 0..=5u8 {
+                        row.spawn((
+                            Node {
+                                width: Val::Px(40.0),
+                                height: Val::Px(32.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                            Button,
+                            Interaction::default(),
+                            ShadowQualityButton(tier),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new(tier.to_string()),
+                                TextFont {
+                                    font_size: 14.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    }
+                });
+
+                page.spawn((
+                    Text::new("Light quality"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for tier in 0..=5u8 {
+                        row.spawn((
+                            Node {
+                                width: Val::Px(40.0),
+                                height: Val::Px(32.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                            Button,
+                            Interaction::default(),
+                            LightQualityButton(tier),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new(tier.to_string()),
+                                TextFont {
+                                    font_size: 14.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    }
+                });
+
                 // Autopilot — real player-facing feature (see its own doc
                 // comment), so unlike everything in the "Cheats" section
                 // below this row is NOT debug-gated: it's the mobile
@@ -347,8 +491,6 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     })
                     .with_children(|row| {
                         spawn_cheat_toggle_button(row, "MSAA", CheatMsaaButton);
-                        spawn_cheat_toggle_button(row, "Shadow", CheatShadowButton);
-            spawn_cheat_toggle_button(row, "Light", CheatLightButton);
                         spawn_cheat_toggle_button(row, "Scope", CheatScopeCameraButton);
                     });
                     page.spawn(Node {
@@ -556,10 +698,6 @@ pub(crate) struct CheatGunButton;
 #[derive(Component)]
 pub(crate) struct CheatMsaaButton;
 #[derive(Component)]
-pub(crate) struct CheatShadowButton;
-#[derive(Component)]
-pub(crate) struct CheatLightButton;
-#[derive(Component)]
 pub(crate) struct CheatScopeCameraButton;
 #[derive(Component)]
 pub(crate) struct CheatKillAllButton;
@@ -663,14 +801,12 @@ pub(crate) fn cheat_toggle_buttons(
     mut freeze: ResMut<FreezeZombies>,
     mut gun_visible: ResMut<GunVisible>,
     mut map_msaa: ResMut<MapMsaaOn>,
-    mut map_shadows: ResMut<MapShadowsOn>,
     noclip_btn: Query<&Interaction, (With<CheatNoclipButton>, Changed<Interaction>)>,
     inspect_btn: Query<&Interaction, (With<CheatInspectButton>, Changed<Interaction>)>,
     god_btn: Query<&Interaction, (With<CheatGodModeButton>, Changed<Interaction>)>,
     freeze_btn: Query<&Interaction, (With<CheatFreezeButton>, Changed<Interaction>)>,
     gun_btn: Query<&Interaction, (With<CheatGunButton>, Changed<Interaction>)>,
     msaa_btn: Query<&Interaction, (With<CheatMsaaButton>, Changed<Interaction>)>,
-    shadow_btn: Query<&Interaction, (With<CheatShadowButton>, Changed<Interaction>)>,
 ) {
     if tapped(&noclip_btn) {
         noclip.0 = !noclip.0;
@@ -697,19 +833,17 @@ pub(crate) fn cheat_toggle_buttons(
     if tapped(&msaa_btn) {
         map_msaa.0 = !map_msaa.0;
     }
-    if tapped(&shadow_btn) {
-        map_shadows.0 = !map_shadows.0;
-    }
 }
 
-// Applies GunVisible/MapMsaaOn/MapShadowsOn every frame — same
-// resource-drives-a-component pattern as sync_player_model, cheap enough
-// (3 single-entity queries) not to bother gating on resource_changed.
+// Applies GunVisible/MapMsaaOn/ShadowQuality/LightQuality every frame —
+// same resource-drives-a-component pattern as sync_player_model, cheap
+// enough (3 single-entity queries) not to bother gating on
+// resource_changed.
 pub(crate) fn apply_map_render_toggles(
     gun_visible: Res<GunVisible>,
     map_msaa: Res<MapMsaaOn>,
-    map_shadows: Res<MapShadowsOn>,
-    map_lights: Res<MapLightsOn>,
+    shadow_quality: Res<ShadowQuality>,
+    light_quality: Res<LightQuality>,
     mut gun: Query<&mut Visibility, With<Gun>>,
     // FpsCamera, not Camera3d — the AK scope's own render-to-texture
     // camera (see setup()) is ALSO a Camera3d, which would make
@@ -727,10 +861,11 @@ pub(crate) fn apply_map_render_toggles(
         }
     }
     if let Ok(mut light) = sun.single_mut() {
-        if light.shadows_enabled != map_shadows.0 {
-            light.shadows_enabled = map_shadows.0;
+        let shadows_on = shadow_quality.0 > 0;
+        if light.shadows_enabled != shadows_on {
+            light.shadows_enabled = shadows_on;
         }
-        let target_illuminance = if map_lights.0 { MAIN_SUN_ILLUMINANCE } else { 0.0 };
+        let target_illuminance = MAIN_SUN_ILLUMINANCE * (light_quality.0.min(5) as f32 / 5.0);
         if light.illuminance != target_illuminance {
             light.illuminance = target_illuminance;
         }
@@ -820,15 +955,6 @@ pub(crate) fn autopilot_toggle_button(mut autopilot: ResMut<Autopilot>, btn: Que
     }
 }
 
-// Standalone for the same arity-ceiling reason as autopilot_toggle_button
-// — cheat_toggle_buttons was already close to Bevy's max system param
-// count (see cheat_toggle_buttons_2's own doc comment for the exact limit
-// this project already hit once).
-pub(crate) fn light_toggle_button(mut map_lights: ResMut<MapLightsOn>, btn: Query<&Interaction, (With<CheatLightButton>, Changed<Interaction>)>) {
-    if tapped(&btn) {
-        map_lights.0 = !map_lights.0;
-    }
-}
 
 // Recolors the 3 toggle buttons green-ish while their cheat is active —
 // desktop's debug panel shows this as "[ON]"/"[OFF]" text instead, but
@@ -852,7 +978,6 @@ pub(crate) fn update_cheat_toggle_colors(
     player_model: Res<PlayerModelVisible>,
     gun_visible: Res<GunVisible>,
     map_msaa: Res<MapMsaaOn>,
-    map_shadows: Res<MapShadowsOn>,
     mut buttons: Query<
         (
             &mut BackgroundColor,
@@ -867,7 +992,6 @@ pub(crate) fn update_cheat_toggle_colors(
             Option<&CheatPlayerModelButton>,
             Option<&CheatGunButton>,
             Option<&CheatMsaaButton>,
-            Option<&CheatShadowButton>,
         ),
         Or<(
             With<CheatNoclipButton>,
@@ -881,12 +1005,11 @@ pub(crate) fn update_cheat_toggle_colors(
             With<CheatPlayerModelButton>,
             With<CheatGunButton>,
             With<CheatMsaaButton>,
-            With<CheatShadowButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, zombie_lod_m, player_model_m, gun_m, msaa_m, shadow_m) in
+    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, zombie_lod_m, player_model_m, gun_m, msaa_m) in
         &mut buttons
     {
         let on = if noclip_m.is_some() {
@@ -909,10 +1032,8 @@ pub(crate) fn update_cheat_toggle_colors(
             player_model.0
         } else if gun_m.is_some() {
             gun_visible.0
-        } else if msaa_m.is_some() {
-            map_msaa.0
         } else {
-            shadow_m.is_some() && map_shadows.0
+            msaa_m.is_some() && map_msaa.0
         };
         *bg = BackgroundColor(color_for(on));
     }
@@ -933,7 +1054,6 @@ pub(crate) fn update_extra_toggle_colors(
     scope_camera: Res<ScopeCameraEnabled>,
     show_tracers: Res<ShowBulletTracers>,
     inspect: Res<InspectMode>,
-    map_lights: Res<MapLightsOn>,
     mut buttons: Query<
         (
             &mut BackgroundColor,
@@ -945,7 +1065,6 @@ pub(crate) fn update_extra_toggle_colors(
             Option<&CheatScopeCameraButton>,
             Option<&CheatShowTracersButton>,
             Option<&CheatInspectButton>,
-            Option<&CheatLightButton>,
         ),
         Or<(
             With<AutopilotButton>,
@@ -956,12 +1075,11 @@ pub(crate) fn update_extra_toggle_colors(
             With<CheatScopeCameraButton>,
             With<CheatShowTracersButton>,
             With<CheatInspectButton>,
-            With<CheatLightButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, scope_camera_m, show_tracers_m, inspect_m, light_m) in &mut buttons {
+    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, scope_camera_m, show_tracers_m, inspect_m) in &mut buttons {
         let on = if auto_m.is_some() {
             autopilot.0
         } else if dof_m.is_some() {
@@ -976,10 +1094,8 @@ pub(crate) fn update_extra_toggle_colors(
             scope_camera.0
         } else if show_tracers_m.is_some() {
             show_tracers.0
-        } else if inspect_m.is_some() {
-            inspect.0
         } else {
-            light_m.is_some() && map_lights.0
+            inspect_m.is_some() && inspect.0
         };
         *bg = BackgroundColor(color_for(on));
     }
@@ -1472,22 +1588,101 @@ pub(crate) fn update_texture_quality_button_colors(
     }
 }
 
+// Same Changed<Interaction>-gated tap-sets-the-resource shape as
+// texture_quality_buttons — independent resource, see PolyQuality's own
+// doc comment in lib.rs.
+pub(crate) fn poly_quality_buttons(
+    mut quality: ResMut<PolyQuality>,
+    buttons: Query<(&Interaction, &PolyQualityButton), Changed<Interaction>>,
+) {
+    for (interaction, button) in &buttons {
+        if *interaction == Interaction::Pressed {
+            quality.0 = button.0;
+        }
+    }
+}
+
+pub(crate) fn update_poly_quality_button_colors(
+    quality: Res<PolyQuality>,
+    mut buttons: Query<(&mut BackgroundColor, &PolyQualityButton)>,
+) {
+    for (mut bg, button) in &mut buttons {
+        let on = button.0 == quality.0;
+        *bg = BackgroundColor(if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) });
+    }
+}
+
+// Same Changed<Interaction>-gated tap-sets-the-resource shape as
+// texture_quality_buttons — see ShadowQuality's own doc comment in lib.rs.
+pub(crate) fn shadow_quality_buttons(
+    mut quality: ResMut<ShadowQuality>,
+    buttons: Query<(&Interaction, &ShadowQualityButton), Changed<Interaction>>,
+) {
+    for (interaction, button) in &buttons {
+        if *interaction == Interaction::Pressed {
+            quality.0 = button.0;
+        }
+    }
+}
+
+pub(crate) fn update_shadow_quality_button_colors(
+    quality: Res<ShadowQuality>,
+    mut buttons: Query<(&mut BackgroundColor, &ShadowQualityButton)>,
+) {
+    for (mut bg, button) in &mut buttons {
+        let on = button.0 == quality.0;
+        *bg = BackgroundColor(if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) });
+    }
+}
+
+// Same Changed<Interaction>-gated tap-sets-the-resource shape as
+// texture_quality_buttons — see LightQuality's own doc comment in lib.rs.
+pub(crate) fn light_quality_buttons(
+    mut quality: ResMut<LightQuality>,
+    buttons: Query<(&Interaction, &LightQualityButton), Changed<Interaction>>,
+) {
+    for (interaction, button) in &buttons {
+        if *interaction == Interaction::Pressed {
+            quality.0 = button.0;
+        }
+    }
+}
+
+pub(crate) fn update_light_quality_button_colors(
+    quality: Res<LightQuality>,
+    mut buttons: Query<(&mut BackgroundColor, &LightQualityButton)>,
+) {
+    for (mut bg, button) in &mut buttons {
+        let on = button.0 == quality.0;
+        *bg = BackgroundColor(if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) });
+    }
+}
+
 // Unlike RenderResolutionScale (a render-target size the offscreen camera
 // re-reads every frame — see resize_scene_render_target), a car prop's
-// texture is baked into whichever SceneRoot asset it was spawned with —
-// changing TextureQuality alone doesn't touch an already-spawned car, so
-// this despawns and re-spawns every ItemGalleryTestProp at the new tier
-// whenever the resource actually changes. Gated on at least one existing
-// car so this never SPAWNS cars onto a map that doesn't have them (e.g.
-// tapping a quality button while on Map 1) — Changed<TextureQuality> would
-// otherwise fire once even on maps with zero cars.
+// mesh/material is baked into whichever asset handles it was spawned
+// with — changing either TextureQuality or PolyQuality alone doesn't
+// touch an already-spawned car, so this despawns and re-spawns every
+// ItemGalleryTestProp at the new tiers whenever EITHER resource actually
+// changes. Gated on at least one existing car so this never SPAWNS cars
+// onto a map that doesn't have them (e.g. tapping a quality button while
+// on Map 1) — Changed<...> would otherwise fire once even on maps with
+// zero cars.
 pub(crate) fn respawn_item_gallery_cars_on_quality_change(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    quality: Res<TextureQuality>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    texture_quality: Res<TextureQuality>,
+    poly_quality: Res<PolyQuality>,
     existing: Query<Entity, With<ItemGalleryTestProp>>,
+    // Also despawned here — see ItemGalleryCarNavObstacle's own doc
+    // comment (nav_debug.rs) for the real crash leaving these behind used
+    // to cause.
+    existing_nav_obstacles: Query<Entity, With<ItemGalleryCarNavObstacle>>,
 ) {
-    if !quality.is_changed() || quality.is_added() {
+    let texture_changed = texture_quality.is_changed() && !texture_quality.is_added();
+    let poly_changed = poly_quality.is_changed() && !poly_quality.is_added();
+    if !texture_changed && !poly_changed {
         return;
     }
     if existing.iter().next().is_none() {
@@ -1496,6 +1691,9 @@ pub(crate) fn respawn_item_gallery_cars_on_quality_change(
     for entity in &existing {
         commands.entity(entity).despawn();
     }
-    spawn_item_gallery_test_props(&mut commands, &asset_server, quality.0);
+    for entity in &existing_nav_obstacles {
+        commands.entity(entity).despawn();
+    }
+    spawn_item_gallery_test_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
 }
 

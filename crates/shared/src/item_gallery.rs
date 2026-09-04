@@ -180,25 +180,45 @@ pub const ITEM_GALLERY_CAR_PATHS: [&str; 16] = [
     "props/car_minivan/mesh/car_minivan_light.glb",
 ];
 
-/// Client-only VISUAL path for `ITEM_GALLERY_CAR_PATHS[index]` at a given
-/// texture-quality tier (0 = no texture at all — every image collapsed to
-/// a single flat color, for the most extreme peak-perf test; 1 =
-/// "potato", smallest real downsampled textures; 5 = original
-/// `_light.glb` resolution — see scripts/bake_texture_quality_levels.py,
-/// which baked every car's `_qN` sibling glb next to its `_light.glb` this
-/// way, for tiers 0..4). Geometry is byte-identical across every tier
-/// (only the embedded images were re-encoded smaller), so this only
-/// matters for what the CLIENT draws — the server (collider-only, never
-/// loads a texture) always uses `ITEM_GALLERY_CAR_PATHS` directly, never
-/// this fn, and gets the exact same collider regardless of quality tier.
-pub fn item_gallery_car_visual_path(index: usize, quality: u8) -> String {
+/// Client-only MESH path for `ITEM_GALLERY_CAR_PATHS[index]` at a given
+/// polygon-quality tier (1 = fewest triangles, 5 = original `_light.glb`
+/// geometry). Texture and polygon quality are two INDEPENDENT axes now
+/// (2026-09-04) — deliberately separate files, not a combined `_qN.glb`
+/// the way an earlier version of this worked: a poly-tier file
+/// (scripts/bake_poly_quality_levels.py) carries NO material/texture data
+/// at all, loaded via `GltfAssetLabel::Primitive` (geometry only) with the
+/// client building its own `StandardMaterial` from
+/// `item_gallery_car_texture_paths`' separately-tiered images — so
+/// picking a low poly tier never forces a low texture tier or vice versa,
+/// and the two don't need their combinatorial product baked (5×5 = 25
+/// files/car) to stay independent. The server (collider-only, never loads
+/// a texture) always uses `ITEM_GALLERY_CAR_PATHS` directly, never this
+/// fn — same collider regardless of either quality tier, since
+/// `ConvexHullFromMesh` only needs A geometry, not the highest-detail one.
+pub fn item_gallery_car_mesh_path(index: usize, poly_quality: u8) -> String {
     let base = ITEM_GALLERY_CAR_PATHS[index];
-    if quality >= 5 {
+    if poly_quality >= 5 {
         return base.to_string();
     }
-    let quality = quality.min(4);
+    let poly_quality = poly_quality.max(1);
     let stem = base.strip_suffix(".glb").unwrap_or(base);
-    format!("{stem}_q{quality}.glb")
+    format!("{stem}_p{poly_quality}.glb")
+}
+
+/// Client-only (base_color, normal, metallic_roughness) JPEG paths for
+/// `ITEM_GALLERY_CAR_PATHS[index]` at a given texture-quality tier (0 = no
+/// texture at all — every image collapsed to a single flat color, for the
+/// most extreme peak-perf test; 5 = original resolution) — see
+/// scripts/bake_car_textures.py, which extracted every car's 3 material
+/// textures into `<car>/mesh/textures/{slot}_qN.jpg` at each tier. See
+/// `item_gallery_car_mesh_path`'s own doc comment for why this is a
+/// separate file/fn from the mesh instead of a combined `_qN.glb`.
+pub fn item_gallery_car_texture_paths(index: usize, texture_quality: u8) -> (String, String, String) {
+    let base = ITEM_GALLERY_CAR_PATHS[index];
+    let dir = base.rsplit_once('/').map(|(dir, _)| dir).unwrap_or(base);
+    let quality = texture_quality.min(5);
+    let slot = |name: &str| format!("{dir}/textures/{name}_q{quality}.jpg");
+    (slot("base_color"), slot("normal"), slot("metallic_roughness"))
 }
 
 /// `(scale, y, x, z, rot_x_deg, rot_y_deg, rot_z_deg)` per car — the full

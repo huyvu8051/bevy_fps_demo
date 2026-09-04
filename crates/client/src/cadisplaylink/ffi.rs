@@ -514,12 +514,6 @@ bool_toggle_ffi!(
     super::native_menu::set_map_msaa
 );
 bool_toggle_ffi!(
-    native_metal_probe_get_map_shadows,
-    native_metal_probe_set_map_shadows,
-    super::native_menu::map_shadows,
-    super::native_menu::set_map_shadows
-);
-bool_toggle_ffi!(
     native_metal_probe_get_show_hitboxes,
     native_metal_probe_set_show_hitboxes,
     super::native_menu::show_hitboxes,

@@ -188,7 +188,6 @@ macro_rules! bool_toggle {
 
 bool_toggle!(gun_visible, set_gun_visible, crate::GunVisible, true);
 bool_toggle!(map_msaa, set_map_msaa, crate::MapMsaaOn, false);
-bool_toggle!(map_shadows, set_map_shadows, crate::MapShadowsOn, true);
 bool_toggle!(show_hitboxes, set_show_hitboxes, crate::ShowHitboxes, false);
 bool_toggle!(aim_blur_enabled, set_aim_blur_enabled, crate::AimBlurEnabled, true);
 bool_toggle!(zombie_anim_disabled, set_zombie_anim_disabled, crate::ZombieAnimDisabled, false);

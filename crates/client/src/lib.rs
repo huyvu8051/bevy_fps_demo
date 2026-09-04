@@ -873,51 +873,77 @@ impl Default for GunVisible {
 #[derive(Resource, Default)]
 struct MapMsaaOn(bool);
 
-// Starts matching the sun DirectionalLight's own shadows_enabled at spawn
-// (see setup()) — same reasoning as MapMsaaOn. Default now follows
-// light_shadows_enabled() so a desktop dev run starts with shadows off.
+// Runtime shadow quality for MainSun's shadows_enabled — 0 = off, 1..=5 =
+// on with increasing shadow-map resolution (see native_metal_probe.rs's
+// SHADOW_MAP_SIZES for the actual per-level texture size; the desktop
+// render path only reads shadows_enabled != 0, no per-level resolution
+// knob there yet). Mobile (iOS/Android) starts at 1 (on, lowest/cheapest
+// resolution) rather than 5 — real-device perf headroom is much tighter
+// than desktop's, and this renderer's shadow passes are 2 extra full
+// scene draws every frame (see render_frame's Pass 0/0b). Desktop still
+// follows light_shadows_enabled() (5 if shadows should start on, 0 if a
+// desktop dev run should start with them off via SHADOWS=0) — same
+// reasoning MapShadowsOn used to have as a plain bool.
 #[derive(Resource)]
-struct MapShadowsOn(bool);
-impl Default for MapShadowsOn {
+pub(crate) struct ShadowQuality(pub(crate) u8);
+impl Default for ShadowQuality {
     fn default() -> Self {
-        Self(light_shadows_enabled())
+        if cfg!(any(target_os = "ios", target_os = "android")) {
+            Self(1)
+        } else {
+            Self(if light_shadows_enabled() { 5 } else { 0 })
+        }
     }
 }
 
-// Runtime on/off for MainSun's own illuminance — same "resource drives a
-// component every frame" shape as MapMsaaOn/MapShadowsOn, added so the
-// settings-menu "Light" button (mobile has no LIGHTS=1 env var to set)
-// can toggle the dominant dynamic light without a restart. Scoped to
-// MainSun only, same as MapShadowsOn — the arena's own overhead PointLight
-// and Map 1's spawn_map1_lights still only ever spawn if
-// dynamic_lights_enabled() was true at Startup, unaffected by this button.
+// Runtime brightness quality for MainSun's own illuminance — 0 = off,
+// 1..=5 = illuminance scaled to level/5 of MAIN_SUN_ILLUMINANCE (NOT a
+// sharpness/resolution knob — see LightQuality's own "what this actually
+// changes" note below). Same "resource drives a component every frame"
+// shape as MapMsaaOn/ShadowQuality, added so the settings-menu "Light"
+// buttons (mobile has no LIGHTS=1 env var to set) can adjust the dominant
+// dynamic light without a restart. Scoped to MainSun only, same as
+// ShadowQuality — the arena's own overhead PointLight and Map 1's
+// spawn_map1_lights still only ever spawn if dynamic_lights_enabled() was
+// true at Startup, unaffected by this. Mobile starts at 1 (on, dimmest)
+// for the same perf-headroom reason as ShadowQuality above — desktop still
+// follows dynamic_lights_enabled() (5 or 0 via LIGHTS=0).
 #[derive(Resource)]
-struct MapLightsOn(bool);
-impl Default for MapLightsOn {
+pub(crate) struct LightQuality(pub(crate) u8);
+impl Default for LightQuality {
     fn default() -> Self {
-        Self(dynamic_lights_enabled())
+        if cfg!(any(target_os = "ios", target_os = "android")) {
+            Self(1)
+        } else {
+            Self(if dynamic_lights_enabled() { 5 } else { 0 })
+        }
     }
 }
 
-// Dynamic lighting + shadows are ON by default everywhere now (2026-09-04
-// — used to default OFF on desktop, opt-in via LIGHTS=1/SHADOWS=1, back
-// when there was no in-game way to turn them on short of an env var/
-// restart; the settings-menu Light/Shadow buttons — MapLightsOn/
-// MapShadowsOn, apply_map_render_toggles — now cover the "it's too hot on
-// my laptop" case at runtime instead). `LIGHTS=0`/`SHADOWS=0` opts back
-// out for a perf-testing run that wants them off from the very first
-// frame (before the in-game buttons are even reachable). Mobile
-// (iOS/Android) ignores both env vars and always keeps full lighting +
-// shadows regardless.
+// Dynamic lighting + shadows are ON (level 5) by default everywhere now
+// (2026-09-04 — used to default OFF on desktop, opt-in via
+// LIGHTS=1/SHADOWS=1, back when there was no in-game way to turn them on
+// short of an env var/restart; the settings-menu Light/Shadow quality rows
+// — LightQuality/ShadowQuality, apply_map_render_toggles — now cover the
+// "it's too hot on my laptop"/"too slow on my phone" case at runtime
+// instead, with real intermediate levels, not just on/off). `LIGHTS=0`/
+// `SHADOWS=0` opts back out for a perf-testing run that wants them off
+// from the very first frame (before the in-game buttons are even
+// reachable). Mobile (iOS/Android) ignores both env vars and always starts
+// at level 5 (full), same as desktop's default — native_metal_probe.rs's
+// own extraction (RenderSnapshot::shadow_quality/light_quality) is what
+// makes the in-game buttons actually take effect there too now.
 /// 0 (no texture at all — every image collapsed to a flat color, the most
 /// extreme peak-perf test) through 1 ("potato", smallest real downsampled
 /// textures) to 5 (original resolution). Desktop defaults to 5; mobile
 /// defaults to 2 (no LIGHTS=1-style env var reachable from a real device
 /// install) — see scripts/bake_texture_quality_levels.py for how each
 /// car's `_qN` sibling glb was generated, and
-/// shared::item_gallery_car_visual_path for how a tier picks the right
-/// file. `TEXTURE_QUALITY=N` env overrides either default for a one-off
-/// perf test (any platform, clamped to 0..=5).
+/// shared::item_gallery_car_texture_paths for how a tier picks the right
+/// files. `TEXTURE_QUALITY=N` env overrides either default for a one-off
+/// perf test (any platform, clamped to 0..=5). Independent from
+/// PolyQuality below — see item_gallery_car_mesh_path's own doc comment
+/// in crates/shared for why texture and polygon are two separate axes.
 pub(crate) fn texture_quality_default() -> u8 {
     std::env::var("TEXTURE_QUALITY")
         .ok()
@@ -931,7 +957,7 @@ pub(crate) fn texture_quality_default() -> u8 {
 // texture_quality_buttons) flip this at runtime; changing it re-spawns
 // every ItemGalleryTestProp car at the new tier (see
 // respawn_item_gallery_cars_on_quality_change) since a car's texture is
-// baked into whichever SceneRoot asset it was spawned with, unlike
+// baked into whichever material handle it was spawned with, unlike
 // RenderResolutionScale which an offscreen render target re-reads every
 // frame.
 #[derive(Resource)]
@@ -939,6 +965,31 @@ pub(crate) struct TextureQuality(pub(crate) u8);
 impl Default for TextureQuality {
     fn default() -> Self {
         Self(texture_quality_default())
+    }
+}
+
+/// 1 (fewest triangles) to 5 (original geometry) — polygon quality for
+/// the same 16 car props, independent of TextureQuality above (see
+/// shared::item_gallery_car_mesh_path's own doc comment for why; on-
+/// device Metal HUD profiling found vertex/geometry cost, not texture,
+/// was the real mobile bottleneck even at TextureQuality 0 — this is what
+/// actually addresses that). Desktop defaults to 5; mobile to 2. No `0`
+/// tier here (unlike texture) — a car with zero triangles isn't a
+/// meaningful "most extreme" test the way a flat-color texture is, it's
+/// just an invisible car. `POLY_QUALITY=N` env overrides either default.
+pub(crate) fn poly_quality_default() -> u8 {
+    std::env::var("POLY_QUALITY")
+        .ok()
+        .and_then(|s| s.trim().parse::<u8>().ok())
+        .map(|q| q.clamp(1, 5))
+        .unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) { 2 } else { 5 })
+}
+
+#[derive(Resource)]
+pub(crate) struct PolyQuality(pub(crate) u8);
+impl Default for PolyQuality {
+    fn default() -> Self {
+        Self(poly_quality_default())
     }
 }
 
@@ -962,9 +1013,10 @@ fn ambient_brightness() -> f32 {
 #[derive(Component)]
 struct MainSun;
 
-// The sun's "on" illuminance — shared between its Startup spawn and
-// apply_map_render_toggles' runtime MapLightsOn toggle so the two can't
-// drift to different brightness values.
+// The sun's full-brightness (level 5) illuminance — shared between its
+// Startup spawn and apply_map_render_toggles' runtime LightQuality scaling
+// (illuminance = MAIN_SUN_ILLUMINANCE * level / 5) so the two can't drift
+// to different brightness values.
 const MAIN_SUN_ILLUMINANCE: f32 = 8_000.0;
 
 
@@ -1459,9 +1511,10 @@ impl Plugin for GamePlugin {
         .init_resource::<PlayerModelTuning>()
         .init_resource::<GunVisible>()
         .init_resource::<MapMsaaOn>()
-        .init_resource::<MapShadowsOn>()
-        .init_resource::<MapLightsOn>()
+        .init_resource::<ShadowQuality>()
+        .init_resource::<LightQuality>()
         .init_resource::<TextureQuality>()
+        .init_resource::<PolyQuality>()
         .init_resource::<ScopeCameraEnabled>()
         .init_resource::<SelectedDebugBot>()
         .init_resource::<LocalPlayerMoving>()
@@ -1528,6 +1581,8 @@ impl Plugin for GamePlugin {
                 update_resolution_scale_button_colors,
                 texture_quality_buttons,
                 update_texture_quality_button_colors,
+                poly_quality_buttons,
+                update_poly_quality_button_colors,
                 respawn_item_gallery_cars_on_quality_change,
                     resize_scene_render_target,
                     scroll_settings_menu,
@@ -1554,10 +1609,13 @@ impl Plugin for GamePlugin {
                 (
                     cheat_toggle_buttons_3,
                     autopilot_toggle_button,
-                light_toggle_button,
                     update_extra_toggle_colors,
                     cheat_spawn_zombie_button,
                     debug_bot_buttons,
+                    shadow_quality_buttons,
+                    update_shadow_quality_button_colors,
+                    light_quality_buttons,
+                    update_light_quality_button_colors,
                 )
                     .chain(),
             )
@@ -1748,6 +1806,7 @@ fn setup(
     windows: Query<&Window, With<PrimaryWindow>>,
     player_model_tuning: Res<PlayerModelTuning>,
     texture_quality: Res<TextureQuality>,
+    poly_quality: Res<PolyQuality>,
 ) {
     // First-frame camera/player position — see the PLAYER_SPAWN comment
     // above; the server's replicated NetTransform takes over almost
@@ -1922,7 +1981,7 @@ fn setup(
         MapKind::ItemGallery => {
             let (pieces, panels) = shared::item_gallery_level_pieces();
             spawn_level_pieces(&mut commands, pieces, panels);
-            spawn_item_gallery_test_props(&mut commands, &asset_server, texture_quality.0);
+            spawn_item_gallery_test_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
             spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
         }
         MapKind::Campaign(map_id) => {
@@ -1939,27 +1998,27 @@ fn setup(
         }
         MapKind::Arena => {
             spawn_test_arena(&mut commands, &mut meshes, &mut materials, current_scenario().map_id());
-            // Temporarily hidden on web + iOS: the web build force-starts on
-            // map 2 (StressTest, an Arena map — see wasm32 set_map_id(2) in
+            // Still hidden on web only: the web build force-starts on map 2
+            // (StressTest, an Arena map — see wasm32 set_map_id(2) in
             // main() above), and the 16 meshy.ai car test props this spawns
             // add real vertex/texture weight for no gameplay reason there.
-            // Also hidden on iOS for now (2026-09-04): needed to isolate a
-            // real-device zombie render glitch (a handful of zombies render
-            // wrong on Map 2) from the heavy car meshes, which were making
-            // the frame rate too choppy to tell whether the glitch was even
-            // reproducing — unrelated to that bug otherwise. Desktop keeps
-            // its cars unchanged. Remove target_os = "ios" here once the
-            // zombie glitch investigation is done.
-            #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
-            spawn_item_gallery_test_props(&mut commands, &asset_server, texture_quality.0);
+            // Re-enabled on iOS (2026-09-04) now that PolyQuality/
+            // TextureQuality (independent axes — see item_gallery_car_mesh_
+            // path's own doc comment in crates/shared) default to their own
+            // low mobile tiers instead of full desktop detail; the earlier
+            // hide-on-iOS was only ever meant to isolate a since-fixed
+            // zombie render glitch from the cars' own vertex/texture cost,
+            // not a permanent call.
+            #[cfg(not(target_arch = "wasm32"))]
+            spawn_item_gallery_test_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
         }
     }
 
     // spawn_test_arena carries its own overhead light; Building gets
     // spawn_map1_lights above. This is just the shared sun — always
     // spawned now (not gated on dynamic_lights_enabled() like the point
-    // lights above still are) so the settings-menu "Light" button
-    // (MapLightsOn, apply_map_render_toggles) has an entity to toggle at
+    // lights above still are) so the settings-menu "Light" quality row
+    // (LightQuality, apply_map_render_toggles) has an entity to toggle at
     // runtime; illuminance starts at 0 when dynamic lights are off by
     // default, matching the old skip-spawning-entirely behavior visually.
     commands.spawn((
