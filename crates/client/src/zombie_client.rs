@@ -586,13 +586,7 @@ pub(crate) fn apply_zombie_distance_lod_texture(
         let Some(handle) = cached.get(&kind) else {
             continue;
         };
-        let band = if distance <= bands.0[0] {
-            0
-        } else if distance <= bands.0[1] {
-            1
-        } else {
-            2
-        };
+        let band = bands.band_of(distance);
         let target_tier = texture_levels.0[band];
         if last_tier.get(&kind) == Some(&target_tier) {
             continue;

@@ -1126,6 +1126,21 @@ impl Default for LodBandDistance {
         Self([ZOMBIE_LOD_DISTANCE, 30.0, 50.0])
     }
 }
+impl LodBandDistance {
+    // Shared by apply_item_gallery_car_distance_lod and
+    // apply_zombie_distance_lod_texture — both classify a distance into
+    // one of the same 3 bands, so the boundary logic lives here once
+    // instead of being copy-pasted at each call site.
+    pub(crate) fn band_of(&self, distance: f32) -> usize {
+        if distance <= self.0[0] {
+            0
+        } else if distance <= self.0[1] {
+            1
+        } else {
+            2
+        }
+    }
+}
 pub(crate) const LOD_DISTANCE_STEP: f32 = 1.0;
 pub(crate) const LOD_DISTANCE_MIN: f32 = 1.0;
 pub(crate) const LOD_DISTANCE_MAX: f32 = 200.0;

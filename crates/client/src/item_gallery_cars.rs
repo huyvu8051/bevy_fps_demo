@@ -144,6 +144,20 @@ const ITEM_GALLERY_CAR_DROP_MARGIN: f32 = 0.15;
 // launching the car into the air after ~5 shots in under a second.
 const ITEM_GALLERY_CAR_HIT_IMPULSE: f32 = 1.0;
 
+// normal/metallic-roughness textures carry linear (not sRGB) data — every
+// other texture load in this project goes through bevy_gltf, which
+// already sets this correctly per glTF's own material role; loading these
+// as plain standalone images instead needs it spelled out by hand or the
+// normal map comes out with visibly wrong (gamma-shifted) lighting.
+// Shared by spawn_item_gallery_test_props and
+// apply_item_gallery_car_distance_lod — both build a car material by hand
+// from the same 3 texture roles.
+fn load_linear_car_texture(asset_server: &AssetServer, path: String) -> Handle<Image> {
+    asset_server.load_with_settings(path, |settings: &mut bevy::image::ImageLoaderSettings| {
+        settings.is_srgb = false;
+    })
+}
+
 /// Spawns the meshy.ai car test props (docs/PROP_IMPORT_CHECKLIST.md) into
 /// Scenario::ItemGallery — called from both setup() (MAP_ID=5 at process
 /// start) and map_select_button (ItemGallery picked from the in-game menu
@@ -193,21 +207,10 @@ pub(crate) fn spawn_item_gallery_test_props(
         let name = path.split('/').nth(1).unwrap_or(path);
         let mesh_path = shared::item_gallery_car_mesh_path(i, poly_quality);
         let (base_color_path, normal_path, metallic_roughness_path) = shared::item_gallery_car_texture_paths(i, texture_quality);
-        // normal/metallic-roughness textures carry linear (not sRGB) data
-        // — every other texture load in this project goes through
-        // bevy_gltf, which already sets this correctly per glTF's own
-        // material role; loading these as plain standalone images instead
-        // needs it spelled out by hand or the normal map comes out with
-        // visibly wrong (gamma-shifted) lighting.
-        let linear = |path: String| {
-            asset_server.load_with_settings(path, |settings: &mut bevy::image::ImageLoaderSettings| {
-                settings.is_srgb = false;
-            })
-        };
         let material = materials.add(StandardMaterial {
             base_color_texture: Some(asset_server.load(base_color_path)),
-            normal_map_texture: Some(linear(normal_path)),
-            metallic_roughness_texture: Some(linear(metallic_roughness_path)),
+            normal_map_texture: Some(load_linear_car_texture(asset_server, normal_path)),
+            metallic_roughness_texture: Some(load_linear_car_texture(asset_server, metallic_roughness_path)),
             // Matches the old force_backface_culling_on_car_materials
             // system's override of the source glb's own doubleSided:true
             // material (which defaults to no culling) — kept as a
@@ -267,13 +270,7 @@ pub(crate) fn apply_item_gallery_car_distance_lod(
     let player_pos = player_transform.translation.xz();
     for (transform, index, mut tier, mut mesh, material_handle) in &mut cars {
         let distance = (transform.translation.xz() - player_pos).length();
-        let band = if distance <= bands.0[0] {
-            0
-        } else if distance <= bands.0[1] {
-            1
-        } else {
-            2
-        };
+        let band = bands.band_of(distance);
         let target_texture = texture_levels.0[band];
         let target_poly = poly_levels.0[band];
         if tier.texture == target_texture && tier.poly == target_poly {
@@ -284,15 +281,10 @@ pub(crate) fn apply_item_gallery_car_distance_lod(
         }
         if tier.texture != target_texture {
             let (base_color_path, normal_path, metallic_roughness_path) = shared::item_gallery_car_texture_paths(index.0, target_texture);
-            let linear = |path: String| {
-                asset_server.load_with_settings(path, |settings: &mut bevy::image::ImageLoaderSettings| {
-                    settings.is_srgb = false;
-                })
-            };
             if let Some(material) = materials.get_mut(&material_handle.0) {
                 material.base_color_texture = Some(asset_server.load(base_color_path));
-                material.normal_map_texture = Some(linear(normal_path));
-                material.metallic_roughness_texture = Some(linear(metallic_roughness_path));
+                material.normal_map_texture = Some(load_linear_car_texture(&asset_server, normal_path));
+                material.metallic_roughness_texture = Some(load_linear_car_texture(&asset_server, metallic_roughness_path));
             }
         }
         tier.texture = target_texture;
