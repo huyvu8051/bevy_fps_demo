@@ -93,4 +93,4 @@ url = "2"
 # server URL isn't hard-coded to 127.0.0.1 — lets a phone on the same LAN
 # open http://<dev-machine-lan-ip>:8765 and have the wasm client connect
 # back to that same host instead of its own (nonexistent) localhost.
-web-sys = { version = "0.3", features = ["Window", "Location"] }
+web-sys = { version = "0.3", features = ["Window", "Location", "Storage"] }

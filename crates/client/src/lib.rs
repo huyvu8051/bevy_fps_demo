@@ -127,6 +127,16 @@ use arena_layout::*;
 mod nav_debug;
 use nav_debug::*;
 
+// Local persistence for every Settings-menu value (quality/sensitivity/
+// resolution/cheats/distance-LOD) — see its own module doc comment.
+mod settings_persistence;
+use settings_persistence::*;
+
+// Studio splash logo shown briefly at launch — see its own module doc
+// comment for scope/platform notes.
+mod splash_screen;
+use splash_screen::*;
+
 // Which level geometry a scenario renders is decided in ONE place —
 // shared's `Scenario::map_kind()` — and matched on in setup() /
 // network_setup's map_select_button, mirroring the server's own
@@ -1841,6 +1851,7 @@ impl Plugin for GamePlugin {
         .init_resource::<AutopilotIntent>()
         .init_resource::<FreezeZombies>()
         .init_resource::<ShowHitboxes>()
+        .init_resource::<RenderResolutionScale>()
         .init_resource::<ShowDistanceRings>()
         .init_resource::<DistanceLodEnabled>()
         .init_resource::<LodBandDistance>()
@@ -1902,7 +1913,8 @@ impl Plugin for GamePlugin {
         .init_resource::<KillCount>()
         .init_resource::<MapSelectionPending>()
         .init_resource::<RecentlyHitZombies>()
-        .add_systems(Startup, (setup, force_game_over_on_start, spawn_map_select_ui_if_pending /*, log_window_resolution */).chain());
+        .add_systems(Startup, (apply_persisted_settings, setup, force_game_over_on_start, spawn_map_select_ui_if_pending /*, log_window_resolution */).chain());
+    app.add_systems(Update, persist_settings_on_change);
     // CPU bisection (temporary, not deleted): the ENTIRE Update schedule
     // below is commented out — rock-bottom baseline with only whatever
     // Bevy/wgpu itself does every frame (extraction/prepare/render graph)
@@ -2044,6 +2056,7 @@ impl Plugin for GamePlugin {
                 restart_game.run_if(debug_keys_allowed),
                 restart_button,
                 map_select_button,
+                reset_config_button,
                 wire_zombie_scene_animation_targets,
                 wire_zombie_animations,
                 wire_zombie_hitbox_bones,
@@ -2083,7 +2096,7 @@ impl Plugin for GamePlugin {
                 update_crosshair,
                 set_hitbox_gizmo_depth_bias,
                 draw_zombie_hitboxes,
-                (distance_rings_toggle_button, update_distance_rings_button_color, draw_distance_rings).chain(),
+                (update_splash_screen, distance_rings_toggle_button, update_distance_rings_button_color, draw_distance_rings).chain(),
                 (
                     distance_lod_toggle_button,
                     update_distance_lod_button_color,
@@ -2200,6 +2213,7 @@ fn setup(
     poly_quality: Res<PolyQuality>,
     gun_texture_quality: Res<GunTextureQuality>,
     gun_poly_quality: Res<GunPolyQuality>,
+    render_resolution_scale: Res<RenderResolutionScale>,
 ) {
     // First-frame camera/player position — see the PLAYER_SPAWN comment
     // above; the server's replicated NetTransform takes over almost
@@ -2221,7 +2235,7 @@ fn setup(
         .map(|window| (window.resolution.physical_width(), window.resolution.physical_height()))
         .unwrap_or((1280, 720));
     let mut scene_image = Image::new_fill(
-        scaled_scene_extent(window_width, window_height, resolution_scale_default()),
+        scaled_scene_extent(window_width, window_height, render_resolution_scale.0),
         TextureDimension::D2,
         &[0, 0, 0, 255],
         TextureFormat::Bgra8UnormSrgb,
@@ -2231,7 +2245,6 @@ fn setup(
         TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
     let scene_image_handle = images.add(scene_image);
     commands.insert_resource(SceneRenderTarget(scene_image_handle.clone()));
-    commands.insert_resource(RenderResolutionScale::default());
 
     // present_camera: a 2D camera targeting the actual window (default
     // RenderTarget, unlike the 3D camera below). IsDefaultUiCamera routes
@@ -2242,6 +2255,7 @@ fn setup(
     // RenderResolutionScale, same as any real game's HUD. Only the 3D scene
     // itself (via the fullscreen ImageNode right below) gets scaled.
     commands.spawn((Camera2d, IsDefaultUiCamera));
+    spawn_splash_screen(&mut commands, &asset_server);
 
     // Fullscreen quad showing the scaled-down 3D render, stretched to fill
     // the window — Bevy UI lays this out at the window's real (100%) size

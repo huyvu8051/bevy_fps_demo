@@ -600,6 +600,12 @@ pub(crate) struct MapSelectRoot;
 #[derive(Component)]
 pub(crate) struct MapSelectButton(u8);
 
+// Wipes every locally-persisted setting (settings_persistence.rs) and
+// resets every tracked resource back to its own Default — see
+// reset_config_button's own doc comment there.
+#[derive(Component)]
+pub(crate) struct ResetConfigButton;
+
 pub(crate) fn spawn_map_select_ui(commands: &mut Commands) {
     commands
         .spawn((
@@ -672,6 +678,33 @@ pub(crate) fn spawn_map_select_ui(commands: &mut Commands) {
                     ));
                 });
             }
+            root.spawn((
+                Node {
+                    width: Val::Px(220.0),
+                    height: Val::Px(40.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
+                    margin: UiRect::top(Val::Px(24.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.45, 0.15, 0.15, 1.0)),
+                BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+                Button,
+                Interaction::default(),
+                ResetConfigButton,
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    Text::new("Reset Config"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+            });
         });
 }
 
