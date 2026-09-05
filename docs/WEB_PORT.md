@@ -207,10 +207,15 @@ wasm-bindgen --target web --out-dir target/web_dist --out-name web \
 wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int \
   -o target/web_dist/web_bg.wasm target/web_dist/web_bg.wasm
 
-# 4. index.html — crates/web/index.html is the canonical one (has a
-# loading progress bar, see its own comments); copy it in rather than
-# hand-writing a new one:
+# 4. index.html + favicon/apple-touch-icon — crates/web/index.html is the
+# canonical one (has a loading progress bar, see its own comments); copy
+# it in rather than hand-writing a new one. The two PNGs are what
+# index.html's own <link rel="icon">/<link rel="apple-touch-icon"> tags
+# point at — index.html references them by relative path, so they have to
+# ship alongside it in target/web_dist, not just live next to the source
+# index.html in the repo.
 cp crates/web/index.html target/web_dist/index.html
+cp crates/web/favicon-32.png crates/web/apple-touch-icon.png target/web_dist/
 
 # 5. Serve it — needs assets/ reachable at the SAME relative path the
 # native build uses (bevy_asset resolves "assets/..." relative to the
