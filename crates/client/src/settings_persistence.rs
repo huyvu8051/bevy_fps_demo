@@ -15,39 +15,50 @@
 //     filesystem to write to (same constraint noted on
 //     shared::read_ron_data_file!'s own doc comment).
 //
-// Every field is `Option<T>` — `None` means "nothing saved yet for this
-// one, let the resource's own `Default` decide" (which is itself often
-// platform/env-var dependent, e.g. TextureQuality's mobile-vs-desktop
-// default — duplicating that logic here would just be a second place to
-// keep in sync, so this only ever stores explicit overrides). `#[serde(
-// default)]` on the struct means a file saved by an older build with
-// fewer fields still deserializes fine — every field it doesn't know
-// about yet just comes back `None`.
+// Every field is `Option<T>` — `None` means "not pinned, let the
+// resource's own `Default` decide" (which for a handful of fields is
+// genuinely dynamic — RENDER_SCALE/LIGHTS/SHADOWS env vars, or
+// Autopilot's per-scenario default — logic this system has no business
+// duplicating). `#[serde(default)]` on the struct means an older file
+// missing newer fields still deserializes fine (they come back `None`).
+//
+// Two SEPARATE sources feed this, not one:
+//   - Shipped defaults (assets/data/default_settings_{desktop,mobile}.ron,
+//     load_ship_defaults) — read-only, bundled with the app, one file per
+//     platform (mobile = iOS/Android sharing the same lower-tier numbers,
+//     matching every existing `cfg!(any(target_os = "ios", target_os =
+//     "android"))` split elsewhere in this crate). This is what an actual
+//     human can open and edit to retune "what does a fresh install ship
+//     at" without touching Rust code or recompiling.
+//   - The device's own local custom settings (a dotfile under `$HOME` on
+//     native — see settings_file_path, ios_home_directory for why a plain
+//     env var isn't enough on iOS; `window.localStorage` on wasm32) —
+//     written every time any tracked resource actually changes, and wins
+//     over the shipped file wherever it has its own `Some` value.
 //
 // Flow:
 //   - apply_persisted_settings (Startup, exclusive `&mut World` — the
-//     only way to touch ~30 different resource types without blowing
+//     only way to touch ~35 different resource types without blowing
 //     past Bevy's per-system param-count ceiling, see
 //     cheat_toggle_buttons_2's own doc comment in settings_menu.rs for
-//     the same wall hit a different way) loads the file/localStorage
-//     entry once and overwrites whichever resources have a `Some` value.
-//     RESET_CONFIG=1 (or any truthy value) short-circuits this entirely —
-//     wipes the saved file/entry and leaves every resource at its
-//     compiled-in Default, same env-var-driven-reset shape as
+//     the same wall hit a different way) applies the shipped defaults
+//     first, then layers the device's local custom file on top if one
+//     exists. RESET_CONFIG=1 (or any truthy value) skips the local file
+//     entirely and deletes it — same env-var-driven-reset shape as
 //     TOUCH_UI_PREVIEW/SHOW_HIT_MARKERS elsewhere in this crate.
 //   - persist_settings_on_change (Update, also exclusive — same reason)
 //     checks `is_changed()` on every tracked resource every frame; the
 //     instant ANY of them changed (a settings button tapped, a cheat
-//     toggled, ...) it re-serializes the whole struct and writes it out.
-//     Whole-file rewrite rather than a partial diff — these change on a
-//     button tap, not every frame, so there's no real cost to keep this
-//     simple.
+//     toggled, ...) it re-serializes the whole struct and writes it to
+//     the device's local file. Whole-file rewrite rather than a partial
+//     diff — these change on a button tap, not every frame, so there's
+//     no real cost to keep this simple.
 //   - reset_config_button (settings_menu.rs's "Reset Config" button,
-//     map-select screen) wipes the saved file/entry AND resets every
-//     tracked resource back to its own Default::default() immediately,
-//     via plain `Commands::insert_resource` — no exclusive-system/arity
-//     concern here since Commands is a single system param regardless of
-//     how many resources get re-inserted inside the function body.
+//     map-select screen) re-applies the shipped-defaults file to every
+//     live resource AND overwrites the device's local custom file with
+//     that same fully-resolved state — "reset" means "go back to exactly
+//     what a fresh install would have", not just "whatever Default::
+//     default() happens to compute right now".
 
 use bevy::prelude::*;
 use crate::*;
@@ -96,8 +107,42 @@ pub(crate) struct PersistedSettings {
     pub(crate) lod_zombie_texture_level: Option<[u8; 3]>,
 }
 
+// A real iOS app launched by the OS (as opposed to a command-line tool
+// exec'd from a shell) has no guarantee `HOME` is actually populated in
+// its process environment — confirmed the hard way: settings silently
+// never persisted on-device, and `std::env::var("HOME")` was the
+// suspect (its fallback of "." resolves to whatever the current
+// directory happens to be at process start, which for an app bundle
+// launched by iOS is not guaranteed writable or stable across
+// relaunches). `NSHomeDirectory()` is the actual Foundation API for
+// this — a plain C function (not an Objective-C message), called the
+// same way native_metal_probe.rs's own bundle_resource_path() already
+// calls NSBundle for the read-only asset path, just without needing
+// msg_send since this one isn't a method call.
+#[cfg(target_os = "ios")]
+fn ios_home_directory() -> Option<String> {
+    use objc::{runtime::Object, *};
+    unsafe extern "C" {
+        fn NSHomeDirectory() -> *mut Object;
+    }
+    unsafe {
+        let path = NSHomeDirectory();
+        if path.is_null() {
+            return None;
+        }
+        let utf8: *const std::os::raw::c_char = msg_send![path, UTF8String];
+        if utf8.is_null() {
+            return None;
+        }
+        Some(std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned())
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn settings_file_path() -> std::path::PathBuf {
+    #[cfg(target_os = "ios")]
+    let home = ios_home_directory().unwrap_or_else(|| ".".to_string());
+    #[cfg(not(target_os = "ios"))]
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     std::path::Path::new(&home).join(".bevy_fps_demo_settings.ron")
 }
@@ -140,6 +185,26 @@ fn delete_settings_text() {
     }
 }
 
+// The bundled, read-only "what does a fresh install ship at" reference —
+// completely separate from the device's own writable custom-settings
+// file above. One RON file per platform bucket (mobile = iOS/Android,
+// matching every other `cfg!(any(target_os = "ios", target_os =
+// "android"))` split in this crate); `shared::read_ron_data_file!`
+// already handles reading it correctly per-platform (NSBundle.
+// resourcePath on iOS, CARGO_MANIFEST_DIR on desktop, include_str! on
+// wasm32 — see that macro's own doc comment), so this needs no bespoke
+// path logic of its own the way the writable file above does.
+fn load_ship_defaults() -> PersistedSettings {
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    let text = shared::read_ron_data_file!("default_settings_mobile.ron");
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    let text = shared::read_ron_data_file!("default_settings_desktop.ron");
+    ron::from_str(&text).unwrap_or_else(|e| {
+        warn!("failed to parse bundled default settings, falling back to compiled-in Default: {e}");
+        PersistedSettings::default()
+    })
+}
+
 // Same truthy-string convention as every other env-var toggle in this
 // crate (TOUCH_UI_PREVIEW, SHOW_HIT_MARKERS, ...). wasm32 has no env vars
 // at all (std::env::var always Err there — see shared::read_ron_data_
@@ -149,19 +214,11 @@ fn reset_config_env_requested() -> bool {
     std::env::var("RESET_CONFIG").is_ok_and(|v| v == "1" || v.to_lowercase() == "true")
 }
 
-pub(crate) fn apply_persisted_settings(world: &mut World) {
-    if reset_config_env_requested() {
-        delete_settings_text();
-        return;
-    }
-    let Some(text) = read_settings_text() else { return };
-    let settings: PersistedSettings = match ron::from_str(&text) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("failed to parse saved settings, ignoring: {e}");
-            return;
-        }
-    };
+// Shared by apply_persisted_settings (ship defaults, then local custom on
+// top) and reset_config_button (ship defaults only) — every `Some` field
+// in `settings` overwrites the matching resource; `None` fields are left
+// exactly as they already are, whatever set them.
+fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     macro_rules! apply {
         // get_resource_mut, not resource_mut: NavDebugVisible (and
         // anything else similarly gated) doesn't exist at all in release
@@ -216,6 +273,23 @@ pub(crate) fn apply_persisted_settings(world: &mut World) {
     apply!(lod_zombie_texture_level, LodZombieTextureLevel);
 }
 
+pub(crate) fn apply_persisted_settings(world: &mut World) {
+    apply_settings_to_world(world, &load_ship_defaults());
+    if reset_config_env_requested() {
+        delete_settings_text();
+        return;
+    }
+    let Some(text) = read_settings_text() else { return };
+    let settings: PersistedSettings = match ron::from_str(&text) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("failed to parse saved settings, ignoring: {e}");
+            return;
+        }
+    };
+    apply_settings_to_world(world, &settings);
+}
+
 pub(crate) fn persist_settings_on_change(world: &mut World) {
     macro_rules! changed {
         ($resource:ty) => {
@@ -263,8 +337,18 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
     if !any_changed {
         return;
     }
+    match ron::to_string(&read_settings_from_world(world)) {
+        Ok(text) => write_settings_text(&text),
+        Err(e) => warn!("failed to serialize settings: {e}"),
+    }
+}
 
-    let settings = PersistedSettings {
+// Shared by persist_settings_on_change (snapshot to write to the local
+// file) and reset_config_button (snapshot AFTER ship defaults have been
+// applied, so what gets written back is the fully-resolved reset state,
+// not just whichever fields the ship-defaults file happened to pin).
+fn read_settings_from_world(world: &World) -> PersistedSettings {
+    PersistedSettings {
         texture_quality: world.get_resource::<TextureQuality>().map(|r| r.0),
         poly_quality: world.get_resource::<PolyQuality>().map(|r| r.0),
         zombie_texture_quality: world.get_resource::<ZombieTextureQuality>().map(|r| r.0),
@@ -303,62 +387,35 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         lod_car_texture_level: world.get_resource::<LodCarTextureLevel>().map(|r| r.0),
         lod_car_poly_level: world.get_resource::<LodCarPolyLevel>().map(|r| r.0),
         lod_zombie_texture_level: world.get_resource::<LodZombieTextureLevel>().map(|r| r.0),
-    };
-    match ron::to_string(&settings) {
-        Ok(text) => write_settings_text(&text),
-        Err(e) => warn!("failed to serialize settings: {e}"),
     }
 }
 
-// "Reset Config" button (map-select screen, network_setup.rs) — wipes the
-// saved file/localStorage entry and resets every tracked resource back to
-// its own Default::default() immediately, so the effect is visible
-// without needing to relaunch. Plain Commands::insert_resource per field
-// rather than an exclusive `&mut World` fn like the two above — this one
-// only needs ONE system param (Commands) no matter how many resources it
-// touches, since the resource list lives in the function body, not the
-// signature.
-pub(crate) fn reset_config_button(mut commands: Commands, btn: Query<&Interaction, (With<ResetConfigButton>, Changed<Interaction>)>) {
-    if !tapped(&btn) {
+// "Reset Config" button (map-select screen, network_setup.rs) — re-applies
+// the SHIPPED defaults (assets/data/default_settings_{desktop,mobile}.ron,
+// same file apply_persisted_settings reads at Startup), not just whatever
+// Default::default() happens to compute right now — "reset" means "go
+// back to exactly what a fresh install would have", including the couple
+// of fields (autopilot, render_resolution_scale, shadow/light/point-light
+// quality on desktop) that file deliberately leaves `None` for the
+// existing env-var/scenario-aware Default to keep deciding. The
+// fully-resolved result (every field now concretely whatever it landed
+// on) gets written back as the device's new local custom-settings file
+// too, so it doesn't just revert in memory this session and drift back on
+// next launch. Exclusive `&mut World`, not plain Commands, because it
+// needs to both apply AND read back ~35 resources — Commands can insert
+// blindly with no such limit, but reading current values back for the
+// write-out needs real World access.
+pub(crate) fn reset_config_button(world: &mut World) {
+    let tapped = world
+        .query_filtered::<&Interaction, (With<ResetConfigButton>, Changed<Interaction>)>()
+        .iter(world)
+        .any(|i| *i == Interaction::Pressed);
+    if !tapped {
         return;
     }
-    delete_settings_text();
-    commands.insert_resource(TextureQuality::default());
-    commands.insert_resource(PolyQuality::default());
-    commands.insert_resource(ZombieTextureQuality::default());
-    commands.insert_resource(GunTextureQuality::default());
-    commands.insert_resource(GunPolyQuality::default());
-    commands.insert_resource(LightQuality::default());
-    commands.insert_resource(ShadowQuality::default());
-    commands.insert_resource(PointLightQuality::default());
-    commands.insert_resource(RenderResolutionScale::default());
-    commands.insert_resource(MapMsaaOn::default());
-    commands.insert_resource(ScopeCameraEnabled::default());
-    commands.insert_resource(SensitivityScale::default());
-    commands.insert_resource(Noclip::default());
-    commands.insert_resource(GodMode::default());
-    commands.insert_resource(FreezeZombies::default());
-    commands.insert_resource(ShowHitboxes::default());
-    commands.insert_resource(AimBlurEnabled::default());
-    commands.insert_resource(ZombieAnimDisabled::default());
-    commands.insert_resource(ZombieHealthBarsHidden::default());
-    commands.insert_resource(ZombieLodDisabled::default());
-    commands.insert_resource(PlayerModelVisible::default());
-    commands.insert_resource(GunVisible::default());
-    commands.insert_resource(CarsVisible::default());
-    commands.insert_resource(AimDofFocalDistanceAlt::default());
-    commands.insert_resource(AutopilotLookOnly::default());
-    commands.insert_resource(ShowAutopilotTarget::default());
-    commands.insert_resource(ShowHitMarkers::default());
-    commands.insert_resource(ShowFloatingDamage::default());
-    commands.insert_resource(ShowBulletTracers::default());
-    commands.insert_resource(Autopilot::default());
-    commands.insert_resource(InspectMode::default());
-    commands.insert_resource(NavDebugVisible::default());
-    commands.insert_resource(ShowDistanceRings::default());
-    commands.insert_resource(DistanceLodEnabled::default());
-    commands.insert_resource(LodBandDistance::default());
-    commands.insert_resource(LodCarTextureLevel::default());
-    commands.insert_resource(LodCarPolyLevel::default());
-    commands.insert_resource(LodZombieTextureLevel::default());
+    apply_settings_to_world(world, &load_ship_defaults());
+    match ron::to_string(&read_settings_from_world(world)) {
+        Ok(text) => write_settings_text(&text),
+        Err(e) => warn!("failed to serialize settings: {e}"),
+    }
 }

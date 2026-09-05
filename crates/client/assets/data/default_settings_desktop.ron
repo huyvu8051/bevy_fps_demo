@@ -1,0 +1,56 @@
+// Shipped defaults for desktop (every native target that isn't iOS/
+// Android — see settings_persistence.rs's load_ship_defaults). Loaded
+// BEFORE the device's own locally-persisted custom settings, so this is
+// only what a device sees on its very first launch, or right after
+// pressing "Reset Config" — any field the player has actually changed
+// lives in the local file instead (~/.bevy_fps_demo_settings.ron) and
+// wins over this one.
+//
+// A field left `None` here means "don't override — let that resource's
+// own Default impl (crates/client/src/lib.rs etc.) decide", which for a
+// few fields (render_resolution_scale: RENDER_SCALE env var;
+// shadow_quality/light_quality/point_light_quality: LIGHTS/SHADOWS env
+// vars; autopilot: depends on the current map scenario) is genuinely
+// dynamic logic this file has no business trying to duplicate — only
+// the flat, load-bearing "what tier does this platform ship at" numbers
+// are pinned here.
+(
+    texture_quality: Some(5),
+    poly_quality: Some(5),
+    zombie_texture_quality: Some(5),
+    gun_texture_quality: Some(5),
+    gun_poly_quality: Some(5),
+    light_quality: None,
+    shadow_quality: None,
+    point_light_quality: None,
+    render_resolution_scale: None,
+    map_msaa_on: Some(false),
+    scope_camera_enabled: Some(true),
+    sensitivity_scale: Some(1.0),
+    noclip: Some(false),
+    god_mode: Some(false),
+    freeze_zombies: Some(false),
+    show_hitboxes: Some(false),
+    aim_blur_enabled: Some(true),
+    zombie_anim_disabled: Some(false),
+    zombie_health_bars_hidden: Some(false),
+    zombie_lod_disabled: Some(false),
+    player_model_visible: Some(false),
+    gun_visible: Some(true),
+    cars_visible: Some(true),
+    aim_dof_focal_distance_alt: Some(false),
+    autopilot_look_only: Some(false),
+    show_autopilot_target: Some(false),
+    show_hit_markers: Some(true),
+    show_floating_damage: Some(true),
+    show_bullet_tracers: Some(true),
+    autopilot: None,
+    inspect_mode: Some(false),
+    nav_debug_visible: Some(false),
+    show_distance_rings: Some(false),
+    distance_lod_enabled: Some(false),
+    lod_band_distance: Some((15.0, 30.0, 50.0)),
+    lod_car_texture_level: Some((5, 3, 1)),
+    lod_car_poly_level: Some((5, 3, 1)),
+    lod_zombie_texture_level: Some((5, 3, 1)),
+)
