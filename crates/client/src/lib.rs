@@ -757,6 +757,14 @@ struct FreezeZombies(bool);
 #[derive(Resource, Default)]
 struct ShowHitboxes(bool);
 
+// Debug/dev: "DistRings" settings toggle. Draws concentric horizontal
+// circles around the player (draw_distance_rings, vfx.rs) at fixed
+// distances — a ruler for eyeballing horizontal distance-to-player while
+// planning the texture/polygon LOD-by-distance feature, so a threshold
+// like ZOMBIE_LOD_DISTANCE can be checked visually instead of guessed.
+#[derive(Resource, Default)]
+struct ShowDistanceRings(bool);
+
 // Debug/dev: toggled by settings/cheats or env SHOW_AUTOPILOT_TARGET. Shows the autopilot's red target aim sphere.
 #[derive(Resource)]
 struct ShowAutopilotTarget(bool);
@@ -1077,6 +1085,80 @@ pub(crate) struct PolyQuality(pub(crate) u8);
 impl Default for PolyQuality {
     fn default() -> Self {
         Self(poly_quality_default())
+    }
+}
+
+// --- Distance-based auto LOD (texture + polygon by distance-to-player) --
+//
+// Manual TextureQuality/PolyQuality/ZombieTextureQuality above are one
+// global tier picked by hand. This instead picks per-object automatically
+// from how far that object currently is from the player, in 3 distance
+// bands (near/mid/far) — see item_gallery_cars.rs's
+// apply_item_gallery_car_distance_lod (per-car, since each car already
+// has its own material/mesh, unlike zombies) and zombie_client.rs's
+// apply_zombie_distance_lod_texture (per-KIND, driven by that kind's
+// NEAREST living zombie — zombies of the same kind share one material
+// handle, see apply_zombie_texture_quality's own doc comment, so true
+// per-instance texture swapping isn't possible without giving every
+// zombie its own material clone; the closer instance decides). No
+// zombie POLY axis: unlike cars, zombie meshes have no baked low-poly
+// sibling file to switch to yet (zombie_kind_mesh_path takes no tier
+// argument) — texture-only until such assets exist.
+//
+// Off by default (DistanceLodEnabled(false)) so manual quality sliders
+// keep working exactly as before until this is turned on via the
+// "DistLOD" settings toggle (settings_menu.rs).
+#[derive(Resource, Default)]
+pub(crate) struct DistanceLodEnabled(pub(crate) bool);
+
+/// 3 independently adjustable band-boundary distances (meters, nearest to
+/// farthest) — band 0 is `distance <= band[0]`, band 1 is
+/// `band[0] < distance <= band[1]`, band 2 is everything past `band[1]`
+/// (`band[2]` itself only matters as the outer ring drawn by
+/// draw_distance_rings — there's no 4th tier beyond it). 15.0 for band 0
+/// matches ZOMBIE_LOD_DISTANCE (crates/shared, zombie.rs) exactly, so the
+/// existing zombie motion-LOD cutoff lines up with where texture/poly LOD
+/// also first kicks in.
+#[derive(Resource)]
+pub(crate) struct LodBandDistance(pub(crate) [f32; 3]);
+impl Default for LodBandDistance {
+    fn default() -> Self {
+        Self([ZOMBIE_LOD_DISTANCE, 30.0, 50.0])
+    }
+}
+pub(crate) const LOD_DISTANCE_STEP: f32 = 1.0;
+pub(crate) const LOD_DISTANCE_MIN: f32 = 1.0;
+pub(crate) const LOD_DISTANCE_MAX: f32 = 200.0;
+
+/// Per-band TextureQuality tier (0..=5, same scale/meaning as
+/// TextureQuality) applied to item-gallery cars — see
+/// apply_item_gallery_car_distance_lod.
+#[derive(Resource)]
+pub(crate) struct LodCarTextureLevel(pub(crate) [u8; 3]);
+impl Default for LodCarTextureLevel {
+    fn default() -> Self {
+        Self([5, 3, 1])
+    }
+}
+
+/// Per-band PolyQuality tier (1..=5, same scale/meaning as PolyQuality)
+/// applied to item-gallery cars — see apply_item_gallery_car_distance_lod.
+#[derive(Resource)]
+pub(crate) struct LodCarPolyLevel(pub(crate) [u8; 3]);
+impl Default for LodCarPolyLevel {
+    fn default() -> Self {
+        Self([5, 3, 1])
+    }
+}
+
+/// Per-band ZombieTextureQuality tier (0..=5, same scale/meaning as
+/// ZombieTextureQuality) applied per zombie kind — see
+/// apply_zombie_distance_lod_texture.
+#[derive(Resource)]
+pub(crate) struct LodZombieTextureLevel(pub(crate) [u8; 3]);
+impl Default for LodZombieTextureLevel {
+    fn default() -> Self {
+        Self([5, 3, 1])
     }
 }
 
@@ -1744,6 +1826,12 @@ impl Plugin for GamePlugin {
         .init_resource::<AutopilotIntent>()
         .init_resource::<FreezeZombies>()
         .init_resource::<ShowHitboxes>()
+        .init_resource::<ShowDistanceRings>()
+        .init_resource::<DistanceLodEnabled>()
+        .init_resource::<LodBandDistance>()
+        .init_resource::<LodCarTextureLevel>()
+        .init_resource::<LodCarPolyLevel>()
+        .init_resource::<LodZombieTextureLevel>()
         .init_resource::<GodMode>()
         .init_resource::<ShowAutopilotTarget>()
         .init_resource::<ShowHitMarkers>()
@@ -1816,6 +1904,7 @@ impl Plugin for GamePlugin {
         (
             (
                 multi_touch_button_interaction,
+                suppress_touch_buttons_while_menu_open,
                 toggle_mouse_ui_lock,
                 suppress_ui_interaction_when_locked,
                 touch_move_axis,
@@ -1979,6 +2068,16 @@ impl Plugin for GamePlugin {
                 update_crosshair,
                 set_hitbox_gizmo_depth_bias,
                 draw_zombie_hitboxes,
+                (distance_rings_toggle_button, update_distance_rings_button_color, draw_distance_rings).chain(),
+                (
+                    distance_lod_toggle_button,
+                    update_distance_lod_button_color,
+                    lod_stepper_buttons,
+                    update_lod_stepper_texts,
+                    apply_item_gallery_car_distance_lod,
+                    apply_zombie_distance_lod_texture,
+                )
+                    .chain(),
                 despawn_hit_markers,
                 despawn_muzzle_flashes,
                 despawn_bullet_tracers,

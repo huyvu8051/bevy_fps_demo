@@ -25,6 +25,26 @@ use crate::*;
 #[derive(Component)]
 pub(crate) struct ItemGalleryTestProp;
 
+// `i` into shared::ITEM_GALLERY_CAR_PATHS / shared::item_gallery_car_physics
+// — spawn_item_gallery_test_props already needs this to build the right
+// mesh/texture paths at spawn time; kept on the entity afterward so
+// apply_item_gallery_car_distance_lod can rebuild those same paths at a
+// DIFFERENT tier later without having to re-derive which car index this
+// entity is (e.g. from Name, which is a display string, not meant to be
+// parsed back).
+#[derive(Component)]
+pub(crate) struct ItemGalleryCarIndex(pub(crate) usize);
+
+// The (texture, poly) tier this car's Mesh3d/MeshMaterial3d are CURRENTLY
+// loaded at — lets apply_item_gallery_car_distance_lod skip re-issuing
+// asset_server.load() every frame for a car whose band hasn't changed
+// (only reload when the target tier actually differs from this).
+#[derive(Component)]
+pub(crate) struct ItemGalleryCarLodTier {
+    pub(crate) texture: u8,
+    pub(crate) poly: u8,
+}
+
 // Settings-menu "Cars" cheat toggle — same "hide, don't despawn" shape as
 // GunVisible (crate::movement_combat): a car still needs to exist (physics/
 // nav obstacle/hit detection all stay live) for testing without it
@@ -209,7 +229,74 @@ pub(crate) fn spawn_item_gallery_test_props(
             LinearDamping(8.0),
             AngularDamping(8.0),
             ItemGalleryTestProp,
+            ItemGalleryCarIndex(i),
+            ItemGalleryCarLodTier { texture: texture_quality, poly: poly_quality },
         ));
+    }
+}
+
+// Per-car distance-based auto LOD (see DistanceLodEnabled's own doc
+// comment in lib.rs for the overall feature). Unlike
+// respawn_item_gallery_cars_on_quality_change (which despawns/respawns
+// every car at once for a manual settings-menu change), this swaps a
+// single car's Mesh3d/material textures IN PLACE — the entity, its
+// physics body, and its collider all stay exactly as they are (gravity-
+// settled position, any bullet-impact rocking) since only the visual
+// tier is changing, not the car itself. The collider (built once at
+// spawn from ColliderConstructor::ConvexHullFromMesh) is deliberately
+// left alone too: hit registration is server-authoritative (see
+// spawn_item_gallery_test_props' own doc comment), so a slightly stale
+// collision hull from a higher-poly tier is a non-issue, and regenerating
+// it every band change would be pure churn for a purely cosmetic swap.
+pub(crate) fn apply_item_gallery_car_distance_lod(
+    enabled: Res<DistanceLodEnabled>,
+    bands: Res<LodBandDistance>,
+    texture_levels: Res<LodCarTextureLevel>,
+    poly_levels: Res<LodCarPolyLevel>,
+    asset_server: Res<AssetServer>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    player: Query<&Transform, With<Player>>,
+    mut cars: Query<(&Transform, &ItemGalleryCarIndex, &mut ItemGalleryCarLodTier, &mut Mesh3d, &MeshMaterial3d<StandardMaterial>), With<ItemGalleryTestProp>>,
+) {
+    if !enabled.0 {
+        return;
+    }
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+    let player_pos = player_transform.translation.xz();
+    for (transform, index, mut tier, mut mesh, material_handle) in &mut cars {
+        let distance = (transform.translation.xz() - player_pos).length();
+        let band = if distance <= bands.0[0] {
+            0
+        } else if distance <= bands.0[1] {
+            1
+        } else {
+            2
+        };
+        let target_texture = texture_levels.0[band];
+        let target_poly = poly_levels.0[band];
+        if tier.texture == target_texture && tier.poly == target_poly {
+            continue;
+        }
+        if tier.poly != target_poly {
+            mesh.0 = asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset(shared::item_gallery_car_mesh_path(index.0, target_poly)));
+        }
+        if tier.texture != target_texture {
+            let (base_color_path, normal_path, metallic_roughness_path) = shared::item_gallery_car_texture_paths(index.0, target_texture);
+            let linear = |path: String| {
+                asset_server.load_with_settings(path, |settings: &mut bevy::image::ImageLoaderSettings| {
+                    settings.is_srgb = false;
+                })
+            };
+            if let Some(material) = materials.get_mut(&material_handle.0) {
+                material.base_color_texture = Some(asset_server.load(base_color_path));
+                material.normal_map_texture = Some(linear(normal_path));
+                material.metallic_roughness_texture = Some(linear(metallic_roughness_path));
+            }
+        }
+        tier.texture = target_texture;
+        tier.poly = target_poly;
     }
 }
 

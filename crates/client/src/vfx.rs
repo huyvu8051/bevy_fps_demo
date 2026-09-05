@@ -571,6 +571,52 @@ pub(crate) fn draw_zombie_hitboxes(
     }
 }
 
+// Standalone rather than folded into settings_menu's cheat_toggle_buttons_*
+// family — those are already near Bevy's system param-count ceiling (see
+// cheat_toggle_buttons_2's own doc comment), same reasoning as
+// nav_debug_toggle_button.
+pub(crate) fn distance_rings_toggle_button(mut show: ResMut<ShowDistanceRings>, btn: Query<&Interaction, (With<CheatDistanceRingsButton>, Changed<Interaction>)>) {
+    if tapped(&btn) {
+        show.0 = !show.0;
+    }
+}
+
+pub(crate) fn update_distance_rings_button_color(show: Res<ShowDistanceRings>, mut btn: Query<&mut BackgroundColor, With<CheatDistanceRingsButton>>) {
+    if !show.is_changed() {
+        return;
+    }
+    let color = if show.0 { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
+    for mut bg in &mut btn {
+        *bg = BackgroundColor(color);
+    }
+}
+
+// Concentric horizontal circles centered on the player, flat on the
+// ground (same Isometry3d rotation as the hitbox fallback rings above),
+// toggled by the "DistRings" settings button. One ring per LodBandDistance
+// entry — the same 3 numbers that drive apply_item_gallery_car_distance_lod
+// / apply_zombie_distance_lod_texture, so this is a direct visual ruler
+// for wherever those bands are currently set, not a fixed reference
+// distance. Colored by distance — nearest a "safe" green fading toward
+// red at the outermost band — so the far ring is easy to pick out at a
+// glance without reading labels.
+pub(crate) fn draw_distance_rings(show: Res<ShowDistanceRings>, bands: Res<LodBandDistance>, player: Query<&Transform, With<Player>>, mut gizmos: Gizmos) {
+    if !show.0 {
+        return;
+    }
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+    let center = player_transform.translation;
+    let ring_rotation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+    let max_radius = bands.0.iter().copied().fold(0.0, f32::max).max(1.0);
+    for &radius in &bands.0 {
+        let t = radius / max_radius;
+        let color = Color::srgb(t, 1.0 - t, 0.0);
+        gizmos.circle(Isometry3d::new(center, ring_rotation), radius, color);
+    }
+}
+
 // Finds whichever bone (head/belly/chest/any limb joint) of `bones` is
 // nearest to `point` and has actually resolved a GlobalTransform — used to
 // pick which specific bone a wound decal should parent onto (see

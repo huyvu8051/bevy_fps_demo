@@ -193,6 +193,33 @@ pub(crate) struct TouchGameplayInputs<'w> {
 // own mouse_released check reacts to touches_input.any_just_released() —
 // ANY touch ending, not just the first — and resets every Pressed node to
 // None, so this system only ever needs to set, never clear.
+// Fix for the "menu leaks taps to buttons behind it" report. On-device
+// syslog (real touches, real UiStack data) confirmed the touch point IS
+// geometrically inside the menu panel's rect AND the panel's own
+// GlobalZIndex correctly sorts it into the topmost UiStack partition, yet
+// background TouchControlButtons still received Interaction::Pressed —
+// so the leak isn't a z-order/geometry bug, it's somewhere inside bevy_ui's
+// own per-partition hit-testing (each UiStack partition resolves its
+// pointer position once from its root node's ComputedUiTargetCamera; any
+// hiccup there silently drops that whole partition out of hit-testing,
+// with no fallback). Rather than depend on diagnosing that further,
+// gate at the game-logic layer instead — every engine's modal/dialog
+// pattern (Unity's CanvasGroup.blocksRaycasts, Unreal's
+// SetInputMode(UIOnly), Godot's mouse_filter gating) does the same thing:
+// while a modal is open, the input layer refuses to route input to
+// anything else, independent of whatever the hit-test geometry says.
+// Runs immediately after multi_touch_button_interaction (same "runs
+// first" reasoning as that system's own comment) so every touch_*_button
+// consumer later in this frame's chain sees None, not a stale Pressed.
+pub(crate) fn suppress_touch_buttons_while_menu_open(menu_visible: Res<SettingsMenuVisible>, mut buttons: Query<&mut Interaction, With<TouchControlButton>>) {
+    if !menu_visible.0 {
+        return;
+    }
+    for mut interaction in &mut buttons {
+        interaction.set_if_neq(Interaction::None);
+    }
+}
+
 // Runs first (see both call sites) so button-tap systems reading
 // Changed<Interaction> later in the same Update tick see this frame's
 // change immediately, not one frame late.

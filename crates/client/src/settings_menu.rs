@@ -750,8 +750,27 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         // Client navmesh + zombie path-trace overlay
                         // (nav_debug.rs) — Arena maps only.
                         spawn_cheat_toggle_button(row, "NavDbg", CheatNavDebugButton);
+                        // Concentric horizontal-distance rings around the
+                        // player (draw_distance_rings, vfx.rs) — a ruler
+                        // for the texture/polygon LOD-by-distance planning.
+                        spawn_cheat_toggle_button(row, "DistRings", CheatDistanceRingsButton);
                     });
                 }
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    // Distance/texture/poly-by-distance auto LOD (cars +
+                    // zombies) — see DistanceLodEnabled's own doc comment
+                    // in lib.rs.
+                    spawn_cheat_toggle_button(row, "DistLOD", CheatDistanceLodButton);
+                });
+                spawn_lod_stepper_row(page, "LOD Dist(m)", LodParam::Distance, ["15".into(), "30".into(), "50".into()]);
+                spawn_lod_stepper_row(page, "Car Tex", LodParam::CarTexture, ["5".into(), "3".into(), "1".into()]);
+                spawn_lod_stepper_row(page, "Car Poly", LodParam::CarPoly, ["5".into(), "3".into(), "1".into()]);
+                spawn_lod_stepper_row(page, "Zmb Tex", LodParam::ZombieTexture, ["5".into(), "3".into(), "1".into()]);
             });
 
             menu.spawn((
@@ -928,6 +947,35 @@ pub(crate) fn spawn_cheat_action_button(parent: &mut ChildSpawnerCommands, label
     spawn_cheat_button_node(parent, label, marker);
 }
 
+// One row: a text label followed by 3 "-/value/+" stepper groups, one per
+// LOD band — shared by all 4 distance-LOD stepper rows (distance/car
+// texture/car poly/zombie texture) so the row layout only needs writing
+// once. `initial` is the text shown before update_lod_stepper_texts first
+// runs (same "hardcode the matching default" convention as SensitivityText
+// above).
+pub(crate) fn spawn_lod_stepper_row(parent: &mut ChildSpawnerCommands, label: &str, param_of_band: impl Fn(usize) -> LodParam, initial: [String; 3]) {
+    parent.spawn((
+        Text::new(label),
+        TextFont { font_size: 14.0, ..default() },
+        TextColor(Color::WHITE),
+    ));
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(10.0),
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .with_children(|row| {
+            for (band, text) in initial.into_iter().enumerate() {
+                let param = param_of_band(band);
+                spawn_cheat_action_button(row, "-", LodDecButton(param));
+                row.spawn((Text::new(text), TextFont { font_size: 14.0, ..default() }, TextColor(Color::WHITE), LodValueText(param)));
+                spawn_cheat_action_button(row, "+", LodIncButton(param));
+            }
+        });
+}
+
 #[derive(Component)]
 pub(crate) struct CheatNoclipButton;
 #[derive(Component)]
@@ -1050,6 +1098,36 @@ pub(crate) struct CheatShowTracersButton;
 // family, to keep those systems under Bevy's param-count ceiling.
 #[derive(Component)]
 pub(crate) struct CheatNavDebugButton;
+// Flips ShowDistanceRings (lib.rs) — handled by its own standalone
+// distance_rings_toggle_button/update_distance_rings_button_color pair
+// (vfx.rs), same reasoning as CheatNavDebugButton above.
+#[derive(Component)]
+pub(crate) struct CheatDistanceRingsButton;
+// Flips DistanceLodEnabled (lib.rs) — handled by its own standalone
+// distance_lod_toggle_button/update_distance_lod_button_color pair below,
+// same reasoning as CheatNavDebugButton above.
+#[derive(Component)]
+pub(crate) struct CheatDistanceLodButton;
+
+// Which of the 3 distance-LOD numbers a stepper row's -/+/text triplet
+// controls — one small set of generic systems (lod_stepper_buttons/
+// update_lod_stepper_texts below) handles all 9 stepper rows instead of
+// 9 near-duplicate systems, since they're all "clamp a value in an
+// array by an index" with only the array/clamp-range differing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum LodParam {
+    Distance(usize),
+    CarTexture(usize),
+    CarPoly(usize),
+    ZombieTexture(usize),
+}
+
+#[derive(Component)]
+pub(crate) struct LodDecButton(pub(crate) LodParam);
+#[derive(Component)]
+pub(crate) struct LodIncButton(pub(crate) LodParam);
+#[derive(Component)]
+pub(crate) struct LodValueText(pub(crate) LodParam);
 
 // Changed<Interaction>-gated like every other touch button in this file —
 // each tap flips the same resource the matching desktop key
@@ -1589,6 +1667,87 @@ pub(crate) fn update_sensitivity_text(scale: Res<SensitivityScale>, mut text: Qu
     }
     for mut text in &mut text {
         text.0 = format!("{:.2}x", scale.0);
+    }
+}
+
+// Standalone rather than folded into cheat_toggle_buttons_* — same
+// param-count-ceiling reasoning as nav_debug_toggle_button.
+pub(crate) fn distance_lod_toggle_button(mut enabled: ResMut<DistanceLodEnabled>, btn: Query<&Interaction, (With<CheatDistanceLodButton>, Changed<Interaction>)>) {
+    if tapped(&btn) {
+        enabled.0 = !enabled.0;
+    }
+}
+
+pub(crate) fn update_distance_lod_button_color(enabled: Res<DistanceLodEnabled>, mut btn: Query<&mut BackgroundColor, With<CheatDistanceLodButton>>) {
+    if !enabled.is_changed() {
+        return;
+    }
+    let color = if enabled.0 { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
+    for mut bg in &mut btn {
+        *bg = BackgroundColor(color);
+    }
+}
+
+// Generic +/- handler for all 9 distance-LOD stepper buttons (3 bands x
+// {distance, car texture, car poly, zombie texture}) — one system instead
+// of 9 near-duplicates, since every case is just "clamp array[band] by a
+// step within a range" with only the array/step/range differing per
+// LodParam variant.
+pub(crate) fn lod_stepper_buttons(
+    mut distance: ResMut<LodBandDistance>,
+    mut car_texture: ResMut<LodCarTextureLevel>,
+    mut car_poly: ResMut<LodCarPolyLevel>,
+    mut zombie_texture: ResMut<LodZombieTextureLevel>,
+    dec_btn: Query<(&Interaction, &LodDecButton), Changed<Interaction>>,
+    inc_btn: Query<(&Interaction, &LodIncButton), Changed<Interaction>>,
+) {
+    let mut apply = |param: LodParam, delta: i32| match param {
+        LodParam::Distance(band) => {
+            let v = &mut distance.0[band];
+            *v = (*v + delta as f32 * LOD_DISTANCE_STEP).clamp(LOD_DISTANCE_MIN, LOD_DISTANCE_MAX);
+        }
+        LodParam::CarTexture(band) => {
+            let v = &mut car_texture.0[band];
+            *v = (*v as i32 + delta).clamp(0, 5) as u8;
+        }
+        LodParam::CarPoly(band) => {
+            let v = &mut car_poly.0[band];
+            *v = (*v as i32 + delta).clamp(1, 5) as u8;
+        }
+        LodParam::ZombieTexture(band) => {
+            let v = &mut zombie_texture.0[band];
+            *v = (*v as i32 + delta).clamp(0, 5) as u8;
+        }
+    };
+    for (interaction, btn) in &dec_btn {
+        if *interaction == Interaction::Pressed {
+            apply(btn.0, -1);
+        }
+    }
+    for (interaction, btn) in &inc_btn {
+        if *interaction == Interaction::Pressed {
+            apply(btn.0, 1);
+        }
+    }
+}
+
+pub(crate) fn update_lod_stepper_texts(
+    distance: Res<LodBandDistance>,
+    car_texture: Res<LodCarTextureLevel>,
+    car_poly: Res<LodCarPolyLevel>,
+    zombie_texture: Res<LodZombieTextureLevel>,
+    mut texts: Query<(&mut Text, &LodValueText)>,
+) {
+    if !distance.is_changed() && !car_texture.is_changed() && !car_poly.is_changed() && !zombie_texture.is_changed() {
+        return;
+    }
+    for (mut text, marker) in &mut texts {
+        text.0 = match marker.0 {
+            LodParam::Distance(band) => format!("{:.0}", distance.0[band]),
+            LodParam::CarTexture(band) => format!("{}", car_texture.0[band]),
+            LodParam::CarPoly(band) => format!("{}", car_poly.0[band]),
+            LodParam::ZombieTexture(band) => format!("{}", zombie_texture.0[band]),
+        };
     }
 }
 

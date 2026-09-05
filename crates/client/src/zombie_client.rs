@@ -533,12 +533,84 @@ pub(crate) fn apply_zombie_texture_quality(
     }
 }
 
+// Per-KIND distance-based auto LOD (see DistanceLodEnabled's own doc
+// comment in lib.rs for the overall feature and why this is per-kind, not
+// per-instance). Every zombie of a kind shares ONE StandardMaterial handle
+// (same fact apply_zombie_texture_quality relies on) — this picks that
+// kind's tier from whichever LIVING zombie of that kind is CLOSEST to the
+// player, so a kind stays at full detail as long as at least one is
+// nearby, and only drops once every instance has drifted past the band
+// boundary. `cached`/`last_tier` are Locals: the material-handle cache is
+// the same "find once, remember" shape as apply_zombie_texture_quality's
+// own `cached`; `last_tier` additionally avoids reissuing
+// asset_server.load() every frame once a kind is already at its target
+// tier. Independent of ZombieTextureQuality — while DistanceLodEnabled is
+// on, this drives the SAME material handles apply_zombie_texture_quality
+// also patches, so this one wins for as long as it keeps re-asserting its
+// own tier every frame the band changes; the manual settings-menu slider
+// still edits ZombieTextureQuality underneath but has no visible effect
+// until DistanceLodEnabled is turned back off.
+pub(crate) fn apply_zombie_distance_lod_texture(
+    enabled: Res<DistanceLodEnabled>,
+    bands: Res<LodBandDistance>,
+    texture_levels: Res<LodZombieTextureLevel>,
+    asset_server: Res<AssetServer>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    player: Query<&Transform, With<Player>>,
+    zombies: Query<(Entity, &Transform, &ZombieKind)>,
+    children: Query<&Children>,
+    mesh_materials: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut cached: Local<std::collections::HashMap<ZombieKind, Handle<StandardMaterial>>>,
+    mut last_tier: Local<std::collections::HashMap<ZombieKind, u8>>,
+) {
+    if !enabled.0 {
+        return;
+    }
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+    let player_pos = player_transform.translation.xz();
+
+    let mut nearest: std::collections::HashMap<ZombieKind, f32> = std::collections::HashMap::new();
+    for (entity, transform, &kind) in &zombies {
+        if !cached.contains_key(&kind)
+            && let Some(handle) = find_material_in_descendants(entity, &children, &mesh_materials)
+        {
+            cached.insert(kind, handle);
+        }
+        let distance = (transform.translation.xz() - player_pos).length();
+        nearest.entry(kind).and_modify(|d| *d = d.min(distance)).or_insert(distance);
+    }
+
+    for (&kind, &distance) in &nearest {
+        let Some(handle) = cached.get(&kind) else {
+            continue;
+        };
+        let band = if distance <= bands.0[0] {
+            0
+        } else if distance <= bands.0[1] {
+            1
+        } else {
+            2
+        };
+        let target_tier = texture_levels.0[band];
+        if last_tier.get(&kind) == Some(&target_tier) {
+            continue;
+        }
+        let texture: Handle<Image> = asset_server.load(shared::zombie_kind_texture_path(kind, target_tier));
+        if let Some(material) = materials.get_mut(handle) {
+            material.base_color_texture = Some(texture);
+        }
+        last_tier.insert(kind, target_tier);
+    }
+}
+
 // Depth-first search down from a Zombie root (or any entity) for the first
 // descendant carrying a StandardMaterial — the glTF scene's own mesh node,
 // however many hops down that turns out to be. Same shape as
 // wire_animation_target_path's own recursion (crate::zombie_client), just
 // hunting for a different component.
-fn find_material_in_descendants(
+pub(crate) fn find_material_in_descendants(
     entity: Entity,
     children: &Query<&Children>,
     mesh_materials: &Query<&MeshMaterial3d<StandardMaterial>>,
