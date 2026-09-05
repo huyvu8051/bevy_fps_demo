@@ -197,7 +197,27 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
             ScrollPosition::default(),
-            GlobalZIndex(STATIC_UI_Z_INDEX),
+            // STATIC_UI_Z_INDEX + 50, NOT the plain STATIC_UI_Z_INDEX every
+            // touch-control button (touch_input.rs) also uses — bevy_ui's
+            // ui_focus_system (the system that actually sets Interaction,
+            // independent of bevy_picking/HoverMap) walks its own UiStack
+            // top-down and stops at the first FocusPolicy::Block node it
+            // finds under the touch; at EQUAL z-index it's tie-broken by
+            // UiStack insertion order, not "which one is visually drawn on
+            // top" the way a naive reading of GlobalZIndex would suggest.
+            // That tie is what let a tap on the menu panel register as a
+            // press on whatever touch-control button (Sprint/Jump/Lean/
+            // Crouch/Prone) happened to sit underneath it at the same
+            // screen position — reported again after this file grew (Gun
+            // quality rows) despite the real HoverMap fix (touch_input.rs's
+            // multi_touch_button_interaction) staying intact, because that
+            // fix only ever covered the SECOND+ simultaneous touch;
+            // ui_focus_system itself, which owns the first/primary touch,
+            // never used HoverMap. Giving the whole menu panel a strictly
+            // higher z-index (matching the map-select overlay's own
+            // STATIC_UI_Z_INDEX + 100 in network_setup.rs) makes it always
+            // win regardless of spawn order, on both touch paths.
+            GlobalZIndex(STATIC_UI_Z_INDEX + 50),
             SettingsMenuRoot,
         ))
         .with_children(|menu| {

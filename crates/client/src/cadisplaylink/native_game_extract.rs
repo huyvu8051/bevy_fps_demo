@@ -14,7 +14,8 @@ use bevy::asset::{AssetId, Assets, Handle};
 use bevy::camera::{Camera, Projection, RenderTargetInfo};
 use bevy::ecs::hierarchy::Children;
 use bevy::ecs::query::{With, Without};
-use bevy::ecs::system::{Query, Res, SystemState};
+use bevy::ecs::resource::Resource;
+use bevy::ecs::system::{Query, Res, ResMut, SystemState};
 use bevy::image::Image;
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::light::{DirectionalLight, PointLight};
@@ -129,6 +130,25 @@ pub fn prime_camera_viewport(world: &mut bevy::ecs::world::World, width_pts: f32
 /// pixel format isn't one of the common RGBA8 variants glTF base-color
 /// textures normally load as (extraction just skips it in that case,
 /// falling back to a flat-tinted draw rather than failing).
+/// Cross-frame cache of decoded texture RGBA (keyed by the source `Image`
+/// asset's own AssetId), lazily inserted into the headless World the first
+/// time extract_render_snapshot runs — see that fn's own use of it for why
+/// a plain per-frame-scoped cache (dedupe within ONE frame across entities
+/// sharing a texture) wasn't enough: a car's texture never changes after
+/// spawn, but extraction re-cloned its full decoded RGBA buffer from the
+/// `Image` asset EVERY SINGLE FRAME regardless, since nothing remembered
+/// "already decoded this one." Invisible at TextureQuality 1-3 (small
+/// enough images that even 16 redundant clones/frame don't register), but
+/// at 4-5 (1024²/2048²) that's up to ~256MB of pure memcpy every frame for
+/// bytes that were already identical to last frame — the real cause of
+/// "car texture quality 4/5 lags, 1/2/3 doesn't." Never evicted, same
+/// "cache forever" shape as `NativeMetalProbe::real_game_textures`/
+/// `gpu_transformed_mesh_cache` on the Metal side — bounded by how many
+/// DISTINCT texture files a play session ever touches (a few dozen across
+/// every quality tier + car + the gun), not by frame count.
+#[derive(Resource, Default)]
+pub struct DecodedTextureCache(std::collections::HashMap<AssetId<Image>, ExtractedTexture>);
+
 #[derive(Clone)]
 pub struct ExtractedTexture {
     /// The source `Image` asset's own stable identity — used by the renderer
@@ -141,14 +161,11 @@ pub struct ExtractedTexture {
     pub id: AssetId<Image>,
     pub width: u32,
     pub height: u32,
-    /// `Arc`, not `Vec<u8>` — see extract_render_snapshot's own
-    /// `decoded_texture_cache` for why: several `ExtractedMesh`es can share
-    /// the SAME source `Image` (e.g. every `ItemGalleryTestProp` car at the
-    /// "Meshy" quality tier shares one texture across all 16 entities), and
-    /// this field used to hold a fresh `data.clone()` per entity — 16 full
-    /// 2048x2048 RGBA copies (~16MB each) EVERY FRAME for what was
-    /// ultimately the same bytes 16 times over. `Arc` makes every entity
-    /// past the first a refcount bump instead of a memcpy.
+    /// `Arc`, not `Vec<u8>` — see `DecodedTextureCache`'s own doc comment:
+    /// this field is cloned from a cache that lives across frames (and
+    /// sometimes across several meshes sharing one `Image` in the same
+    /// frame too), so cloning it needs to be a refcount bump, not a
+    /// megabytes-sized memcpy.
     pub rgba: std::sync::Arc<[u8]>,
 }
 
@@ -1225,40 +1242,42 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         out.into_iter().collect()
     };
 
+    world.init_resource::<DecodedTextureCache>();
     let mut mesh_state: SystemState<(
         Query<(bevy::ecs::entity::Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>, &GlobalTransform), Without<SkinnedMesh>>,
         Res<Assets<Mesh>>,
         Res<Assets<StandardMaterial>>,
         Res<Assets<Image>>,
+        ResMut<DecodedTextureCache>,
     )> = SystemState::new(world);
-    let (mesh_query, meshes, materials, images) = mesh_state.get(world);
-    // Per-frame dedupe: several meshes can share the SAME `Image` asset —
-    // most dramatically, all 16 `ItemGalleryTestProp` cars at the "Meshy"
-    // poly/texture quality tier point at one shared base_color/normal
-    // texture (see shared::item_gallery_car_meshy_texture_paths). Without
-    // this, decoding a texture meant a fresh `data.clone()` PER ENTITY
-    // below — 16 full copies of the same ~16MB (2048x2048 RGBA) buffer
-    // every single frame for bytes that were already identical. Keyed by
-    // AssetId so it's still correct when different meshes legitimately use
-    // different textures (the normal case for every other car tier).
-    let mut decoded_texture_cache: std::collections::HashMap<AssetId<Image>, Option<ExtractedTexture>> = std::collections::HashMap::new();
+    let (mesh_query, meshes, materials, images, mut texture_cache) = mesh_state.get_mut(world);
+    // Cross-frame dedupe (see DecodedTextureCache's own doc comment) — a
+    // texture's decoded bytes are cached FOREVER by AssetId the first time
+    // any mesh references it, not just deduped within this one frame's
+    // entities. Without this, every mesh's texture got a fresh
+    // `data.clone()` EVERY SINGLE FRAME regardless of whether anything
+    // changed — negligible at TextureQuality 1-3's small images, but up to
+    // ~256MB/frame of pure memcpy at 4-5 across 16 cars' 1024²/2048²
+    // textures, none of which actually change frame to frame once spawned.
     let mut decode_texture = |handle: &Handle<Image>, images: &Assets<Image>| -> Option<ExtractedTexture> {
-        decoded_texture_cache
-            .entry(handle.id())
-            .or_insert_with(|| {
-                let image = images.get(handle)?;
-                let data = image.data.as_ref()?;
-                match image.texture_descriptor.format {
-                    TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => Some(ExtractedTexture {
-                        id: handle.id(),
-                        width: image.texture_descriptor.size.width,
-                        height: image.texture_descriptor.size.height,
-                        rgba: std::sync::Arc::from(data.as_slice()),
-                    }),
-                    _ => None,
-                }
-            })
-            .clone()
+        if let Some(cached) = texture_cache.0.get(&handle.id()) {
+            return Some(cached.clone());
+        }
+        let image = images.get(handle)?;
+        let data = image.data.as_ref()?;
+        match image.texture_descriptor.format {
+            TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => {
+                let extracted = ExtractedTexture {
+                    id: handle.id(),
+                    width: image.texture_descriptor.size.width,
+                    height: image.texture_descriptor.size.height,
+                    rgba: std::sync::Arc::from(data.as_slice()),
+                };
+                texture_cache.0.insert(handle.id(), extracted.clone());
+                Some(extracted)
+            }
+            _ => None,
+        }
     };
     for (entity, mesh3d, material3d, transform) in mesh_query.iter() {
         let is_gun = gun_mesh_entities.contains(&entity);
