@@ -135,6 +135,13 @@ class ViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // Keeps the screen from auto-locking/dimming during gameplay —
+        // ViewController is the app's only screen (UIRequiresFullScreen,
+        // Info.plist), so there's no other view to restore this for on
+        // exit; set once here for the whole process lifetime. Doesn't
+        // block the user manually pressing the power button, only the
+        // idle-timeout auto-lock.
+        UIApplication.shared.isIdleTimerDisabled = true
         self.view.backgroundColor = .black
         // Always creates the probe (and the real headless game App inside
         // it) immediately, whether or not MAP_ID is set yet —
