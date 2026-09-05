@@ -141,11 +141,14 @@ pub fn prime_camera_viewport(world: &mut bevy::ecs::world::World, width_pts: f32
 /// enough images that even 16 redundant clones/frame don't register), but
 /// at 4-5 (1024²/2048²) that's up to ~256MB of pure memcpy every frame for
 /// bytes that were already identical to last frame — the real cause of
-/// "car texture quality 4/5 lags, 1/2/3 doesn't." Never evicted, same
-/// "cache forever" shape as `NativeMetalProbe::real_game_textures`/
-/// `gpu_transformed_mesh_cache` on the Metal side — bounded by how many
-/// DISTINCT texture files a play session ever touches (a few dozen across
-/// every quality tier + car + the gun), not by frame count.
+/// "car texture quality 4/5 lags, 1/2/3 doesn't." Pruned back to exactly
+/// this frame's referenced AssetIds at the end of every
+/// extract_render_snapshot call (see its own `used_texture_ids`/
+/// `retain()`) — this used to be "cache forever" like
+/// `NativeMetalProbe::real_game_textures`/`gpu_transformed_mesh_cache` on
+/// the Metal side still are, which was fine back when nothing ever
+/// changed a car's texture after spawn, but confirmed growing without
+/// bound on a real device once distance-LOD started swapping tiers live.
 #[derive(Resource, Default)]
 pub struct DecodedTextureCache(std::collections::HashMap<AssetId<Image>, ExtractedTexture>);
 
@@ -1259,7 +1262,18 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // changed — negligible at TextureQuality 1-3's small images, but up to
     // ~256MB/frame of pure memcpy at 4-5 across 16 cars' 1024²/2048²
     // textures, none of which actually change frame to frame once spawned.
+    // Tracks every AssetId actually referenced THIS frame so the cache can
+    // be pruned back down to just that afterward (see the retain() call
+    // below) — added once car distance-LOD (crate::item_gallery_cars)
+    // started swapping a car's base_color/normal texture between multiple
+    // tiers at runtime, which this cache's own doc comment explicitly
+    // never anticipated ("a car's texture never changes after spawn").
+    // Without this, every tier a car ever visited stayed decoded in RAM
+    // forever — confirmed on a real iOS device as continuously climbing
+    // memory while DistLOD was on.
+    let mut used_texture_ids: std::collections::HashSet<AssetId<Image>> = std::collections::HashSet::new();
     let mut decode_texture = |handle: &Handle<Image>, images: &Assets<Image>| -> Option<ExtractedTexture> {
+        used_texture_ids.insert(handle.id());
         if let Some(cached) = texture_cache.0.get(&handle.id()) {
             return Some(cached.clone());
         }
@@ -1366,6 +1380,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             is_gpu_transformed: is_car,
         });
     }
+    texture_cache.0.retain(|id, _| used_texture_ids.contains(id));
 
     snapshot
 }

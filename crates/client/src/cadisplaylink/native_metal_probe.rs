@@ -1145,18 +1145,27 @@ pub struct NativeMetalProbe {
     // a full re-upload of every texture on the same frame a shot fired.
     // Identity-keyed avoids both: uploads happen exactly once per unique
     // image regardless of entity churn, and a lookup can never bind the
-    // wrong texture to the wrong mesh.
+    // wrong texture to the wrong mesh. Pruned to exactly this frame's
+    // referenced AssetIds at the end of every render_frame call (see
+    // render_frame's own `retain()`) — a car's texture DOES change now
+    // (item_gallery_cars::apply_item_gallery_car_distance_lod swaps tiers
+    // live), so without this every tier a car ever visited stayed
+    // resident as a real GPU texture forever; confirmed climbing without
+    // bound on a real device once distance-LOD shipped.
     real_game_textures: std::collections::HashMap<AssetId<Image>, metal::Texture>,
     // Identity-keyed the same way real_game_textures is (same "entity churn
     // can't scramble an index-keyed cache" reasoning) — one LOCAL-space
     // (not world-space) vertex buffer per unique `Mesh` asset, uploaded
     // once and reused every frame that asset shows up again, for every
     // ExtractedMesh with `is_gpu_transformed` set (currently just cars —
-    // see that field's own doc comment). The buffer never needs
-    // invalidating: a `Mesh` asset's own vertex data never changes after
-    // load, only the model-matrix uniform each draw call sends alongside
-    // it does. usize is the triangle-list vertex count (draw_primitives'
-    // own count, mirroring RealGameMeshDraw::vertex_count).
+    // see that field's own doc comment). A given `Mesh` asset's own vertex
+    // data still never changes after load — only the model-matrix uniform
+    // each draw call sends alongside it does — but distance-LOD now swaps
+    // WHICH Mesh asset a car's Mesh3d points at as it crosses bands, so
+    // the buffer for a tier the car has since left behind is dead weight;
+    // pruned the same way as real_game_textures above. usize is the
+    // triangle-list vertex count (draw_primitives' own count, mirroring
+    // RealGameMeshDraw::vertex_count).
     gpu_transformed_mesh_cache: std::collections::HashMap<AssetId<Mesh>, (metal::Buffer, usize)>,
     // Real-game mode only: the FpsCamera entity's actual world-space
     // rotation quaternion (xyzw), straight from GlobalTransform — includes
@@ -2790,6 +2799,24 @@ impl NativeMetalProbe {
         let texture = self.ensure_scene_color_texture(render_width, render_height);
         let Some(drawable) = self.layer.next_drawable() else { return };
         let drawable_texture = drawable.texture();
+
+        // Prune both GPU caches down to exactly what THIS frame's
+        // extracted meshes still reference, before touching either one —
+        // has to happen before the upload loop below (which then only
+        // ever uploads/builds what's genuinely missing) and before
+        // real_game_meshes below borrows `&metal::Texture`s out of
+        // real_game_textures (a `retain()` after that point would fight
+        // those borrows). See both fields' own doc comments for why this
+        // is needed now (distance-LOD) when it wasn't before.
+        let used_texture_ids: std::collections::HashSet<AssetId<Image>> = real_game_static_meshes
+            .iter()
+            .flat_map(|mesh| [mesh.texture.as_ref(), mesh.normal_texture.as_ref()].into_iter().flatten())
+            .map(|t| t.id)
+            .collect();
+        self.real_game_textures.retain(|id, _| used_texture_ids.contains(id));
+        let used_mesh_ids: std::collections::HashSet<AssetId<Mesh>> =
+            real_game_static_meshes.iter().filter_map(|mesh| mesh.mesh_id).collect();
+        self.gpu_transformed_mesh_cache.retain(|id, _| used_mesh_ids.contains(id));
 
         for mesh in &real_game_static_meshes {
             // Same identity-keyed upload-once cache for both — see
