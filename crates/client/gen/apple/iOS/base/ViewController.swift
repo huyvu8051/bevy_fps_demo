@@ -17,22 +17,10 @@
 import UIKit
 import QuartzCore
 
-// Phase 6 Step 1 feasibility spike (temporary): boots the REAL game's
-// gameplay App (physics/networking/AI/prediction) with no window/render
-// backend at all and ticks it repeatedly, printing zombie/player counts —
-// see native_game_app_create/tick in cadisplaylink/ffi.rs. No renderer
-// reads from it yet. Remove once Phase 6 Step 1 is confirmed working.
-let RUN_HEADLESS_GAME_APP_SPIKE = false
-// Phase 6 Step 4: when true, the Rust+Metal probe (`rustMetalProbe`,
-// always the active renderer now) draws the REAL game's own level
-// (spawn_test_arena's walls+floor, the ak47_scope gun), camera driven by
-// the game's own FpsCamera instead of touch input — see
-// native_metal_probe_create_real_game in ffi.rs. Separate from
-// RUN_HEADLESS_GAME_APP_SPIKE (that one boots its OWN headless App with no
-// renderer at all; this one boots the renderer WITH a headless App wired
-// in) — only one of the two should be true at once, they'd otherwise run
-// two independent, un-networked copies of the game.
-let USE_REAL_GAME_NATIVE_RENDERER = true
+// The Rust+Metal renderer (`rustMetalProbe`) draws the real game's own
+// level (spawn_test_arena's walls+floor, the ak47_scope gun), camera
+// driven by the game's own FpsCamera — see native_metal_probe_create_
+// real_game in ffi.rs.
 
 private extension Comparable {
     func clamped(to range: ClosedRange<Self>) -> Self {
@@ -69,12 +57,9 @@ private extension Comparable {
 class ViewController: UIViewController {
     @IBOutlet var metalV: MetalView!
 
-    // Not `private`: GameControllerInput.swift (Bluetooth keyboard/mouse,
-    // Phase 6 Step 3) reads this the same way it already reads `bevyApp`.
+    // Not `private`: GameControllerInput.swift (Bluetooth keyboard/mouse)
+    // reads this the same way it already reads `bevyApp`.
     var rustMetalProbe: OpaquePointer?
-    // Phase 6 Step 1 spike (temporary) — see RUN_HEADLESS_GAME_APP_SPIKE.
-    private var headlessGameApp: OpaquePointer?
-    private var headlessGameAppTimer: Timer?
     // Left half of screen = move (drag vector -> forward/strafe), right
     // half = look (drag delta -> yaw/pitch), tracked by touch identity.
     private var moveTouch: UITouch?
@@ -115,7 +100,7 @@ class ViewController: UIViewController {
     // ViewController's own class-level doc comment), so this only still
     // exists for the Apple Watch companion sync below.
     private func syncHud() {
-        guard USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe else { return }
+        guard let probe = self.rustMetalProbe else { return }
         let hp = native_metal_probe_get_player_hp(probe)
 
         // Apple Watch companion app sync — see WatchSessionManager's own
@@ -134,14 +119,12 @@ class ViewController: UIViewController {
     private func createGameProbeIfNeeded() {
         guard rustMetalProbe == nil else { return }
         let viewPointer = Unmanaged.passUnretained(self.metalV).toOpaque()
-        // The probe's own standalone Sponza/box-arena/patrol demo World
+        // The renderer's own standalone Sponza/box-arena/patrol demo World
         // (native_metal_probe_create, real_game=false) was removed from the
-        // Rust side once confirmed unreachable here — USE_REAL_GAME_NATIVE_RENDERER
-        // is always true in this build; see git history if a standalone
-        // demo/probe entry point is ever worth resurrecting.
-        if USE_REAL_GAME_NATIVE_RENDERER {
-            rustMetalProbe = native_metal_probe_create_real_game(viewPointer, Float(UIScreen.main.nativeScale))
-        }
+        // Rust side once this real-game path became the only one ever
+        // built — see git history if a standalone demo entry point is ever
+        // worth resurrecting.
+        rustMetalProbe = native_metal_probe_create_real_game(viewPointer, Float(UIScreen.main.nativeScale))
         if #available(iOS 15.0, *) {
             displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
         }
@@ -161,13 +144,6 @@ class ViewController: UIViewController {
         // picks one. No native map-select view left to gate this on
         // anymore.
         createGameProbeIfNeeded()
-        if RUN_HEADLESS_GAME_APP_SPIKE && headlessGameApp == nil {
-            headlessGameApp = native_game_app_create()
-            headlessGameAppTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                guard let app = self?.headlessGameApp else { return }
-                native_game_app_tick(app)
-            }
-        }
         self.displayLink.isPaused = false
     }
 
@@ -220,7 +196,7 @@ class ViewController: UIViewController {
         // moveTouch/lookTouch tracking below, which render_frame's camera
         // pose gets overwritten from the real FpsCamera anyway once one
         // exists (see native_metal_probe.rs's render_frame).
-        if USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe {
+        if let probe = self.rustMetalProbe {
             for touch in touches {
                 let location = touch.location(in: self.metalV)
                 native_metal_probe_touch_started(probe, touchId(for: touch), Float(location.x), Float(location.y))
@@ -241,7 +217,7 @@ class ViewController: UIViewController {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe {
+        if let probe = self.rustMetalProbe {
             for touch in touches {
                 let location = touch.location(in: self.metalV)
                 native_metal_probe_touch_moved(probe, touchId(for: touch), Float(location.x), Float(location.y))
@@ -268,7 +244,7 @@ class ViewController: UIViewController {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe {
+        if let probe = self.rustMetalProbe {
             for touch in touches {
                 let location = touch.location(in: self.metalV)
                 native_metal_probe_touch_ended(probe, touchId(for: touch), Float(location.x), Float(location.y))
@@ -278,7 +254,7 @@ class ViewController: UIViewController {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if USE_REAL_GAME_NATIVE_RENDERER, let probe = self.rustMetalProbe {
+        if let probe = self.rustMetalProbe {
             for touch in touches {
                 let location = touch.location(in: self.metalV)
                 native_metal_probe_touch_cancelled(probe, touchId(for: touch), Float(location.x), Float(location.y))

@@ -4,8 +4,6 @@
 //! Swift — our probe's joystick (left half) and look-drag (right half)
 //! need two simultaneous touches to both work at once.
 
-use super::native_game_app::build_headless_game_ecs_app;
-use super::native_game_extract::extract_render_snapshot;
 use super::native_metal_probe::NativeMetalProbe;
 use bevy::app::App;
 use bevy::ecs::{entity::Entity, system::Query, world::FromWorld};
@@ -666,60 +664,3 @@ pub extern "C" fn native_metal_probe_near_death_nearest_zombie(obj: *mut std::ff
     }
 }
 
-// Phase 6 Step 1 feasibility spike: the real game's gameplay App
-// (physics/networking/AI/prediction from build_game_common) with no
-// window/render backend at all. Not wired into any renderer yet — this
-// just proves the headless App itself runs without panicking and that
-// networking/physics/AI actually progress. See native_game_app.rs.
-#[unsafe(no_mangle)]
-pub extern "C" fn native_game_app_create() -> *mut std::ffi::c_void {
-    // No real device/view to read metrics from at this untouched spike
-    // entry point (see this fn's own doc comment — "not wired into any
-    // renderer yet") — the old hardcoded iPhone-13/14-ish physical size at
-    // scale_factor 1.0 is fine here since nothing reads real touch input
-    // through it. NativeMetalProbe::new is the path that threads the
-    // actual device metrics through (see build_headless_game_ecs_app's own
-    // doc comment).
-    let app = build_headless_game_ecs_app(1170, 2532, 1.0);
-    Box::into_raw(Box::new(app)) as *mut std::ffi::c_void
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn native_game_app_tick(obj: *mut std::ffi::c_void) {
-    let app = unsafe { &mut *(obj as *mut App) };
-    app.update();
-
-    // Phase 6 Step 2 (extraction): pull a plain, owned snapshot out of the
-    // headless World — same query shapes the plan specified (Zombie/
-    // NetPlayer transforms, FpsCamera pose, static Mesh3d geometry for the
-    // arena+gun). Not wired into any renderer yet (Step 4); this just
-    // proves the extraction queries themselves resolve correctly against
-    // the real game's live entities.
-    let snapshot = extract_render_snapshot(app.world_mut());
-    let mesh_vert_total: usize = snapshot.static_meshes.iter().map(|m| m.positions.len()).sum();
-    match &snapshot.camera {
-        Some(cam) => println!(
-            "[native_game_app_spike] zombies={} players={} static_meshes={} verts={} camera_eye={:?} yaw={:.2} pitch={:.2}",
-            snapshot.zombies.len(),
-            snapshot.remote_players.len(),
-            snapshot.static_meshes.len(),
-            mesh_vert_total,
-            cam.eye,
-            cam.yaw,
-            cam.pitch,
-        ),
-        None => println!(
-            "[native_game_app_spike] zombies={} players={} static_meshes={} verts={} camera=<none yet>",
-            snapshot.zombies.len(),
-            snapshot.remote_players.len(),
-            snapshot.static_meshes.len(),
-            mesh_vert_total,
-        ),
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn native_game_app_release(obj: *mut std::ffi::c_void) {
-    let app: Box<App> = unsafe { Box::from_raw(obj as *mut App) };
-    drop(app);
-}

@@ -82,11 +82,10 @@ final class GameControllerInput {
         }
     }
 
-    // Dispatch to the active native Metal probe (`rustMetalProbe` — both
-    // the plain probe demo and, when USE_REAL_GAME_NATIVE_RENDERER is set,
-    // the real game's own headless App via native_metal_probe_*). The old
-    // bevy_render-on-CADisplayLink fallback (`bevyApp`) was removed —
-    // dead code once USE_RUST_METAL_DEMO (which gated it) was always true.
+    // Dispatch to the native Metal renderer (`rustMetalProbe`, driving the
+    // real game's own headless App via native_metal_probe_*). The old
+    // bevy_render-on-CADisplayLink fallback (`bevyApp`) was removed once
+    // this became the only renderer ever built.
     private static func keyChanged(on vc: ViewController?, _ keyId: UInt16, _ pressed: Bool) {
         if let probe = vc?.rustMetalProbe {
             native_metal_probe_key_changed(probe, keyId, pressed)

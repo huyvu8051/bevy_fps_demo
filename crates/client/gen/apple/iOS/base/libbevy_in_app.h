@@ -12,13 +12,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Opaque pointer to the Rust-side bevy::app::App — only ever the headless
-// gameplay App from native_game_app_create below now (see its own
-// comments); the bevy_render-on-CADisplayLink App this type originally
-// also pointed to was removed once wgpu's own CPU encoding cost, not the
-// winit event loop, turned out to be the real problem.
-struct bevy_app;
-
 // Rust + `metal` crate renderer (no Bevy App/bevy_render/wgpu at all) — see
 // crates/client/src/cadisplaylink/native_metal_probe.rs. Draws the REAL
 // game's own level (arena+gun) with the camera driven by the real
@@ -129,13 +122,5 @@ void native_metal_probe_near_death_nearest_zombie(struct native_metal_probe *pro
 // same as Kill All/Spawn +100).
 bool native_metal_probe_game_over(struct native_metal_probe *probe);
 void native_metal_probe_trigger_restart(struct native_metal_probe *probe);
-
-// Phase 6 Step 1 feasibility spike: the real game's gameplay App
-// (physics/networking/AI/prediction) with no window/render backend at all
-// — see crates/client/src/cadisplaylink/native_game_app.rs. Not wired into
-// any renderer yet; native_game_app_tick just prints zombie/player counts.
-struct bevy_app *native_game_app_create(void);
-void native_game_app_tick(struct bevy_app *app);
-void native_game_app_release(struct bevy_app *app);
 
 #endif /* libbevy_in_app_h */

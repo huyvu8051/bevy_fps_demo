@@ -1,7 +1,8 @@
-//! Phase 6 of the wgpu-replacement plan: the REAL game's gameplay App
-//! (physics, networking, zombie AI, player prediction — everything in
-//! `build_game_common`/`setup()` from `crate::lib`) running headless, no
-//! window, no `WinitPlugin`, no `RenderPlugin`/`PbrPlugin`/wgpu at all.
+//! Boots the real game's gameplay App (physics, networking, zombie AI,
+//! player prediction — everything in `build_game_common`/`setup()` from
+//! `crate::lib`) headless, no window, no `WinitPlugin`, no
+//! `RenderPlugin`/`PbrPlugin`/wgpu at all — this is what `native_metal_
+//! probe.rs`'s real-game renderer runs and draws every frame on iOS.
 //!
 //! Our renderer never touched Bevy's own window/asset/GPU plumbing to
 //! begin with (`native_metal_probe.rs` talks straight to the raw UIView's
@@ -15,10 +16,10 @@
 use bevy::app::App;
 use bevy::asset::AssetApp;
 
-// Step 1 (feasibility spike): does `build_game_common` + `setup()` run at
-// all without any window/render backend? This was never tested before —
-// every previous run of this code (device, Simulator, desktop) always had
-// a full DefaultPlugins/WinitPlugin/RenderPlugin stack underneath it.
+// `build_game_common` + `setup()` run fine with no window/render backend
+// at all, once the right minimal plugin subset (below) is present —
+// confirmed by actually running this headless; every plugin add below
+// exists because leaving it out panicked at that exact point.
 pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, scale_factor: f32) -> App {
     let mut app = App::new();
     // Proactive pass over bevy_internal's actual `DefaultPlugins` member
