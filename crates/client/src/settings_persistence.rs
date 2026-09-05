@@ -140,11 +140,27 @@ fn ios_home_directory() -> Option<String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn settings_file_path() -> std::path::PathBuf {
+    // iOS sandbox rule confirmed the hard way on a real device (syslog:
+    // "Operation not permitted (os error 1)"): NSHomeDirectory() is a
+    // real, writable-by-this-app directory, but you can't write files
+    // directly at ITS root — only inside specific subdirectories
+    // (Documents/, Library/, tmp/, ...). "Library/Application Support" is
+    // Apple's own recommended spot for exactly this kind of "app-managed
+    // data the user never browses directly" file (Documents is for
+    // user-visible/iCloud-backed/Files-app-exposed content instead). See
+    // write_settings_text's create_dir_all — a fresh container has no
+    // Application Support folder yet, has to be created before first
+    // write.
     #[cfg(target_os = "ios")]
-    let home = ios_home_directory().unwrap_or_else(|| ".".to_string());
+    {
+        let home = ios_home_directory().unwrap_or_else(|| ".".to_string());
+        std::path::Path::new(&home).join("Library/Application Support/bevy_fps_demo_settings.ron")
+    }
     #[cfg(not(target_os = "ios"))]
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    std::path::Path::new(&home).join(".bevy_fps_demo_settings.ron")
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        std::path::Path::new(&home).join(".bevy_fps_demo_settings.ron")
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -154,8 +170,16 @@ fn read_settings_text() -> Option<String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn write_settings_text(text: &str) {
-    if let Err(e) = std::fs::write(settings_file_path(), text) {
-        warn!("failed to save settings to {:?}: {e}", settings_file_path());
+    let path = settings_file_path();
+    if let Some(parent) = path.parent() {
+        // No-op on desktop ($HOME always exists already); on iOS a fresh
+        // container has no "Library/Application Support" subfolder until
+        // something creates it.
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::write(&path, text) {
+        Ok(()) => info!("[settings] saved to {path:?}"),
+        Err(e) => warn!("[settings] failed to save to {path:?}: {e}"),
     }
 }
 
@@ -279,7 +303,12 @@ pub(crate) fn apply_persisted_settings(world: &mut World) {
         delete_settings_text();
         return;
     }
-    let Some(text) = read_settings_text() else { return };
+    #[cfg(not(target_arch = "wasm32"))]
+    info!("[settings] looking for local custom settings at {:?}", settings_file_path());
+    let Some(text) = read_settings_text() else {
+        info!("[settings] no local custom settings found, staying at ship defaults");
+        return;
+    };
     let settings: PersistedSettings = match ron::from_str(&text) {
         Ok(s) => s,
         Err(e) => {
@@ -287,6 +316,7 @@ pub(crate) fn apply_persisted_settings(world: &mut World) {
             return;
         }
     };
+    info!("[settings] loaded local custom settings, applying on top of ship defaults");
     apply_settings_to_world(world, &settings);
 }
 
