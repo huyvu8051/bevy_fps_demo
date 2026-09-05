@@ -211,7 +211,15 @@ pub(crate) struct TouchGameplayInputs<'w> {
 // Runs immediately after multi_touch_button_interaction (same "runs
 // first" reasoning as that system's own comment) so every touch_*_button
 // consumer later in this frame's chain sees None, not a stale Pressed.
-pub(crate) fn suppress_touch_buttons_while_menu_open(menu_visible: Res<SettingsMenuVisible>, mut buttons: Query<&mut Interaction, With<TouchControlButton>>) {
+// Excludes SettingsToggleButton (the "==" gear button, which ALSO carries
+// TouchControlButton — see its own spawn site) — that one is the button
+// that CLOSES the menu, so suppressing it here would make the menu
+// unclosable the instant it opens (confirmed regression: reported as
+// "menu can't be closed anymore" right after this fix shipped).
+pub(crate) fn suppress_touch_buttons_while_menu_open(
+    menu_visible: Res<SettingsMenuVisible>,
+    mut buttons: Query<&mut Interaction, (With<TouchControlButton>, Without<SettingsToggleButton>)>,
+) {
     if !menu_visible.0 {
         return;
     }
