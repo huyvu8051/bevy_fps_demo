@@ -1,5 +1,10 @@
 # Web port (wasm32)
 
+> `crates/web/` lives on the `web` branch, not `master` — master drops it
+> entirely to keep normal dev builds/CI from having to consider a wasm32
+> target at all. Everything below still applies once you're on `web`
+> (`git checkout web && git merge master` to pull in the latest first).
+
 Status: **works, full parity with desktop** — a release build compiles,
 boots, renders, loads real assets, and plays real multiplayer against the
 same dedicated server desktop/iOS clients use: stays connected (real
