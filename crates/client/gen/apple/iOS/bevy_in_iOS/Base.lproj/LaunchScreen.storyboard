@@ -22,7 +22,15 @@
                                 </constraints>
                             </imageView>
                         </subviews>
-                        <color key="backgroundColor" xcode11CocoaTouchSystemColor="systemBackgroundColor" cocoaTouchSystemColor="whiteColor"/>
+                        <!-- Matches the logo's own badge background (RGB
+                        19,23,24 sampled from app_icon_1024.png) instead of
+                        white — the badge's dark disc isn't separable from
+                        its own outline linework (same black, touching
+                        pixels in a flattened raster with no source layers),
+                        so matching the surrounding color is how this stays
+                        seamless instead of showing as a dark square/circle
+                        on a white screen. -->
+                        <color key="backgroundColor" red="0.0745" green="0.0902" blue="0.0941" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                         <constraints>
                             <constraint firstItem="LGO-go-app" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="cx1-th-c60"/>
                             <constraint firstItem="LGO-go-app" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" id="cy1-th-c60"/>
