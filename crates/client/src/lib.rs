@@ -1605,7 +1605,15 @@ pub fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "Last Day in Saigon".to_string(),
-                        mode: if cfg!(target_os = "ios") || cfg!(target_os = "android") {
+                        // No `target_os = "ios"` arm here — this fn is
+                        // never called on iOS at all (native_game_app.rs's
+                        // headless App is the real entry point there, and
+                        // it deliberately never adds WindowPlugin). Android
+                        // has no real target yet, but if it ever uses
+                        // Bevy's standard winit support (rather than a
+                        // custom native renderer like iOS's), it goes
+                        // through this exact fn/WindowPlugin.
+                        mode: if cfg!(target_os = "android") {
                             WindowMode::BorderlessFullscreen(MonitorSelection::Current)
                         } else {
                             WindowMode::Windowed
@@ -1766,12 +1774,14 @@ fn fill_ambient_on_editor_cameras(
 }
 
 // Everything the real game needs that has nothing to do with which
-// windowing backend is driving it (winit vs. the experimental
-// CADisplayLink FFI entry point in cadisplaylink::ffi) — mirrors
-// build_probe_common's own reasoning. DefaultPlugins/WindowPlugin/
-// TaskPoolPlugin/WinitSettings stay in each entry point's own setup since
-// they genuinely differ (WinitPlugin disabled + no WinitSettings on the
-// CADisplayLink path), everything else is identical.
+// windowing backend is driving it (winit vs. the CADisplayLink FFI entry
+// point in cadisplaylink::ffi, the permanent iOS rendering path — see
+// that module's own doc comment) — mirrors
+// native_game_app::build_headless_game_ecs_app's own reasoning.
+// DefaultPlugins/WindowPlugin/WinitSettings stay in each entry point's
+// own setup since they genuinely differ (WinitPlugin disabled + no
+// WinitSettings, no WindowPlugin at all on the CADisplayLink path),
+// everything else is identical.
 //
 // A real `Plugin`, not just a free function — wraps the ~90-system
 // master Update chain built up across the 7-phase lib.rs file split
