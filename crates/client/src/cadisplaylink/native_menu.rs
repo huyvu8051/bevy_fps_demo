@@ -1,6 +1,6 @@
 //! Phase 6 follow-up: the real game's settings menu is a `bevy_ui` Node
 //! hierarchy (`spawn_settings_menu` in `crate::lib`), and our custom Metal
-//! renderer never draws `bevy_ui` content at all (`native_metal_probe.rs`
+//! renderer never draws `bevy_ui` content at all (`native_metal_renderer.rs`
 //! only issues `Mesh3d`/`MeshMaterial3d` draw calls) — confirmed via a
 //! temporary self-test that `SettingsMenuVisible` itself flips correctly on
 //! F1/MENU-button press, so this is a missing-renderer-feature, not a logic

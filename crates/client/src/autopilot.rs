@@ -55,7 +55,7 @@ impl Default for Autopilot {
 /// Runs ONLY autopilot's target-selection + camera-aim tracking (turns the
 /// player's view toward the nearest zombie), without the movement/sprint/
 /// fire decisions the full `Autopilot` toggle also drives — added so the
-/// scope-camera-not-showing-zombies investigation (native_metal_probe.rs)
+/// scope-camera-not-showing-zombies investigation (native_metal_renderer.rs)
 /// could get a zombie reliably centered in frame without needing to
 /// actually aim by hand first. `intent.move_axis`/`intent.fire` still only
 /// take effect downstream while `Autopilot.0` is true (see send_player_

@@ -5,7 +5,7 @@
 //! probe.rs`'s real-game renderer runs and draws every frame on iOS.
 //!
 //! Our renderer never touched Bevy's own window/asset/GPU plumbing to
-//! begin with (`native_metal_probe.rs` talks straight to the raw UIView's
+//! begin with (`native_metal_renderer.rs` talks straight to the raw UIView's
 //! CAMetalLayer, and reads input via direct FFI calls from Swift, not
 //! Bevy's InputPlugin) — so the real gameplay App doesn't need
 //! `WindowPlugin`'s `RawHandleWrapper`/`create_bevy_window` either. This
@@ -191,7 +191,7 @@ pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, sc
     // Physical resolution + a real `scale_factor_override` (not the
     // WindowResolution default of 1.0) — MUST match Swift's real device
     // metrics (UIScreen.main.nativeScale + the Metal view's own point-size
-    // bounds, threaded in via NativeMetalProbe::new/native_metal_probe_
+    // bounds, threaded in via NativeMetalRenderer::new/native_metal_probe_
     // create_real_game) or every touch-driven UI hit-test breaks: Swift
     // reports touch.location(in:) in POINTS (UIKit's own coordinate space),
     // while Bevy UI lays out Node/ComputedNode using window.width()/height()

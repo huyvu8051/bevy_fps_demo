@@ -1,6 +1,6 @@
 //! glTF-flavored helpers for the native Metal renderer: a vertex layout
 //! (`GltfVertex`) shared by the real game's own per-frame mesh baking
-//! (`bake_static_mesh_vertices` in native_metal_probe.rs) and the skinned
+//! (`bake_static_mesh_vertices` in native_metal_renderer.rs) and the skinned
 //! zombie/soldier model loader (skinned_gltf.rs), plus `to_rgba8` for
 //! normalizing whatever pixel format `gltf::image::Data` decoded to before
 //! handing it to metal_texture.rs's `upload_texture`. Used to also own a
@@ -19,7 +19,7 @@ pub struct GltfVertex {
     pub normal: [f32; 3],
     pub uv: [f32; 2],
     // xyz = tangent direction, w = handedness sign (glTF's own convention)
-    // — see native_metal_probe.rs's SPONZA_SHADER_SOURCE for the TBN basis
+    // — see native_metal_renderer.rs's SPONZA_SHADER_SOURCE for the TBN basis
     // this feeds. `[1,0,0,1]` (an arbitrary but valid unit tangent) when
     // the source mesh has no real ATTRIBUTE_TANGENT — never actually
     // sampled through in that case, since normal_texture is also None

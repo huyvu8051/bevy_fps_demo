@@ -1,7 +1,7 @@
 //! Phase 6 Step 2 of the wgpu-replacement plan: per-frame extraction from
 //! the headless real-game `App` (see `native_game_app.rs`) into a plain,
 //! owned snapshot our Metal renderer can read — the seam between Bevy ECS
-//! and the custom renderer, mirroring `native_metal_probe.rs`'s existing
+//! and the custom renderer, mirroring `native_metal_renderer.rs`'s existing
 //! `patrol_system` extract pattern (tick the World, run an ad-hoc
 //! `SystemState`/`QueryState`, collect into an owned `Vec` rather than
 //! keeping a live borrow).
@@ -145,7 +145,7 @@ pub fn prime_camera_viewport(world: &mut bevy::ecs::world::World, width_pts: f32
 /// this frame's referenced AssetIds at the end of every
 /// extract_render_snapshot call (see its own `used_texture_ids`/
 /// `retain()`) — this used to be "cache forever" like
-/// `NativeMetalProbe::real_game_textures`/`gpu_transformed_mesh_cache` on
+/// `NativeMetalRenderer::real_game_textures`/`gpu_transformed_mesh_cache` on
 /// the Metal side still are, which was fine back when nothing ever
 /// changed a car's texture after spawn, but confirmed growing without
 /// bound on a real device once distance-LOD started swapping tiers live.
@@ -157,7 +157,7 @@ pub struct ExtractedTexture {
     /// The source `Image` asset's own stable identity — used by the renderer
     /// to cache uploaded GPU textures keyed by WHICH image this is, not by
     /// its position in `RenderSnapshot::static_meshes` (see
-    /// `NativeMetalProbe::real_game_textures`'s own doc comment for why a
+    /// `NativeMetalRenderer::real_game_textures`'s own doc comment for why a
     /// positional cache silently went stale/mismatched once transient VFX
     /// meshes — muzzle flash, smoke — started spawning/despawning every
     /// shot, shuffling that Vec's contents frame to frame).
@@ -231,12 +231,12 @@ pub struct ExtractedMesh {
     pub normal_texture: Option<ExtractedTexture>,
     /// World-space transform at extraction time (from `GlobalTransform`,
     /// converted to a plain `Transform` for the renderer's convenience —
-    /// see `bake_static_meshes` in native_metal_probe.rs).
+    /// see `bake_static_meshes` in native_metal_renderer.rs).
     pub transform: Transform,
     /// The real `StandardMaterial::alpha_mode` — `true` for `Blend`/
     /// `Premultiplied`/`Add`/`Multiply` (anything that needs to composite
     /// with what's already drawn rather than fully replace it), `false`
-    /// for `Opaque`/`Mask`. native_metal_probe.rs's draw_scene uses this
+    /// for `Opaque`/`Mask`. native_metal_renderer.rs's draw_scene uses this
     /// (the real material property, not a guessed alpha threshold or an
     /// entity-hierarchy heuristic) to draw every blended mesh in the
     /// whole scene — arena or gun — in a separate
@@ -246,14 +246,14 @@ pub struct ExtractedMesh {
     /// value heuristic wasn't reliable enough.
     pub is_blend: bool,
     /// The source `Mesh` asset's own stable identity — `None` unless
-    /// `is_gpu_transformed` is also true. Lets native_metal_probe.rs cache
+    /// `is_gpu_transformed` is also true. Lets native_metal_renderer.rs cache
     /// one local-space vertex/index buffer per unique mesh (uploaded once,
     /// reused every frame this same asset shows up again) instead of
     /// re-baking to world space and re-uploading a fresh buffer every
     /// single frame — see `is_gpu_transformed`'s own doc comment for which
     /// meshes actually get this treatment and why.
     pub mesh_id: Option<AssetId<Mesh>>,
-    /// True for meshes native_metal_probe.rs should transform on the GPU
+    /// True for meshes native_metal_renderer.rs should transform on the GPU
     /// via a per-draw model-matrix uniform (see `Self::transform` above)
     /// instead of the older "bake_static_mesh_vertices CPU-transforms
     /// every vertex into world space fresh every frame" path every other
@@ -385,7 +385,7 @@ pub struct RenderSnapshot {
     /// ever read by `apply_map_render_toggles` to sync bevy_render's own
     /// `Msaa` component (the desktop/winit build's render path), which
     /// this renderer never touches at all, so toggling it in-game visibly
-    /// did nothing here. Extracted so native_metal_probe.rs can actually
+    /// did nothing here. Extracted so native_metal_renderer.rs can actually
     /// switch between its own MSAA-on/MSAA-off compiled pipeline pairs —
     /// same button, now with a real effect on both render paths instead of
     /// just one.
@@ -396,7 +396,7 @@ pub struct RenderSnapshot {
     /// still updates the real `MainSun` `DirectionalLight.shadows_enabled`
     /// every frame (desktop's render path reads it), but this renderer
     /// never touches that component — extracted separately so
-    /// native_metal_probe.rs can pick its own shadow-map resolution (0 =
+    /// native_metal_renderer.rs can pick its own shadow-map resolution (0 =
     /// skip the shadow-caster draw passes entirely) instead.
     pub shadow_quality: u8,
     /// The `LightQuality` cheat-menu tier (crate::lib, 0..=5) — same gap as
@@ -422,14 +422,14 @@ pub struct RenderSnapshot {
     /// camera render target; this renderer never touches bevy_render at
     /// all, so that resource previously had zero effect here regardless of
     /// what the settings-menu slider was set to. Extracted so
-    /// native_metal_probe.rs can render its own offscreen scene target at
+    /// native_metal_renderer.rs can render its own offscreen scene target at
     /// this scale and upscale-blit it into the real drawable instead.
     pub render_resolution_scale: f32,
     /// The `ZombieTextureQuality` settings-menu tier (crate::lib, 0..=5,
     /// separate from cars' own `TextureQuality`) — this renderer's zombie/
     /// soldier skinned models were loaded once at startup from a fixed
     /// embedded texture and never touched it at all. Extracted so
-    /// native_metal_probe.rs's apply_zombie_texture_quality can re-upload
+    /// native_metal_renderer.rs's apply_zombie_texture_quality can re-upload
     /// each zombie kind's base_color_texture from
     /// shared::zombie_kind_texture_path's tiered JPEGs when this changes.
     /// Cars don't need an equivalent snapshot field — their TextureQuality
@@ -710,7 +710,7 @@ fn extract_panel<Root: bevy::ecs::component::Component>(
 /// which only extracted the point light.
 pub struct SunSnapshot {
     /// The direction the light travels *toward* (the entity's own forward
-    /// vector) — same convention native_metal_probe.rs's old hardcoded
+    /// vector) — same convention native_metal_renderer.rs's old hardcoded
     /// `light_dir` constant used, so `max(dot(normal, -sunDir), 0)` matches.
     pub direction: [f32; 3],
     pub color: [f32; 3],
@@ -719,7 +719,7 @@ pub struct SunSnapshot {
 /// The scene's real `PointLight`, extracted so the Metal renderer can
 /// actually shade from where the light is instead of a hand-picked fixed
 /// direction — lighting was never ported when the rest of the real game
-/// moved onto this renderer (see native_metal_probe.rs's own fragment
+/// moved onto this renderer (see native_metal_renderer.rs's own fragment
 /// shaders, which used a constant `light_dir` unrelated to any real light
 /// in the scene). USE_TEST_ARENA (crate::lib) spawns exactly one overhead
 /// `PointLight`, so `first()` is enough for now — if a scene with more
@@ -834,7 +834,7 @@ impl Default for CameraSnapshot {
 /// Runs once per tick against the headless `App`'s `World` — cheap enough
 /// (a handful of small queries plus re-reading two `Assets<T>` collections)
 /// to call every frame rather than caching, matching
-/// `native_metal_probe.rs`'s own per-frame extract call.
+/// `native_metal_renderer.rs`'s own per-frame extract call.
 pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSnapshot {
     let mut snapshot = RenderSnapshot::default();
 
@@ -1195,7 +1195,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // instantiates those from each Zombie/NetPlayer's SceneRoot, same as
     // it does for the gun's meshes here) — those already get drawn once,
     // correctly GPU-skinned, via `real_game_extracted`'s own
-    // EntityKind::Zombie/Soldier skinned-model path (native_metal_probe.rs)
+    // EntityKind::Zombie/Soldier skinned-model path (native_metal_renderer.rs)
     // using the probe's separately-loaded zombie_model/soldier_model.
     // Without this filter, this query ALSO baked their raw bind-pose
     // vertex positions (no skinning applied — this query has no way to
@@ -1214,7 +1214,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     // which only the desktop/wgpu render path actually reads) — same class
     // of bug `map_msaa_on` above was added to fix for MSAA. Only used to
     // skip drawing the gun entirely when the toggle is off — draw ORDER
-    // (native_metal_probe.rs's draw_scene, opaque-vs-blend pass split) is
+    // (native_metal_renderer.rs's draw_scene, opaque-vs-blend pass split) is
     // decided by the real material AlphaMode instead, see ExtractedMesh::
     // is_blend below, not by whether a mesh belongs to the gun.
     let mut gun_visible_state: SystemState<Res<crate::GunVisible>> = SystemState::new(world);

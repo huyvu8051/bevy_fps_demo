@@ -1,7 +1,7 @@
 //! The renderer core's own notion of "a GPU-skinned thing to draw this
 //! frame" — deliberately knows nothing about zombies, soldiers, or any
 //! other gameplay concept. Used to be a closed `EntityKind::{Zombie,
-//! Soldier}` enum in native_metal_probe.rs, hardcoding both which
+//! Soldier}` enum in native_metal_renderer.rs, hardcoding both which
 //! `SkinnedModel` to draw AND its scale/offset/facing correction directly
 //! into the draw loop — meaning adding a third skinned actor type (a new
 //! monster, a vehicle, anything) meant editing the renderer itself. Moved
@@ -47,7 +47,7 @@ impl SkinnedModelRegistry {
     }
 
     /// For patching an already-registered model in place (mobile
-    /// TextureQuality handling — see native_metal_probe.rs's
+    /// TextureQuality handling — see native_metal_renderer.rs's
     /// apply_zombie_texture_quality) instead of re-parsing its whole .glb
     /// from scratch just to swap a texture.
     pub fn get_mut(&mut self, name: &str) -> Option<&mut SkinnedModelSlot> {
@@ -80,7 +80,7 @@ pub enum SkinnedActorPose {
 /// One skinned actor to draw this frame, exactly as extracted from the
 /// host app's own ECS/game state — this project's implementation is
 /// native_game_extract.rs's zombie/remote-player queries, mapped to this
-/// shape in native_metal_probe.rs's render_frame. `model` is a
+/// shape in native_metal_renderer.rs's render_frame. `model` is a
 /// `SkinnedModelRegistry` key, not a gameplay type.
 pub struct SkinnedActorDraw {
     pub transform: Transform,

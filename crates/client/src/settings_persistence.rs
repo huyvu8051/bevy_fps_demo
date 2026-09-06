@@ -117,7 +117,7 @@ pub(crate) struct PersistedSettings {
 // launched by iOS is not guaranteed writable or stable across
 // relaunches). `NSHomeDirectory()` is the actual Foundation API for
 // this — a plain C function (not an Objective-C message), called the
-// same way native_metal_probe.rs's own bundle_resource_path() already
+// same way native_metal_renderer.rs's own bundle_resource_path() already
 // calls NSBundle for the read-only asset path, just without needing
 // msg_send since this one isn't a method call.
 #[cfg(target_os = "ios")]

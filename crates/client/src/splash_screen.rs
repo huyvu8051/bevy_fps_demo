@@ -4,13 +4,13 @@
 // desktop/web (bevy_ui) side only — the iOS CADisplayLink renderer draws
 // its own HUD straight from ECS state via hand-written Metal code, not
 // bevy_ui, so this node is invisible there; iOS has its own equivalent
-// drawn directly in native_metal_probe.rs's render_frame (see its splash
+// drawn directly in native_metal_renderer.rs's render_frame (see its splash
 // quad code, gated on the same duration below).
 
 use bevy::prelude::*;
 use crate::*;
 
-// `pub(crate)` so native_metal_probe.rs's Metal-drawn splash stays in sync
+// `pub(crate)` so native_metal_renderer.rs's Metal-drawn splash stays in sync
 // with this one instead of hand-copying the number.
 pub(crate) const SPLASH_SCREEN_DURATION_SECS: f32 = 2.0;
 

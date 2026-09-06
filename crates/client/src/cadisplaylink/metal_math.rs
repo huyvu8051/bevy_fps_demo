@@ -2,7 +2,7 @@
 //! this project's own gameplay types (no `bevy`, no `shared`, no
 //! `ExtractedMesh`/`Zombie`/etc.), so this is the first piece pulled out on
 //! the way toward a genuinely reusable "native Metal renderer for Bevy on
-//! iOS" plugin (see native_metal_probe.rs's own module doc comment for the
+//! iOS" plugin (see native_metal_renderer.rs's own module doc comment for the
 //! wider context this experiment exists in). Column-major `[[f32; 4]; 4]`,
 //! matching Metal's own convention.
 
@@ -65,7 +65,7 @@ pub fn look_at(eye: [f32; 3], center: [f32; 3], up: [f32; 3]) -> [[f32; 4]; 4] {
 
 /// Transforms a point (implicit w=1) by a column-major 4x4 matrix,
 /// returning the full homogeneous clip-space `[x, y, z, w]` — callers that
-/// need NDC (native_metal_probe.rs's scope-PIP screen projection, to place
+/// need NDC (native_metal_renderer.rs's scope-PIP screen projection, to place
 /// the PIP circle where the real 3D lens quad's world position actually
 /// projects to instead of a fixed screen position) must divide by `w`
 /// themselves, and check `w > 0` first: a point behind the camera has

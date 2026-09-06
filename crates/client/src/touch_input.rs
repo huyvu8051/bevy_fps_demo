@@ -479,7 +479,7 @@ pub(crate) fn spawn_touch_controls(commands: &mut Commands) {
     // a landscape phone the whole column's real height (joystick + every
     // row) was landing close enough to the top edge to overlap HealthUi's
     // own top:16 label (both are real ComputedNode rects now that both
-    // draw via the Metal renderer — see native_metal_probe.rs's
+    // draw via the Metal renderer — see native_metal_renderer.rs's
     // touch-control/HUD draw loops — so this was actually visible, not
     // just theoretical). One fewer row buys back a full row's height.
     let stance_btn_px = TOUCH_FIRE_BUTTON_PX * 0.6;

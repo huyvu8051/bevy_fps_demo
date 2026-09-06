@@ -520,7 +520,7 @@ pub(crate) fn apply_fps_cap_desktop(cap: Res<FpsCap>, winit_settings: Option<Res
     winit_settings.focused_mode = UpdateMode::reactive(std::time::Duration::from_secs_f32(1.0 / cap.0 as f32));
 }
 // Default 30% on every platform — the 3D scene (desktop) / whole frame
-// including UI (mobile, see native_metal_probe.rs's own blit pass) renders
+// including UI (mobile, see native_metal_renderer.rs's own blit pass) renders
 // into a 0.3x offscreen target and gets upscaled. Override per-run with
 // RENDER_SCALE, or live via the settings-menu presets.
 const RESOLUTION_SCALE_DEFAULT: f32 = 0.3;
@@ -530,7 +530,7 @@ const RESOLUTION_SCALE_MIN_TEXTURE_PX: u32 = 64;
 /// unless `RENDER_SCALE` env overrides it (clamped to the sane 0.1..=1.0
 /// range the offscreen target supports). The in-game settings-menu presets
 /// still change it at runtime from whatever this returns. Also feeds the
-/// offscreen game-camera render target (desktop) / native_metal_probe.rs's
+/// offscreen game-camera render target (desktop) / native_metal_renderer.rs's
 /// scene_color_texture (mobile).
 fn resolution_scale_default() -> f32 {
     std::env::var("RENDER_SCALE")
@@ -968,7 +968,7 @@ impl Default for GunVisible {
 struct MapMsaaOn(bool);
 
 // Runtime shadow quality for MainSun's shadows_enabled — 0 = off, 1..=5 =
-// on with increasing shadow-map resolution (see native_metal_probe.rs's
+// on with increasing shadow-map resolution (see native_metal_renderer.rs's
 // SHADOW_MAP_SIZES for the actual per-level texture size; the desktop
 // render path only reads shadows_enabled != 0, no per-level resolution
 // knob there yet). Mobile (iOS/Android) starts at 1 (on, lowest/cheapest
@@ -1053,7 +1053,7 @@ pub(crate) struct PointLightBaseIntensity(pub(crate) f32);
 // `SHADOWS=0` opts back out for a perf-testing run that wants them off
 // from the very first frame (before the in-game buttons are even
 // reachable). Mobile (iOS/Android) ignores both env vars and always starts
-// at level 5 (full), same as desktop's default — native_metal_probe.rs's
+// at level 5 (full), same as desktop's default — native_metal_renderer.rs's
 // own extraction (RenderSnapshot::shadow_quality/light_quality) is what
 // makes the in-game buttons actually take effect there too now.
 /// 0 (no texture at all — every image collapsed to a flat color, the most
@@ -1100,7 +1100,7 @@ impl Default for TextureQuality {
 // starts at 2, desktop at 5) — see zombie_kind_texture_path (crates/
 // shared) for how a tier picks the right file, and
 // apply_zombie_texture_quality (crate::zombie_client / mobile's own copy
-// in native_metal_probe.rs) for where this actually gets applied.
+// in native_metal_renderer.rs) for where this actually gets applied.
 // `ZOMBIE_TEXTURE_QUALITY=N` env overrides the default for a one-off perf
 // test, independent of `TEXTURE_QUALITY` (cars).
 pub(crate) fn zombie_texture_quality_default() -> u8 {
@@ -3215,7 +3215,7 @@ fn count_local_kills(
 // (MAP_ID, button title, one-line description) — keep in sync with
 // Scenario::from_map_id (crates/shared/src/network.rs). ASCII/English only
 // (not the original Swift menu's Vietnamese text) since this renders
-// through native_metal_probe.rs's bitmap font on iOS too, which only has
+// through native_metal_renderer.rs's bitmap font on iOS too, which only has
 // uppercase A-Z/digits/a handful of symbols — see glyph_index's own doc
 // comment.
 //
@@ -3465,7 +3465,7 @@ fn load_character_ron_by_dir(dir: &str) -> CharacterRon {
     // 2)", panicking across the Swift->Rust FFI boundary in
     // native_metal_probe_create_real_game, which aborts the whole app
     // since that call can't unwind). iOS needs NSBundle's OWN resource
-    // path instead (cadisplaylink::native_metal_probe::bundle_resource_path,
+    // path instead (cadisplaylink::native_metal_renderer::bundle_resource_path,
     // already used the same way for the .glb assets in that same file) —
     // simulator builds happened to still work because the simulator's
     // "sandboxed" bundle path IS a real path on the host Mac's
@@ -3473,7 +3473,7 @@ fn load_character_ron_by_dir(dir: &str) -> CharacterRon {
     // CARGO_MANIFEST_DIR, masking this until a real device was tested.
     #[cfg(target_os = "ios")]
     let text: String = {
-        let resource_path = crate::cadisplaylink::native_metal_probe::bundle_resource_path()
+        let resource_path = crate::cadisplaylink::native_metal_renderer::bundle_resource_path()
             .unwrap_or_else(|| panic!("failed to read {dir}/character.ron: NSBundle.main.resourcePath was nil"));
         let path = std::path::Path::new(&resource_path).join("assets").join(dir).join("character.ron");
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {dir}/character.ron at {path:?}: {e}"))

@@ -1,7 +1,7 @@
 //! Plain Metal texture upload — zero dependency on this project's own
 //! gameplay/asset types (no `bevy`, no `shared`, no `gltf`), so this is
 //! another piece pulled out on the way toward a genuinely reusable "native
-//! Metal renderer for Bevy on iOS" plugin (see native_metal_probe.rs's own
+//! Metal renderer for Bevy on iOS" plugin (see native_metal_renderer.rs's own
 //! module doc comment for the wider context this experiment exists in;
 //! metal_math.rs was the first piece split out this same way).
 

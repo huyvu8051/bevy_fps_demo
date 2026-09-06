@@ -1,12 +1,16 @@
-//! Rust-side control experiment, mirroring the Swift native-Metal demo
-//! (see ViewController.swift's USE_NATIVE_METAL_DEMO): draws the same
-//! 5-cuboid arena directly via the `metal` crate (classic
-//! MTLCommandQueue/MTLRenderCommandEncoder, no bevy_render, no wgpu) to
-//! check whether writing the renderer in Rust (instead of Swift) brings
-//! wgpu's "high CPU encoding cost" overhead back, or whether it's specific
-//! to wgpu's abstraction layer regardless of language. Entirely
-//! self-contained — no Bevy App involved at all, since the question this
-//! answers doesn't need ECS.
+//! The iOS renderer — drives the real game (crate::cadisplaylink's
+//! `native_game_app`/`native_game_extract`) straight to screen via the
+//! `metal` crate (classic MTLCommandQueue/MTLRenderCommandEncoder), no
+//! bevy_render/wgpu involved. This started as a control experiment
+//! (mirroring an old Swift native-Metal demo, checking whether writing
+//! the renderer in Rust instead of Swift brought wgpu's "high CPU
+//! encoding cost" overhead back) — that question's long since answered
+//! (no), and this is now the sole, permanent iOS rendering path, not a
+//! spike kept around for comparison. `NativeMetalRenderer` still has a
+//! fallback demo/patrol scene (a handful of hardcoded cuboids) it draws
+//! when no headless game App is attached — that's a real, still-used
+//! secondary path (e.g. for isolating rendering-only bugs), not leftover
+//! dead code from the original experiment.
 
 use bevy::asset::AssetId;
 use bevy::image::Image;
@@ -509,7 +513,7 @@ fragment float4 skinned_fragment(VertexOut in [[stage_in]],
 // Sun-only shadow map: renders every shadow-casting mesh (arena walls/
 // floor/gun via shadow_vertex_sponza, zombies/remote players via
 // shadow_vertex_skinned) from the light's own point of view into a
-// depth-only render target — see NativeMetalProbe::shadow_map's own doc
+// depth-only render target — see NativeMetalRenderer::shadow_map's own doc
 // comment for the texture itself, and render_frame's "Pass 0" for how the
 // resulting `lightViewProjection` matrix is built (an orthographic box
 // centered on the camera, since a directional light has no single
@@ -987,7 +991,7 @@ struct SkinnedUniforms {
     _camera_pad: f32,
 }
 
-pub struct NativeMetalProbe {
+pub struct NativeMetalRenderer {
     device: Device,
     layer: MetalLayer,
     queue: CommandQueue,
@@ -1424,14 +1428,14 @@ fn load_splash_texture(device: &metal::Device) -> Option<metal::Texture> {
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(err) => {
-            eprintln!("[native_metal_probe] splash texture read failed {path:?}: {err}");
+            eprintln!("[native_metal_renderer] splash texture read failed {path:?}: {err}");
             return None;
         }
     };
     let decoded = match image::load_from_memory(&bytes) {
         Ok(decoded) => decoded,
         Err(err) => {
-            eprintln!("[native_metal_probe] splash texture decode failed {path:?}: {err}");
+            eprintln!("[native_metal_renderer] splash texture decode failed {path:?}: {err}");
             return None;
         }
     };
@@ -1548,7 +1552,7 @@ struct RealGameMeshDraw<'a> {
 
 const MAT4_IDENTITY: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
 
-impl NativeMetalProbe {
+impl NativeMetalRenderer {
     // `view` is the raw UIView* handed over from Swift — same FFI contract
     // as the existing cadisplaylink module (see ios_view.rs). We reach
     // into it via objc msg_send! to grab its CAMetalLayer, exactly what
@@ -1673,7 +1677,7 @@ impl NativeMetalProbe {
                     )
                 }
                 Err(err) => {
-                    eprintln!("[native_metal_probe] sponza shader compile failed: {err}");
+                    eprintln!("[native_metal_renderer] sponza shader compile failed: {err}");
                     (None, None)
                 }
             };
@@ -1776,7 +1780,7 @@ impl NativeMetalProbe {
                     )
                 }
                 Err(err) => {
-                    eprintln!("[native_metal_probe] shadow shader compile failed: {err}");
+                    eprintln!("[native_metal_renderer] shadow shader compile failed: {err}");
                     (None, None)
                 }
             };
@@ -1808,7 +1812,7 @@ impl NativeMetalProbe {
                     )
                 }
                 Err(err) => {
-                    eprintln!("[native_metal_probe] skinned shader compile failed: {err}");
+                    eprintln!("[native_metal_renderer] skinned shader compile failed: {err}");
                     (None, None)
                 }
             };
@@ -1963,7 +1967,7 @@ impl NativeMetalProbe {
                     )
                 }
                 Err(err) => {
-                    eprintln!("[native_metal_probe] quad shader compile failed: {err}");
+                    eprintln!("[native_metal_renderer] quad shader compile failed: {err}");
                     (None, None)
                 }
             };
@@ -2007,7 +2011,7 @@ impl NativeMetalProbe {
                 device.new_render_pipeline_state(&descriptor).ok()
             }
             Err(err) => {
-                eprintln!("[native_metal_probe] blit shader compile failed: {err}");
+                eprintln!("[native_metal_renderer] blit shader compile failed: {err}");
                 None
             }
         };
@@ -2084,7 +2088,7 @@ impl NativeMetalProbe {
                     )
                 }
                 Err(err) => {
-                    eprintln!("[native_metal_probe] ui shader compile failed: {err}");
+                    eprintln!("[native_metal_renderer] ui shader compile failed: {err}");
                     (None, None)
                 }
             };
@@ -2185,7 +2189,7 @@ impl NativeMetalProbe {
     // `MouseMotion`/`MouseButtonInput`) straight into it — the exact same
     // message-writing helpers `cadisplaylink_*` already uses against the
     // toy/real `cadisplaylink_create_game_app`, just re-targeted. Always
-    // `Some` in practice (every `NativeMetalProbe` builds one) — `Option`
+    // `Some` in practice (every `NativeMetalRenderer` builds one) — `Option`
     // mainly so callers don't need a separate liveness check.
     pub fn real_game_app_mut(&mut self) -> Option<&mut bevy::app::App> {
         self.real_game_app.as_mut()
@@ -2605,14 +2609,14 @@ impl NativeMetalProbe {
             let bytes = match std::fs::read(&path) {
                 Ok(bytes) => bytes,
                 Err(err) => {
-                    eprintln!("[native_metal_probe] zombie texture read failed {path:?}: {err}");
+                    eprintln!("[native_metal_renderer] zombie texture read failed {path:?}: {err}");
                     continue;
                 }
             };
             let decoded = match image::load_from_memory(&bytes) {
                 Ok(decoded) => decoded,
                 Err(err) => {
-                    eprintln!("[native_metal_probe] zombie texture decode failed {path:?}: {err}");
+                    eprintln!("[native_metal_renderer] zombie texture decode failed {path:?}: {err}");
                     continue;
                 }
             };
