@@ -14,6 +14,7 @@
     shadow_quality: Some(1),
     point_light_quality: None,
     render_resolution_scale: None,
+    fps_cap: None,
     map_msaa_on: Some(false),
     scope_camera_enabled: Some(true),
     sensitivity_scale: Some(1.0),

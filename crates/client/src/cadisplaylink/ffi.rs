@@ -364,6 +364,12 @@ pub extern "C" fn native_metal_probe_set_sensitivity(obj: *mut std::ffi::c_void,
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_get_fps_cap(obj: *mut std::ffi::c_void) -> f32 {
+    let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
+    probe.real_game_app_mut().map(super::native_menu::fps_cap).unwrap_or(120.0)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_get_player_hp(obj: *mut std::ffi::c_void) -> f32 {
     let probe = unsafe { &mut *(obj as *mut NativeMetalProbe) };
     probe.real_game_app_mut().map(super::native_menu::player_hp).unwrap_or(-1.0)

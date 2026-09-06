@@ -8,9 +8,10 @@
 //
 // A field left `None` here means "don't override — let that resource's
 // own Default impl (crates/client/src/lib.rs etc.) decide", which for a
-// few fields (render_resolution_scale: RENDER_SCALE env var;
-// shadow_quality/light_quality/point_light_quality: LIGHTS/SHADOWS env
-// vars; autopilot: depends on the current map scenario) is genuinely
+// few fields (render_resolution_scale: RENDER_SCALE env var; fps_cap:
+// FPS_CAP env var; shadow_quality/light_quality/point_light_quality:
+// LIGHTS/SHADOWS env vars; autopilot: depends on the current map
+// scenario) is genuinely
 // dynamic logic this file has no business trying to duplicate — only
 // the flat, load-bearing "what tier does this platform ship at" numbers
 // are pinned here.
@@ -24,6 +25,7 @@
     shadow_quality: None,
     point_light_quality: None,
     render_resolution_scale: None,
+    fps_cap: None,
     map_msaa_on: Some(false),
     scope_camera_enabled: Some(true),
     sensitivity_scale: Some(1.0),

@@ -75,6 +75,11 @@ class ViewController: UIViewController {
     // Any? since GameControllerInput itself is @available(iOS 14, *) and
     // this property must be declarable on iOS 13 too (deployment target).
     private var gameControllerInput: Any?
+    // Last FPS cap value actually applied to displayLink.preferredFrameRateRange
+    // — nil forces the very first enterFrame to apply whatever the Settings
+    // menu default is, since there's no natural "not set yet" sentinel for a
+    // real fps value the way there is for e.g. HP (-1). See syncFpsCap.
+    private var lastFpsCap: Float?
 
     lazy var displayLink: CADisplayLink = {
         CADisplayLink.init(target: self, selector: #selector(enterFrame))
@@ -185,6 +190,27 @@ class ViewController: UIViewController {
         native_metal_probe_update_camera(probe, forward, strafe, lookDx, lookDy, deltaTime)
         native_metal_probe_render_frame(probe)
         syncHud()
+        if #available(iOS 15.0, *) {
+            syncFpsCap(probe)
+        }
+    }
+
+    // Polls FpsCap (crate::lib) via FFI and re-applies preferredFrameRateRange
+    // only when it actually changed — no push notification exists from Rust
+    // to Swift for a resource change, so this is the same "poll a cheap FFI
+    // getter every frame" pattern syncHud() already uses for HP/kill count.
+    // At the default 120 cap, keeps the original adaptive
+    // (80...120, preferred 120) range for smooth ProMotion behavior; any
+    // lower cap switches to a fixed minimum==maximum==preferred range,
+    // which is the correct way to force an exact rate rather than a range.
+    @available(iOS 15.0, *)
+    private func syncFpsCap(_ probe: OpaquePointer) {
+        let cap = native_metal_probe_get_fps_cap(probe)
+        guard cap != lastFpsCap else { return }
+        lastFpsCap = cap
+        displayLink.preferredFrameRateRange = cap >= 120
+            ? CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+            : CAFrameRateRange(minimum: cap, maximum: cap, preferred: cap)
     }
 
     // MARK: touch — every active UITouch is forwarded with its own stable

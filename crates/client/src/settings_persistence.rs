@@ -76,6 +76,7 @@ pub(crate) struct PersistedSettings {
     pub(crate) shadow_quality: Option<u8>,
     pub(crate) point_light_quality: Option<u8>,
     pub(crate) render_resolution_scale: Option<f32>,
+    pub(crate) fps_cap: Option<u32>,
     pub(crate) map_msaa_on: Option<bool>,
     pub(crate) scope_camera_enabled: Option<bool>,
     pub(crate) sensitivity_scale: Option<f32>,
@@ -266,6 +267,7 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(shadow_quality, ShadowQuality);
     apply!(point_light_quality, PointLightQuality);
     apply!(render_resolution_scale, RenderResolutionScale);
+    apply!(fps_cap, FpsCap);
     apply!(map_msaa_on, MapMsaaOn);
     apply!(scope_camera_enabled, ScopeCameraEnabled);
     apply!(sensitivity_scale, SensitivityScale);
@@ -335,6 +337,7 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(ShadowQuality)
         || changed!(PointLightQuality)
         || changed!(RenderResolutionScale)
+        || changed!(FpsCap)
         || changed!(MapMsaaOn)
         || changed!(ScopeCameraEnabled)
         || changed!(SensitivityScale)
@@ -388,6 +391,7 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         shadow_quality: world.get_resource::<ShadowQuality>().map(|r| r.0),
         point_light_quality: world.get_resource::<PointLightQuality>().map(|r| r.0),
         render_resolution_scale: world.get_resource::<RenderResolutionScale>().map(|r| r.0),
+        fps_cap: world.get_resource::<FpsCap>().map(|r| r.0),
         map_msaa_on: world.get_resource::<MapMsaaOn>().map(|r| r.0),
         scope_camera_enabled: world.get_resource::<ScopeCameraEnabled>().map(|r| r.0),
         sensitivity_scale: world.get_resource::<SensitivityScale>().map(|r| r.0),

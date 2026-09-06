@@ -75,6 +75,10 @@ pub(crate) struct SettingsMenuPageLabel;
 #[derive(Component)]
 pub(crate) struct ResolutionScaleButton(f32);
 
+// One per FPS_CAP_PRESETS entry — same shape as ResolutionScaleButton.
+#[derive(Component)]
+pub(crate) struct FpsCapButton(u32);
+
 // One per texture-quality tier (1..=5) — texture_quality_buttons reads
 // Interaction on these the same way ResolutionScaleButton does. See
 // TextureQuality's own doc comment in lib.rs for what each tier means.
@@ -285,6 +289,50 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         .with_children(|btn| {
                             btn.spawn((
                                 Text::new(format!("{:.0}%", scale * 100.0)),
+                                TextFont {
+                                    font_size: 14.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    }
+                });
+
+                page.spawn((
+                    Text::new("FPS cap"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                page.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for &cap in &FPS_CAP_PRESETS {
+                        row.spawn((
+                            Node {
+                                width: Val::Px(50.0),
+                                height: Val::Px(32.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                            Button,
+                            Interaction::default(),
+                            FpsCapButton(cap),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new(format!("{cap}")),
                                 TextFont {
                                     font_size: 14.0,
                                     ..default()
@@ -2066,6 +2114,24 @@ pub(crate) fn update_resolution_scale_button_colors(
 ) {
     for (mut bg, button) in &mut buttons {
         let on = button.0 == scale.0;
+        *bg = BackgroundColor(if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) });
+    }
+}
+
+// Same Changed<Interaction>-gated tap-sets-the-resource shape as
+// resolution_scale_buttons.
+pub(crate) fn fps_cap_buttons(mut cap: ResMut<FpsCap>, buttons: Query<(&Interaction, &FpsCapButton), Changed<Interaction>>) {
+    for (interaction, button) in &buttons {
+        if *interaction == Interaction::Pressed {
+            cap.0 = button.0;
+        }
+    }
+}
+
+// Same color-feedback idea as update_resolution_scale_button_colors.
+pub(crate) fn update_fps_cap_button_colors(cap: Res<FpsCap>, mut buttons: Query<(&mut BackgroundColor, &FpsCapButton)>) {
+    for (mut bg, button) in &mut buttons {
+        let on = button.0 == cap.0;
         *bg = BackgroundColor(if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) });
     }
 }

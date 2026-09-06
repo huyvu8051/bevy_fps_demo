@@ -61,6 +61,15 @@ pub fn sensitivity(app: &mut App) -> f32 {
     app.world().get_resource::<crate::SensitivityScale>().map(|v| v.0).unwrap_or(1.0)
 }
 
+// Polled every frame from ViewController.swift's enterFrame (see its own
+// comment) to keep CADisplayLink.preferredFrameRateRange in sync with
+// whichever FPS-cap preset button was tapped — there's no push notification
+// from Rust to Swift for a resource change, so polling a cheap FFI call is
+// the same pattern menu_visible/sensitivity above already use.
+pub fn fps_cap(app: &mut App) -> f32 {
+    app.world().get_resource::<crate::FpsCap>().map(|c| c.0 as f32).unwrap_or(120.0)
+}
+
 // Same clamp bounds as the real game's own `sensitivity_buttons` system
 // (crate::lib) — duplicated here rather than made `pub(crate)` there, since
 // this is the one place outside that system doing an unclamped external

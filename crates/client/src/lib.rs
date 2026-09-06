@@ -473,6 +473,45 @@ const AIM_DOF_APERTURE_F_STOPS: f32 = 11.0;
 // exposed in the UI. MIN_TEXTURE_PX guards against a degenerate/zero-size
 // render target on a tiny window at a low scale.
 const RESOLUTION_SCALE_PRESETS: [f32; 7] = [0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0];
+
+// Same preset-buttons idea as RESOLUTION_SCALE_PRESETS, for an FPS ceiling
+// instead of render scale. Desktop: applied by apply_fps_cap_desktop
+// (below) writing into WinitSettings.focused_mode, replacing the old
+// FPS_CAP-env-var-only startup value with something live/settings-menu
+// adjustable — the env var still sets the INITIAL FpsCap default (see its
+// own Default impl), so a one-off `FPS_CAP=30 cargo run` still works
+// unchanged for a quick perf test. iOS: read via native_menu::fps_cap and
+// applied to CADisplayLink.preferredFrameRateRange every frame in
+// ViewController.swift's enterFrame — this Rust resource is the single
+// source of truth either way, only the platform-specific "how it actually
+// throttles" differs.
+const FPS_CAP_PRESETS: [u32; 9] = [120, 100, 90, 80, 70, 60, 50, 40, 30];
+
+#[derive(Resource)]
+pub(crate) struct FpsCap(pub(crate) u32);
+impl Default for FpsCap {
+    fn default() -> Self {
+        let env_cap = std::env::var("FPS_CAP").ok().and_then(|s| s.parse::<u32>().ok()).filter(|c| *c > 0);
+        Self(env_cap.unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) { 120 } else { 60 }))
+    }
+}
+
+// `Option<ResMut<...>>`, not `ResMut<...>` — WinitSettings genuinely does
+// NOT exist as a resource in the headless App the iOS renderer drives
+// (native_game_app::build_headless_game_ecs_app adds no WinitPlugin and
+// never calls this crate's own main(), which is the only place that
+// inserts it — see that fn's own doc comment). GamePlugin (and this
+// system with it) gets added to THAT App too, so a plain `ResMut`
+// crashed the whole app on launch: confirmed via a real on-device panic
+// ("Parameter `ResMut<WinitSettings>` failed validation: Resource does
+// not exist"), not just a theoretical concern.
+pub(crate) fn apply_fps_cap_desktop(cap: Res<FpsCap>, winit_settings: Option<ResMut<WinitSettings>>) {
+    let Some(mut winit_settings) = winit_settings else { return };
+    if !cap.is_changed() {
+        return;
+    }
+    winit_settings.focused_mode = UpdateMode::reactive(std::time::Duration::from_secs_f32(1.0 / cap.0 as f32));
+}
 // Default 30% on every platform — the 3D scene (desktop) / whole frame
 // including UI (mobile, see native_metal_probe.rs's own blit pass) renders
 // into a 0.3x offscreen target and gets upscaled. Override per-run with
@@ -1852,6 +1891,7 @@ impl Plugin for GamePlugin {
         .init_resource::<FreezeZombies>()
         .init_resource::<ShowHitboxes>()
         .init_resource::<RenderResolutionScale>()
+        .init_resource::<FpsCap>()
         .init_resource::<ShowDistanceRings>()
         .init_resource::<DistanceLodEnabled>()
         .init_resource::<LodBandDistance>()
@@ -1958,6 +1998,7 @@ impl Plugin for GamePlugin {
                     update_mouse_ui_lock_indicator,
                     resolution_scale_buttons,
                 update_resolution_scale_button_colors,
+                (fps_cap_buttons, update_fps_cap_button_colors, apply_fps_cap_desktop).chain(),
                 texture_quality_buttons,
                 update_texture_quality_button_colors,
                 poly_quality_buttons,

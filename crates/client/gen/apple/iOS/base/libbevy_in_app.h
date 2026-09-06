@@ -57,6 +57,10 @@ bool native_metal_probe_menu_visible(struct native_metal_probe *probe);
 void native_metal_probe_set_menu_visible(struct native_metal_probe *probe, bool visible);
 float native_metal_probe_get_sensitivity(struct native_metal_probe *probe);
 void native_metal_probe_set_sensitivity(struct native_metal_probe *probe, float value);
+// The Settings-menu FPS-cap preset (30..=120) — polled every frame by
+// ViewController.swift's enterFrame to keep CADisplayLink.
+// preferredFrameRateRange in sync.
+float native_metal_probe_get_fps_cap(struct native_metal_probe *probe);
 float native_metal_probe_get_player_hp(struct native_metal_probe *probe);
 // Ping (ms). -1.0 = not connected yet.
 float native_metal_probe_get_ping_ms(struct native_metal_probe *probe);
