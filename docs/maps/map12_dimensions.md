@@ -28,7 +28,7 @@ có địch đặc biệt ở map này).
 
 - **Footprint v1:** 30x24 (mê cung 4x3 khối container 2.4x6.1m) →
   **v2: 60m x 48m**
-- Dãy container 447-460 (niêm phong BRDF, lore nối Map 13): góc khu,
+- Dãy container 447-460 (niêm phong Meridian, lore nối Map 13): góc khu,
   giữ nguyên vị trí tương đối
 - Ammo/med kit: trong container thường dọc lối đi chính
 

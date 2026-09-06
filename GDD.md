@@ -1,4 +1,7 @@
-# Game Design Document — Bevy FPS Demo
+# Game Design Document — Last Day in Saigon
+
+**Tên chính thức:** Last Day in Saigon *(Việt: "Ngày Cuối Ở Sài Gòn")* —
+chốt 2026-09-06, xem mục 14.1 cho bối cảnh/lore đầy đủ.
 
 Trạng thái: **Nháp v0.1** — tổng hợp từ buổi confirm mục tiêu ngày 2026-08-27.
 Mục đích: nguồn tham chiếu duy nhất cho hướng đi của game, để mọi quyết định
@@ -115,7 +118,7 @@ Chưa chốt số lượng — để mở, quyết định dần theo playtest:
 - [x] Số lượng map/zombie/vũ khí — chốt **ngang L4D** (~20 map, ~8 loại
       địch, ~12 vũ khí), xem mục 15.
 - [ ] Mức độ character customization (chỉ skin, hay cả model/tỉ lệ cơ thể).
-- [x] Cốt truyện — lore đầy đủ (thành phố "Blackridge", nguồn gốc dịch
+- [x] Cốt truyện — lore đầy đủ (thành phố "Sài Gòn", nguồn gốc dịch
       "LAZARUS", twist chính Campaign 4) + chi tiết ĐẦY ĐỦ toàn bộ 20 map
       / 4 campaign (layout, pacing, briefing, audio log, environmental
       storytelling, zombie/economy placement) ở mục 14.
@@ -281,15 +284,19 @@ trọn vẹn thật sự.
 
 ### 14.1 Thế giới & Bối cảnh dịch bệnh (mở rộng 2026-08-27)
 
-**Thành phố Blackridge** — đô thị công nghiệp cỡ trung (dân số hư cấu
-~2.8 triệu trước dịch), có 1 khu trung tâm tài chính/văn phòng cao tầng,
-bao quanh bởi các khu dân cư/thương mại, rồi tới vành đai công nghiệp và
-ngoại ô ở rìa. Địa hình đa dạng vừa đủ để mỗi campaign có bản sắc riêng
-(mục 15/16) mà không cần bịa ra 1 thành phố phi thực tế.
+**Thành phố Sài Gòn** — đô thị lớn nhất Việt Nam (dân số hư cấu ~9 triệu
+trước dịch, gần đúng quy mô thật), có khu trung tâm tài chính/văn phòng
+cao tầng (Quận 1), bao quanh bởi các khu dân cư/thương mại đông đúc, rồi
+tới vành đai công nghiệp/cảng (khu vực Cát Lái, Thủ Đức) và ngoại ô ở
+rìa. Địa hình đa dạng vừa đủ để mỗi campaign có bản sắc riêng (mục 15/16)
+mà không cần bịa ra 1 thành phố phi thực tế.
 
 **Nguồn gốc dịch bệnh (chỉ tiết lộ dần qua audio log, KHÔNG giải thích hết
 ngay từ đầu — giữ bí ẩn xuyên suốt Campaign 1-3, trả lời ở Campaign 4):**
-- Tên gọi không chính thức trong game: **"Chủng Blackridge"** — ban đầu bị
+- Tên gọi không chính thức trong game: **"Chủng Đỏ"** (theo triệu chứng da
+  nứt nẻ đỏ đặc trưng ở giai đoạn đột biến nặng, không đặt theo tên địa
+  danh — tránh gắn tên bệnh dịch với 1 địa danh thật, đúng khuyến nghị đặt
+  tên bệnh dịch của WHO) — ban đầu bị
   nhầm là 1 đợt cúm nặng bất thường lây lan nhanh (thời gian ủ bệnh cực
   ngắn, vài giờ thay vì vài ngày).
 - **Sự thật (twist Campaign 4):** đây không phải dịch bệnh tự nhiên — là
@@ -312,10 +319,13 @@ ngay từ đầu — giữ bí ẩn xuyên suốt Campaign 1-3, trả lời ở 
 
 **Các phe liên quan (không phải NPC chiến đấu, chỉ tồn tại qua dấu vết môi
 trường/log — giữ đúng nguyên tắc không cutscene nặng):**
-- **Quân đội Blackridge (BRDF — Blackridge Defense Force):** ban đầu cố
-  phong tỏa/di tản, sau đó rút lui bỏ mặc trung tâm thành phố (Campaign
-  1-3), cuối cùng lộ diện thật sự là bên đang che giấu nguồn gốc dịch
-  (Campaign 4).
+- **Tập đoàn Meridian (Meridian Group):** tập đoàn nước ngoài vận hành cơ
+  sở nghiên cứu bí mật trong thành phố, lực lượng an ninh riêng gồm cả
+  lính đánh thuê nước ngoài lẫn người Việt được thuê tại chỗ. Ban đầu cố
+  phong tỏa/di tản dưới danh nghĩa hỗ trợ chính quyền, sau đó rút lui bỏ
+  mặc trung tâm thành phố (Campaign 1-3), cuối cùng lộ diện thật sự là
+  bên đang che giấu nguồn gốc dịch (Campaign 4). Không phải quân đội hay
+  chính quyền thật của Việt Nam — thuần túy 1 tổ chức tư nhân hư cấu.
 - **Nhóm sống sót khác:** vài nhóm nhỏ khác cũng cố thoát thành phố song
   song — không gặp trực tiếp (tránh cần thêm NPC AI phe thứ 3), chỉ để
   lại dấu vết (xác chết đã cháy do tự vệ thất bại, ghi chú cảnh báo cho
@@ -351,8 +361,8 @@ trường/log — giữ đúng nguyên tắc không cutscene nặng):**
 ### 14.3 Campaign 1 — "Ground Zero" (chi tiết đầy đủ 5 map)
 
 *Bối cảnh chung:* Nhóm sống sót tỉnh dậy giữa đống đổ nát trung tâm
-Blackridge, không rõ đã bao lâu kể từ khi dịch bùng phát. Mục tiêu: thoát
-khỏi khu phong tỏa trung tâm trước khi BRDF hoàn tất "thanh lọc" khu vực.
+Sài Gòn, không rõ đã bao lâu kể từ khi dịch bùng phát. Mục tiêu: thoát
+khỏi khu phong tỏa trung tâm trước khi Meridian hoàn tất "thanh lọc" khu vực.
 
 ---
 
@@ -370,7 +380,7 @@ khỏi khu phong tỏa trung tâm trước khi BRDF hoàn tất "thanh lọc" kh
   không phải mình mày nghĩ ra điều đó."
 - *Audio log #1 (tìm thấy trong văn phòng tầng 2, giọng nhân viên bảo
   vệ):* "...nếu ai nghe được cái này, đừng xuống gara B2, tụi nó tụ ở dưới
-  đó đông lắm. Tao với thằng Dan đang kẹt ở tầng 5, chờ... [tiếng ồn, cắt
+  đó đông lắm. Tao với thằng Đăng đang kẹt ở tầng 5, chờ... [tiếng ồn, cắt
   ngang]"
 - *Environmental storytelling:* xác nhân viên văn phòng gục trên bàn làm
   việc, ba lô sơ tán bỏ lại hàng loạt ở sảnh (gợi ý sơ tán hoảng loạn,
@@ -414,7 +424,7 @@ khỏi khu phong tỏa trung tâm trước khi BRDF hoàn tất "thanh lọc" kh
   tối** — khác biệt rõ rệt với 2 map mở trước đó.
 - *Pacing:* Build-up ở khu soát vé/sân ga (vẫn còn ánh sáng khẩn cấp) →
   Sustain peak trong đường hầm tối (tầm nhìn giảm mạnh, đèn pin là công cụ
-  chính, đây là nơi **Boomer-style giới thiệu lần đầu** — mục 15/17.5,
+  chính, đây là nơi **Bloater-style giới thiệu lần đầu** — mục 15/17.5,
   khói mù trong không gian kín cực kỳ nguy hiểm vì không có chỗ tránh) →
   Peak fade khi gần ga đến → Relax ở sân ga cuối, sáng sủa hơn hẳn để nhấn
   mạnh cảm giác "thoát khỏi bóng tối".
@@ -424,13 +434,13 @@ khỏi khu phong tỏa trung tâm trước khi BRDF hoàn tất "thanh lọc" kh
   sắt):* "Tàu cuối cùng chạy lúc 6 giờ sáng ngày phong tỏa. Sau đó chúng
   tôi cắt điện đường hầm theo lệnh — không phải để ngăn tụi nó, mà để
   ngăn người sống chạy trốn qua đó. Chúa ơi, họ đã biết trước." *(gợi ý
-  ngầm đầu tiên về twist Campaign 4 — BRDF biết trước và cố kiểm soát
+  ngầm đầu tiên về twist Campaign 4 — Meridian biết trước và cố kiểm soát
   luồng di tản, không phải chỉ ứng phó dịch bệnh)*.
-- *Environmental storytelling:* biển "KHU VỰC CẤM — CHỈ NHÂN VIÊN BRDF"
+- *Environmental storytelling:* biển "KHU VỰC CẤM — CHỈ NHÂN VIÊN Meridian"
   dán đè lên biển ga cũ (gợi ý quân đội từng kiểm soát khu vực này trước
   khi rút), đèn pin/mũ bảo hộ công nhân vứt lại dọc đường ray.
 - *Zombie/economy placement:* mật độ vừa nhưng nguy hiểm hơn do tầm nhìn
-  hẹp; 1-2 Boomer đặt tại các khúc cua hẹp trong hầm (buộc người chơi phản
+  hẹp; 1-2 Bloater đặt tại các khúc cua hẹp trong hầm (buộc người chơi phản
   ứng nhanh, không thấy trước); pin đèn pin (nếu có cơ chế pin — cân nhắc
   thêm ở giai đoạn polish) và đạn đặt xen kẽ dọc đường ray để duy trì nhịp
   di chuyển liên tục thay vì dồn hết vào 1 điểm.
@@ -446,12 +456,12 @@ khỏi khu phong tỏa trung tâm trước khi BRDF hoàn tất "thanh lọc" kh
   → Peak fade ở đoạn cầu thoáng cuối, tận dụng sightline dài cho vũ khí
   tầm xa → Relax khi gần tới điểm hẹn cuối cầu.
 - *Briefing:* "Cầu là điểm hẹn — nếu đội cứu hộ còn ở đó."
-- *Audio log #4 (radio xe cứu hộ bỏ lại giữa cầu, giọng chỉ huy BRDF —
+- *Audio log #4 (radio xe cứu hộ bỏ lại giữa cầu, giọng chỉ huy Meridian —
   đây là log then chốt hé lộ twist, đặt ở map áp chót có chủ đích):*
   "...lệnh từ trên là rút toàn bộ đơn vị khỏi khu vực Cổng thành trước
   18:00. Không giải thích lý do. Nếu còn dân thường ở khu trung tâm,
   mặc kệ — ưu tiên là bịt kín [nhiễu sóng] ...không được để lộ ra ngoài."
-- *Environmental storytelling:* xe quân sự BRDF bị lật/cháy giữa cầu
+- *Environmental storytelling:* xe quân sự Meridian bị lật/cháy giữa cầu
   (gợi ý quân đội cũng đã rút chạy hỗn loạn, không phải rút lui có trật
   tự như tuyên truyền), hàng loạt xe dân thường bỏ trống với cửa mở, đồ
   đạc cá nhân còn nguyên trong xe.
@@ -469,7 +479,7 @@ khỏi khu phong tỏa trung tâm trước khi BRDF hoàn tất "thanh lọc" kh
   cản để né đòn.
 - *Pacing:* Build-up ngắn khi leo lên các tầng gara (dọn zombie lẻ tẻ, thu
   thập đạn/med kit cuối cùng chuẩn bị boss fight — đây là "safe room"
-  trước boss, mục 14.4) → **Sustain peak = toàn bộ boss fight** (Tank-
+  trước boss, mục 14.4) → **Sustain peak = toàn bộ boss fight** (Brute-
   style, mục 15, xuất hiện ngay khi bước ra bãi đáp) → không có "peak
   fade" truyền thống (boss chết là kết thúc đột ngột, đúng kiểu climax) →
   Relax là đoạn credit/kết thúc campaign trên trực thăng/xe rời đi.
@@ -490,7 +500,7 @@ khỏi khu phong tỏa trung tâm trước khi BRDF hoàn tất "thanh lọc" kh
   Campaign 4).
 - *Zombie/economy placement:* zombie thường tối thiểu trước boss (để dồn
   tài nguyên chuẩn bị); đầy đủ đạn/med kit ở khu vực ngay trước bãi đáp
-  (safe room trước boss, mục 14.4); boss Tank-style chiếm trọn không gian
+  (safe room trước boss, mục 14.4); boss Brute-style chiếm trọn không gian
   đấu, không có zombie thường xen vào cùng lúc (giữ fight rõ ràng, dễ đọc
   cho co-op 4 người).
 
@@ -512,7 +522,7 @@ của nó.
 - *Pacing:* Build-up dọc dãy nhà đầu (yên tĩnh bất thường) → Sustain peak
   khi băng qua công viên trung tâm (không gian mở, dễ bị bao vây) → Peak
   fade ở đường chính → Relax gần trạm xe buýt cuối khu.
-- *Giới thiệu Hunter-style:* nhảy vọt từ mái nhà xuống — không gian nhà 1
+- *Giới thiệu Stalker-style:* nhảy vọt từ mái nhà xuống — không gian nhà 1
   tầng liền kề là địa hình lý tưởng để nó di chuyển trên mái, tấn công bất
   ngờ từ trên cao thay vì mặt đất như zombie thường.
 - *Briefing:* "Yên tĩnh quá. Không phải kiểu yên tĩnh tốt."
@@ -525,7 +535,7 @@ của nó.
   ground-zero dân sự** đầu tiên người chơi thực sự đi ngang qua, dù không
   ai trong nhóm nhận ra ý nghĩa của nó.
 - *Zombie/economy:* mật độ thấp hơn hẳn Campaign 1 (đúng lời hứa "vành đai
-  thưa dân hơn"), nhưng Hunter khiến cảm giác nguy hiểm không giảm; đạn dự
+  thưa dân hơn"), nhưng Stalker khiến cảm giác nguy hiểm không giảm; đạn dự
   trữ đặt trong nhà để xe các căn nhà mẫu.
 
 **Map 7 — "Trường tiểu học" (Fairview Elementary)**
@@ -533,10 +543,10 @@ của nó.
   thư viện, nhà thể chất — không gian nhiều phòng nhỏ nối hành lang dài,
   hợp giới thiệu tấn công tầm xa từ góc khuất.
 - *Pacing:* Build-up ở sân trường → Sustain peak trong hành lang lớp học
-  tầng 2 (Smoker ẩn trong 1 lớp học, kéo người chơi qua cửa sổ vỡ khi đi
+  tầng 2 (Strangler ẩn trong 1 lớp học, kéo người chơi qua cửa sổ vỡ khi đi
   ngang) → Peak fade ở thư viện → Relax ở nhà thể chất (không gian rộng,
   sáng, làm điểm nghỉ tương phản với hành lang tối trước đó).
-- *Giới thiệu Smoker-style:* tấn công/kéo người từ xa qua hành lang dài —
+- *Giới thiệu Strangler-style:* tấn công/kéo người từ xa qua hành lang dài —
   buộc đồng đội phải bắn đứt dây kéo kịp thời, giới thiệu tự nhiên cơ chế
   cứu đồng đội (khác revive ở mục 17.11, đây là 1 dạng "cứu" khác — bắn
   đứt ràng buộc, không phải hồi sinh).
@@ -562,7 +572,7 @@ của nó.
 - *Pacing:* Build-up dọc đường chạy bộ → Sustain peak khi băng qua khu vực
   mở nhất cạnh hồ (không có vật cản, buộc di chuyển liên tục né vùng chất
   lỏng) → Peak fade ở phía xa hồ → Relax tại bãi đỗ xe công viên.
-- *Giới thiệu Spitter-style:* nhả vùng chất ăn mòn từ xa — không gian mở
+- *Giới thiệu Spewer-style:* nhả vùng chất ăn mòn từ xa — không gian mở
   của công viên là nơi lý tưởng để thể hiện cơ chế "vùng nguy hiểm phải né
   ra" vì có đủ chỗ để di chuyển tránh, không bị kẹt như không gian hẹp.
 - *Briefing:* "Không gian trống thế này lẽ ra phải an toàn hơn trong nhà.
@@ -576,7 +586,7 @@ của nó.
   cần giải thích hết)*.
 - *Environmental storytelling:* xe tuần tra không biển số (nhắc trong log)
   đậu gần trạm xử lý nước cạnh hồ, cửa trạm bị phá khóa từ bên ngoài (gợi
-  ý ai đó đã đột nhập, không rõ BRDF hay dân thường).
+  ý ai đó đã đột nhập, không rõ Meridian hay dân thường).
 - *Zombie/economy:* mật độ vừa, dàn trải quanh hồ; đạn/med kit đặt trong
   gazebo (điểm giữa map, khuyến khích đi vòng thu thập trước khi tiếp
   tục).
@@ -589,7 +599,7 @@ của nó.
 - *Pacing:* Build-up ở lối vào chợ (đèn còn sáng 1 phần) → Sustain peak
   giữa chợ (mật độ quầy hàng dày đặc, tầm nhìn bị chia cắt liên tục) →
   Peak fade ở cuối chợ → Relax tại bãi đậu xe tải giao hàng phía sau chợ.
-- *Giới thiệu Jockey-style:* kéo tách 1 người chơi ra khỏi nhóm — không
+- *Giới thiệu Leech-style:* kéo tách 1 người chơi ra khỏi nhóm — không
   gian đông đúc/nhiều lối rẽ của chợ đêm khiến việc bị tách ra đặc biệt
   nguy hiểm (không thấy đồng đội ngay, phải tự xoay sở vài giây).
 - *Briefing:* "Đèn còn sáng nghĩa là còn điện. Còn điện nghĩa là còn hy
@@ -599,26 +609,26 @@ của nó.
   cộng):* "...[nhạc quảng cáo]... tất cả người dân vui lòng về nhà ngay,
   đây là lệnh giới nghiêm bắt buộc, không tuân thủ sẽ bị xử lý theo quy
   định khẩn cấp... [nhạc quảng cáo tiếp tục]" *(cho thấy lệnh giới nghiêm
-  BRDF đã ban hành từ sớm, chồng lấp lên đời sống dân thường bình thường
+  Meridian đã ban hành từ sớm, chồng lấp lên đời sống dân thường bình thường
   đang diễn ra dở dang — hình ảnh tương phản ám ảnh)*.
 - *Environmental storytelling:* quầy hàng vẫn còn nguyên đồ chưa kịp dọn
   (thức ăn thiu, đồ chơi, quần áo), 1 khu vực có dấu hiệu đụng độ giữa
-  dân thường và lính BRDF (vỏ đạn quân sự lẫn trong đống đổ vỡ — gợi ý
-  ngầm sớm rằng BRDF đã dùng vũ lực với chính dân thường của họ).
+  dân thường và lính Meridian (vỏ đạn quân sự lẫn trong đống đổ vỡ — gợi ý
+  ngầm sớm rằng Meridian đã dùng vũ lực với chính dân thường của họ).
 - *Zombie/economy:* mật độ cao nhất Campaign 2 (đêm + không gian chật hẹp
   = nguy hiểm nhất); đạn/med kit đặt trong các xe tải giao hàng ở khu vực
   Relax cuối map.
 
-**Map 10 — "Trạm kiểm soát BRDF bỏ hoang" (Checkpoint Delta) — Boss map,
+**Map 10 — "Trạm kiểm soát Meridian bỏ hoang" (Checkpoint Delta) — Boss map,
 kết thúc Campaign 2**
 - *Layout/flow:* Ra khỏi khu dân cư, tới 1 trạm kiểm soát quân sự lớn từng
   chặn đường ra vào vành đai — hàng rào bê tông, tháp canh, lô cốt — giờ
   bỏ hoang, cửa mở toang. Không gian mang tính phòng thủ quân sự rõ rệt,
   khác hẳn khu dân cư/thương mại các map trước.
 - *Pacing:* Build-up qua khu vực hàng rào ngoài (safe room trước, mục
-  14.7) → **Sustain peak = boss fight thứ 2** (Tank-style tái xuất hiện,
+  14.7) → **Sustain peak = boss fight thứ 2** (Brute-style tái xuất hiện,
   đây không phải "1 boss duy nhất cả game" mà là 1 LOẠI encounter tái diễn
-  ở cuối mỗi campaign lớn, đúng cách L4D dùng Tank nhiều lần) → Relax là
+  ở cuối mỗi campaign lớn, đúng cách L4D dùng Brute nhiều lần) → Relax là
   đoạn rời trạm kiểm soát, tiến vào vùng công nghiệp (Campaign 3).
 - *Briefing:* "Trạm kiểm soát bỏ trống nghĩa là không còn ai giữ ranh giới
   nữa. Nghĩa là cả 2 phía đều đã thua."
@@ -626,7 +636,7 @@ kết thúc Campaign 2**
   chữ vội vàng):* "23:40 — lệnh rút toàn bộ trạm kiểm soát vành đai, hiệu
   lực ngay. Không có lý do chính thức. Trung úy nói đây là lệnh trực tiếp
   từ Cổng thành." *(lần đầu tiên tên "Cổng thành" xuất hiện TRONG lore
-  BRDF, không chỉ trong lời đồn dân sự ở cuối Campaign 1 — xác nhận ngầm
+  Meridian, không chỉ trong lời đồn dân sự ở cuối Campaign 1 — xác nhận ngầm
   đây là 1 địa điểm thật, có thật quyền lực ra lệnh, tăng trọng lượng cho
   twist sắp tới)*.
 - *Environmental storytelling:* vũ khí/đạn quân sự bỏ lại vội vàng (rút
@@ -644,12 +654,12 @@ kết thúc Campaign 2**
 *Bối cảnh chung:* Rời vành đai, nhóm tiến vào khu công nghiệp/cảng hàng
 hóa rìa thành phố — địa hình đổi hẳn sang nhà máy, kho bãi, container,
 đường ống — không gian rộng, nhiều tầng/độ cao, ít dấu vết dân thường hơn
-(khu vực làm việc, không phải nơi ở) nhưng biển báo/hàng rào an ninh BRDF
+(khu vực làm việc, không phải nơi ở) nhưng biển báo/hàng rào an ninh Meridian
 dày đặc dần, báo hiệu đang tới gần "Cổng thành".
 
 **Map 11 — "Nhà máy dệt cũ" (Ironloom Textile Mill)**
 - *Layout/flow:* Nhà máy dệt bỏ hoang từ trước dịch (không liên quan trực
-  tiếp BRDF, chỉ là nhà máy đóng cửa vì phá sản) — không gian tối, nhiều
+  tiếp Meridian, chỉ là nhà máy đóng cửa vì phá sản) — không gian tối, nhiều
   máy móc lớn làm vật cản/che khuất tầm nhìn, dây chuyền sản xuất dẫn từ
   tầng trệt lên các tầng lửng.
 - *Pacing:* Build-up ở khu văn phòng nhà máy → Sustain peak giữa dây
@@ -663,7 +673,7 @@ dày đặc dần, báo hiệu đang tới gần "Cổng thành".
   tiết đời thường tạo chiều sâu thế giới):* "Ca cuối cùng. Không ngờ công
   ty phá sản nhanh vậy. Chúc ai đọc được cuốn sổ này may mắn hơn tụi tôi."
   *(một khoảnh khắc nhân văn không liên quan cốt truyện chính — nhắc rằng
-  Blackridge có vấn đề kinh tế/xã hội từ trước khi dịch bệnh xảy ra, thế
+  Sài Gòn có vấn đề kinh tế/xã hội từ trước khi dịch bệnh xảy ra, thế
   giới có chiều sâu ngoài mạch truyện chính)*.
 - *Environmental storytelling:* máy móc phủ bụi dày (đóng cửa đã lâu,
   không phải do dịch), tương phản với 1 góc nhà máy có dấu hiệu người sống
@@ -673,7 +683,7 @@ dày đặc dần, báo hiệu đang tới gần "Cổng thành".
   med kit trong phòng y tế nhà máy (theo luật lao động, mọi nhà máy đều
   có).
 
-**Map 12 — "Bãi container cảng" (Blackridge Freight Yard)**
+**Map 12 — "Bãi container cảng" (Cát Lái Freight Yard)**
 - *Layout/flow:* Bãi container khổng lồ — mê cung thùng container xếp
   chồng nhiều tầng, lối đi ngoằn ngoèo giữa các dãy, cần trục cảng làm
   điểm mốc thị giác từ xa để định hướng.
@@ -686,12 +696,12 @@ dày đặc dần, báo hiệu đang tới gần "Cổng thành".
   định hướng. Nhìn cần trục ở giữa bãi — đi về hướng đó là ra được."
 - *Audio log #12 (radio 2 chiều bỏ lại trong 1 container mở, giọng công
   nhân cảng):* "Cont số 447 tới 460 — đóng dấu ưu tiên, không ai được mở
-  ngoại trừ áp tải BRDF trực tiếp. Tao không hỏi trong đó có gì, tao chỉ
-  làm đúng việc được giao." *(gieo manh mối: BRDF vận chuyển hàng hóa bí
+  ngoại trừ áp tải Meridian trực tiếp. Tao không hỏi trong đó có gì, tao chỉ
+  làm đúng việc được giao." *(gieo manh mối: Meridian vận chuyển hàng hóa bí
   mật qua cảng dân sự — có thể liên quan tới cơ sở nghiên cứu, không xác
   nhận rõ)*.
 - *Environmental storytelling:* dãy container 447-460 (nhắc trong log) bị
-  niêm phong bằng dấu BRDF, 1 container trong dãy đó đã bị cạy mở từ bên
+  niêm phong bằng dấu Meridian, 1 container trong dãy đó đã bị cạy mở từ bên
   trong (không rõ ai/cái gì đã ra khỏi đó — chi tiết rùng rợn, không giải
   thích, để người chơi tự suy diễn).
 - *Zombie/economy:* mật độ cao (không gian hẹp giữa container = zombie
@@ -706,10 +716,10 @@ dày đặc dần, báo hiệu đang tới gần "Cổng thành".
 - *Pacing:* Build-up ở khu vực nhận hàng → Sustain peak dọc hành lang
   chính (nhiều cửa phòng lạnh 2 bên, mỗi cửa là 1 rủi ro tiềm ẩn) → Peak
   fade khi gần phòng lạnh sâu nhất → **Relax đặc biệt: không phải hết
-  nguy hiểm, mà là gặp Witch-style đứng yên** (khác cấu trúc 4 map trước —
+  nguy hiểm, mà là gặp Wailer-style đứng yên** (khác cấu trúc 4 map trước —
   đây không phải combat cao trào rồi giảm dần, mà là 1 khoảnh khắc CĂNG
   THẲNG TĨNH: phải đi rón rén qua, không được gây tiếng động).
-- *Giới thiệu Witch-style:* đứng yên trong phòng lạnh sâu nhất, chỉ tấn
+- *Giới thiệu Wailer-style:* đứng yên trong phòng lạnh sâu nhất, chỉ tấn
   công cực mạnh nếu bị làm phiền (ánh đèn pin chiếu trực tiếp, tiếng súng
   gần, hoặc chạm phải) — người chơi có thể chọn đi vòng tránh hẳn (nếu
   map có lối phụ) hoặc liều lĩnh đi ngang qua rón rén.
@@ -717,18 +727,18 @@ dày đặc dần, báo hiệu đang tới gần "Cổng thành".
   bên trong, và nó không di chuyển. Đừng làm nó thức dậy."
 - *Audio log #13 (biên bản kiểm tra kho lạnh, dán trên bảng thông báo,
   ngày trước dịch bùng phát):* "Phát hiện 1 khoang lạnh không rõ nguồn
-  gốc, không có trong danh mục hàng hóa đã đăng ký, dấu niêm phong BRDF.
+  gốc, không có trong danh mục hàng hóa đã đăng ký, dấu niêm phong Meridian.
   Đã báo cáo lên quản lý, chưa nhận phản hồi." *(tiếp nối manh mối từ Map
-  12 — container bí mật BRDF giờ được xác nhận đã tới đúng khu vực kho
-  lạnh này, ngầm liên kết Witch-style với chính hàng hóa bí mật đó — gợi ý
+  12 — container bí mật Meridian giờ được xác nhận đã tới đúng khu vực kho
+  lạnh này, ngầm liên kết Wailer-style với chính hàng hóa bí mật đó — gợi ý
   witch không phải zombie thường mà là 1 kết quả thí nghiệm, dù không nói
   thẳng)*.
 - *Environmental storytelling:* 1 khoang lạnh riêng biệt có dấu niêm
-  phong BRDF đã bị phá vỡ từ bên trong (nơi Witch-style xuất hiện), khác
+  phong Meridian đã bị phá vỡ từ bên trong (nơi Wailer-style xuất hiện), khác
   hẳn các khoang hàng hóa thông thường xung quanh.
-- *Zombie/economy:* mật độ zombie thường THẤP nhất map này (Witch là mối
+- *Zombie/economy:* mật độ zombie thường THẤP nhất map này (Wailer là mối
   đe dọa chính, không cần đông zombie thường cạnh tranh sự chú ý); med kit
-  đặt ngay trước khu vực Witch (phần thưởng cho ai chọn đối đầu thay vì né
+  đặt ngay trước khu vực Wailer (phần thưởng cho ai chọn đối đầu thay vì né
   tránh).
 
 **Map 14 — "Đường ống & Nhà máy lọc" (Refinery Loop)**
@@ -743,28 +753,28 @@ dày đặc dần, báo hiệu đang tới gần "Cổng thành".
 - *Briefing:* "Đi trên cao thì thấy xa hơn, nhưng ngã xuống thì mất mạng
   y như bị cắn. Cẩn thận từng bước."
 - *Audio log #14 (nhật ký kỹ sư vận hành nhà máy lọc, viết tay để lại
-  trong phòng điều khiển):* "BRDF thuê nguyên khu nhà máy này làm bãi
+  trong phòng điều khiển):* "Meridian thuê nguyên khu nhà máy này làm bãi
   trung chuyển 3 tháng trước, nói là 'dự trữ chiến lược'. Tụi tôi bị cấm
   vào khu bồn chứa số 9 tới số 12. Tôi làm ở đây 15 năm, chưa từng có khu
-  vực nào cấm nhân viên vào cả." *(gieo manh mối: BRDF đã âm thầm chiếm
+  vực nào cấm nhân viên vào cả." *(gieo manh mối: Meridian đã âm thầm chiếm
   dụng hạ tầng công nghiệp dân sự làm hậu cần cho hoạt động bí mật từ
   trước khi dịch bùng phát — không chỉ phản ứng SAU dịch, mà đã chuẩn bị
   TRƯỚC)*.
 - *Environmental storytelling:* bồn chứa số 9-12 (nhắc trong log) được rào
-  riêng bằng hàng rào BRDF mới hơn hẳn phần còn lại của nhà máy (rõ ràng
+  riêng bằng hàng rào Meridian mới hơn hẳn phần còn lại của nhà máy (rõ ràng
   mới lắp gần đây, tương phản với kết cấu nhà máy cũ kỹ xung quanh).
 - *Zombie/economy:* mật độ vừa nhưng độ khó tăng do địa hình hẹp trên
   cao; đạn/med kit đặt trong phòng điều khiển (Relax cuối map, safe room
   tự nhiên trước khi qua map cuối campaign).
 
-**Map 15 — "Hàng rào an ninh BRDF" (Perimeter Fence Alpha) — Boss map,
+**Map 15 — "Hàng rào an ninh Meridian" (Perimeter Fence Alpha) — Boss map,
 kết thúc Campaign 3**
 - *Layout/flow:* Tới sát hàng rào an ninh ngoài cùng của khu vực "Cổng
   thành" — dày đặc lô cốt, camera an ninh (không hoạt động, chỉ là set
   dressing), tháp canh — đây là ranh giới cuối cùng trước khi Campaign 4
   bắt đầu thật sự đi vào bên trong.
 - *Pacing:* Build-up dọc hàng rào ngoài (safe room trước, mục 14.7) →
-  **Sustain peak = boss fight thứ 3** (Tank-style tái xuất hiện lần cuối
+  **Sustain peak = boss fight thứ 3** (Brute-style tái xuất hiện lần cuối
   trước Campaign 4, có thể tăng nhẹ chỉ số so với 2 lần trước để phản ánh
   độ khó leo thang tổng thể — cụ thể hóa khi tune ở Giai đoạn 3) → Relax
   ngắn ngay trước cổng chính dẫn vào Campaign 4 (kết thúc campaign ở đúng
@@ -775,10 +785,10 @@ kết thúc Campaign 3**
   cảnh báo tự động lặp lại):* "Khu vực hạn chế. Mọi cá nhân không có thẩm
   quyền sẽ bị coi là mối đe dọa an ninh và xử lý theo quy định. Đây không
   phải cảnh báo cuối cùng." *(giọng điệu đe dọa rõ ràng hơn hẳn mọi cảnh
-  báo BRDF trước đó trong game — báo trước bản chất thật của Campaign 4:
+  báo Meridian trước đó trong game — báo trước bản chất thật của Campaign 4:
   không chỉ có zombie chờ đợi bên trong)*.
-- *Environmental storytelling:* xác lính BRDF (không phải zombie hóa,
-  chết vì đạn) nằm rải rác gần hàng rào — gợi ý ngay cả chính BRDF cũng
+- *Environmental storytelling:* xác lính Meridian (không phải zombie hóa,
+  chết vì đạn) nằm rải rác gần hàng rào — gợi ý ngay cả chính Meridian cũng
   từng có xung đột nội bộ hoặc chống lại mệnh lệnh rút lui/dọn dẹp, không
   phải toàn bộ tổ chức đồng lòng.
 - *Zombie/economy:* zombie thường tối thiểu; đầy đủ trang bị ở safe room
@@ -791,36 +801,36 @@ kết thúc Campaign 3**
 thúc game)
 
 *Bối cảnh chung:* Vào bên trong khu vực bị cấm suốt 3 campaign trước —
-không phải khu tị nạn như lời đồn, mà là **cơ sở nghiên cứu quân sự BRDF,
+không phải khu tị nạn như lời đồn, mà là **cơ sở nghiên cứu quân sự Meridian,
 nguồn gốc thật của dịch bệnh** (mục 14.1). Từ map đầu tiên, kẻ địch không
-chỉ còn là zombie — **lính BRDF** xuất hiện như 1 loại "địch" mới (PvE,
+chỉ còn là zombie — **lính Meridian** xuất hiện như 1 loại "địch" mới (PvE,
 tái dùng framework AI zombie với model lính để đơn giản kỹ thuật, mục
 14.4 cũ đã ghi rõ hướng này), đóng vai trò ngăn cản nhóm tiếp cận sự thật.
 
 **Map 16 — "Trạm kiểm soát chính" (Main Gatehouse)**
 - *Layout/flow:* Cổng vào chính thức của cơ sở — trạm gác kiên cố, hàng
-  rào điện, sân trong. Đây là map đầu tiên **lính BRDF còn sống và có tổ
+  rào điện, sân trong. Đây là map đầu tiên **lính Meridian còn sống và có tổ
   chức** xuất hiện (không phải xác chết như các campaign trước) — canh
   gác chủ động, không phải lực lượng đã sụp đổ.
 - *Pacing:* Build-up ở khu vực ngoài hàng rào (vẫn còn zombie như bình
-  thường) → Sustain peak khi vào trạm gác — **lần đầu chạm trán lính BRDF
+  thường) → Sustain peak khi vào trạm gác — **lần đầu chạm trán lính Meridian
   đang tuần tra** (xen kẽ zombie, 2 loại địch cùng lúc — lính đôi khi bắn
   cả zombie nếu zombie tới gần họ trước, tạo cảm giác hỗn loạn 3 phe) →
   Peak fade ở sân trong → Relax tại 1 trạm gác phụ bỏ trống.
 - *Briefing:* "Có lính canh nghĩa là có gì đó đáng canh giữ. Không phải
   người tị nạn, không phải trại cứu trợ. Cẩn thận."
-- *Audio log #16 (bộ đàm lính BRDF nhặt được từ 1 lính đã hạ, đoạn hội
+- *Audio log #16 (bộ đàm lính Meridian nhặt được từ 1 lính đã hạ, đoạn hội
   thoại nội bộ ghi tự động):* "Có nhóm dân thường tiếp cận từ hướng Nam.
   Xin chỉ thị." — "Xử lý theo quy trình tiêu chuẩn. Không có ngoại lệ cho
   dân thường trong bán kính này, kể cả trẻ em." *(xác nhận trực tiếp,
-  không còn ẩn ý — BRDF coi bất kỳ ai tiếp cận là mối đe dọa cần loại bỏ,
+  không còn ẩn ý — Meridian coi bất kỳ ai tiếp cận là mối đe dọa cần loại bỏ,
   đây là điểm twist chính thức được xác nhận rõ ràng lần đầu, không còn
   chỉ là suy đoán qua log)*.
 - *Environmental storytelling:* biển hiệu chính thức "CƠ SỞ NGHIÊN CỨU
-  SINH HỌC BLACKRIDGE — BRDF" (lần đầu tên đầy đủ cơ sở xuất hiện, xác
+  SINH HỌC BLACKRIDGE — Meridian" (lần đầu tên đầy đủ cơ sở xuất hiện, xác
   nhận trực quan điều audio log vừa tiết lộ), phòng chờ có TV vẫn phát
   loop bản tin tuyên truyền cũ nói "tình hình đang được kiểm soát tốt".
-- *Zombie/economy:* mật độ zombie vừa + lính BRDF (số lượng nhỏ, vài
+- *Zombie/economy:* mật độ zombie vừa + lính Meridian (số lượng nhỏ, vài
   người/đợt, không phải đông như zombie horde — vai trò khác: nguy hiểm
   hơn từng cá thể, không phải áp đảo số lượng); lính rơi lại đạn dược khi
   hạ (nguồn đạn mới, khác hẳn pickup dân sự trước đó).
@@ -829,16 +839,16 @@ tái dùng framework AI zombie với model lính để đơn giản kỹ thuật
 - *Layout/flow:* Tòa nhà văn phòng/hành chính của cơ sở — phòng họp,
   văn phòng chỉ huy, phòng lưu trữ hồ sơ. Không gian giống Map 1 (tòa nhà
   văn phòng Campaign 1) một cách có chủ đích — tạo cảm giác "quay vòng",
-  nhấn mạnh nhóm đã đi 1 vòng lớn quanh Blackridge chỉ để quay lại đúng
+  nhấn mạnh nhóm đã đi 1 vòng lớn quanh Sài Gòn chỉ để quay lại đúng
   kiểu không gian đã bắt đầu, nhưng giờ mọi thứ đã rõ ràng hơn.
 - *Pacing:* Build-up ở sảnh hành chính → Sustain peak tại khu văn phòng
-  chỉ huy (lính BRDF phòng thủ dày hơn Map 16, biết trước có xâm nhập) →
+  chỉ huy (lính Meridian phòng thủ dày hơn Map 16, biết trước có xâm nhập) →
   Peak fade ở phòng lưu trữ → Relax tại 1 phòng nghỉ nhân viên.
 - *Briefing:* "Hồ sơ ở đây có thể có câu trả lời tụi mình cần. Nếu có, nó
   đáng để mạo hiểm."
 - *Audio log #17 (không phải audio — LẦN DUY NHẤT trong game 1 tài liệu
   VĂN BẢN đầy đủ thay vì ghi âm, tìm thấy trong phòng lưu trữ, đóng dấu
-  MẬT):* "Báo cáo sự cố #BR-001: Rò rỉ chủng thử nghiệm 'Chủng Blackridge'
+  MẬT):* "Báo cáo sự cố #MG-001: Rò rỉ chủng thử nghiệm 'Chủng Đỏ'
   (mã nội bộ: LAZARUS) tại khu vực nghiên cứu ngầm, nguyên nhân do lỗi
   quy trình containment cấp 4. Khuyến nghị: phong tỏa toàn bộ thành phố
   theo kịch bản ứng phó đã lập sẵn, đồng thời tiêu hủy mọi bằng chứng liên
@@ -847,9 +857,9 @@ tái dùng framework AI zombie với model lính để đơn giản kỹ thuật
   văn bản chính thức, không còn nghi ngờ gì nữa: dịch bệnh là nhân tạo, có
   kế hoạch che giấu từ đầu, thậm chí có mã tên riêng "LAZARUS")*.
 - *Environmental storytelling:* hàng loạt tủ hồ sơ đã bị đốt/tiêu hủy
-  dở dang (BRDF đang thực hiện đúng "khuyến nghị tiêu hủy bằng chứng"
+  dở dang (Meridian đang thực hiện đúng "khuyến nghị tiêu hủy bằng chứng"
   trong báo cáo), máy hủy tài liệu vẫn còn chạy, quá tải giấy kẹt.
-- *Zombie/economy:* lính BRDF nhiều hơn Map 16 (bảo vệ khu vực nhạy cảm
+- *Zombie/economy:* lính Meridian nhiều hơn Map 16 (bảo vệ khu vực nhạy cảm
   hơn); vẫn có zombie xen kẽ (kể cả trong khu vực an ninh cao, gợi ý cơ sở
   cũng không hoàn toàn kiểm soát được tình hình nội bộ); đạn/med kit trong
   phòng nghỉ nhân viên.
@@ -884,37 +894,37 @@ tái dùng framework AI zombie với model lính để đơn giản kỹ thuật
   chủ đích (tạo áp lực đúng lúc câu chuyện nặng nề nhất).
 
 **Map 19 — "Boong-ke chỉ huy" (Command Bunker)**
-- *Layout/flow:* Trung tâm chỉ huy kiên cố của cơ sở — nơi chỉ huy BRDF
-  đang trực tiếp giám sát việc tiêu hủy bằng chứng/tự hủy cơ sở. Không
-  gian boong-ke bê tông dày, hành lang hẹp, phòng chỉ huy trung tâm ở
-  cuối.
-- *Pacing:* Build-up ở hành lang ngoài (lính BRDF phòng thủ dày đặc nhất
+- *Layout/flow:* Trung tâm chỉ huy kiên cố của cơ sở — nơi **Khải**, chỉ
+  huy an ninh người Việt của Meridian tại cơ sở này, đang trực tiếp giám
+  sát việc tiêu hủy bằng chứng/tự hủy cơ sở. Không gian boong-ke bê tông
+  dày, hành lang hẹp, phòng chỉ huy trung tâm ở cuối.
+- *Pacing:* Build-up ở hành lang ngoài (lính Meridian phòng thủ dày đặc nhất
   game, đây là điểm họ bảo vệ quyết liệt nhất) → Sustain peak khi đột nhập
-  phòng chỉ huy (đối đầu trực tiếp với **chỉ huy BRDF** — không phải boss
-  Tank-style, mà là 1 encounter khác: 1 nhân vật người thật, có thể chạy
+  phòng chỉ huy (đối đầu trực tiếp với **Khải** — không phải boss
+  Brute-style, mà là 1 encounter khác: 1 nhân vật người thật, có thể chạy
   trốn thay vì đứng đánh tay đôi, dùng chính hệ thống tự hủy cơ sở làm vũ
   khí cuối cùng thay vì đối đầu trực diện — tạo khác biệt rõ với 3 lần
-  Tank-style trước, tránh lặp lại công thức) → Peak fade khi hệ thống tự
+  Brute-style trước, tránh lặp lại công thức) → Peak fade khi hệ thống tự
   hủy được kích hoạt (đếm ngược bắt đầu — chuyển tông sang tẩu thoát) →
   không có Relax truyền thống, map kết thúc bằng báo động sơ tán khẩn cấp
   dẫn thẳng sang Map 20.
 - *Briefing:* "Đây là trung tâm đầu não của cả chỗ này. Nếu có ai ra lệnh
   bỏ mặc tụi mình chết ở Ground Zero, người đó ở đây."
-- *Audio log #19 (không phải log tìm thấy — LỜI THOẠI TRỰC TIẾP của chỉ
-  huy BRDF khi bị dồn vào đường cùng, phát qua loa boong-ke, đây là lần
+- *Audio log #19 (không phải log tìm thấy — LỜI THOẠI TRỰC TIẾP của Khải
+  khi bị dồn vào đường cùng, phát qua loa boong-ke, đây là lần
   DUY NHẤT trong toàn game có 1 "nhân vật" thực sự lên tiếng trực tiếp với
   nhóm, phá vỡ nguyên tắc "chỉ kể qua log" một cách có chủ đích ở đúng
   cao trào quan trọng nhất):* "Các người không hiểu đâu. Nếu tin này lọt
-  ra ngoài, không chỉ Blackridge — mọi thành phố có cơ sở như thế này sẽ
+  ra ngoài, không chỉ Sài Gòn — mọi thành phố có cơ sở như thế này sẽ
   hoảng loạn. Tôi đang cứu nhiều mạng hơn các người tưởng. Cơ sở sẽ tự hủy
   trong 5 phút. Lựa chọn của các người: chạy, hoặc chết cùng sự thật này."
   *(đặt nhóm — và người chơi — vào 1 tình huống đạo đức mơ hồ có chủ đích,
   không phải villain hoàn toàn 1 chiều, tạo chiều sâu cho cái kết mở)*.
 - *Environmental storytelling:* phòng chỉ huy có nhiều màn hình giám sát
   camera an ninh khắp cơ sở (bao gồm cả các khu vực nhóm vừa đi qua ở Map
-  16-18 — 1 chi tiết nhỏ xác nhận BRDF đã theo dõi nhóm suốt từ đầu
+  16-18 — 1 chi tiết nhỏ xác nhận Meridian đã theo dõi nhóm suốt từ đầu
   campaign, không phải tình cờ chạm trán).
-- *Zombie/economy:* lính BRDF dày đặc nhất game trước khi tự hủy kích
+- *Zombie/economy:* lính Meridian dày đặc nhất game trước khi tự hủy kích
   hoạt (sau đó họ cũng phải bỏ chạy, không còn là mối đe dọa chính ở Map
   20); không có med kit/đạn pickup mới trong map này (áp lực thời gian —
   không có thời gian dừng lại tìm kiếm, chỉ dùng những gì đã tích lũy).
@@ -927,7 +937,7 @@ game (bản 1.0)**
   ra cửa thoát hiểm trên mặt đất.
 - *Pacing:* Không có build-up truyền thống — map bắt đầu NGAY TRONG sustain
   peak (tiếp nối trực tiếp từ báo động cuối Map 19) → đỉnh điểm là **boss
-  cuối cùng, Tank-style biến thể mạnh hơn** ("LAZARUS Subject" trưởng
+  cuối cùng, Brute-style biến thể mạnh hơn** ("LAZARUS Subject" trưởng
   thành — chính là kết quả cuối cùng của thí nghiệm nhắc ở Map 18, xuất
   hiện chặn đường thoát chính, kẹt giữa hành lang đang sập) → Peak fade
   cực ngắn ngay sau khi hạ boss (không có thời gian nán lại, cơ sở vẫn
@@ -951,7 +961,7 @@ game (bản 1.0)**
   đúng tinh thần "không còn gì để chuẩn bị thêm, chỉ còn chạy".
 - **Kết thúc mở (bản 1.0):** sau khi thoát, màn hình kết thúc campaign để
   ngỏ 2 hướng — công khai sự thật (rủi ro hoảng loạn diện rộng như chỉ huy
-  BRDF cảnh báo) hay im lặng bỏ đi — không quyết định thay người chơi,
+  Meridian cảnh báo) hay im lặng bỏ đi — không quyết định thay người chơi,
   chỉ đặt câu hỏi (đúng monologue ở trên) — mở đường rõ ràng cho
   DLC/Campaign 5+ khai thác hệ quả của lựa chọn đó nếu game thành công.
 
@@ -990,15 +1000,15 @@ quyết 1 câu hỏi thiết kế còn thiếu: **chọn/đổi vũ khí đầu 
   không phải hội thoại trực tiếp giữa các nhân vật người chơi.
 - **Gieo twist Campaign 4 dần dần, không phải bất ngờ vô căn cứ** — mỗi
   audio log trong Campaign 1 (đặc biệt #3 và #4) đều có 1 câu ẩn ý về
-  BRDF/Cổng thành để khi twist lộ ra ở Campaign 4, người chơi có thể quay
+  Meridian/Cổng thành để khi twist lộ ra ở Campaign 4, người chơi có thể quay
   lại nhớ ra manh mối đã có sẵn (kỹ thuật "fair twist" — không phải
   reveal ngẫu nhiên không báo trước).
 
 ## 15. Content scope — ngang L4D (quyết định 2026-08-27, cập nhật)
 
 **L4D1 gốc** (tham chiếu): 4 campaign x ~5 map = **20 map**, 1 loại zombie
-thường + **5 special infected** (Boomer/Hunter/Smoker/Spitter/Jockey) +
-**1 boss** (Tank) + 1 special encounter (Witch) = **~8 loại địch**, **~12
+thường + **5 special infected** (Bloater/Stalker/Strangler/Spewer/Leech) +
+**1 boss** (Brute) + 1 special encounter (Wailer) = **~8 loại địch**, **~12
 vũ khí** (2 pistol, 2 shotgun, 3-4 rifle, 2 sniper, 2 SMG, melee, cộng
 throwable: pipe bomb/molotov/bile bomb).
 
@@ -1007,21 +1017,21 @@ throwable: pipe bomb/molotov/bile bomb).
   trúc L4D: mỗi campaign là 1 hành trình A→B riêng, có mở đầu/kết thúc
   riêng, nối vào cốt truyện chung ở mục 14).
 - **Zombie:** zombie thường (đã có) + **~5 loại đặc biệt kiểu L4D** (vai
-  trò khác nhau: 1 loại nổ/gây khói mù kiểu Boomer, 1 loại tốc độ cao/leo
-  trèo kiểu Hunter, 1 loại tấn công tầm xa/kéo người kiểu Smoker, 1 loại
-  gây debuff diện rộng kiểu Spitter, 1 loại tách người chơi ra khỏi nhóm
-  kiểu Jockey) + **1 boss** (Tank-style, sát thương/máu rất cao) + **1
+  trò khác nhau: 1 loại nổ/gây khói mù kiểu Bloater, 1 loại tốc độ cao/leo
+  trèo kiểu Stalker, 1 loại tấn công tầm xa/kéo người kiểu Strangler, 1 loại
+  gây debuff diện rộng kiểu Spewer, 1 loại tách người chơi ra khỏi nhóm
+  kiểu Leech) + **1 boss** (Brute-style, sát thương/máu rất cao) + **1
   special encounter** (đứng yên, chỉ tấn công nếu bị làm phiền, kiểu
-  Witch) + **3 loại đặc biệt bổ sung tham khảo ngoài L4D** (quyết định
-  2026-09-01 — Charger-style lao/tóm kéo, Clicker-style mù chỉ dò bằng
-  âm thanh, Screamer-style gọi bầy rồi bỏ chạy) — tổng **~10 loại đặc
+  Wailer) + **3 loại đặc biệt bổ sung tham khảo ngoài L4D** (quyết định
+  2026-09-01 — Rammer-style lao/tóm kéo, Stray-style mù chỉ dò bằng
+  âm thanh, Howler-style gọi bầy rồi bỏ chạy) — tổng **~10 loại đặc
   biệt/boss/encounter** phân biệt bằng AI/kỹ năng. **Thiết kế đầy đủ (tên
   tiếng Việt, kỹ năng, ngoại hình, map gán) cho cả 10 loại này đã có ở
   `docs/ZOMBIE_BESTIARY.md`** — không dừng ở mức "kiểu XYZ" nữa. **Cộng
   thêm** (quyết định
   2026-09-01, chi tiết ở `docs/ZOMBIE_BESTIARY.md`): mỗi map có **đúng 4**
   **archetype môi trường** riêng (nhân viên văn phòng, công nhân cảng,
-  lính BRDF...) — tái dùng NGUYÊN AI zombie thường, chỉ đổi model/trang
+  lính Meridian...) — tái dùng NGUYÊN AI zombie thường, chỉ đổi model/trang
   phục (2-3 variant/archetype) + tuỳ chọn lệch nhẹ máu/tốc độ, không phải
   8 loại địch nói trên tăng thêm — mục đích thuần thị giác, để mỗi map
   không lặp lại đúng 1 hình ảnh zombie xuyên suốt 20 map.
@@ -1070,7 +1080,7 @@ thuật như hiện tại.
 - **1 map duy nhất**, hoàn chỉnh: có điểm bắt đầu → gameplay → điểm
   extract, môi trường/lighting/audio đã polish (không phải greybox).
 - Địch: zombie thường (đã có) + **1 loại đặc biệt: nổ/gây khói mù
-  (Boomer-style)** — chọn ở mục 17.5 để làm trước, test hệ thống AI đặc
+  (Bloater-style)** — chọn ở mục 17.5 để làm trước, test hệ thống AI đặc
   biệt có mở rộng tốt không trước khi làm tiếp 4 loại kia.
 - **Downed/Revive system** (chốt ở mục 17.1, thay cho spectate-khi-chết ở
   bản nháp trước) — người chơi mất máu về 0 thì `Downed` (nằm chờ cứu),
@@ -1174,7 +1184,7 @@ struct ExtractZone {
     định chiến thuật) → về lại `Alive` với % máu thấp (không full máu,
     tránh lạm dụng revive liên tục làm mất tính sát thương của mất máu).
   - Hết `bleed_out_timer` mà chưa được cứu, hoặc bị zombie đặc biệt tấn
-    công thẳng lúc đang `Downed` (instakill kiểu Hunter pounce của L4D,
+    công thẳng lúc đang `Downed` (instakill kiểu Stalker pounce của L4D,
     để giai đoạn sau khi có zombie đó) → chuyển `Dead`.
   - `Dead` khác solo cũ: **không rời phòng ngay**, chuyển sang camera xem
     theo góc đồng đội còn sống (spectate), chờ mission kết thúc — vẫn tính
@@ -1227,7 +1237,7 @@ struct ExtractZone {
 
 ### 17.5 Chọn zombie đặc biệt đầu tiên
 
-**Chọn: loại "nổ/gây khói mù" (Boomer-style)** — lý do chọn cái này làm
+**Chọn: loại "nổ/gây khói mù" (Bloater-style)** — lý do chọn cái này làm
 trước trong số 5 loại ở mục 15:
 - **AI đơn giản nhất:** không cần pathing đặc biệt (không kéo/bay/leo trèo
   khác zombie thường) — chỉ cần: tiến gần → nổ (AoE) khi chết hoặc khi đủ
@@ -1238,8 +1248,8 @@ trước trong số 5 loại ở mục 15:
   rộng được từ codebase zombie hiện có (thêm 1 component `SpecialZombie`
   hoặc enum variant, 1 hiệu ứng AoE khi chết) mà không phải viết lại AI
   framework — nếu cái đơn giản nhất đã khó mở rộng, biết sớm để sửa kiến
-  trúc trước khi làm tiếp 4 loại phức tạp hơn (Hunter/Smoker/Spitter/
-  Jockey đều cần cơ chế mới hẳn: nhảy/kéo dây/tấn công tầm xa/tách nhóm).
+  trúc trước khi làm tiếp 4 loại phức tạp hơn (Stalker/Strangler/Spewer/
+  Leech đều cần cơ chế mới hẳn: nhảy/kéo dây/tấn công tầm xa/tách nhóm).
 - **Cơ chế cụ thể (MVP):** khi chết (bị bắn hết máu) HOẶC khi vào bán kính
   X so với người chơi bất kỳ → nổ, gây 1 vùng khói/khí độc tồn tại N giây,
   người chơi đứng trong đó bị giảm tầm nhìn (fog/particle overlay) + mất
@@ -1549,8 +1559,8 @@ Store readiness" trước đây).
 
 ### 17.18 Kiến trúc Zombie đặc biệt (ECS, lấp khoảng trống 17.5)
 
-- **Component mới:** `SpecialZombieKind` enum (`Boomer` cho MVP, mở rộng
-  dần `Hunter/Smoker/Spitter/Jockey` ở Giai đoạn 3) gắn thêm lên entity
+- **Component mới:** `SpecialZombieKind` enum (`Bloater` cho MVP, mở rộng
+  dần `Stalker/Strangler/Spewer/Leech` ở Giai đoạn 3) gắn thêm lên entity
   `Zombie` đã có — zombie thường không có component này (query
   `Without<SpecialZombieKind>` để phân biệt, giữ nguyên toàn bộ code
   zombie thường không đổi).
@@ -1560,7 +1570,7 @@ Store readiness" trước đây).
   chết/khi đủ gần). Không sửa system zombie thường.
 - **Native Metal renderer (đã có pattern sẵn để tái dùng — không phải
   việc mới):** `native_metal_probe.rs` đã có `skinned_models: HashMap<
-  &str, SkinnedModel>` tra theo tên model — zombie Boomer chỉ cần đăng ký
+  &str, SkinnedModel>` tra theo tên model — zombie Bloater chỉ cần đăng ký
   thêm 1 entry mới (`"zombie_boomer"`) trỏ tới model AI-gen riêng, đúng
   hệt cách zombie thường/soldier hiện tại đã đăng ký — không cần sửa kiến
   trúc renderer.
@@ -1598,7 +1608,7 @@ Store readiness" trước đây).
    resource-toàn-cục → component-per-player **trước khi** làm các bước
    sau, vì nếu cần refactor lớn thì ảnh hưởng ước tính thời gian toàn bộ
    Giai đoạn 1.
-7. **Zombie Boomer-style** (17.5/17.18) — mở rộng hệ thống zombie hiện có.
+7. **Zombie Bloater-style** (17.5/17.18) — mở rộng hệ thống zombie hiện có.
 8. **Attachment system MVP** (17.6) — 2-3 attachment đầu tiên.
 9. **Đạn dược/Health pickup + Friendly fire** (17.17) — hệ thống item mới.
 10. **DDA khung + baseline tay** (17.7) — **xóa `Director`/`run_ai_director`

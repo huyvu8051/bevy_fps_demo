@@ -80,7 +80,7 @@ khắc căng thẳng tĩnh** khi đi ngang Witch (xem GDD 14.5).
 │   │        cho ai CHỌN đối đầu thay      │    chạm phải)             │
 │   │        vì né tránh                  │                          │
 │   │                                    │                       │
-│   │   [Khoang lạnh niêm phong BRDF      │                       │
+│   │   [Khoang lạnh niêm phong Meridian      │                       │
 │   │    đã bị PHÁ TỪ BÊN TRONG —         │                       │
 │   │    đây chính là nơi Witch xuất       │                       │
 │   │    hiện, liên kết trực tiếp Map 12]  │                       │
@@ -92,7 +92,7 @@ khắc căng thẳng tĩnh** khi đi ngang Witch (xem GDD 14.5).
 │   └─────────────┘                                          │
 │                                                              │
 │   L13 (Audio log #13 — biên bản kiểm tra kho lạnh,             │
-│        khoang lạnh không rõ nguồn gốc, dấu BRDF)                │
+│        khoang lạnh không rõ nguồn gốc, dấu Meridian)                │
 └───────────────────────────────┬────────────────────────────┘
                                  ═══
 ```

@@ -21,7 +21,7 @@ giữa các tầng giàn giáo giữ nguyên — chỉ mặt bằng mỗi tầng
 │                                                              │
 │        Z                                                    │
 │                                                              │
-│   [Hàng rào BRDF mới hơn hẳn phần còn lại của nhà máy —         │
+│   [Hàng rào Meridian mới hơn hẳn phần còn lại của nhà máy —         │
 │    quây quanh bồn chứa số 9-12, nhìn thấy từ xa]                 │
 └───────────────────────────────┬────────────────────────────┘
                                  ↑ Lên giàn giáo
@@ -48,8 +48,8 @@ giữa các tầng giàn giáo giữ nguyên — chỉ mặt bằng mỗi tầng
 │      │   Z   │                                               │
 │                                                              │
 │   ┌────────────────────┐                                   │
-│   │ 🛢️ Bồn chứa 9-12       │  ← Rào BRDF mới, KHÔNG vào được    │
-│   │  (rào chắn BRDF)       │    (chỉ nhìn thấy từ xa, gợi ý       │
+│   │ 🛢️ Bồn chứa 9-12       │  ← Rào Meridian mới, KHÔNG vào được    │
+│   │  (rào chắn Meridian)       │    (chỉ nhìn thấy từ xa, gợi ý       │
 │   │                        │    lore, không phải khu vực chơi      │
 │   └────────────────────┘    được ở Campaign 3)                  │
 │                                                              │
@@ -83,7 +83,7 @@ giữa các tầng giàn giáo giữ nguyên — chỉ mặt bằng mỗi tầng
 │   │                                │       safe room tự nhiên      │
 │   │   L14 (Audio log #14 —          │       trước khi qua map        │
 │   │   nhật ký kỹ sư vận hành,        │       cuối campaign)           │
-│   │   BRDF thuê khu làm bãi          │                             │
+│   │   Meridian thuê khu làm bãi          │                             │
 │   │   trung chuyển, cấm vào bồn       │                             │
 │   │   9-12)                          │                             │
 │   └──────────────────────────┘                             │
@@ -96,7 +96,7 @@ giữa các tầng giàn giáo giữ nguyên — chỉ mặt bằng mỗi tầng
 │                │  E (Extract Zone) │                          │
 │                │  → Map 15 Hàng     │                          │
 │                │    rào an ninh      │                          │
-│                │    BRDF (Boss #3)   │                          │
+│                │    Meridian (Boss #3)   │                          │
 │                └─────────────────┘                          │
 └──────────────────────────────────────────────────────────┘
 ```

@@ -14,7 +14,7 @@ code spawn table cho từng map.
    chuyển/đuổi (`move_zombies`) của zombie thường, KHÔNG viết AI framework
    mới. Khác nhau ở:
    - **Ngoại hình/trang phục** theo bối cảnh map (công nhân, nhân viên
-     văn phòng, lính BRDF...) — mỗi archetype có **2-3 variant** (đổi màu
+     văn phòng, lính Meridian...) — mỗi archetype có **2-3 variant** (đổi màu
      trang phục/dáng người qua prompt AI-gen khác nhau, cùng 1 rig).
    - **Hệ số** `Health`/tốc độ so với baseline (vd lính gác dày hơn,
      người già yếu hơn) — dùng lại đúng field `Health`/`ZOMBIE_WALK_
@@ -27,11 +27,11 @@ code spawn table cho từng map.
    - Mục đích: mỗi map trông có "dân cư riêng" (cả hình ảnh lẫn cảm giác
      hành vi) thay vì cùng 1 hình ảnh + hành vi lặp lại xuyên suốt 20 map.
 3. **Zombie đặc biệt đặt tên (đã có khung, GDD mục 15/17.5/17.18)** —
-   Boomer/Hunter/Smoker/Spitter/Jockey (kỹ năng riêng, cần AI mới) + Tank
-   (boss) + Witch-style (special encounter). KHÔNG lặp lại ở đây, xem GDD
+   Bloater/Stalker/Strangler/Spewer/Leech (kỹ năng riêng, cần AI mới) + Brute
+   (boss) + Wailer-style (special encounter). KHÔNG lặp lại ở đây, xem GDD
    trực tiếp. Archetype (tầng 2) không thay thế tầng này — 1 map có thể có
    cả archetype VÀ 1 con đặc biệt đặt tên (vd Map 3 vừa có "Hành khách
-   tàu điện" archetype vừa là map giới thiệu Boomer).
+   tàu điện" archetype vừa là map giới thiệu Bloater).
 
 ## Animation: dùng chung vs. riêng (quyết định 2026-09-01 — tối ưu, không
 ## generate thừa)
@@ -73,19 +73,19 @@ animation.
 
 | Loại | Dùng chung (Idle/Walk/Run/Crawl) | Clip riêng cần thêm | Tận dụng lại clip nền cho phần còn lại |
 |---|---|---|---|
-| Nghẹt Thở (Boomer) | ✅ | **0 mới** — nổ là VFX + despawn, không phải animation | — |
-| Dây Thối (Smoker) | ✅ | 1: **Tongue Attack** (thay Bite khi ở xa) | Bite vẫn dùng khi bị kéo tới gần |
-| Kẻ Phun Độc (Spitter) | ✅ | 1: **Spit Attack** (thay Bite khi ở xa) | — |
-| Kẻ Rình Rập (Hunter) | ✅ | 1: **Pounce** (one-shot nhảy tới) | Sau khi ghim xuống đất, dùng lại **Bite** loop luôn — không cần clip "cắn khi ghim" riêng |
-| Kẻ Cưỡi (Jockey) | ✅ | 1: **Latch** (one-shot bám lên lưng) | Lúc đang cưỡi không cần clip riêng — camera/controller là phần hiện, không phải animation nó |
-| Lôi Đình (Tank) | ✅ | **0 mới** — dùng lại `Bite` làm đòn đấm (đổi hitbox/dame trong code, không đổi clip) | Walk/Run cũng dùng thẳng bản zombie thường, chỉ tăng scale model |
-| Người Than Khóc (Witch) | ❌ (không Walk/Run — đứng yên) | 2: **Cower** (idle loop khi yên) + **Charge** (one-shot khi nổi giận, có thể tái dùng Run tốc độ cao thay vì clip mới nếu chấp nhận bớt kịch tính) | — |
-| Kẻ Húc (Charger) | ✅ | 1: **Slam** (one-shot đập nạn nhân xuống đất, lặp lại) | Pha lao tới dùng lại **Run** nguyên bản (chỉ nhanh hơn qua code, không cần clip riêng) |
-| Kẻ Rình (Lurker) | ✅ | **0 mới** — mù nên không cần tư thế "ngắm"/"rình" đặc biệt, chỉ đi tới nguồn âm rồi Bite như thường | — |
-| Kẻ Hú (Screamer) | ✅ | 1: **Scream** (one-shot, ngửa đầu hú) | Bỏ chạy sau khi hú dùng lại **Run** nguyên bản |
+| Nghẹt Thở (Bloater) | ✅ | **0 mới** — nổ là VFX + despawn, không phải animation | — |
+| Dây Thối (Strangler) | ✅ | 1: **Tongue Attack** (thay Bite khi ở xa) | Bite vẫn dùng khi bị kéo tới gần |
+| Kẻ Phun Độc (Spewer) | ✅ | 1: **Spit Attack** (thay Bite khi ở xa) | — |
+| Kẻ Rình Rập (Stalker) | ✅ | 1: **Pounce** (one-shot nhảy tới) | Sau khi ghim xuống đất, dùng lại **Bite** loop luôn — không cần clip "cắn khi ghim" riêng |
+| Kẻ Cưỡi (Leech) | ✅ | 1: **Latch** (one-shot bám lên lưng) | Lúc đang cưỡi không cần clip riêng — camera/controller là phần hiện, không phải animation nó |
+| Lôi Đình (Brute) | ✅ | **0 mới** — dùng lại `Bite` làm đòn đấm (đổi hitbox/dame trong code, không đổi clip) | Walk/Run cũng dùng thẳng bản zombie thường, chỉ tăng scale model |
+| Người Than Khóc (Wailer) | ❌ (không Walk/Run — đứng yên) | 2: **Cower** (idle loop khi yên) + **Charge** (one-shot khi nổi giận, có thể tái dùng Run tốc độ cao thay vì clip mới nếu chấp nhận bớt kịch tính) | — |
+| Kẻ Húc (Rammer) | ✅ | 1: **Slam** (one-shot đập nạn nhân xuống đất, lặp lại) | Pha lao tới dùng lại **Run** nguyên bản (chỉ nhanh hơn qua code, không cần clip riêng) |
+| Kẻ Rình (Stray) | ✅ | **0 mới** — mù nên không cần tư thế "ngắm"/"rình" đặc biệt, chỉ đi tới nguồn âm rồi Bite như thường | — |
+| Kẻ Hú (Howler) | ✅ | 1: **Scream** (one-shot, ngửa đầu hú) | Bỏ chạy sau khi hú dùng lại **Run** nguyên bản |
 
 **Tổng clip mới cần gen cho TOÀN BỘ hệ thống đặc biệt (10 loại): 7**
-(Tongue, Spit, Pounce, Latch, Cower, Slam, Scream — Witch's Charge vẫn để
+(Tongue, Spit, Pounce, Latch, Cower, Slam, Scream — Wailer's Charge vẫn để
 tuỳ chọn/bỏ được) — không phải 10 loại × 1 bộ animation riêng, và **3
 trong 10 loại (Nghẹt Thở, Lôi Đình, Kẻ Rình) cần đúng 0 clip mới**. Mỗi
 clip mới chỉ cần gen **1 lần trên rig `zombie_meshy.glb`**
@@ -96,8 +96,8 @@ chợ" của Dây Thối đều phát chung 1 clip Tongue Attack, chỉ khác mo
 ## Nguyên tắc thiết kế archetype (để không vượt ngân sách solo dev)
 
 - **Tái dùng archetype giữa các map cùng bối cảnh** thay vì tạo mới cho
-  mỗi map — vd "Nhân viên bảo vệ/Lính BRDF" xuất hiện lặp lại ở nhiều map
-  khác nhau (Map 1, 5, 10, 16, 19, 20) vì hợp lý với lore (BRDF đóng quân
+  mỗi map — vd "Nhân viên bảo vệ/Lính Meridian" xuất hiện lặp lại ở nhiều map
+  khác nhau (Map 1, 5, 10, 16, 19, 20) vì hợp lý với lore (Meridian đóng quân
   khắp thành phố) và tiết kiệm asset. Chỉ tạo archetype thật mới khi bối
   cảnh map đủ khác biệt.
 - **Không tạo archetype trẻ em** — theo đúng convention mọi game zombie
@@ -116,7 +116,7 @@ chợ" của Dây Thối đều phát chung 1 clip Tongue Attack, chỉ khác mo
 | Archetype | Base kind | Hệ số Health/tốc độ | Variant (2-3) | Xuất hiện ở map |
 |---|---|---|---|---|
 | **Nhân viên văn phòng** | Classic | 1.0 / 1.0 (baseline) | Nam vest xộc xệch · Nữ áo sơ mi rách · Thực tập sinh đeo thẻ | M1, M17 |
-| **Bảo vệ / Lính BRDF** | Meshy | 1.3 / 1.0 (dày hơn, không nhanh hơn) | Bảo vệ toà nhà · Lính BRDF thường · Sĩ quan BRDF (huy hiệu) | M1, M5, M10, M14, M16, M19, M20 |
+| **Bảo vệ / Lính Meridian** | Meshy | 1.3 / 1.0 (dày hơn, không nhanh hơn) | Bảo vệ toà nhà · Lính Meridian thường · Sĩ quan Meridian (huy hiệu) | M1, M5, M10, M14, M16, M19, M20 |
 | **Khách mua sắm** | Classic | 1.0 / 1.0 | Gia đình (túi đồ) · Thiếu niên (tai nghe còn đeo) · Người già (xe đẩy) | M2 |
 | **Hành khách tàu điện** | Meshy | 0.9 / 1.1 (gầy hơn, nhanh hơn chút — kẹt dưới hầm lâu) | Hành khách thường · Nhân viên soát vé · Công nhân vệ sinh đường ray | M3 |
 | **Người vô gia cư** | Classic | 0.9 / 1.0 | Trú ẩn dưới ga tàu · Nhặt ve chai quanh sân ga | M3 |
@@ -157,7 +157,7 @@ archetype mới cho toàn bộ 20 map, đúng tinh thần "Người tị nạn" 
 | **Nhân viên dịch vụ công cộng** | Meshy | 1.0 / 1.0 | Bưu tá khu mẫu (M6) · Nhân viên y tế học đường (M7) · Nhân viên quản lý công viên cấp cao (M8) · Nhân viên thuế chợ đêm (M9) · Nhân viên hành chính checkpoint (M10) | 2 Vành đai |
 | **Công nhân thời vụ** | Classic | 1.0 / 0.9 | Thời vụ nhà máy dệt (M11) · Thời vụ bốc dỡ cảng (M12) · Thời vụ kho lạnh (M13) · Thời vụ nhà máy lọc (M14) · Thời vụ hàng rào an ninh (M15) | 3 Vùng công nghiệp |
 | **Nhân viên vận tải/logistics** | Meshy | 1.1 / 1.0 | Lái xe tải nhà máy dệt (M11) · Điều phối container (M12) · Lái xe đông lạnh (M13) · Lái xe bồn nhà máy lọc (M14) · Lái xe tuần tra hàng rào (M15) | 3 Vùng công nghiệp |
-| **Nhân viên hậu cần BRDF** | Meshy | 1.1 / 1.0 | Hậu cần cổng chính (M16) · Hậu cần khu hành chính (M17) · Hậu cần phòng lab (M18) · Hậu cần boong-ke (M19) · Hậu cần điểm cuối (M20) | 4 Cổng thành |
+| **Nhân viên hậu cần Meridian** | Meshy | 1.1 / 1.0 | Hậu cần cổng chính (M16) · Hậu cần khu hành chính (M17) · Hậu cần phòng lab (M18) · Hậu cần boong-ke (M19) · Hậu cần điểm cuối (M20) | 4 Cổng thành |
 | **Người bị giam giữ** | Classic | 0.7 / 0.9 (yếu, từng bị giam) | Bị giam ở cổng chính (M16) · Bị thẩm vấn khu hành chính (M17) · Đối tượng theo dõi ở lab (M18) · Bị giam ở boong-ke (M19) · Bị giam ở điểm cuối (M20) | 4 Cổng thành |
 
 **Tổng mới:** 25 + 8 = **33 archetype**, ~96 model zombie riêng biệt (variant
@@ -168,7 +168,7 @@ mức 2 trước đó), vẫn nằm trong khả năng AI-gen 1 người làm —
 chỉ là 1 biến thể prompt của 2 rig `zombie.glb`/`zombie_meshy.glb` đã có,
 không phải rig mới. "Người tị nạn"/8 archetype xuyên-campaign ở trên là
 các ngoại lệ có chủ đích với 4-5 variant thay vì 2-3 — mỗi cái đều có 1
-mạch lý do xuyên suốt (BRDF bỏ mặc dân thường, hoặc đơn giản là "vai trò
+mạch lý do xuyên suốt (Meridian bỏ mặc dân thường, hoặc đơn giản là "vai trò
 tồn tại ở mọi map trong campaign" như lao công/bưu tá/tài xế), không
 phải chỉ tạo cho đủ số.
 
@@ -207,12 +207,12 @@ dùng chung** (không phải 33 hành vi riêng biệt).
 | Trait | Archetype |
 |---|---|
 | Bình thường | Hành khách tàu điện · Người đi đường — 2 archetype trung tính nhất, không thiên hẳn về tính cách nào |
-| Hung hãn | Bảo vệ/Lính BRDF · Cảnh sát giao thông · Công nhân cảng · Đội an ninh tư nhân — có huấn luyện/phản xạ nhanh trước khi biến đổi |
+| Hung hãn | Bảo vệ/Lính Meridian · Cảnh sát giao thông · Công nhân cảng · Đội an ninh tư nhân — có huấn luyện/phản xạ nhanh trước khi biến đổi |
 | Lỳ đòn | Người tị nạn · Người sống sót cuối cùng — đã quen sợ hãi/cảnh giác từ trước, 1 khi đã chú ý tới ai thì không rời mắt |
 | Bầy đàn | Khách mua sắm · Giáo viên/Học sinh cấp 3 · Phụ huynh đón con · Người chợ đêm — vốn hay tụ tập theo nhóm khi còn sống |
 | Lang thang | Người đi công viên · Nhân viên công viên · Người giao hàng đêm · Nhân viên vệ sinh đô thị · Nhân viên dịch vụ công cộng · Nhân viên vận tải/logistics — nghề nghiệp vốn di chuyển liên tục |
 | Đờ đẫn | Nạn nhân giao thông · Nạn nhân hoá chất — chấn thương cơ thể nặng, phản xạ chậm |
-| Cảnh giác cao | Nhà khoa học/Nhân viên lab · Nhân viên vận hành chỉ huy · Nhân viên hậu cần BRDF — công việc đòi hỏi quan sát liên tục |
+| Cảnh giác cao | Nhà khoa học/Nhân viên lab · Nhân viên vận hành chỉ huy · Nhân viên hậu cần Meridian — công việc đòi hỏi quan sát liên tục |
 | **Hoảng loạn** *(mới)* | Nhân viên bất động sản · Cư dân vành đai — dân thường thuần, chưa từng va chạm bạo lực, dễ chững lại khi bị dồn |
 | **Phản ứng âm thanh** *(mới)* | Người vô gia cư · Kỹ thuật viên nhà máy lọc — quen dựa vào thính giác (sống lang thang / quen tiếng máy móc lớn nên nhạy với âm thanh lạ) |
 | **Ẩn nấp** *(mới)* | Người bị giam giữ · Công nhân thời vụ — phản xạ như thú bị dồn ép (từng bị giam) / quen trốn việc ở góc khuất nhà xưởng |
@@ -224,35 +224,37 @@ dùng chung** (không phải 33 hành vi riêng biệt).
 
 | Map | Campaign | Archetype xuất hiện (đúng 4 mọi map) | Đặc biệt/boss trong map |
 |---|---|---|---|
-| M1 Highrise | 1 Ground Zero | Nhân viên văn phòng, Bảo vệ/Lính BRDF, Người đi đường, Nhân viên vệ sinh đô thị | — |
-| M2 Meridian Plaza | 1 | Khách mua sắm, Bảo vệ/Lính BRDF, Người đi đường, Nhân viên vệ sinh đô thị | — |
-| M3 Meridian Station | 1 | Hành khách tàu điện, Người vô gia cư, Người đi đường, Nhân viên vệ sinh đô thị | **Nghẹt Thở** (Boomer, giới thiệu) |
-| M4 Route 9 Overpass | 1 | Nạn nhân giao thông, Cảnh sát giao thông, Người đi đường, Nhân viên vệ sinh đô thị | **Kẻ Húc** (Charger, giới thiệu) |
-| M5 Terminus Overlook | 1 | Bảo vệ/Lính BRDF, Người tị nạn, Người đi đường, Nhân viên vệ sinh đô thị | **Lôi Đình** (Tank, boss, lần 1) |
+| M1 Highrise | 1 Ground Zero | Nhân viên văn phòng, Bảo vệ/Lính Meridian, Người đi đường, Nhân viên vệ sinh đô thị | — |
+| M2 Meridian Plaza | 1 | Khách mua sắm, Bảo vệ/Lính Meridian, Người đi đường, Nhân viên vệ sinh đô thị | — |
+| M3 Meridian Station | 1 | Hành khách tàu điện, Người vô gia cư, Người đi đường, Nhân viên vệ sinh đô thị | **Nghẹt Thở** (Bloater, giới thiệu) |
+| M4 Route 9 Overpass | 1 | Nạn nhân giao thông, Cảnh sát giao thông, Người đi đường, Nhân viên vệ sinh đô thị | **Kẻ Húc** (Rammer, giới thiệu) |
+| M5 Terminus Overlook | 1 | Bảo vệ/Lính Meridian, Người tị nạn, Người đi đường, Nhân viên vệ sinh đô thị | **Lôi Đình** (Brute, boss, lần 1) |
 | M6 Sundown Gardens | 2 Vành đai | Cư dân khu mẫu, Nhân viên bất động sản, Cư dân vành đai, Nhân viên dịch vụ công cộng | — |
 | M7 Fairview Elementary | 2 | Giáo viên/Học sinh cấp 3, Phụ huynh đón con, Cư dân vành đai, Nhân viên dịch vụ công cộng | — |
 | M8 Miller's Pond | 2 | Người đi công viên, Nhân viên công viên, Cư dân vành đai, Nhân viên dịch vụ công cộng | — |
-| M9 Perimeter Night Market | 2 | Người chợ đêm, Người giao hàng đêm, Cư dân vành đai, Nhân viên dịch vụ công cộng | **Dây Thối** (Smoker, giới thiệu) |
-| M10 Checkpoint Delta | 2 | Bảo vệ/Lính BRDF, Người tị nạn, Cư dân vành đai, Nhân viên dịch vụ công cộng | **Lôi Đình** (lần 2) |
-| M11 Ironloom Textile Mill | 3 Vùng công nghiệp | Công nhân dệt, Đội an ninh tư nhân, Công nhân thời vụ, Nhân viên vận tải/logistics | **Kẻ Hú** (Screamer, giới thiệu) |
-| M12 Blackridge Freight Yard | 3 | Công nhân cảng, Đội an ninh tư nhân, Công nhân thời vụ, Nhân viên vận tải/logistics | — |
-| M13 Cold Storage 7 | 3 | Nạn nhân hoá chất, Đội an ninh tư nhân, Công nhân thời vụ, Nhân viên vận tải/logistics | **Kẻ Phun Độc** (Spitter, giới thiệu) |
-| M14 Refinery Loop | 3 | Kỹ thuật viên nhà máy lọc, Bảo vệ/Lính BRDF, Công nhân thời vụ, Nhân viên vận tải/logistics | **Kẻ Rình Rập** (Hunter, giới thiệu) |
-| M15 Perimeter Fence Alpha | 3 | Bảo vệ/Lính BRDF, Người tị nạn, Công nhân thời vụ, Nhân viên vận tải/logistics | **Lôi Đình** (lần 3) |
-| M16 Main Gatehouse | 4 Cổng thành | Bảo vệ/Lính BRDF, Người tị nạn, Nhân viên hậu cần BRDF, Người bị giam giữ | — |
-| M17 Sector 3 Admin Block | 4 | Nhân viên văn phòng, Nhà khoa học/Nhân viên lab, Nhân viên hậu cần BRDF, Người bị giam giữ | **Kẻ Rình** (Lurker, giới thiệu) |
-| M18 Subterranean Lab Alpha | 4 | Nhà khoa học/Nhân viên lab, Đối tượng thí nghiệm, Nhân viên hậu cần BRDF, Người bị giam giữ | **Kẻ Cưỡi** (Jockey, giới thiệu) |
-| M19 Command Bunker | 4 | Bảo vệ/Lính BRDF, Nhân viên vận hành chỉ huy, Nhân viên hậu cần BRDF, Người bị giam giữ | tái xuất Dây Thối + Kẻ Phun Độc |
-| M20 Final Breach | 4 | Bảo vệ/Lính BRDF, Người sống sót cuối cùng, Nhân viên hậu cần BRDF, Người bị giam giữ | **Lôi Đình** (boss cuối) + toàn bộ 9 loại đặc biệt/encounter khác cùng lúc |
+| M9 Perimeter Night Market | 2 | Người chợ đêm, Người giao hàng đêm, Cư dân vành đai, Nhân viên dịch vụ công cộng | **Dây Thối** (Strangler, giới thiệu) |
+| M10 Checkpoint Delta | 2 | Bảo vệ/Lính Meridian, Người tị nạn, Cư dân vành đai, Nhân viên dịch vụ công cộng | **Lôi Đình** (lần 2) |
+| M11 Ironloom Textile Mill | 3 Vùng công nghiệp | Công nhân dệt, Đội an ninh tư nhân, Công nhân thời vụ, Nhân viên vận tải/logistics | **Kẻ Hú** (Howler, giới thiệu) |
+| M12 Cát Lái Freight Yard | 3 | Công nhân cảng, Đội an ninh tư nhân, Công nhân thời vụ, Nhân viên vận tải/logistics | — |
+| M13 Cold Storage 7 | 3 | Nạn nhân hoá chất, Đội an ninh tư nhân, Công nhân thời vụ, Nhân viên vận tải/logistics | **Kẻ Phun Độc** (Spewer, giới thiệu) |
+| M14 Refinery Loop | 3 | Kỹ thuật viên nhà máy lọc, Bảo vệ/Lính Meridian, Công nhân thời vụ, Nhân viên vận tải/logistics | **Kẻ Rình Rập** (Stalker, giới thiệu) |
+| M15 Perimeter Fence Alpha | 3 | Bảo vệ/Lính Meridian, Người tị nạn, Công nhân thời vụ, Nhân viên vận tải/logistics | **Lôi Đình** (lần 3) |
+| M16 Main Gatehouse | 4 Cổng thành | Bảo vệ/Lính Meridian, Người tị nạn, Nhân viên hậu cần Meridian, Người bị giam giữ | — |
+| M17 Sector 3 Admin Block | 4 | Nhân viên văn phòng, Nhà khoa học/Nhân viên lab, Nhân viên hậu cần Meridian, Người bị giam giữ | **Kẻ Rình** (Stray, giới thiệu) |
+| M18 Subterranean Lab Alpha | 4 | Nhà khoa học/Nhân viên lab, Đối tượng thí nghiệm, Nhân viên hậu cần Meridian, Người bị giam giữ | **Kẻ Cưỡi** (Leech, giới thiệu) |
+| M19 Command Bunker | 4 | Bảo vệ/Lính Meridian, Nhân viên vận hành chỉ huy, Nhân viên hậu cần Meridian, Người bị giam giữ | tái xuất Dây Thối + Kẻ Phun Độc |
+| M20 Final Breach | 4 | Bảo vệ/Lính Meridian, Người sống sót cuối cùng, Nhân viên hậu cần Meridian, Người bị giam giữ | **Lôi Đình** (boss cuối) + toàn bộ 9 loại đặc biệt/encounter khác cùng lúc |
 
 ---
 
 ## Thiết kế đầy đủ 4 loại đặc biệt còn lại (quyết định 2026-09-01)
 
 Đặt tên tiếng Việt riêng cho từng loại (GDD trước đó chỉ gọi "kiểu
-Hunter/Smoker/Spitter/Jockey" để tham chiếu nhanh — giữ tên tiếng Anh
-trong ngoặc cho tiện tra cứu chéo với L4D, nhưng tên chính thức trong
-game là tên tiếng Việt). Mỗi loại: tái dùng `move_zombies`/pathing/aggro
+Stalker/Strangler/Spewer/Leech" để tham chiếu nhanh theo công năng — giờ
+mỗi loại có **2 tên chính thức song song cho 2 ngôn ngữ chính của game**:
+tên Việt (chính) + tên Anh riêng trong ngoặc (không dùng lại tên gốc từ
+game khác, đặt mới theo đúng công năng — vd "Stalker" cho loại nhảy vồ
+rình rập). Mỗi loại: tái dùng `move_zombies`/pathing/aggro
 hiện có cho di chuyển (đúng nguyên tắc GDD mục 17.18 — không viết lại AI
 framework), chỉ thêm **1 system hành vi riêng** xử lý phần khác biệt.
 
@@ -260,14 +262,14 @@ framework), chỉ thêm **1 system hành vi riêng** xử lý phần khác biệ
 
 Audio log rải rác (đúng cơ chế environmental storytelling ở GDD 14.3)
 dần hé lộ: 4 loại đặc biệt không phải 4 "loài" tách biệt — là **4 mức độ
-đột biến khác nhau của cùng 1 chủng Blackridge**, tuỳ thuộc **người đó
+đột biến khác nhau của cùng 1 chủng Đỏ**, tuỳ thuộc **người đó
 phơi nhiễm ở đâu/bao lâu/thể trạng gốc** trước khi biến đổi. Đây là lý do
 kể chuyện tự nhiên cho việc chúng xuất hiện đúng nơi hợp bối cảnh (Kẻ
 Phun Độc chỉ xuất hiện quanh khu vực có hoá chất, Kẻ Rình Rập từng là vận
 động viên/công nhân leo trèo...) — không cần giải thích bằng cutscene,
 chỉ cần 1-2 audio log mỗi loại khi giới thiệu lần đầu.
 
-### 🫧 Dây Thối (Smoker) — M9 Night Market, tái xuất M19
+### 🫧 Dây Thối (Strangler) — M9 Night Market, tái xuất M19
 
 - **Ngoại hình:** gầy khô, cổ họng phình to bất thường, da xám xanh rỉ
   dịch nhớt. Thường đứng yên trong bóng tối/sau quầy hàng, chỉ lộ ra khi
@@ -287,7 +289,7 @@ chỉ cần 1-2 audio log mỗi loại khi giới thiệu lần đầu.
 - **Variant (2):** Người bán hàng đêm (tạp dề còn dính) · Bảo vệ chợ
   (đồng phục rách).
 
-### 🧪 Kẻ Phun Độc (Spitter) — M13 Cold Storage 7, tái xuất M19
+### 🧪 Kẻ Phun Độc (Spewer) — M13 Cold Storage 7, tái xuất M19
 
 - **Ngoại hình:** da phồng rộp/loang lổ hoá chất, miệng rỉ chất lỏng
   xanh lục phát sáng nhẹ trong bóng tối (hợp bối cảnh kho lạnh tối).
@@ -295,7 +297,7 @@ chỉ cần 1-2 audio log mỗi loại khi giới thiệu lần đầu.
 - **Kỹ năng:** đứng yên tại chỗ ngắm rồi phun 1 vũng acid tầm xa (giống
   đạn cầu vồng, có thể né bằng cách di chuyển ngang) — vũng tồn tại N
   giây (đề xuất 6s), gây DoT cho bất kỳ ai đứng trong đó (tái dùng đúng
-  cơ chế "vùng khói/khí độc" đã thiết kế cho Nghẹt Thở/Boomer ở GDD 17.5,
+  cơ chế "vùng khói/khí độc" đã thiết kế cho Nghẹt Thở/Bloater ở GDD 17.5,
   chỉ đổi particle màu xanh acid thay vì khói xám) + phá huỷ dần item
   pickup nếu vũng phủ lên (buộc người chơi phải chọn: lấy đồ liều ăn DoT,
   hay bỏ qua).
@@ -308,7 +310,7 @@ chỉ cần 1-2 audio log mỗi loại khi giới thiệu lần đầu.
 - **Variant (2):** Công nhân kho lạnh (đồ bảo hộ ăn mòn) · Kỹ thuật viên
   hoá chất (kính bảo hộ vỡ, mặt biến dạng nặng nhất trong 2 variant).
 
-### 🐆 Kẻ Rình Rập (Hunter) — M14 Refinery Loop, tái xuất M20
+### 🐆 Kẻ Rình Rập (Stalker) — M14 Refinery Loop, tái xuất M20
 
 - **Ngoại hình:** cơ bắp co rút lộ gân, dáng khom người như thú săn mồi,
   di chuyển bằng cả 2 tay 2 chân trên bề mặt dốc/ống dẫn (hợp M14 —
@@ -334,7 +336,7 @@ chỉ cần 1-2 audio log mỗi loại khi giới thiệu lần đầu.
 - **Variant (2):** Công nhân bảo trì (dây an toàn đứt lủng lẳng) · Giám
   sát ca (mũ bảo hộ vỡ).
 
-### 🎯 Kẻ Cưỡi (Jockey) — M18 Subterranean Lab Alpha, tái xuất M20
+### 🎯 Kẻ Cưỡi (Leech) — M18 Subterranean Lab Alpha, tái xuất M20
 
 - **Ngoại hình:** nhỏ/gầy bất thường so với zombie khác (tương phản có
   chủ đích — trông "yếu" nhưng nguy hiểm nhất nếu chủ quan), 2 tay dài
@@ -350,7 +352,7 @@ chỉ cần 1-2 audio log mỗi loại khi giới thiệu lần đầu.
 - **Vai trò chiến thuật:** khác Dây Thối (kéo về 1 điểm cố định) — Kẻ
   Cưỡi **chủ động lái theo địa hình nguy hiểm nhất gần đó**, biến chính
   người chơi thành mối đe doạ cho bản thân, đúng tinh thần "hài hước
-  nhưng nguy hiểm" của Jockey gốc trong L4D.
+  nhưng nguy hiểm" của Leech gốc trong L4D.
 - **Counter-play:** không tự gỡ được (như Dây Thối/Kẻ Rình Rập) — bắt
   buộc đồng đội can thiệp (bắn nó rớt khỏi lưng, sát thương thấp là đủ
   vì mục tiêu là làm nó rớt chứ không cần giết). Solo chơi 1 mình: bị
@@ -363,13 +365,13 @@ chỉ cần 1-2 audio log mỗi loại khi giới thiệu lần đầu.
 
 ## 3 loại đặc biệt mới — tham khảo ngoài L4D (quyết định 2026-09-01)
 
-L4D1/2 đã dùng hết ở trên (Boomer/Hunter/Smoker/Spitter/Jockey/Tank/
-Witch) — 3 loại dưới đây lấy cảm hứng từ franchise zombie khác, lấp vào
+L4D1/2 đã dùng hết ở trên (Bloater/Stalker/Strangler/Spewer/Leech/Brute/
+Wailer) — 3 loại dưới đây lấy cảm hứng từ franchise zombie khác, lấp vào
 những map hiện chưa có đặc biệt riêng (M4, M11, M17), giữ đúng nguyên
 tắc cũ: tái dùng `move_zombies`, chỉ thêm đúng 1 system hành vi + 1 clip
 animation mới mỗi loại.
 
-### 🚌 Kẻ Húc (Charger — lấy cảm hứng từ L4D2) — M4 Route 9 Overpass
+### 🚌 Kẻ Húc (Rammer — lấy cảm hứng từ L4D2) — M4 Route 9 Overpass
 
 - **Ngoại hình:** 1 cánh tay phải phình to dị dạng gấp 3 tay trái, thân
   hình lệch hẳn sang 1 bên, dáng đi khập khiễng khi không charge.
@@ -377,19 +379,19 @@ animation mới mỗi loại.
   "sightline dài nhất Campaign 1"), **lao thẳng 1 mạch** (charge) theo
   hướng đó. Trúng người chơi → **tóm kéo đi** trong lúc vẫn đang chạy,
   đập liên tục xuống đất (sát thương theo thời gian, khác Kẻ Rình Rập —
-  Charger DI CHUYỂN trong lúc khống chế, không đứng yên 1 chỗ) cho tới
+  Rammer DI CHUYỂN trong lúc khống chế, không đứng yên 1 chỗ) cho tới
   khi đồng đội bắn nó rớt ra. Charge trượt (không trúng ai, hoặc đâm phải
   tường/vật cản) → **choáng 2-3s tại chỗ** — cửa sổ phản công rõ ràng.
 - **Vai trò chiến thuật:** biến chính "sightline dài" (ưu điểm của người
   chơi có súng tầm xa) thành rủi ro — đứng dàn hàng ngang giữa đường
-  thẳng dễ bị 1 con Charger gom cả nhóm.
+  thẳng dễ bị 1 con Rammer gom cả nhóm.
 - **Counter-play:** né sang ngang (charge chỉ theo đường thẳng ban đầu,
   không bẻ lái) — hoặc chủ động đứng nép sau cột/xe hỏng để nó đâm trượt
   và tự choáng.
 - **Variant (2):** Tài xế xe tải (charge từ thói quen "cầm lái"), Lính
   cứu hộ giao thông (tay dị dạng như đang "kéo nạn nhân").
 
-### 🔇 Kẻ Rình (Lurker — lấy cảm hứng từ Clicker, *The Last of Us*) — M17 Sector 3 Admin Block
+### 🔇 Kẻ Rình (Stray — lấy cảm hứng từ Clicker, *The Last of Us*) — M17 Sector 3 Admin Block
 
 - **Ngoại hình:** mắt phủ màng trắng đục (mù hẳn), lỗ tai/mũi phình bất
   thường — không gầm gừ, gần như im lặng tuyệt đối.
@@ -410,7 +412,7 @@ animation mới mỗi loại.
 - **Variant (2):** Nhân viên văn phòng (đã mù do phơi nhiễm hoá chất
   trong toà nhà), Nhà khoa học (kính bảo hộ vỡ, mắt cháy do thí nghiệm).
 
-### 📢 Kẻ Hú (Screamer — lấy cảm hứng từ *State of Decay*/*Dying Light*) — M11 Ironloom Textile Mill
+### 📢 Kẻ Hú (Howler — lấy cảm hứng từ *State of Decay*/*Dying Light*) — M11 Ironloom Textile Mill
 
 - **Ngoại hình:** hàm dưới banh rộng bất thường gần 90°, cổ họng phồng
   to liên tục rung.
@@ -438,8 +440,8 @@ animation mới mỗi loại.
 
 | Campaign | Đặc biệt giới thiệu mới | Lý do chọn map đó |
 |---|---|---|
-| 1 Ground Zero | Nghẹt Thở (Boomer, M3) · Kẻ Húc (Charger, M4) | Boomer đã chốt GDD 17.5 — không gian hẹp M3; Charger tận dụng sightline dài nhất Campaign 1 ở M4 |
-| 2 Vành đai | Dây Thối (Smoker) | M9 chợ đêm nhiều góc khuất/quầy hàng để núp |
+| 1 Ground Zero | Nghẹt Thở (Bloater, M3) · Kẻ Húc (Rammer, M4) | Bloater đã chốt GDD 17.5 — không gian hẹp M3; Rammer tận dụng sightline dài nhất Campaign 1 ở M4 |
+| 2 Vành đai | Dây Thối (Strangler) | M9 chợ đêm nhiều góc khuất/quầy hàng để núp |
 | 3 Vùng công nghiệp | Kẻ Phun Độc + Kẻ Rình Rập + Kẻ Hú | M13 có sẵn hoá chất, M14 có sẵn verticality, M11 nhà máy ồn ào hợp "phải hú to" — 3 loại cùng campaign vì địa hình công nghiệp đa dạng nhất, đủ chỗ cho cả 3 phát huy đúng sở trường |
 | 4 Cổng thành | Kẻ Cưỡi + Kẻ Rình | M18 phòng lab — hành lang hẹp hợp "lái người chơi vào bẫy thí nghiệm"; Kẻ Rình ở M17 (trước M18) — twist luật chơi ngay khi bước vào campaign cuối, chuẩn bị tâm lý trước không gian tối tăm nhất game ở M18 |
 
@@ -451,10 +453,10 @@ cuối, không giới thiệu gì mới nữa.
 
 ## Boss & special encounter — thiết kế đầy đủ
 
-GDD mục 15 mới ghi 1 dòng ("Tank-style, máu/dame cao" / "Witch-style,
+GDD mục 15 mới ghi 1 dòng ("Brute-style, máu/dame cao" / "Wailer-style,
 đứng yên trừ khi bị làm phiền") — đặt tên và điền chi tiết ở đây.
 
-### 👹 Lôi Đình (Tank) — boss, tái xuất M5 → M10 → M15 → M20
+### 👹 Lôi Đình (Brute) — boss, tái xuất M5 → M10 → M15 → M20
 
 - **Ngoại hình:** to gấp ~3 lần zombie thường, cơ bắp phình bất thường
   (mức đột biến cực đoan nhất trong "4 mức độ đột biến" — phơi nhiễm liều
@@ -472,7 +474,7 @@ GDD mục 15 mới ghi 1 dòng ("Tank-style, máu/dame cao" / "Witch-style,
   — đuổi kịp người đứng yên/bắn, không đuổi kịp người đang chạy lùi có
   kiểm soát) — buộc chiến thuật "vừa lùi vừa bắn", không phải chạy trốn
   hoàn toàn.
-- **Vai trò chiến thuật:** đúng vai trò Tank gốc — 1 "sự kiện" riêng biệt
+- **Vai trò chiến thuật:** đúng vai trò Brute gốc — 1 "sự kiện" riêng biệt
   giữa dòng zombie thường, cả nhóm phải tập trung hoả lực + kiểm soát vị
   trí (không để ai bị dồn vào góc cụt) trong lúc zombie thường vẫn tiếp
   tục quấy nhiễu xung quanh.
@@ -484,7 +486,7 @@ GDD mục 15 mới ghi 1 dòng ("Tank-style, máu/dame cao" / "Witch-style,
   ninh nhiều chướng ngại, M20 không gian cuối cùng) là đủ tạo cảm giác
   mới mà không cần đổi kỹ năng.
 
-### 🕯️ Người Than Khóc (Witch-style) — special encounter, không phải boss
+### 🕯️ Người Than Khóc (Wailer-style) — special encounter, không phải boss
 
 - **Xuất hiện:** rải rác nhiều map (không cố định — đề xuất mọi map
   Campaign 2 trở đi, mỗi map tối đa 1 con, vị trí cố định theo map giống
@@ -527,21 +529,21 @@ trên (map, animation, trait), không cần thiết kế lại từ đầu.
 | # | Tên | Cảm hứng | Kỹ năng cốt lõi | Vì sao khác mọi loại đã có |
 |---|---|---|---|---|
 | 1 | **Kẻ Tái Sinh** | Regenerator (*Resident Evil 4*) | Tự hồi máu liên tục — chỉ 1 điểm yếu (vết nứt phát sáng ở ngực) mới gây sát thương thật, bắn chỗ khác gần vô dụng | Duy nhất loại buộc **bắn chính xác 1 điểm**, không phải bắn nhiều/né |
-| 2 | **Kẻ Bám Trần** | Licker (*Resident Evil*) | Bám tường/trần, rơi xuống đánh 1 đòn mạnh rồi bò đi tái định vị ngay (hit-and-run) | Khác Kẻ Rình Rập (Hunter) ở chỗ KHÔNG ghim/pin — đánh xong rút liền |
+| 2 | **Kẻ Bám Trần** | Licker (*Resident Evil*) | Bám tường/trần, rơi xuống đánh 1 đòn mạnh rồi bò đi tái định vị ngay (hit-and-run) | Khác Kẻ Rình Rập (Stalker) ở chỗ KHÔNG ghim/pin — đánh xong rút liền |
 | 3 | **Kẻ Cuồng Nộ** | Berserker (*Dead Island*) | Miễn sát thương khi đang gầm gừ lao tới; phải bắn dồn đủ số phát trong thời gian ngắn mới làm choáng, lộ điểm yếu vài giây | Duy nhất loại có "giáp tạm thời theo trạng thái", không phải giáp cố định |
-| 4 | **Kẻ Ném Đá** | Behemoth (*Dying Light 2*) | Bản tank tầm xa — ném mảnh vỡ/vật cản gây sát thương diện rộng, chậm nhưng nguy hiểm ở không gian mở | Tank duy nhất có tấn công TẦM XA (Lôi Đình thuần cận chiến) |
+| 4 | **Kẻ Ném Đá** | Behemoth (*Dying Light 2*) | Bản tank tầm xa — ném mảnh vỡ/vật cản gây sát thương diện rộng, chậm nhưng nguy hiểm ở không gian mở | Brute duy nhất có tấn công TẦM XA (Lôi Đình thuần cận chiến) |
 | 5 | **Kẻ Ấp Trứng** | Carrier (*World War Z*) | Chết → nổ ra 2-3 zombie con nhỏ/yếu/nhanh | Buộc cân nhắc hạ nó TỪ XA thay vì cận chiến như mọi loại khác |
 | 6 | **Kẻ Giáp Sắt** | Lính chống bạo động (nguyên bản, cảm hứng chung nhiều game) | Giáp trước gần miễn sát thương — chỉ hiệu quả khi bắn từ sau lưng/2 bên | Duy nhất loại buộc **bọc lườn/đi vòng** giữa combat, không phải bắn thẳng mặt |
 | 7 | **Đầu Ký Sinh** | Headcrab (*Half-Life*) | Sau khi hạ cơ thể chính, 1 ký sinh tách khỏi cổ, nhảy loạn xạ tấn công yếu nhưng rất nhanh | Duy nhất loại có **2 pha chiến đấu** trong 1 lần hạ gục |
 | 8 | **Kẻ Giả Chết** | "Xác giả chết bật dậy" (trope kinh điển RE/L4D) | Nằm bất động lẫn giữa xác trang trí môi trường (`!` deco có sẵn trong map design, xem `map01_highrise.md`'s legend) — chỉ lộ diện khi người chơi đi sát qua | Duy nhất loại tái dùng thẳng prop môi trường đã có sẵn làm ngụy trang, không cần asset mới |
-| 9 | **Kẻ Nhiễm Độc Ngược** | Gasbag (*World War Z*) | Chết phát tán khí khiến ĐẠN BẮN QUA VÙNG KHÍ mất độ chính xác (debuff vũ khí, không phải debuff tầm nhìn như Nghẹt Thở) | Khác Nghẹt Thở (Boomer) ở đúng chỗ này — debuff súng thay vì debuff mắt |
+| 9 | **Kẻ Nhiễm Độc Ngược** | Gasbag (*World War Z*) | Chết phát tán khí khiến ĐẠN BẮN QUA VÙNG KHÍ mất độ chính xác (debuff vũ khí, không phải debuff tầm nhìn như Nghẹt Thở) | Khác Nghẹt Thở (Bloater) ở đúng chỗ này — debuff súng thay vì debuff mắt |
 | 10 | **Kẻ Rình Bóng Tối** | "Chỉ di chuyển khi không bị nhìn" (trope kiểu *SCP-173*/Weeping Angel) | Đứng im khi trong tầm nhìn/crosshair người chơi, chỉ di chuyển khi ngoài góc nhìn trực tiếp | Duy nhất loại biến **hành động "ngoái nhìn lại"** thành cơ chế sinh tồn, không loại nào khác trong bestiary có |
 | 11 | **Kẻ Săn Bầy** | Lycan (*Resident Evil Village*) | Luôn xuất hiện theo nhóm 2-3, chủ động tách ra bao vây từ nhiều hướng cùng lúc thay vì dồn từ 1 phía | Duy nhất loại có **spawn theo cụm bắt buộc + phối hợp bao vây**, không phải 1 con đơn lẻ |
 | 12 | **Kẻ Phân Mảnh** | Necromorph (*Dead Space*) | Bắn trúng thân chỉ làm chậm — phải bắn đứt tay/chân mới hạ hẳn; chi đứt rời còn bò/lết tấn công riêng vài giây | Duy nhất loại buộc đổi mục tiêu ngắm (tay/chân) thay vì luôn nhắm giữa thân |
 | 13 | **Kẻ Trong Ống Thông Gió** | Xenomorph (*Alien: Isolation*) | Di chuyển qua hệ ống dẫn/trần treo (map công nghiệp có sẵn), bất ngờ xuất hiện từ 1 trong nhiều cửa thoát khác nhau mỗi lần | Duy nhất loại có **nhiều điểm xuất hiện không đoán trước**, không phải 1 vị trí spawn cố định |
 | 14 | **Kẻ Không Ngừng** | "Never stops, always walking toward you" (*It Follows*) | Luôn biết chính xác vị trí người chơi (không cần phát hiện), đi thẳng tới KHÔNG BAO GIỜ ngừng — nhưng chậm hơn cả đi bộ player | Duy nhất loại gây áp lực **tâm lý dài hạn** thay vì nguy hiểm tức thời — không nguy nếu di chuyển, nguy nếu mải làm việc quá lâu 1 chỗ |
 | 15 | **Kẻ Giả Dạng** | Mimic (*The Thing*) | Model/texture giống HỆT 1 archetype dân thường đang đứng lẫn trong map, không phân biệt được bằng mắt — chỉ lộ diện khi bất ngờ tấn công | Duy nhất loại gây **nghi ngờ mọi archetype khác** xung quanh, đổi hẳn cách người chơi quan sát map |
-| 16 | **Kẻ Sợ Ánh Sáng** | đảo ngược khái niệm Witch — ánh sáng thành vũ khí | Bị đẩy lùi/choáng tạm thời khi đèn pin chiếu thẳng vào; hung hãn hơn hẳn trong bóng tối | Duy nhất loại biến **đèn pin thành vũ khí phòng thủ thật sự**, không chỉ để nhìn đường |
+| 16 | **Kẻ Sợ Ánh Sáng** | đảo ngược khái niệm Wailer — ánh sáng thành vũ khí | Bị đẩy lùi/choáng tạm thời khi đèn pin chiếu thẳng vào; hung hãn hơn hẳn trong bóng tối | Duy nhất loại biến **đèn pin thành vũ khí phòng thủ thật sự**, không chỉ để nhìn đường |
 | 17 | **Kẻ Đào Hang** | côn trùng/loài đào hang (nguyên bản) | Chui qua khe hẹp/lỗ thông gió nhỏ mà player không lọt qua được — luôn có thể vòng ra sau lưng trong không gian kín | Duy nhất loại "bỏ qua" layout tường thông thường của map |
 | 18 | **Kẻ Câm** | 28 Days Later-style rage infected, phiên bản im lặng | Không phát tiếng bước chân dù đang chạy — mọi loại khác đều có tiếng động làm cảnh báo tự nhiên, riêng loại này thì không | Duy nhất loại tước mất **tín hiệu cảnh báo âm thanh** người chơi quen dựa vào |
 | 19 | **Kẻ Thôi Miên** | Siren-song (thần thoại Hy Lạp) | Phát ra âm thanh khiến zombie THƯỜNG gần đó tạm ngừng đuổi người chơi, quay sang cắn lẫn nhau vài giây | Duy nhất loại **gây rối loạn hàng ngũ địch** thay vì tấn công/triệu tập thêm quân |
@@ -581,7 +583,7 @@ Latch/Cower/Slam/Scream).
 | 10 | Kẻ Rình Bóng Tối | Idle/Walk (0 mới) | Đứng im/di chuyển đều là pose có sẵn, chỉ đổi ĐIỀU KIỆN chạy pose nào |
 | 11 | Kẻ Săn Bầy | Run/Bite (0 mới) | Phối hợp bao vây là logic spawn/target, không phải animation riêng |
 | 12 | Kẻ Phân Mảnh | **Crawl** (tái dùng, gắn lên chi đã tách rời) | Đúng dáng "lết trên mặt đất" có sẵn — chỉ gắn lên entity chi rời thay vì cả cơ thể |
-| 13 | Kẻ Trong Ống Thông Gió | **Pounce** (tái dùng, cho pha "bật ra khỏi ống") | Cùng dáng bung người tới như Hunter |
+| 13 | Kẻ Trong Ống Thông Gió | **Pounce** (tái dùng, cho pha "bật ra khỏi ống") | Cùng dáng bung người tới như Stalker |
 | 14 | Kẻ Không Ngừng | Walk/Bite (0 mới) | Chỉ là Walk vĩnh viễn, không có Run |
 | 15 | Kẻ Giả Dạng | **Dùng nguyên animation của archetype đang giả dạng** (0 mới) | Đúng định nghĩa — nó LÀ archetype đó về mặt hình ảnh cho tới lúc lộ diện |
 | 16 | Kẻ Sợ Ánh Sáng | **Hit reaction/flinch** (tái dùng từ Tier 3 `ZOMBIE_ANIMATION_PLAN.md`, đã có kế hoạch) | Đúng dáng "giật lùi vì tổn thương" có sẵn, chỉ đổi tác nhân kích hoạt (ánh sáng thay vì đạn) |
@@ -606,7 +608,7 @@ phải sai tốc độ).
 
 | Loại | Mô tả gốc | Animation ĐÚNG cần có |
 |---|---|---|
-| Kẻ Rình Rập (Hunter, tầng 10 loại chính) | "di chuyển bằng cả 2 tay 2 chân trên bề mặt dốc/ống dẫn" | Cần **Quadruped Prowl** (bò rình 4 chân) thay Walk, **Quadruped Climb** thay Run — KHÔNG phải Walk/Run người thường như đã ngầm định trước đó |
+| Kẻ Rình Rập (Stalker, tầng 10 loại chính) | "di chuyển bằng cả 2 tay 2 chân trên bề mặt dốc/ống dẫn" | Cần **Quadruped Prowl** (bò rình 4 chân) thay Walk, **Quadruped Climb** thay Run — KHÔNG phải Walk/Run người thường như đã ngầm định trước đó |
 | Kẻ Bám Trần (Licker) | bám tường/trần | Cần **Wall Cling** (bám, thay Idle) + **Quadruped Climb** (di chuyển trên tường/trần, thay Walk/Run) — không chỉ mỗi "Drop Strike" lúc tấn công |
 | Kẻ Trong Ống Thông Gió | di chuyển qua ống dẫn | Cần **Quadruped Climb** (chui/bò trong ống hẹp) — không phải Walk/Run đứng thẳng |
 | Kẻ Săn Bầy (Lycan) | cảm hứng sói *RE Village*, vốn là sinh vật 4 chân | Cần **Quadruped Prowl/Run** — nếu giữ hoàn toàn dáng người thì mất đúng chất "Lycan" |
@@ -648,7 +650,7 @@ TOÀN BỘ hệ thống (10 loại chính + 20 loại dự trữ): 7 (10 loại 
 2. **Loại có kỹ năng tấn công riêng thật sự** (Tongue/Spit/Pounce/Latch/
    Slam/Throw/Drop Strike — 7 loại) — đây mới là chỗ ĐÚNG LÀ đang thiếu:
    mỗi loại này hiện chỉ có 1 clip cho CẢ cụm "chuẩn bị → ra đòn", trong
-   khi phần mô tả cơ chế đã tự nhắc tới "telegraph" (vd Hunter "rướn
+   khi phần mô tả cơ chế đã tự nhắc tới "telegraph" (vd Stalker "rướn
    người chuẩn bị nhảy ~0.4s") mà animation chưa có clip riêng cho đúng
    khoảnh khắc đó.
 
@@ -703,7 +705,7 @@ Crawl + windup/recovery vẫn 100% dùng chung như các mục trên — chỉ p
 1. Điền `docs/characters/zombie.md` (story/lore/visual notes đang TODO)
    cho zombie thường trước — làm nền tảng style trước khi viết brief cho
    96 archetype variant + 10 loại đặc biệt/boss/encounter.
-2. ~~Quyết định map nào nhận Hunter/Smoker/Spitter/Jockey~~ — **đã xong**,
+2. ~~Quyết định map nào nhận Stalker/Strangler/Spewer/Leech~~ — **đã xong**,
    xem bảng "Ghi chú phân bổ theo campaign" ở trên.
 3. **Kỹ thuật — archetype (code, chưa làm ở giai đoạn hiện tại):** cần 1
    bảng tra map_id → danh sách (model_path, health_mult, speed_mult) khi
@@ -714,8 +716,8 @@ Crawl + windup/recovery vẫn 100% dùng chung như các mục trên — chỉ p
    bắt đầu dựng map 2 trở đi.
 4. **Kỹ thuật — 4 loại đặc biệt (code, thứ tự đề xuất theo mục 17.18/
    17.19 của GDD):**
-   - `SpecialZombieKind` enum (`Boomer` đã có khung ở GDD 17.5, thêm
-     `Smoker`/`Spitter`/`Hunter`/`Jockey`) gắn thêm lên entity `Zombie` đã
+   - `SpecialZombieKind` enum (`Bloater` đã có khung ở GDD 17.5, thêm
+     `Strangler`/`Spewer`/`Stalker`/`Leech`) gắn thêm lên entity `Zombie` đã
      có, giống hệt cách archetype dự kiến làm ở bước 3 — không tạo entity
      loại mới, chỉ thêm component.
    - Mỗi loại 1 system hành vi riêng (`smoker_tongue_behavior`,
@@ -727,7 +729,7 @@ Crawl + windup/recovery vẫn 100% dùng chung như các mục trên — chỉ p
      trạng thái "bị ghim" của Kẻ Rình Rập/Dây Thối tái dùng khung
      `PlayerLifeState` (GDD 17.1) làm 1 sub-state tạm thời thay vì tạo
      state máy mới.
-   - Lôi Đình (Tank) chỉ cần tái dùng zombie thường với multiplier cực
+   - Lôi Đình (Brute) chỉ cần tái dùng zombie thường với multiplier cực
      lớn trên `Health`/`KNOCKBACK_FORCE` — không cần AI mới, chỉ cần
      spawn 1 lần/map tại vị trí cố định thay vì theo lưới `ZOMBIE_SPAWNS`.
    - Người Than Khóc cần 1 `PassiveUntilProvoked` component riêng (aggro

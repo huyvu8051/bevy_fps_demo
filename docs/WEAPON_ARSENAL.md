@@ -150,11 +150,11 @@ phải gen").
 
 ## Vũ khí Thực nghiệm — gắn thẳng vào cốt truyện (1 khẩu, tự thiết kế riêng)
 
-### ⚡ Súng Xung Điện Blackridge (Blackridge Prototype Railgun)
+### ⚡ Súng Xung Điện Meridian (Meridian Prototype Railgun)
 
 - **Bối cảnh:** chỉ tìm được ở **M18 Subterranean Lab Alpha** (Campaign
   4, đúng nơi "rò rỉ dịch bệnh thật sự bắt đầu" — GDD mục 14.1) hoặc
-  **M19 Command Bunker** — vũ khí thử nghiệm của chính BRDF, chưa từng
+  **M19 Command Bunker** — vũ khí thử nghiệm của chính Meridian, chưa từng
   đưa vào sản xuất hàng loạt.
 - **Cơ chế:** không dùng đạn thường — **sạc điện qua thời gian** (giữ
   nút để sạc, càng sạc lâu damage/AoE càng lớn, tối đa ~2s), bắn ra 1 tia
@@ -163,7 +163,7 @@ phải gen").
   đủ hạ ngay). Không có "băng đạn" — dùng pin nội bộ hồi chậm theo thời
   gian (giống mana hơn là ammo).
 - **Vai trò cốt truyện:** đây là bằng chứng vật lý đầu tiên người chơi
-  cầm trên tay cho thấy BRDF không chỉ "cố dọn dẹp" mà **đã và đang phát
+  cầm trên tay cho thấy Meridian không chỉ "cố dọn dẹp" mà **đã và đang phát
   triển vũ khí quân sự thử nghiệm** ngay tại nơi dịch bệnh bắt nguồn —
   củng cố twist Campaign 4 (GDD mục 14.1) bằng gameplay, không chỉ qua
   audio log.

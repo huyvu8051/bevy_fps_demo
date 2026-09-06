@@ -77,7 +77,7 @@ escape sequence** (vd `PLAYER_SPEED x2` chỉ trong lúc đếm ngược Map 19�
 (b):
 
 - Số phút (5:00 ở Map 19 → 4:30/3:00/1:30/0:20 ở Map 20) đã **gắn với
-  lời thoại chỉ huy BRDF** ("Cơ sở sẽ tự hủy trong 5 phút" — L19, xem
+  lời thoại chỉ huy Meridian** ("Cơ sở sẽ tự hủy trong 5 phút" — L19, xem
   `map19_command_bunker.md`) — đổi số sẽ phải sửa cả câu thoại đã viết,
   lan sang nội dung tường thuật không liên quan tới việc mở rộng bản đồ.
 - Buff tốc độ tạm thời trong 1 đoạn escape có kịch bản rõ ràng (nhân vật
@@ -112,7 +112,7 @@ chính xác, không chỉ tính toán trên giấy.
 
 ## So sánh tổng thể Campaign 4 (Map 16-20, sau x4 diện tích + x12 zombie thường)
 
-| Map | Zombie thường (v1→v3) | Biến thể lab (v1→v3) | Lính BRDF (không x12) | Chỉ huy | Boss |
+| Map | Zombie thường (v1→v3) | Biến thể lab (v1→v3) | Lính Meridian (không x12) | Chỉ huy | Boss |
 |---|---|---|---|---|---|
 | 16. Main Gatehouse | 5 → **60** | — | **2** | 0 | 0 |
 | 17. Sector 3 Admin Block | 2 → **24** | — | **5** | 0 | 0 |
@@ -125,7 +125,7 @@ chính xác, không chỉ tính toán trên giấy.
 
 ## So sánh CUỐI CÙNG toàn bộ 4 Campaign (Map 1-20, sau x4 diện tích + x12 zombie thường)
 
-| Campaign | Zombie thường (v1→v3) | Đặc biệt/biến thể (không x12, trừ lab-variant) | Lính/Chỉ huy BRDF | Boss |
+| Campaign | Zombie thường (v1→v3) | Đặc biệt/biến thể (không x12, trừ lab-variant) | Lính/Chỉ huy Meridian | Boss |
 |---|---|---|---|---|
 | 1. Ground Zero | 47 → **564** | 6 (Boomer 2, ẩn 3, Tank 1) | 0 | 1 |
 | 2. Vành đai | 22 → **264** | 5 (Hunter/Smoker/Spitter/Jockey, Tank 1) | 0 | 1 |
@@ -134,7 +134,7 @@ chính xác, không chỉ tính toán trên giấy.
 | **TỔNG TOÀN GAME** | **112 → 1344** (+36 lab) | **14** | **13** | **4 lần Tank + 1 chỉ huy + 1 boss cuối** |
 
 Zombie thường toàn game x12 đúng công thức (112×12=1344, cộng riêng 36
-biến thể lab Map 18). Mọi địch đặc biệt/boss/lính BRDF/chỉ huy **giữ
+biến thể lab Map 18). Mọi địch đặc biệt/boss/lính Meridian/chỉ huy **giữ
 nguyên tuyệt đối số lượng gốc** xuyên suốt cả 20 map — nguyên tắc thống
 nhất áp dụng nhất quán từ Map 1 tới Map 20: chỉ zombie thường (và biến
 thể cosmetic như lab-zombie) tăng theo diện tích x4 + cường độ x3 = x12

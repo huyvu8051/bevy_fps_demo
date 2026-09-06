@@ -7,7 +7,7 @@ Map 16-18 theo lore "cùng cơ sở").
 ⚠️ v2 = x2 mỗi cạnh. **Zombie thường VÀ biến thể phòng thí nghiệm đều
 x12** — biến thể lab chỉ là "tái dùng model zombie thường + texture
 khác" (không phải địch có AI/cơ chế riêng như Boomer/Hunter...), nên áp
-dụng đúng công thức chung, khác với lính BRDF/đặc biệt ở các map khác.
+dụng đúng công thức chung, khác với lính Meridian/đặc biệt ở các map khác.
 
 ---
 

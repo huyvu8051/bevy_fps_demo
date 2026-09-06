@@ -1,4 +1,4 @@
-# Map 10 — "Trạm kiểm soát BRDF bỏ hoang" (Checkpoint Delta) — Boss Map
+# Map 10 — "Trạm kiểm soát Meridian bỏ hoang" (Checkpoint Delta) — Boss Map
 
 Campaign 2 "Vành đai", Map 10/20 (Map 5/5, **kết thúc campaign**). Xem
 GDD.md mục 14.4. Cùng legend với Map 5 (Boss `👹`, Tank-style tái xuất

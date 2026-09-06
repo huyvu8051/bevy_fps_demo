@@ -1597,6 +1597,7 @@ pub fn main() {
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
+                        title: "Last Day in Saigon".to_string(),
                         mode: if cfg!(target_os = "ios") || cfg!(target_os = "android") {
                             WindowMode::BorderlessFullscreen(MonitorSelection::Current)
                         } else {

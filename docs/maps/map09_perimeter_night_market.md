@@ -55,7 +55,7 @@ khỏi nhóm giữa mê cung quầy hàng, không thấy đồng đội ngay).
 │        Z              Z                                     │
 │                                                              │
 │   L9 (Audio log #9 — loa quầy hàng, quảng cáo lỗi xen           │
-│       lệnh giới nghiêm BRDF)                                    │
+│       lệnh giới nghiêm Meridian)                                    │
 └───────────────────────────────┬────────────────────────────┘
                                  ═══
 ```
@@ -79,14 +79,14 @@ khỏi nhóm giữa mê cung quầy hàng, không thấy đồng đội ngay).
 │        Z                                                    │
 │                                                              │
 │   !!! (vỏ đạn quân sự lẫn trong đống đổ vỡ — gợi ý ngầm         │
-│        BRDF từng dùng vũ lực với dân thường tại đây, deco)       │
+│        Meridian từng dùng vũ lực với dân thường tại đây, deco)       │
 └───────────────────────────────┬────────────────────────────┘
                                  ═══
 ```
 
 - **Mật độ (v3, x12):** 12 zombie (v1: 1), Peak Fade.
 - **Ghi chú lore:** chi tiết nhỏ này là 1 trong các gợi ý sớm nhất về bản
-  chất thật của BRDF (trước khi twist rõ ràng hơn ở Campaign 3-4).
+  chất thật của Meridian (trước khi twist rõ ràng hơn ở Campaign 3-4).
 
 ---
 

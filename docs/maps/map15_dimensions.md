@@ -62,7 +62,7 @@ mở rộng" trước boss, không phải chỗ combat.
 | Map | Zombie thường (v1→v3) | Đặc biệt/Boss (không x12) | Ammo | Med kit |
 |---|---|---|---|---|
 | 11. Ironloom Textile Mill | 6 → **72** | 0 | 1 | 1 |
-| 12. Blackridge Freight Yard | 7 → **84** | 0 | 1 | 1 |
+| 12. Cát Lái Freight Yard | 7 → **84** | 0 | 1 | 1 |
 | 13. Cold Storage 7 | 4 → **48** | 1 (Witch) | 0 | 1 |
 | 14. Refinery Loop | 5 → **60** | 0 | 1 | 1 |
 | 15. Perimeter Fence Alpha | 1 → **12** | 1 (Tank) | 1 | 1 |

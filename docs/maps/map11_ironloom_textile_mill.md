@@ -21,7 +21,7 @@ GDD.md mục 14.5. Cùng legend với Map 1.
 │         Z                                                    │
 │                                                              │
 │   [Bụi dày phủ khắp — đóng cửa cả năm trước dịch, KHÔNG          │
-│    liên quan BRDF, chỉ là nhà máy phá sản]                       │
+│    liên quan Meridian, chỉ là nhà máy phá sản]                       │
 └───────────────────────────────┬────────────────────────────┘
                                  ═══ Vào khu dây chuyền
 ```

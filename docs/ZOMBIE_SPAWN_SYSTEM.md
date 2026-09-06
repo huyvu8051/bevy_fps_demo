@@ -53,7 +53,7 @@ pub struct SpawnWave {
                                         // toàn map, dùng làm khoá cho
                                         // "đã trigger chưa" + debug log
     pub kind: ZombieKind,               // zombie thường | biến thể lab |
-                                        // Boomer/Hunter/... | lính BRDF |
+                                        // Boomer/Hunter/... | lính Meridian |
                                         // boss — biến thể/đặc biệt/boss/
                                         // lính KHÔNG đi qua x12, nhưng vẫn
                                         // dùng chung struct này (count nhỏ)
@@ -70,7 +70,7 @@ pub enum ZombieKind {
     LabVariant,      // biến thể phòng TN Map 18 — x12 (cosmetic only)
     Special(SpecialKind),  // Boomer/Hunter/Smoker/Spitter/Jockey/Witch —
                             // KHÔNG x12
-    BrdfSoldier,     // lính BRDF — KHÔNG x12
+    BrdfSoldier,     // lính Meridian — KHÔNG x12
     BrdfCommander,   // chỉ huy Map 19 — KHÔNG x12, luôn count=1
     Boss,            // Tank-style — KHÔNG x12, luôn count=1
 }

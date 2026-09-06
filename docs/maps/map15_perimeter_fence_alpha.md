@@ -1,4 +1,4 @@
-# Map 15 — "Hàng rào an ninh BRDF" (Perimeter Fence Alpha) — Boss Map
+# Map 15 — "Hàng rào an ninh Meridian" (Perimeter Fence Alpha) — Boss Map
 
 Campaign 3 "Vùng công nghiệp", Map 15/20 (Map 5/5, **kết thúc campaign**).
 Xem GDD.md mục 14.5. Cùng legend với Map 5/10 (Boss `👹`, Tank-style tái
@@ -23,16 +23,16 @@ xuất lần 3).
 │                                                              │
 │   📷 (camera an ninh — KHÔNG hoạt động, chỉ deco)               │
 │                                                              │
-│   !!! (xác lính BRDF, chết vì đạn — KHÔNG PHẢI zombie hóa,       │
-│        gợi ý xung đột nội bộ BRDF hoặc chống lệnh rút lui,         │
+│   !!! (xác lính Meridian, chết vì đạn — KHÔNG PHẢI zombie hóa,       │
+│        gợi ý xung đột nội bộ Meridian hoặc chống lệnh rút lui,         │
 │        deco quan trọng)                                          │
 └───────────────────────────────┬────────────────────────────┘
                                  ═══ Tới khu safe room trước boss
 ```
 
 - **Mật độ (v3, x12):** 12 zombie (v1: 1) — Build-up.
-- **Ghi chú lore:** xác lính BRDF chết vì đạn (không phải bị cắn) là chi
-  tiết quan trọng — gieo ý tưởng "ngay cả BRDF cũng không đồng lòng" cho
+- **Ghi chú lore:** xác lính Meridian chết vì đạn (không phải bị cắn) là chi
+  tiết quan trọng — gieo ý tưởng "ngay cả Meridian cũng không đồng lòng" cho
   Campaign 4.
 
 ---
@@ -48,7 +48,7 @@ xuất lần 3).
 │   │  bảng hiệu an ninh, cảnh  │       trước khi vào Campaign 4"    │
 │   │  báo tự động, giọng điệu  │       theo đúng GDD                │
 │   │  đe dọa hơn hẳn mọi cảnh  │                                   │
-│   │  báo BRDF trước đó)       │                                   │
+│   │  báo Meridian trước đó)       │                                   │
 │   └──────────────────────┘                                 │
 └───────────────────────────────┬────────────────────────────┘
                                 ↑ Ra sân giữa lô cốt
@@ -127,7 +127,7 @@ xuất lần 3).
 | Map | Zombie thường (v1→v3) | Đặc biệt (không x12) | Boss (không x12) | Ammo | Med kit |
 |---|---|---|---|---|---|
 | 11. Ironloom Textile Mill | 6 → **72** | 0 | 0 | 1 | 1 |
-| 12. Blackridge Freight Yard | 7 → **84** | 0 | 0 | 1 | 1 |
+| 12. Cát Lái Freight Yard | 7 → **84** | 0 | 0 | 1 | 1 |
 | 13. Cold Storage 7 | 4 → **48** | 1 (Witch) | 0 | 0 | 1 |
 | 14. Refinery Loop | 5 → **60** | 0 | 0 | 1 | 1 |
 | 15. Perimeter Fence Alpha | 1 → **12** | 0 | 1 (Tank) | 1 | 1 |

@@ -34,7 +34,7 @@ con, chỉ thêm zombie lộ sẵn thường theo x12.
   đa dạng loại), rải dày hơn theo chiều dài x2 — vẫn "obstacle course
   liên tục", không thưa ra
 - Xe cứu thương (ammo+med kit): cuối đoạn, `(0, y, 20)`
-- Xe quân sự BRDF lật (deco): giữa đoạn, `(-8, y, 4)`
+- Xe quân sự Meridian lật (deco): giữa đoạn, `(-8, y, 4)`
 
 **Zombie lộ sẵn (nhịp spawn, x12):**
 

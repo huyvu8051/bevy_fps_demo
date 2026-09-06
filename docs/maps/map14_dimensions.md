@@ -28,7 +28,7 @@ diện tích sàn), chỉ footprint mặt bằng mỗi tầng x2 mỗi cạnh.
   quá mức làm mất tính thử thách verticality)
 - Chiều cao giữa 3 tầng: **giữ nguyên** `FLOOR_HEIGHT`-tương-đương (không
   x2) — đây là chiều Y, ngoài phạm vi "rộng x4"
-- Bồn chứa 9-12 (rào BRDF, không vào được): vẫn chỉ nhìn thấy từ xa,
+- Bồn chứa 9-12 (rào Meridian, không vào được): vẫn chỉ nhìn thấy từ xa,
   không đổi vai trò dù map rộng hơn
 
 **Nhịp spawn (zombie x12, chia đều 3 tầng):**

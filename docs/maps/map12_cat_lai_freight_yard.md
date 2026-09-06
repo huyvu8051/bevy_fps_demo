@@ -1,4 +1,4 @@
-# Map 12 — "Bãi container cảng" (Blackridge Freight Yard)
+# Map 12 — "Bãi container cảng" (Sài Gòn Freight Yard)
 
 Campaign 3 "Vùng công nghiệp", Map 12/20 (Map 2/5 của campaign). Xem
 GDD.md mục 14.5. Cùng legend với Map 1.
@@ -43,8 +43,8 @@ GDD.md mục 14.5. Cùng legend với Map 1.
 │   nguồn tiếng động, tầm nhìn bị chặn liên tục theo cả 2 chiều)    │
 │                                                              │
 │   ┌──────────────────┐                                     │
-│   │ 📦 447-460           │  ← Dãy container NIÊM PHONG BRDF,     │
-│   │ (niêm phong BRDF)     │    1 container đã bị cạy mở TỪ BÊN    │
+│   │ 📦 447-460           │  ← Dãy container NIÊM PHONG Meridian,     │
+│   │ (niêm phong Meridian)     │    1 container đã bị cạy mở TỪ BÊN    │
 │   │ !!!                   │    TRONG (deco, không giải thích,      │
 │   │                       │    người chơi tự suy diễn)              │
 │   └──────────────────┘                                     │

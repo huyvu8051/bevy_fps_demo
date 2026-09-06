@@ -4,7 +4,7 @@ Campaign 4 "Cổng thành", Map 19/20 (Map 4/5 của campaign). Xem GDD.md
 mục 14.6. Cùng legend với Map 16, thêm:
 
 ```
-👔  Chỉ huy BRDF — encounter đặc biệt, KHÔNG PHẢI Tank-style, là nhân
+👔  Chỉ huy Meridian — encounter đặc biệt, KHÔNG PHẢI Tank-style, là nhân
     vật người thật, chạy trốn/kích hoạt tự hủy thay vì đánh tay đôi
 ```
 
@@ -14,7 +14,7 @@ mục 14.6. Cùng legend với Map 16, thêm:
 nguyên tắc "chỉ kể qua log" (mục 14.8).
 
 ⚠️ **v3 — diện tích x4 + zombie thường x12:** xem `map19_dimensions.md`.
-**Lính BRDF và chỉ huy BRDF KHÔNG x12** — giữ nguyên tuyệt đối, chỉ huy
+**Lính Meridian và chỉ huy Meridian KHÔNG x12** — giữ nguyên tuyệt đối, chỉ huy
 đặc biệt tuyệt đối không nhân bản (là 1 sự kiện kịch bản, không phải
 combat đếm số).
 
@@ -28,7 +28,7 @@ combat đếm số).
 │                                                              │
 │   ══════════════ HÀNH LANG BOONG-KE (bê tông dày) ══════════   │
 │                                                              │
-│   🪖  🪖  🪖  🪖  🪖  (lính BRDF DÀY ĐẶC NHẤT toàn game —        │
+│   🪖  🪖  🪖  🪖  🪖  (lính Meridian DÀY ĐẶC NHẤT toàn game —        │
 │                          đây là khu vực họ bảo vệ quyết         │
 │                          liệt nhất)                              │
 │                                                              │
@@ -38,7 +38,7 @@ combat đếm số).
                                  ═══ Vào phòng chỉ huy
 ```
 
-- **Mật độ (v3, x12 zombie):** 24 zombie (v1: 2) + **5 lính BRDF**
+- **Mật độ (v3, x12 zombie):** 24 zombie (v1: 2) + **5 lính Meridian**
   (KHÔNG x12, giữ nguyên) — vẫn cao nhất toàn game về số lượng lính,
   đúng vai trò "khu vực bảo vệ quyết liệt nhất".
 - **Không có item pickup** — áp lực thời gian đã bắt đầu ngầm từ đây
@@ -46,7 +46,7 @@ combat đếm số).
 
 ---
 
-## Phòng chỉ huy trung tâm [SUSTAIN PEAK — Đối đầu chỉ huy BRDF]
+## Phòng chỉ huy trung tâm [SUSTAIN PEAK — Đối đầu chỉ huy Meridian]
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -56,10 +56,10 @@ combat đếm số).
 │   │  📺📺📺📺 (nhiều màn hình giám sát   │  ← Camera khắp cơ sở,   │
 │   │            camera an ninh)           │    BAO GỒM CẢ khu vực   │
 │   │                                    │    Map 16-18 vừa đi qua  │
-│   │                                    │    — xác nhận BRDF đã     │
+│   │                                    │    — xác nhận Meridian đã     │
 │   │                                    │    theo dõi nhóm SUỐT     │
 │   │              👔                     │    từ đầu Campaign 4       │
-│   │      (Chỉ huy BRDF, bị dồn           │                         │
+│   │      (Chỉ huy Meridian, bị dồn           │                         │
 │   │       vào đường cùng)                │                         │
 │   │                                    │                         │
 │   │  L19 (KHÔNG PHẢI log tìm thấy —       │                         │
@@ -80,7 +80,7 @@ combat đếm số).
 ```
 
 - **Mật độ:** 0 zombie thường mới ở đây — toàn bộ tập trung vào encounter
-  kịch bản với chỉ huy BRDF.
+  kịch bản với chỉ huy Meridian.
 - **Cơ chế đặc biệt:** đây KHÔNG phải boss fight combat thông thường —
   chỉ huy chạy trốn, kích hoạt tự hủy, rồi map ngay lập tức chuyển tông
   sang tẩu thoát (không có "Peak Fade" hạ nhiệt như các map khác).
@@ -111,7 +111,7 @@ combat đếm số).
 
 ## Tổng kết số liệu (v1 → v3, xem `map19_dimensions.md` cho chi tiết)
 
-| Khu vực | Tag pacing | Zombie (v1→v3) | Lính BRDF (không x12) | Chỉ huy (không x12) | Ghi chú |
+| Khu vực | Tag pacing | Zombie (v1→v3) | Lính Meridian (không x12) | Chỉ huy (không x12) | Ghi chú |
 |---|---|---|---|---|---|
 | A. Hành lang ngoài | Build-up/Sustain | 2 → **24** | **5** | 0 | — |
 | B. Phòng chỉ huy | **Sustain Peak (kịch bản)** | 0 → 0 | 0 | **1 (thoát)** | L19, kích hoạt tự hủy |

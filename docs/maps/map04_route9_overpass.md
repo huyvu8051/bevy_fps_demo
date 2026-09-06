@@ -44,8 +44,8 @@ Map 1. Map ngoài trời, **sightline dài nhất Campaign 1** — thiết kế 
 │   thường (Z) đứng lộ sẵn                                         │
 │                                                              │
 │   ┌──────────┐                                              │
-│   │ Xe quân sự │  !!! (xe BRDF lật/cháy — gợi ý quân đội         │
-│   │ BRDF lật    │       cũng rút chạy hỗn loạn, không trật tự)   │
+│   │ Xe quân sự │  !!! (xe Meridian lật/cháy — gợi ý quân đội         │
+│   │ Meridian lật    │       cũng rút chạy hỗn loạn, không trật tự)   │
 │   └──────────┘                                              │
 │                                                              │
 │   🚑 A  H  ← Xe cứu thương bỏ lại, đạn + med kit bên trong        │

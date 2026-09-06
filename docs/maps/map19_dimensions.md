@@ -3,7 +3,7 @@
 Bổ sung cho `map19_command_bunker.md`. Dùng chung thư viện kích thước ở
 `map01_dimensions.md` mục 1.
 
-⚠️ v2 = x2 mỗi cạnh. Zombie thường x12. **Lính BRDF VÀ chỉ huy BRDF
+⚠️ v2 = x2 mỗi cạnh. Zombie thường x12. **Lính Meridian VÀ chỉ huy Meridian
 KHÔNG x12** — giữ nguyên, cùng nguyên tắc Map 16/17. Chỉ huy đặc biệt là
 "1 sự kiện kịch bản" (chạy trốn, kích hoạt tự hủy), không phải combat
 đếm số — tuyệt đối không nhân bản.
@@ -14,7 +14,7 @@ KHÔNG x12** — giữ nguyên, cùng nguyên tắc Map 16/17. Chỉ huy đặc 
 
 - **Footprint v1:** hành lang bê tông dày, dài 30m, rộng 4.8 (x2 hành
   lang chính) → **v2: dài 60m, rộng 9.6m**
-- Lính BRDF: giữ nguyên **5 con**, không x12 — vẫn "dày đặc nhất toàn
+- Lính Meridian: giữ nguyên **5 con**, không x12 — vẫn "dày đặc nhất toàn
   game" đúng vai trò khu vực bảo vệ quyết liệt nhất
 
 **Nhịp spawn (zombie thường, x12):**
@@ -23,14 +23,14 @@ KHÔNG x12** — giữ nguyên, cùng nguyên tắc Map 16/17. Chỉ huy đặc 
 |---|---|---|---|
 | 1 | Vào hành lang | 24 (v1: 2, x12) | Rải xen kẽ giữa lính, ít hơn hẳn số lính |
 
-Lính BRDF vẫn 5, không đổi.
+Lính Meridian vẫn 5, không đổi.
 
 ---
 
-## Phòng chỉ huy trung tâm [SUSTAIN PEAK — Đối đầu chỉ huy BRDF]
+## Phòng chỉ huy trung tâm [SUSTAIN PEAK — Đối đầu chỉ huy Meridian]
 
 - **Footprint v1:** 20x16 → **v2: 40m x 32m**
-- Chỉ huy BRDF: giữ nguyên **1 con** (sự kiện kịch bản, chạy trốn + kích
+- Chỉ huy Meridian: giữ nguyên **1 con** (sự kiện kịch bản, chạy trốn + kích
   hoạt tự hủy), không x12, tuyệt đối không nhân bản
 - L19 (lời thoại trực tiếp qua loa): không đổi
 
@@ -49,7 +49,7 @@ trung vào encounter kịch bản.
 
 ## Tổng kết số liệu (v1 → v3)
 
-| Khu vực | Tag pacing | Zombie (v1→v3) | Lính BRDF (không x12) | Chỉ huy (không x12) |
+| Khu vực | Tag pacing | Zombie (v1→v3) | Lính Meridian (không x12) | Chỉ huy (không x12) |
 |---|---|---|---|---|
 | A. Hành lang ngoài | Build-up/Sustain | 2 → **24** | **5** | 0 |
 | B. Phòng chỉ huy | **Sustain Peak (kịch bản)** | 0 → 0 | 0 | **1 (thoát)** |

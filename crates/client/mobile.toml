@@ -1,6 +1,6 @@
 [app]
 name = "client"
-stylized-name = "Bevy FPS Demo"
+stylized-name = "Last Day in Saigon"
 identifier = "com.huyvu8051.bevyfpsdemo"
 template-pack = "bevy"
 

@@ -21,5 +21,5 @@ numbers that belong in code.
 
 This file covers only the base zombie (the one AI, 2 mesh kinds). For the
 full roster — per-map environmental archetypes (office worker, factory
-worker, BRDF soldier...) and the named special infected (Boomer/Hunter/
+worker, Meridian soldier...) and the named special infected (Boomer/Hunter/
 Tank/...) — see `docs/ZOMBIE_BESTIARY.md`.

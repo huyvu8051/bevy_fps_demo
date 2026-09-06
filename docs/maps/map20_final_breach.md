@@ -130,7 +130,7 @@ nguyên 1 con.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│   Nhóm thoát ra ngoài trời, nhìn cơ sở BRDF sụp đổ phía          │
+│   Nhóm thoát ra ngoài trời, nhìn cơ sở Meridian sụp đổ phía          │
 │   sau — KẾT THÚC MỞ (không quyết định thay người chơi):          │
 │                                                              │
 │     → Công khai sự thật (rủi ro hoảng loạn diện rộng)            │
@@ -157,7 +157,7 @@ nguyên 1 con.
 
 ## So sánh tổng thể Campaign 4 (Map 16-20, v1 → v3 sau x4 diện tích + x12 zombie thường)
 
-| Map | Zombie (v1→v3) | Lính BRDF (không x12) | Chỉ huy (không x12) | Boss (không x12) |
+| Map | Zombie (v1→v3) | Lính Meridian (không x12) | Chỉ huy (không x12) | Boss (không x12) |
 |---|---|---|---|---|
 | 16. Main Gatehouse | 5 → **60** | 2 | 0 | 0 |
 | 17. Sector 3 Admin Block | 2 → **24** | 5 | 0 | 0 |
@@ -170,7 +170,7 @@ nguyên 1 con.
 
 ## So sánh CUỐI CÙNG toàn bộ 4 Campaign (Map 1-20, v1 → v3 sau x4 diện tích + x12 zombie thường)
 
-| Campaign | Zombie thường (v1→v3) | Đặc biệt (không x12) | Lính/Chỉ huy BRDF (không x12) | Boss (không x12) |
+| Campaign | Zombie thường (v1→v3) | Đặc biệt (không x12) | Lính/Chỉ huy Meridian (không x12) | Boss (không x12) |
 |---|---|---|---|---|
 | 1. Ground Zero | 47 → **564** | 5 (Boomer 2, ẩn 3) | 0 | 1 |
 | 2. Vành đai | 22 → **264** | 4 (Hunter/Smoker/Spitter/Jockey) | 0 | 1 |
@@ -189,6 +189,6 @@ bản sắc riêng, không lặp lại công thức", nhất quán xuyên suốt
 
 **v3 (diện tích x4 + zombie thường x12) giữ nguyên đường cong này** —
 mọi tỉ lệ giữa campaign/map không đổi, chỉ số tuyệt đối tăng đồng đều.
-Toàn bộ địch đặc biệt/boss/lính/chỉ huy BRDF **giữ nguyên số lượng gốc
+Toàn bộ địch đặc biệt/boss/lính/chỉ huy Meridian **giữ nguyên số lượng gốc
 tuyệt đối** xuyên suốt cả 20 map — chi tiết đầy đủ ở từng
 `mapNN_dimensions.md`.
