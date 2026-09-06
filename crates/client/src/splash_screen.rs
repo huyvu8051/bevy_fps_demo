@@ -9,7 +9,7 @@
 use bevy::prelude::*;
 use crate::*;
 
-const SPLASH_SCREEN_DURATION_SECS: f32 = 1.0;
+const SPLASH_SCREEN_DURATION_SECS: f32 = 2.0;
 
 #[derive(Component)]
 pub(crate) struct SplashScreen(Timer);
