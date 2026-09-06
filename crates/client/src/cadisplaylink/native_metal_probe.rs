@@ -1123,6 +1123,14 @@ pub struct NativeMetalProbe {
     quad_pipeline_no_msaa: Option<RenderPipelineState>,
     quad_vertex_buffer: metal::Buffer,
     start_time: std::time::Instant,
+    // Loaded once in new() (see load_splash_texture) — needs to be a plain
+    // Texture rather than a lazily-loaded Option so render_frame can read
+    // it with `&self` instead of `&mut self`: by the time the splash quad
+    // gets drawn, `self.layer.next_drawable()`'s immutable borrow is
+    // already alive for the rest of the frame (held until
+    // present_drawable at the very end), so any `&mut self` call in
+    // between fails to borrow-check.
+    splash_texture: metal::Texture,
     // `Some` only when constructed via `new(view, true)` — the headless
     // real game (build_game_common: physics/networking/AI/prediction),
     // ticked and extracted every frame. When
@@ -1406,6 +1414,31 @@ fn ndc_ui_rect(x: f32, y: f32, w: f32, h: f32, view_w: f32, view_h: f32, uv: [[f
 // — each UI quad is tiny (96 bytes of vertex data) and drawn once, so a
 // full buffer allocation per quad would be pure overhead; Metal's inline
 // "bytes" path exists exactly for this.
+// Same read-file/decode/upload sequence as apply_zombie_texture_quality
+// (a method, since it re-loads at runtime on a settings change) — this is
+// a free fn instead since it only ever runs once, in new(), before there's
+// a `self` to call a method on yet.
+fn load_splash_texture(device: &metal::Device) -> Option<metal::Texture> {
+    let resource_path = bundle_resource_path().unwrap_or_default();
+    let path = std::path::Path::new(&resource_path).join("assets").join("branding/open_diy_splash.png");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            eprintln!("[native_metal_probe] splash texture read failed {path:?}: {err}");
+            return None;
+        }
+    };
+    let decoded = match image::load_from_memory(&bytes) {
+        Ok(decoded) => decoded,
+        Err(err) => {
+            eprintln!("[native_metal_probe] splash texture decode failed {path:?}: {err}");
+            return None;
+        }
+    };
+    let rgba = decoded.to_rgba8();
+    Some(super::metal_texture::upload_texture(device, rgba.width(), rgba.height(), rgba.as_raw()))
+}
+
 fn draw_ui_quad(encoder: &metal::RenderCommandEncoderRef, verts: &[UiVertex; 6], tint: [f32; 4], texture: &metal::Texture) {
     encoder.set_vertex_bytes(0, std::mem::size_of::<[UiVertex; 6]>() as u64, verts.as_ptr() as *const _);
     let uniforms = UiUniforms { tint };
@@ -1663,6 +1696,16 @@ impl NativeMetalProbe {
         white_texture_descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
         let white_texture = device.new_texture(&white_texture_descriptor);
         white_texture.replace_region(metal::MTLRegion::new_2d(0, 0, 1, 1), 0, [255u8, 255, 255, 255].as_ptr() as *const _, 4);
+
+        // iOS port of splash_screen.rs's desktop bevy_ui splash — loaded
+        // once here (not lazily in render_frame) so the render loop only
+        // ever needs a `&self` read of it, see splash_texture's own field
+        // doc comment for why that borrow-checking constraint exists.
+        // Falls back to a clone of white_texture (a plain 1x1 white pixel)
+        // on any read/decode failure — the splash backdrop quad is already
+        // white, so a missing logo just reads as a very brief blank white
+        // screen instead of a panic over a purely cosmetic asset.
+        let splash_texture = load_splash_texture(&device).unwrap_or_else(|| white_texture.clone());
 
         // See flat_normal_texture's own field doc comment.
         let flat_normal_descriptor = metal::TextureDescriptor::new();
@@ -2098,6 +2141,7 @@ impl NativeMetalProbe {
             quad_pipeline_no_msaa,
             quad_vertex_buffer,
             start_time: std::time::Instant::now(),
+            splash_texture,
             real_game_app,
             real_game_textures: std::collections::HashMap::new(),
             gpu_transformed_mesh_cache: std::collections::HashMap::new(),
@@ -3415,6 +3459,43 @@ impl NativeMetalProbe {
                     &self.white_texture,
                     &self.font_atlas_texture,
                 );
+            }
+        }
+
+        // iOS port of splash_screen.rs's desktop bevy_ui splash (see that
+        // file's own doc comment for why it needs a separate copy here at
+        // all) — drawn last, independent of the big UI `if` above so it
+        // still shows even before any HUD/menu state exists yet on the
+        // very first frames. Fully opaque + covers the whole screen, so it
+        // completely hides whatever the 3D scene/UI passes above already
+        // drew this frame — cheaper than skipping those passes outright,
+        // and keeps this block a pure "draw 2 more quads, gated on time"
+        // addition instead of threading a flag through everything above.
+        if now < crate::splash_screen::SPLASH_SCREEN_DURATION_SECS {
+            let ui_pipeline_ref = if msaa_enabled { &self.ui_pipeline } else { &self.ui_pipeline_no_msaa };
+            if let Some(ui_pipeline) = ui_pipeline_ref {
+                let (view_w, view_h) = self.view_size_points();
+                encoder.set_render_pipeline_state(ui_pipeline);
+                encoder.set_fragment_sampler_state(0, Some(&self.ui_sampler));
+                encoder.set_depth_stencil_state(&self.ui_depth_state);
+                const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+                // White backdrop first — matches the desktop version's
+                // BackgroundColor(Color::WHITE) (splash_screen.rs), so
+                // the square logo's letterboxed edges on a non-square
+                // phone screen blend in instead of showing whatever the
+                // hidden frame behind it happened to draw.
+                let backdrop = ndc_ui_rect(0.0, 0.0, view_w, view_h, view_w, view_h, FULL_UV);
+                draw_ui_quad(encoder, &backdrop, [1.0, 1.0, 1.0, 1.0], &self.white_texture);
+                // Centered square logo, sized the same way as the
+                // desktop Node (60% of the narrow dimension, capped at
+                // 480 logical points) — `min(view_w, view_h)` stands in
+                // for bevy_ui's Val::Percent(60.0), which desktop
+                // resolves against the Node's own width, not the whole
+                // window (safe here since the parent Node there is
+                // itself 100% width/height).
+                let logo_size = (view_w.min(view_h) * 0.6).min(480.0);
+                let logo = ndc_ui_rect((view_w - logo_size) * 0.5, (view_h - logo_size) * 0.5, logo_size, logo_size, view_w, view_h, FULL_UV);
+                draw_ui_quad(encoder, &logo, [1.0, 1.0, 1.0, 1.0], &self.splash_texture);
             }
         }
 

@@ -1,15 +1,18 @@
 // --- Splash screen: OPEN DIY studio logo shown briefly at launch ---
 // Self-contained: one component, one spawn helper (called once from
-// setup(), crate::lib), one Update system ticking it down. Desktop/web
-// only for now — the iOS CADisplayLink renderer (cadisplaylink module)
-// draws its own HUD straight from ECS state via hand-written Metal code,
-// not bevy_ui, so a plain bevy_ui node like this one is invisible there
-// until someone ports it the same way HealthUi/AmmoUi were.
+// setup(), crate::lib), one Update system ticking it down. This is the
+// desktop/web (bevy_ui) side only — the iOS CADisplayLink renderer draws
+// its own HUD straight from ECS state via hand-written Metal code, not
+// bevy_ui, so this node is invisible there; iOS has its own equivalent
+// drawn directly in native_metal_probe.rs's render_frame (see its splash
+// quad code, gated on the same duration below).
 
 use bevy::prelude::*;
 use crate::*;
 
-const SPLASH_SCREEN_DURATION_SECS: f32 = 2.0;
+// `pub(crate)` so native_metal_probe.rs's Metal-drawn splash stays in sync
+// with this one instead of hand-copying the number.
+pub(crate) const SPLASH_SCREEN_DURATION_SECS: f32 = 2.0;
 
 #[derive(Component)]
 pub(crate) struct SplashScreen(Timer);
