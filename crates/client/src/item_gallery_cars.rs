@@ -35,27 +35,61 @@ pub(crate) struct ItemGalleryTestProp;
 #[derive(Component)]
 pub(crate) struct ItemGalleryCarIndex(pub(crate) usize);
 
-// The (texture, poly) tier this car's Mesh3d/MeshMaterial3d are CURRENTLY
-// loaded at — lets apply_item_gallery_car_distance_lod skip re-issuing
-// asset_server.load() every frame for a car whose band hasn't changed
-// (only reload when the target tier actually differs from this).
+// Per-car preload pool for the 3 distance bands' worth of mesh/texture
+// assets, plus which band is currently the one actually applied to
+// Mesh3d/MeshMaterial3d. Swapping bands is then a pure handle CLONE out of
+// this pool — no asset_server.load() in the hot path at all, so moving
+// back and forth across a band boundary never re-triggers a decode.
+//
+// Why a pool instead of loading each band on demand (the previous
+// approach): loading only ever starts once a car actually CROSSES into a
+// new band, so the freshly issued Handle<Mesh>/Handle<Image> isn't loaded
+// yet at the moment it's needed — and Bevy's render extraction skips
+// drawing a mesh whose Mesh3d/material references an asset that isn't
+// loaded, not a placeholder, the car just vanishes/flickers for however
+// long that decode takes. That was fixed for textures alone by staging the
+// swap and waiting for readiness before committing it (an approach that
+// worked, per live testing), but the same problem was still fully open on
+// the poly/mesh side (it never got the same staging), which is what was
+// still flickering. Preloading the whole pool once up front — a single
+// wait that happens ONCE per car (at spawn, or on the rare event settings
+// change the LOD tiers) rather than on every distance-driven band
+// transition — covers both mesh and texture the same way and needs no
+// per-transition staging logic at all.
 #[derive(Component)]
 pub(crate) struct ItemGalleryCarLodTier {
-    pub(crate) texture: u8,
-    pub(crate) poly: u8,
-    // A texture swap in flight: handles already issued via asset_server.load,
-    // not yet written into the material. Kept separate from `texture` above
-    // (which only updates once the swap actually lands) so
-    // apply_item_gallery_car_distance_lod can tell "still waiting on the
-    // same target" apart from "target changed again, restart the load".
-    pending_texture: Option<PendingCarTexture>,
+    // Band index (into LodBandDistance's 3 bands) currently applied to
+    // Mesh3d/MeshMaterial3d — None until the pool finishes loading and the
+    // first swap has actually landed.
+    active_band: Option<usize>,
+    // The (poly, texture) level arrays the pool below was built for —
+    // compared against LodCarPolyLevel/LodCarTextureLevel each frame so a
+    // settings-menu change to those steppers is noticed and rebuilds the
+    // pool (the only case a car goes back to waiting on a load: normal
+    // distance-based band switching never does).
+    pool_poly_levels: [u8; 3],
+    pool_texture_levels: [u8; 3],
+    pool_ready: bool,
+    mesh_pool: [Handle<Mesh>; 3],
+    texture_pool: [(Handle<Image>, Handle<Image>, Handle<Image>); 3],
 }
 
-struct PendingCarTexture {
-    target: u8,
-    base_color: Handle<Image>,
-    normal: Handle<Image>,
-    metallic_roughness: Handle<Image>,
+impl ItemGalleryCarLodTier {
+    // Sentinel that can never equal a real quality level (0..=5) — forces
+    // the very first apply_item_gallery_car_distance_lod tick for a newly
+    // spawned car to see "pool doesn't match current config" and build it.
+    const UNBUILT: [u8; 3] = [u8::MAX; 3];
+
+    fn new() -> Self {
+        Self {
+            active_band: None,
+            pool_poly_levels: Self::UNBUILT,
+            pool_texture_levels: Self::UNBUILT,
+            pool_ready: false,
+            mesh_pool: std::array::from_fn(|_| Handle::default()),
+            texture_pool: std::array::from_fn(|_| (Handle::default(), Handle::default(), Handle::default())),
+        }
+    }
 }
 
 // Settings-menu "Cars" cheat toggle — same "hide, don't despawn" shape as
@@ -246,7 +280,7 @@ pub(crate) fn spawn_item_gallery_test_props(
             AngularDamping(8.0),
             ItemGalleryTestProp,
             ItemGalleryCarIndex(i),
-            ItemGalleryCarLodTier { texture: texture_quality, poly: poly_quality, pending_texture: None },
+            ItemGalleryCarLodTier::new(),
         ));
     }
 }
@@ -282,55 +316,58 @@ pub(crate) fn apply_item_gallery_car_distance_lod(
     };
     let player_pos = player_transform.translation.xz();
     for (transform, index, mut tier, mut mesh, material_handle) in &mut cars {
+        if tier.pool_poly_levels != poly_levels.0 || tier.pool_texture_levels != texture_levels.0 {
+            // First tick for this car, or the settings-menu LOD steppers
+            // changed the level a band maps to — (re)issue all 3 bands'
+            // loads up front and mark the pool not-ready until every one of
+            // them lands. This is the only place a load ever starts, so
+            // it's also the only place a car can be left showing a stale
+            // (but still valid/rendered) mesh/texture for a moment — normal
+            // distance-based band switching below never touches the asset
+            // server at all.
+            tier.mesh_pool = std::array::from_fn(|band| {
+                asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset(shared::item_gallery_car_mesh_path(index.0, poly_levels.0[band])))
+            });
+            tier.texture_pool = std::array::from_fn(|band| {
+                let (base_color_path, normal_path, metallic_roughness_path) = shared::item_gallery_car_texture_paths(index.0, texture_levels.0[band]);
+                (
+                    asset_server.load(base_color_path),
+                    load_linear_car_texture(&asset_server, normal_path),
+                    load_linear_car_texture(&asset_server, metallic_roughness_path),
+                )
+            });
+            tier.pool_poly_levels = poly_levels.0;
+            tier.pool_texture_levels = texture_levels.0;
+            tier.pool_ready = false;
+            tier.active_band = None;
+        }
+        if !tier.pool_ready {
+            tier.pool_ready = tier.mesh_pool.iter().all(|h| asset_server.is_loaded_with_dependencies(h.id()))
+                && tier.texture_pool.iter().all(|(base_color, normal, metallic_roughness)| {
+                    asset_server.is_loaded_with_dependencies(base_color.id())
+                        && asset_server.is_loaded_with_dependencies(normal.id())
+                        && asset_server.is_loaded_with_dependencies(metallic_roughness.id())
+                });
+            if !tier.pool_ready {
+                continue;
+            }
+        }
         let distance = (transform.translation.xz() - player_pos).length();
         let band = bands.band_of(distance);
-        let target_texture = texture_levels.0[band];
-        let target_poly = poly_levels.0[band];
-        if tier.texture == target_texture && tier.poly == target_poly && tier.pending_texture.is_none() {
+        if tier.active_band == Some(band) {
             continue;
         }
-        // Poly (mesh) swap stays immediate — a hard cut in silhouette reads
-        // as ordinary LOD popping. Texture swap does NOT: assigning a
-        // freshly-issued (not-yet-loaded) Handle<Image> straight into the
-        // material makes the whole car disappear for the ~0.5s the image
-        // takes to decode, because Bevy's render extraction skips drawing a
-        // mesh whose material references an image that isn't loaded yet —
-        // it's not a visible placeholder, the car just vanishes. So the
-        // texture swap below is staged through `pending_texture` and only
-        // actually written into the material once every handle involved is
-        // confirmed ready — the car keeps showing its CURRENT (old) texture
-        // right up to that instant, no gap.
-        if tier.poly != target_poly {
-            mesh.0 = asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset(shared::item_gallery_car_mesh_path(index.0, target_poly)));
-            tier.poly = target_poly;
+        // Pure handle clones out of the already-loaded pool below — no
+        // asset_server.load() here, so this never re-triggers a decode no
+        // matter how often the player oscillates across a band boundary.
+        mesh.0 = tier.mesh_pool[band].clone();
+        if let Some(material) = materials.get_mut(&material_handle.0) {
+            let (base_color, normal, metallic_roughness) = &tier.texture_pool[band];
+            material.base_color_texture = Some(base_color.clone());
+            material.normal_map_texture = Some(normal.clone());
+            material.metallic_roughness_texture = Some(metallic_roughness.clone());
         }
-        if tier.texture != target_texture {
-            let already_loading = tier.pending_texture.as_ref().is_some_and(|p| p.target == target_texture);
-            if !already_loading {
-                let (base_color_path, normal_path, metallic_roughness_path) = shared::item_gallery_car_texture_paths(index.0, target_texture);
-                tier.pending_texture = Some(PendingCarTexture {
-                    target: target_texture,
-                    base_color: asset_server.load(base_color_path),
-                    normal: load_linear_car_texture(&asset_server, normal_path),
-                    metallic_roughness: load_linear_car_texture(&asset_server, metallic_roughness_path),
-                });
-            }
-        }
-        if let Some(pending) = tier.pending_texture.take() {
-            let ready = asset_server.is_loaded_with_dependencies(pending.base_color.id())
-                && asset_server.is_loaded_with_dependencies(pending.normal.id())
-                && asset_server.is_loaded_with_dependencies(pending.metallic_roughness.id());
-            if ready {
-                if let Some(material) = materials.get_mut(&material_handle.0) {
-                    material.base_color_texture = Some(pending.base_color);
-                    material.normal_map_texture = Some(pending.normal);
-                    material.metallic_roughness_texture = Some(pending.metallic_roughness);
-                }
-                tier.texture = pending.target;
-            } else {
-                tier.pending_texture = Some(pending);
-            }
-        }
+        tier.active_band = Some(band);
     }
 }
 
