@@ -43,6 +43,19 @@ pub(crate) struct ItemGalleryCarIndex(pub(crate) usize);
 pub(crate) struct ItemGalleryCarLodTier {
     pub(crate) texture: u8,
     pub(crate) poly: u8,
+    // A texture swap in flight: handles already issued via asset_server.load,
+    // not yet written into the material. Kept separate from `texture` above
+    // (which only updates once the swap actually lands) so
+    // apply_item_gallery_car_distance_lod can tell "still waiting on the
+    // same target" apart from "target changed again, restart the load".
+    pending_texture: Option<PendingCarTexture>,
+}
+
+struct PendingCarTexture {
+    target: u8,
+    base_color: Handle<Image>,
+    normal: Handle<Image>,
+    metallic_roughness: Handle<Image>,
 }
 
 // Settings-menu "Cars" cheat toggle — same "hide, don't despawn" shape as
@@ -233,7 +246,7 @@ pub(crate) fn spawn_item_gallery_test_props(
             AngularDamping(8.0),
             ItemGalleryTestProp,
             ItemGalleryCarIndex(i),
-            ItemGalleryCarLodTier { texture: texture_quality, poly: poly_quality },
+            ItemGalleryCarLodTier { texture: texture_quality, poly: poly_quality, pending_texture: None },
         ));
     }
 }
@@ -273,22 +286,51 @@ pub(crate) fn apply_item_gallery_car_distance_lod(
         let band = bands.band_of(distance);
         let target_texture = texture_levels.0[band];
         let target_poly = poly_levels.0[band];
-        if tier.texture == target_texture && tier.poly == target_poly {
+        if tier.texture == target_texture && tier.poly == target_poly && tier.pending_texture.is_none() {
             continue;
         }
+        // Poly (mesh) swap stays immediate — a hard cut in silhouette reads
+        // as ordinary LOD popping. Texture swap does NOT: assigning a
+        // freshly-issued (not-yet-loaded) Handle<Image> straight into the
+        // material makes the whole car disappear for the ~0.5s the image
+        // takes to decode, because Bevy's render extraction skips drawing a
+        // mesh whose material references an image that isn't loaded yet —
+        // it's not a visible placeholder, the car just vanishes. So the
+        // texture swap below is staged through `pending_texture` and only
+        // actually written into the material once every handle involved is
+        // confirmed ready — the car keeps showing its CURRENT (old) texture
+        // right up to that instant, no gap.
         if tier.poly != target_poly {
             mesh.0 = asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset(shared::item_gallery_car_mesh_path(index.0, target_poly)));
+            tier.poly = target_poly;
         }
         if tier.texture != target_texture {
-            let (base_color_path, normal_path, metallic_roughness_path) = shared::item_gallery_car_texture_paths(index.0, target_texture);
-            if let Some(material) = materials.get_mut(&material_handle.0) {
-                material.base_color_texture = Some(asset_server.load(base_color_path));
-                material.normal_map_texture = Some(load_linear_car_texture(&asset_server, normal_path));
-                material.metallic_roughness_texture = Some(load_linear_car_texture(&asset_server, metallic_roughness_path));
+            let already_loading = tier.pending_texture.as_ref().is_some_and(|p| p.target == target_texture);
+            if !already_loading {
+                let (base_color_path, normal_path, metallic_roughness_path) = shared::item_gallery_car_texture_paths(index.0, target_texture);
+                tier.pending_texture = Some(PendingCarTexture {
+                    target: target_texture,
+                    base_color: asset_server.load(base_color_path),
+                    normal: load_linear_car_texture(&asset_server, normal_path),
+                    metallic_roughness: load_linear_car_texture(&asset_server, metallic_roughness_path),
+                });
             }
         }
-        tier.texture = target_texture;
-        tier.poly = target_poly;
+        if let Some(pending) = tier.pending_texture.take() {
+            let ready = asset_server.is_loaded_with_dependencies(pending.base_color.id())
+                && asset_server.is_loaded_with_dependencies(pending.normal.id())
+                && asset_server.is_loaded_with_dependencies(pending.metallic_roughness.id());
+            if ready {
+                if let Some(material) = materials.get_mut(&material_handle.0) {
+                    material.base_color_texture = Some(pending.base_color);
+                    material.normal_map_texture = Some(pending.normal);
+                    material.metallic_roughness_texture = Some(pending.metallic_roughness);
+                }
+                tier.texture = pending.target;
+            } else {
+                tier.pending_texture = Some(pending);
+            }
+        }
     }
 }
 
