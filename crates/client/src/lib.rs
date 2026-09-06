@@ -485,7 +485,14 @@ const RESOLUTION_SCALE_PRESETS: [f32; 7] = [0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0];
 // ViewController.swift's enterFrame — this Rust resource is the single
 // source of truth either way, only the platform-specific "how it actually
 // throttles" differs.
-const FPS_CAP_PRESETS: [u32; 9] = [120, 100, 90, 80, 70, 60, 50, 40, 30];
+// Only the refresh rates iOS ProMotion hardware actually locks to exactly
+// (confirmed via on-device testing — 40/50/70/90/100 all silently snap to
+// one of these instead, since CADisplayLink.preferredFrameRateRange only
+// ever produces whatever discrete rate the panel's own LTPO firmware
+// supports, not an arbitrary requested Hz. Listing an unreachable preset
+// would let the player pick "90" and silently get 80 with no indication
+// why — narrower list, but every entry actually does what it says.
+const FPS_CAP_PRESETS: [u32; 4] = [120, 80, 60, 30];
 
 #[derive(Resource)]
 pub(crate) struct FpsCap(pub(crate) u32);
