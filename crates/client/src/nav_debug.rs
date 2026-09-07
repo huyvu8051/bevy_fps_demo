@@ -20,9 +20,10 @@
 // tens of GB. The client cars are RigidBody::Dynamic so a box can sit a
 // little off the server's Static rest pose.
 //
-// Only MapKind::Arena has a per-map navmesh; other maps get nothing.
-// Toggle: the "NavDbg" button in the settings menu Cheats section (debug
-// builds only) flips NavDebugVisible.
+// MapKind::Arena and MapKind::Campaign(1) (Map 1's 4 real stacked floors,
+// see shared::map1_navmesh_layers) have a mirrored navmesh here; other
+// maps get nothing. Toggle: the "NavDbg" button in the settings menu
+// Cheats section (debug builds only) flips NavDebugVisible.
 
 use bevy::prelude::*;
 use vleue_navigator::prelude::*;
@@ -122,14 +123,17 @@ fn navmesh_plane() -> Transform {
         .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
 }
 
-// Keeps exactly one ManagedNavMesh alive while on an Arena map, matching
-// the server's spawn_zombie_navmesh Arena branch (same boundary, same
-// settings). Despawns it on any other map so a menu switch can't leave a
-// stale navmesh behind.
+// Keeps the right set of ManagedNavMesh entities alive for the current
+// map — 1 for Arena (matching the server's spawn_zombie_navmesh Arena
+// branch), 10 for Map 1 (1 per floor/ramp layer, matching that same fn's
+// Campaign(1) branch — see shared::map1_navmesh_layers's own doc comment
+// for why there are 10). Despawns everything on any other map so a menu
+// switch can't leave a stale navmesh behind.
 fn sync_client_navmesh(mut commands: Commands, existing: Query<Entity, With<ManagedNavMesh>>) {
-    let is_arena = current_scenario().map_kind() == shared::MapKind::Arena;
-    match (is_arena, existing.iter().next()) {
-        (true, None) => {
+    let map_kind = current_scenario().map_kind();
+    let existing_count = existing.iter().count();
+    match map_kind {
+        shared::MapKind::Arena if existing_count == 0 => {
             commands.spawn((
                 ManagedNavMesh::single(),
                 NavMeshSettings {
@@ -148,8 +152,46 @@ fn sync_client_navmesh(mut commands: Commands, existing: Query<Entity, With<Mana
                 navmesh_plane(),
             ));
         }
-        (false, Some(entity)) => commands.entity(entity).despawn(),
-        _ => {}
+        shared::MapKind::Campaign(1) if existing_count == 0 => {
+            // Exact mirror of server/main.rs's spawn_zombie_navmesh
+            // Campaign(1) branch — see its own comment for why this is a
+            // duplicate rather than a shared helper (client/server are
+            // separate binaries; crates/shared deliberately doesn't
+            // depend on vleue_navigator).
+            let (layers, stitches) = shared::map1_navmesh_layers();
+            for (index, layer) in layers.iter().enumerate() {
+                let index = index as u8;
+                let to_local = |p: Vec3| shared::map1_world_to_layer_local(layer.translation, layer.rotation, p);
+                let mut fixed = Triangulation::from_outer_edges(&layer.outer_world.iter().map(|&p| to_local(p)).collect::<Vec<_>>());
+                if !layer.holes_world.is_empty() {
+                    fixed.add_obstacles(layer.holes_world.iter().map(|hole| hole.iter().map(|&p| to_local(p)).collect::<Vec<_>>()));
+                }
+                let layer_stitches: Vec<((u8, u8), [Vec2; 2])> = stitches
+                    .iter()
+                    .filter(|s| s.from == index || s.to == index)
+                    .map(|s| ((s.from, s.to), [to_local(s.points_world[0]), to_local(s.points_world[1])]))
+                    .collect();
+                commands.spawn((
+                    ManagedNavMesh::single(),
+                    NavMeshSettings {
+                        fixed,
+                        layer: Some(index),
+                        stitches: layer_stitches,
+                        build_timeout: Some(shared::ARENA_NAVMESH_BUILD_TIMEOUT_SECS),
+                        agent_radius: shared::ARENA_NAVMESH_AGENT_RADIUS,
+                        ..default()
+                    },
+                    NavMeshUpdateMode::Direct,
+                    Transform::from_translation(layer.translation).with_rotation(layer.rotation),
+                ));
+            }
+        }
+        shared::MapKind::Arena | shared::MapKind::Campaign(1) => {} // already spawned this map, nothing to do
+        _ => {
+            for entity in &existing {
+                commands.entity(entity).despawn();
+            }
+        }
     }
 }
 
