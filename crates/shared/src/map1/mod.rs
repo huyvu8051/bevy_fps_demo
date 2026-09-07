@@ -424,12 +424,37 @@ fn ramp_segment(start: Vec3, end: Vec3, width: f32, thickness: f32) -> (Vec3, Qu
     (center, rotation, Vec3::new(width, thickness, surface_len))
 }
 
-/// Cầu thang ĐƠN GIẢN nối `from` lên `to` (2 tầng CHỒNG THẬT, cùng tâm
-/// X/Z) — bản rút gọn tối đa: chỉ 2 nhịp dốc thẳng hàng dọc trục Z, nối
-/// nhau bằng 1 tấm chiếu nghỉ PHẲNG ở đúng giữa 2 tầng, KHÔNG có
-/// tường/lan can 2 bên (chỉ có sàn, theo đúng yêu cầu). Nhịp 1 leo nửa
-/// đầu độ cao, đi ngang qua chiếu nghỉ, nhịp 2 leo nốt nửa còn lại —
-/// toàn bộ nằm thẳng 1 đường dọc Z, không rẽ góc.
+// Đơn giản hoá thêm 1 bước (quyết định 2026-09-07, cùng ngày với việc
+// chồng tầng thẳng): bỏ hẳn cầu thang 2 nhịp + chiếu nghỉ, thay bằng
+// ĐÚNG 1 đường dốc chéo thẳng nối 2 tầng — không rẽ, không chiếu nghỉ,
+// đơn giản tối đa như yêu cầu. `simple_stairwell` bên dưới vẫn giữ lại
+// (không xoá, không hại gì) phòng khi sau này muốn cầu thang có chiếu
+// nghỉ trở lại, nhưng `map1_level_pieces_computed` giờ gọi
+// `simple_ramp_stacked` thay vào đó.
+pub const MAP1_RAMP_RUN: f32 = FLOOR_HEIGHT; // 3m ngang cho 3m cao -> ~45°, khớp độ dốc mỗi nhịp cũ
+
+/// (center, rotation, full-size) cho ĐÚNG 1 đường dốc chéo nối `from` lên
+/// `to` (2 tầng CHỒNG THẬT, cùng tâm X/Z) — không rẽ, không chiếu nghỉ.
+pub fn simple_ramp_stacked(shaft_x: f32, shaft_z: f32, from: &FloorLevel, to: &FloorLevel) -> (Vec3, Quat, Vec3) {
+    let half_run = MAP1_RAMP_RUN / 2.0;
+    ramp_segment(
+        Vec3::new(shaft_x, from.elevation, shaft_z - half_run),
+        Vec3::new(shaft_x, to.elevation, shaft_z + half_run),
+        TOWER_STAIR_WIDTH,
+        ARENA_WALL_THICKNESS,
+    )
+}
+
+/// Nửa chiều dài (dọc Z) đường dốc chiếm — dùng để đục lỗ sàn tầng trên
+/// đúng khớp (xem FloorLevel::floor_slab_with_hole).
+pub const fn simple_ramp_stacked_half_len() -> f32 {
+    MAP1_RAMP_RUN / 2.0
+}
+
+/// Cầu thang 2 nhịp + chiếu nghỉ — KHÔNG còn được `map1_level_pieces_
+/// computed` gọi nữa (xem `simple_ramp_stacked` ở trên), giữ lại làm tuỳ
+/// chọn dự phòng nếu sau này muốn quay lại kiểu có chiếu nghỉ.
+#[allow(dead_code)]
 pub fn simple_stairwell(shaft_x: f32, shaft_z: f32, from: &FloorLevel, to: &FloorLevel) -> Vec<(Vec3, Quat, Vec3)> {
     let mid_elevation = (from.elevation + to.elevation) / 2.0;
     let half_landing = TOWER_STAIR_LANDING_RUN / 2.0;
@@ -441,10 +466,18 @@ pub fn simple_stairwell(shaft_x: f32, shaft_z: f32, from: &FloorLevel, to: &Floo
     let ramp1 = ramp_segment(Vec3::new(shaft_x, from.elevation, z0), Vec3::new(shaft_x, mid_elevation, z1), TOWER_STAIR_WIDTH, ARENA_WALL_THICKNESS);
     let ramp2 = ramp_segment(Vec3::new(shaft_x, mid_elevation, z2), Vec3::new(shaft_x, to.elevation, z3), TOWER_STAIR_WIDTH, ARENA_WALL_THICKNESS);
 
-    let landing_rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    // `Quat::IDENTITY`, NOT the already-flat `Rx(-90°)` — same "raw"
+    // convention ramp1/ramp2 use (their rotation is just heading+tilt,
+    // no "lie flat" baked in yet). The caller always finishes every
+    // piece here through ramp_panel(), which adds its OWN `Rx(-90°)` —
+    // passing an already-flat rotation here made that happen TWICE
+    // (net `Rx(-180°)`), standing the landing up like a wall instead of
+    // lying it flat (reported live as "chiếu nghỉ nằm dọc"). No heading/
+    // tilt needed for a flat landing anyway (zero rotation IS the raw
+    // form here), so identity is also simply correct, not just
+    // consistent.
     let landing_centerline = Vec3::new(shaft_x, mid_elevation, shaft_z);
-    let landing_center = landing_centerline - landing_rotation * Vec3::new(0.0, ARENA_WALL_THICKNESS / 2.0, 0.0);
-    let landing = (landing_center, landing_rotation, Vec3::new(TOWER_STAIR_WIDTH, ARENA_WALL_THICKNESS, TOWER_STAIR_LANDING_RUN));
+    let landing = (landing_centerline, Quat::IDENTITY, Vec3::new(TOWER_STAIR_WIDTH, ARENA_WALL_THICKNESS, TOWER_STAIR_LANDING_RUN));
 
     vec![ramp1, landing, ramp2]
 }
@@ -486,15 +519,14 @@ pub fn map1_level_pieces_computed() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
     // hole cut in it, walls fully enclosed, connected down to the floor
     // below by simple_stairwell's real 2-flight stair + landing.
     for (level, below) in [(MAP1_G, MAP1_B1), (MAP1_F2, MAP1_G), (MAP1_F3, MAP1_F2)] {
-        for (c, sx, sz) in level.floor_slab_with_hole(TOWER_SHAFT_X, MAP1_STAIR_SHAFT_Z, TOWER_STAIR_WIDTH / 2.0, simple_stairwell_half_len()) {
+        for (c, sx, sz) in level.floor_slab_with_hole(TOWER_SHAFT_X, MAP1_STAIR_SHAFT_Z, TOWER_STAIR_WIDTH / 2.0, simple_ramp_stacked_half_len()) {
             panels.push(floor_panel(c, sx, sz, ARENA_WALL_THICKNESS, floor_color, 0.85));
         }
         for (c, sx, sz) in level.walls_enclosed() {
             panels.push(wall_panel(c, sx, sz, level.wall_height, wall_color, 0.75));
         }
-        for (center, rotation, size) in simple_stairwell(TOWER_SHAFT_X, MAP1_STAIR_SHAFT_Z, &below, &level) {
-            panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stair_color, 0.9));
-        }
+        let (center, rotation, size) = simple_ramp_stacked(TOWER_SHAFT_X, MAP1_STAIR_SHAFT_Z, &below, &level);
+        panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stair_color, 0.9));
     }
 
     (pieces, panels)
