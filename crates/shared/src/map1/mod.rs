@@ -18,7 +18,7 @@
 use bevy::prelude::{Quat, Vec3};
 
 use crate::arena::ARENA_WALL_THICKNESS;
-use crate::level_piece::{floor_panel, ramp_panel, wall_panel, wall_panel4, BoxPiece, PanelPiece};
+use crate::level_piece::{floor_panel, ramp_panel, wall_panel, BoxPiece, PanelPiece};
 
 // Chênh cao độ thật giữa 2 tầng liên tiếp — xấp xỉ 1 tầng nhà thực tế (~3m).
 pub const FLOOR_HEIGHT: f32 = 3.0;
@@ -30,22 +30,38 @@ pub const FLOOR_HEIGHT: f32 = 3.0;
 pub const RAMP_RUN: f32 = 9.0;
 pub const RAMP_WIDTH: f32 = 4.0;
 
-// Simplified Map 1 (decision 2026-09-07): 4 identical square floors (B1
-// Garage / G Lobby / F2 Office / F3 Office) instead of the old hand-built
-// per-floor rooms (car grid, reception desk, cubicles, locker/meeting
-// rooms) — just floor_slab() + walls_*_floor() + ramp_between() per pair,
-// straight from FloorLevel's own generic helpers, no per-floor custom
-// layout code at all. spawn_map1_lights (crate::client's lib.rs) reads
-// these same 4 constants for light placement, so geometry and lighting
-// can't drift apart the way the old per-submodule constants could.
+// Simplified Map 1 (decision 2026-09-07, corrected same day — floors
+// must stack, see below): 4 identical square floors (B1 Garage / G
+// Lobby / F2 Office / F3 Office), no per-floor custom rooms. First cut
+// used ramp_between()/next_north_wall_z(), which offsets each floor
+// along Z (that's the right tool for 2 floors joined by a diagonal
+// ramp, e.g. the old B1-to-G connection) — but stacked ON TOP of 4
+// times over, it sprawled the "building" across ~90m of Z instead of
+// actually stacking, which doesn't read as a building at all. Real
+// fix: all 4 share the SAME north_wall_z (so same X/Z footprint,
+// directly on top of each other, only `elevation` differs) — the
+// existing `simple_stairwell`/`floor_slab_with_hole` machinery (already
+// in this file, originally written for the old G→F2→F3 vertical
+// stretch) is the correct connector for stacked floors, not
+// ramp_between. spawn_map1_lights (crate::client's lib.rs) reads these
+// same constants for light placement, so geometry and lighting can't
+// drift apart.
 pub const MAP1_HALF_X: f32 = 10.0;
 pub const MAP1_HALF_Z: f32 = 10.0;
 pub const MAP1_WALL_HEIGHT: f32 = 3.0;
+pub const MAP1_NORTH_WALL_Z: f32 = -MAP1_HALF_Z;
 
-pub const MAP1_B1: FloorLevel = FloorLevel::new(MAP1_HALF_X, MAP1_HALF_Z, MAP1_WALL_HEIGHT, 0.0, -MAP1_HALF_Z);
-pub const MAP1_G: FloorLevel = FloorLevel::new(MAP1_HALF_X, MAP1_HALF_Z, MAP1_WALL_HEIGHT, FLOOR_HEIGHT, MAP1_B1.next_north_wall_z());
-pub const MAP1_F2: FloorLevel = FloorLevel::new(MAP1_HALF_X, MAP1_HALF_Z, MAP1_WALL_HEIGHT, FLOOR_HEIGHT * 2.0, MAP1_G.next_north_wall_z());
-pub const MAP1_F3: FloorLevel = FloorLevel::new(MAP1_HALF_X, MAP1_HALF_Z, MAP1_WALL_HEIGHT, FLOOR_HEIGHT * 3.0, MAP1_F2.next_north_wall_z());
+pub const MAP1_B1: FloorLevel = FloorLevel::new(MAP1_HALF_X, MAP1_HALF_Z, MAP1_WALL_HEIGHT, 0.0, MAP1_NORTH_WALL_Z);
+pub const MAP1_G: FloorLevel = FloorLevel::new(MAP1_HALF_X, MAP1_HALF_Z, MAP1_WALL_HEIGHT, FLOOR_HEIGHT, MAP1_NORTH_WALL_Z);
+pub const MAP1_F2: FloorLevel = FloorLevel::new(MAP1_HALF_X, MAP1_HALF_Z, MAP1_WALL_HEIGHT, FLOOR_HEIGHT * 2.0, MAP1_NORTH_WALL_Z);
+pub const MAP1_F3: FloorLevel = FloorLevel::new(MAP1_HALF_X, MAP1_HALF_Z, MAP1_WALL_HEIGHT, FLOOR_HEIGHT * 3.0, MAP1_NORTH_WALL_Z);
+
+// Stairwell shaft position — same X/Z reused for every floor pair (1
+// continuous vertical shaft, not a new one per pair), reusing the
+// existing TOWER_SHAFT_X convention. Z = the shared center_z (all 4
+// floors have the same one now), simplest choice with no interior rooms
+// left to dodge.
+pub const MAP1_STAIR_SHAFT_Z: f32 = MAP1_B1.center_z();
 
 // Player spawn — just inside B1's solid North wall, near the West side
 // (matches the old GARAGE_PLAYER_SPAWN's "Northwest corner, near the
@@ -453,48 +469,32 @@ pub fn map1_level_pieces_computed() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
     let mut panels: Vec<PanelPiece> = Vec::new();
     let floor_color = [0.5, 0.5, 0.52];
     let wall_color = [0.6, 0.58, 0.55];
+    let stair_color = [0.45, 0.43, 0.4];
 
-    // B1 Garage — ground floor, gap only South (up to G).
+    // B1 Garage — ground floor: solid slab (nothing below to cut a
+    // stairwell hole for), walls fully enclosed (the only way up is the
+    // stairwell hole in G's floor above, not a wall gap).
     let (c, sx, sz) = MAP1_B1.floor_slab();
     panels.push(floor_panel(c, sx, sz, ARENA_WALL_THICKNESS, floor_color, 0.85));
-    for (c, sx, sz) in MAP1_B1.walls_ground_floor() {
+    for (c, sx, sz) in MAP1_B1.walls_enclosed() {
         panels.push(wall_panel(c, sx, sz, MAP1_B1.wall_height, wall_color, 0.75));
     }
 
-    // G Lobby — mid floor (gap North from B1, gap South up to F2).
-    let (c, sx, sz) = MAP1_G.floor_slab();
-    panels.push(floor_panel(c, sx, sz, ARENA_WALL_THICKNESS, floor_color, 0.85));
-    for (c, sx, sz) in MAP1_G.walls_mid_floor() {
-        panels.push(wall_panel(c, sx, sz, MAP1_G.wall_height, wall_color, 0.75));
-    }
-    let (rc, rr, rs) = ramp_between(&MAP1_B1, &MAP1_G);
-    panels.push(ramp_panel(rc, rr, rs.x, rs.y, rs.z, wall_color, 0.85));
-    for (c, sx, sy, sz) in ramp_guard_walls_between(&MAP1_B1, &MAP1_G) {
-        panels.push(wall_panel4(c, sx, sy, sz, wall_color, 0.75));
-    }
-
-    // F2 Office — mid floor (gap North from G, gap South up to F3).
-    let (c, sx, sz) = MAP1_F2.floor_slab();
-    panels.push(floor_panel(c, sx, sz, ARENA_WALL_THICKNESS, floor_color, 0.85));
-    for (c, sx, sz) in MAP1_F2.walls_mid_floor() {
-        panels.push(wall_panel(c, sx, sz, MAP1_F2.wall_height, wall_color, 0.75));
-    }
-    let (rc, rr, rs) = ramp_between(&MAP1_G, &MAP1_F2);
-    panels.push(ramp_panel(rc, rr, rs.x, rs.y, rs.z, wall_color, 0.85));
-    for (c, sx, sy, sz) in ramp_guard_walls_between(&MAP1_G, &MAP1_F2) {
-        panels.push(wall_panel4(c, sx, sy, sz, wall_color, 0.75));
-    }
-
-    // F3 Office — top floor (gap only North from F2).
-    let (c, sx, sz) = MAP1_F3.floor_slab();
-    panels.push(floor_panel(c, sx, sz, ARENA_WALL_THICKNESS, floor_color, 0.85));
-    for (c, sx, sz) in MAP1_F3.walls_top_floor() {
-        panels.push(wall_panel(c, sx, sz, MAP1_F3.wall_height, wall_color, 0.75));
-    }
-    let (rc, rr, rs) = ramp_between(&MAP1_F2, &MAP1_F3);
-    panels.push(ramp_panel(rc, rr, rs.x, rs.y, rs.z, wall_color, 0.85));
-    for (c, sx, sy, sz) in ramp_guard_walls_between(&MAP1_F2, &MAP1_F3) {
-        panels.push(wall_panel4(c, sx, sy, sz, wall_color, 0.75));
+    // G / F2 / F3 — each stacks DIRECTLY on the floor below (same X/Z
+    // footprint, see MAP1_B1..MAP1_F3's own doc comment for why this
+    // replaced the earlier Z-offset layout): floor slab has a stairwell
+    // hole cut in it, walls fully enclosed, connected down to the floor
+    // below by simple_stairwell's real 2-flight stair + landing.
+    for (level, below) in [(MAP1_G, MAP1_B1), (MAP1_F2, MAP1_G), (MAP1_F3, MAP1_F2)] {
+        for (c, sx, sz) in level.floor_slab_with_hole(TOWER_SHAFT_X, MAP1_STAIR_SHAFT_Z, TOWER_STAIR_WIDTH / 2.0, simple_stairwell_half_len()) {
+            panels.push(floor_panel(c, sx, sz, ARENA_WALL_THICKNESS, floor_color, 0.85));
+        }
+        for (c, sx, sz) in level.walls_enclosed() {
+            panels.push(wall_panel(c, sx, sz, level.wall_height, wall_color, 0.75));
+        }
+        for (center, rotation, size) in simple_stairwell(TOWER_SHAFT_X, MAP1_STAIR_SHAFT_Z, &below, &level) {
+            panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stair_color, 0.9));
+        }
     }
 
     (pieces, panels)
