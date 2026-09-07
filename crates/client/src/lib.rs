@@ -2966,71 +2966,23 @@ fn spawn_test_arena(
 // shared::map1 mà server dùng để sinh hình học — thuần cosmetic, để ở
 // local là an toàn.
 fn spawn_map1_lights(commands: &mut Commands) {
-    // B1 Garage — không cửa sổ, cần 1 đèn overhead sáng hoặc phòng sẽ tối om.
-    commands.spawn((
-        PointLight {
-            color: Color::srgb(0.85, 0.88, 1.0),
-            intensity: 3_000_000.0,
-            range: (shared::GARAGE_HALF_SIZE_X + shared::GARAGE_HALF_SIZE_Z) * 1.5,
-            shadows_enabled: light_shadows_enabled(),
-            ..default()
-        },
-        PointLightBaseIntensity(3_000_000.0),
-        Transform::from_xyz(0.0, ARENA_WALL_HEIGHT - 0.2, 0.0),
-    ));
-
-    // G Lobby — trần cao, không gian mở → 2 đèn thay vì 1.
-    for &(lx, lz) in &[(-6.0, shared::LOBBY_CENTER_Z - 4.0), (6.0, shared::LOBBY_CENTER_Z + 4.0)] {
+    // Simplified Map 1 (decision 2026-09-07): 4 identical square floors,
+    // so 1 centered overhead light per floor is enough — no more
+    // per-room light counts/positions to hand-tune, just read the same
+    // shared::MAP1_B1/G/F2/F3 FloorLevel constants the geometry itself
+    // (map1_level_pieces_computed) is built from, so light placement
+    // can't drift out of sync with the actual floor layout.
+    for level in [shared::MAP1_B1, shared::MAP1_G, shared::MAP1_F2, shared::MAP1_F3] {
         commands.spawn((
             PointLight {
-                color: Color::srgb(0.95, 0.93, 0.88),
-                intensity: 4_500_000.0,
-                range: (shared::LOBBY_HALF_SIZE_X + shared::LOBBY_HALF_SIZE_Z) * 1.2,
+                color: Color::srgb(0.9, 0.9, 0.88),
+                intensity: 4_000_000.0,
+                range: (level.half_size_x + level.half_size_z) * 1.2,
                 shadows_enabled: light_shadows_enabled(),
                 ..default()
             },
-            PointLightBaseIntensity(4_500_000.0),
-            Transform::from_xyz(lx, shared::FLOOR_HEIGHT + shared::LOBBY_WALL_HEIGHT - 0.3, lz),
-        ));
-    }
-
-    // F2 Office — trần thấp hơn Sảnh → 3 đèn dọc dãy cubicle để phủ đều.
-    for &(lx, lz) in &[
-        (0.0, shared::F2_NORTH_WALL_Z + 5.0),
-        (0.0, shared::F2_CENTER_Z),
-        (0.0, shared::F2_SOUTH_WALL_Z - 5.0),
-    ] {
-        commands.spawn((
-            PointLight {
-                color: Color::srgb(0.95, 0.95, 0.9),
-                intensity: 2_500_000.0,
-                range: shared::F2_HALF_SIZE_X * 1.5,
-                shadows_enabled: light_shadows_enabled(),
-                ..default()
-            },
-            PointLightBaseIntensity(2_500_000.0),
-            Transform::from_xyz(lx, shared::F2_ELEVATION + shared::F2_WALL_HEIGHT - 0.3, lz),
-        ));
-    }
-
-    // F3 Office — hành lang dài hơn F2 → 4 đèn để phủ đều hết chiều dài
-    // ("hành lang chính, dài, mở" theo mockup).
-    for &(lx, lz) in &[
-        (0.0, shared::F3_NORTH_WALL_Z + 5.0),
-        (0.0, shared::F3_NORTH_WALL_Z + 14.0),
-        (0.0, shared::F3_CENTER_Z + 4.0),
-        (0.0, shared::F3_SOUTH_WALL_Z - 5.0),
-    ] {
-        commands.spawn((
-            PointLight {
-                color: Color::srgb(0.95, 0.9, 0.85),
-                intensity: 2_500_000.0,
-                range: shared::F3_HALF_SIZE_X * 1.5,
-                shadows_enabled: light_shadows_enabled(),
-                ..default()
-            },
-            PointLightBaseIntensity(2_500_000.0),
-            Transform::from_xyz(lx, shared::F3_ELEVATION + shared::F3_WALL_HEIGHT - 0.3, lz),
+            PointLightBaseIntensity(4_000_000.0),
+            Transform::from_xyz(0.0, level.elevation + level.wall_height - 0.3, level.center_z()),
         ));
     }
 }

@@ -146,7 +146,7 @@ pub enum MapKind {
 /// hence a fn rather than a const table.
 pub fn scenario_player_spawn(scenario: Scenario) -> Vec3 {
     match scenario {
-        Scenario::Normal => crate::map1::GARAGE_PLAYER_SPAWN,
+        Scenario::Normal => crate::map1::MAP1_PLAYER_SPAWN,
         Scenario::StressTest => STRESS_TEST_PLAYER_SPAWN,
         Scenario::ItemGallery => crate::item_gallery::item_gallery_player_spawn(),
     }
