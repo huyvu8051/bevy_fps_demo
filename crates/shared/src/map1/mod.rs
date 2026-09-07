@@ -431,7 +431,11 @@ fn ramp_segment(start: Vec3, end: Vec3, width: f32, thickness: f32) -> (Vec3, Qu
 // (không xoá, không hại gì) phòng khi sau này muốn cầu thang có chiếu
 // nghỉ trở lại, nhưng `map1_level_pieces_computed` giờ gọi
 // `simple_ramp_stacked` thay vào đó.
-pub const MAP1_RAMP_RUN: f32 = FLOOR_HEIGHT; // 3m ngang cho 3m cao -> ~45°, khớp độ dốc mỗi nhịp cũ
+// 6m ngang cho 3m cao -> ~26.6° — leo được thoải mái, không bị hụt tốc
+// độ đi bộ như ~45° ban đầu (báo trực tiếp là "hơi khó leo"). Vẫn còn dư
+// nhiều so với giới hạn ~53° của controller (GROUND_NORMAL_MIN_Y,
+// player.rs) và vẫn nằm gọn trong nửa sàn (half_run=3.0 < MAP1_HALF_Z=10).
+pub const MAP1_RAMP_RUN: f32 = FLOOR_HEIGHT * 2.0;
 
 /// (center, rotation, full-size) cho ĐÚNG 1 đường dốc chéo nối `from` lên
 /// `to` (2 tầng CHỒNG THẬT, cùng tâm X/Z) — không rẽ, không chiếu nghỉ.
