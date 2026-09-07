@@ -1027,10 +1027,51 @@ fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<Nav
         return;
     }
 
-    // Non-Arena (Building / ItemGallery): no per-map RON, so keep the
-    // hand-authored boundary + pillar footprints. A bare ManagedNavMesh
-    // (no NavMeshSettings) is ignored by the updater, so this manual
-    // insert stands.
+    if scenario.map_kind() == MapKind::Campaign(1) {
+        // Map 1's real 4 stacked floors — was pathfinding on the flat
+        // ItemGallery-style fallback below (zero awareness of floors),
+        // which is exactly why a wrong-floor zombie/autopilot just walked
+        // into the nearest wall instead of routing through a stairwell.
+        // 1 navmesh LAYER per floor + per ramp (see shared::map1_
+        // navmesh_layers's own doc comment), stitched at every
+        // floor<->ramp boundary so pathfinding treats the whole building
+        // as one connected graph — vleue_navigator/polyanya's own
+        // supported mechanism for exactly this, not a custom hack.
+        let (layers, stitches) = shared::map1_navmesh_layers();
+        for (index, layer) in layers.iter().enumerate() {
+            let index = index as u8;
+            let to_local = |p: Vec3| shared::map1_world_to_layer_local(layer.translation, layer.rotation, p);
+            let mut fixed = Triangulation::from_outer_edges(&layer.outer_world.iter().map(|&p| to_local(p)).collect::<Vec<_>>());
+            if !layer.holes_world.is_empty() {
+                fixed.add_obstacles(layer.holes_world.iter().map(|hole| hole.iter().map(|&p| to_local(p)).collect::<Vec<_>>()));
+            }
+            let layer_stitches: Vec<((u8, u8), [Vec2; 2])> = stitches
+                .iter()
+                .filter(|s| s.from == index || s.to == index)
+                .map(|s| ((s.from, s.to), [to_local(s.points_world[0]), to_local(s.points_world[1])]))
+                .collect();
+            commands.spawn((
+                ManagedNavMesh::single(),
+                NavMeshSettings {
+                    fixed,
+                    layer: Some(index),
+                    stitches: layer_stitches,
+                    build_timeout: Some(shared::ARENA_NAVMESH_BUILD_TIMEOUT_SECS),
+                    agent_radius: shared::ARENA_NAVMESH_AGENT_RADIUS,
+                    ..default()
+                },
+                NavMeshUpdateMode::Direct,
+                NavMeshUpdateModeBlocking,
+                Transform::from_translation(layer.translation).with_rotation(layer.rotation),
+            ));
+        }
+        return;
+    }
+
+    // Non-Arena, non-Map1 (ItemGallery, any other not-yet-real Campaign
+    // map_id): no per-map RON, so keep the hand-authored boundary +
+    // pillar footprints. A bare ManagedNavMesh (no NavMeshSettings) is
+    // ignored by the updater, so this manual insert stands.
     let mut navmesh = NavMesh::from_edge_and_obstacles(
         NAVMESH_BOUNDS.to_vec(),
         NAVMESH_COLUMN_OBSTACLES.iter().map(|&(x, z)| column_footprint(x, z)).collect(),

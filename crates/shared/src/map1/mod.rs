@@ -15,7 +15,7 @@
 // shared regenerate_level_piece_ron -- --ignored --nocapture`
 // (level_piece.rs) để bake thay đổi vào file RON đó.
 
-use bevy::prelude::{Quat, Vec3};
+use bevy::prelude::{Quat, Vec2, Vec3, Vec3Swizzles};
 
 use crate::arena::ARENA_WALL_THICKNESS;
 use crate::level_piece::{floor_panel, ramp_panel, wall_panel, BoxPiece, PanelPiece};
@@ -449,6 +449,173 @@ pub fn campaign_zombie_spawn_pos(map_id: u8, seed: usize) -> (Vec3, f32) {
          data (docs/ZOMBIE_SPAWN_SYSTEM.md) before real play anyway, not a \
          sandbox scatter fallback"
     )
+}
+
+// --- Map 1 multi-layer navmesh geometry (decision 2026-09-07) ---------
+//
+// Zombies/autopilot on Map 1 used to pathfind on a single flat placeholder
+// navmesh (server::spawn_zombie_navmesh's old Building-branch fallback —
+// a generic boundary + a few pillar footprints, with zero awareness of
+// Map 1's real 4 stacked floors) — reported live as "wrong-floor
+// zombie/autopilot just walks into the nearest wall/corner" instead of
+// routing through a stairwell. `vleue_navigator` (built on `polyanya`)
+// supports exactly the fix real games use for this — multiple navmesh
+// "layers" (1 per floor + 1 per ramp here) stitched together at shared
+// edges so A* treats the whole building as one connected graph, routing
+// through a stairwell automatically instead of needing hand-written
+// "if wrong floor, find stairs" logic.
+//
+// This module only computes the PURE geometry (world-space transforms +
+// boundary/hole/stitch points) — `crates/shared` doesn't depend on
+// `vleue_navigator`/`polyanya` (only client/server do, client just for
+// the debug-visualization mirror), so turning this into actual
+// `Triangulation`/`NavMeshSettings` happens in
+// `crates/server/src/main.rs`'s `spawn_zombie_navmesh`.
+//
+// Layer indices: 0..=3 are the 4 floors (B1,G,F2,F3, same order as
+// `[MAP1_B1, MAP1_G, MAP1_F2, MAP1_F3]` elsewhere in this file), 4..=9
+// are the 6 ramps (main+fire-escape for each of the 3 floor pairs, in
+// `MAP1_RAMPS`' own order below).
+
+/// (floor pair index, shaft X) for every ramp in the building — same 3
+/// floor-to-floor connections `map1_level_pieces_computed` already builds
+/// visually, times 2 shafts (main + fire escape) each.
+const MAP1_RAMPS: [(usize, usize, f32); 6] = [
+    (0, 1, TOWER_SHAFT_X),
+    (0, 1, FIRE_ESCAPE_SHAFT_X),
+    (1, 2, TOWER_SHAFT_X),
+    (1, 2, FIRE_ESCAPE_SHAFT_X),
+    (2, 3, TOWER_SHAFT_X),
+    (2, 3, FIRE_ESCAPE_SHAFT_X),
+];
+
+/// 1 navmesh layer's world-space placement + boundary, generic over
+/// "floor" or "ramp" — the caller (server) turns `outer_world`/
+/// `holes_world` into a `Triangulation` by converting each point to this
+/// layer's own local 2D space via [`map1_world_to_layer_local`].
+pub struct Map1NavLayer {
+    pub translation: Vec3,
+    pub rotation: Quat,
+    pub outer_world: Vec<Vec3>,
+    pub holes_world: Vec<Vec<Vec3>>,
+}
+
+/// 1 connection between 2 layers — `points_world` is the shared edge (2
+/// corners), converted into EACH side's own local space separately (the
+/// two are only equal by coincidence, not in general — a ramp's local
+/// axes are rotated relative to a flat floor's, unlike the flat-to-flat
+/// case in vleue_navigator's own `layers_basic.rs` example).
+pub struct Map1NavStitch {
+    pub from: u8,
+    pub to: u8,
+    pub points_world: [Vec3; 2],
+}
+
+/// Converts a world-space point known to lie ON a layer's own flat plane
+/// into that layer's local 2D (`Triangulation`) coordinates — just the
+/// inverse of how that plane got placed in the world to begin with
+/// (rotate into the layer's local frame, then drop the now-~0 local Z).
+/// Generic over any layer's own (translation, rotation), so it's the one
+/// piece of transform math written ONCE here instead of re-derived by
+/// hand per layer (a hand-derived rotation is exactly what caused the
+/// stairwell-landing bug fixed earlier this session).
+pub fn map1_world_to_layer_local(translation: Vec3, rotation: Quat, world_point: Vec3) -> Vec2 {
+    (rotation.inverse() * (world_point - translation)).xy()
+}
+
+fn map1_floor_corners_world(floor: &FloorLevel) -> Vec<Vec3> {
+    let (x0, x1) = (-floor.half_size_x, floor.half_size_x);
+    let (z0, z1) = (floor.north_wall_z, floor.south_wall_z());
+    vec![
+        Vec3::new(x0, floor.elevation, z0),
+        Vec3::new(x1, floor.elevation, z0),
+        Vec3::new(x1, floor.elevation, z1),
+        Vec3::new(x0, floor.elevation, z1),
+    ]
+}
+
+fn map1_hole_corners_world(shaft_x: f32, elevation: f32) -> Vec<Vec3> {
+    let half_x = TOWER_STAIR_WIDTH / 2.0;
+    let half_z = simple_ramp_stacked_half_len();
+    let (x0, x1) = (shaft_x - half_x, shaft_x + half_x);
+    let (z0, z1) = (MAP1_STAIR_SHAFT_Z - half_z, MAP1_STAIR_SHAFT_Z + half_z);
+    vec![
+        Vec3::new(x0, elevation, z0),
+        Vec3::new(x1, elevation, z0),
+        Vec3::new(x1, elevation, z1),
+        Vec3::new(x0, elevation, z1),
+    ]
+}
+
+/// All 10 navmesh layers (4 floors + 6 ramps) + every stitch connecting
+/// them, in world space. `crates/server`'s `spawn_zombie_navmesh` is the
+/// only consumer — see this module's own doc comment above for why the
+/// split (pure geometry here, `Triangulation`/`NavMeshSettings` there).
+pub fn map1_navmesh_layers() -> (Vec<Map1NavLayer>, Vec<Map1NavStitch>) {
+    let flat_rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    let floors: [FloorLevel; 4] = [MAP1_B1, MAP1_G, MAP1_F2, MAP1_F3];
+
+    let mut layers = Vec::with_capacity(floors.len() + MAP1_RAMPS.len());
+    for (i, floor) in floors.iter().enumerate() {
+        let holes = if i == 0 {
+            // B1 is the ground floor — solid slab, nothing below it to
+            // cut a stairwell hole for (matches map1_level_pieces_
+            // computed's own walls_enclosed() treatment of it).
+            Vec::new()
+        } else {
+            vec![map1_hole_corners_world(TOWER_SHAFT_X, floor.elevation), map1_hole_corners_world(FIRE_ESCAPE_SHAFT_X, floor.elevation)]
+        };
+        layers.push(Map1NavLayer {
+            translation: Vec3::new(0.0, floor.elevation, MAP1_STAIR_SHAFT_Z),
+            rotation: flat_rotation,
+            outer_world: map1_floor_corners_world(floor),
+            holes_world: holes,
+        });
+    }
+
+    let mut stitches = Vec::with_capacity(MAP1_RAMPS.len() * 2);
+    for &(below_idx, above_idx, shaft_x) in &MAP1_RAMPS {
+        let below = &floors[below_idx];
+        let above = &floors[above_idx];
+        let (raw_center, raw_rotation, size) = simple_ramp_stacked(shaft_x, MAP1_STAIR_SHAFT_Z, below, above);
+        // Reuse ramp_panel's own (translation, rotation) computation
+        // instead of re-deriving it — guarantees this navmesh layer sits
+        // exactly on the same surface the visual ramp panel does, and
+        // avoids hand-rederiving the same offset math that caused the
+        // landing-rotation bug earlier this session. Color/roughness are
+        // irrelevant here, thrown away below.
+        let (translation, rotation, width, length, ..) = ramp_panel(raw_center, raw_rotation, size.x, size.y, size.z, [0.0, 0.0, 0.0], 0.0);
+        let half_w = width / 2.0;
+        let half_l = length / 2.0;
+        let local_to_world = |local: Vec2| translation + rotation * local.extend(0.0);
+        let outer_world = vec![
+            local_to_world(Vec2::new(-half_w, -half_l)),
+            local_to_world(Vec2::new(half_w, -half_l)),
+            local_to_world(Vec2::new(half_w, half_l)),
+            local_to_world(Vec2::new(-half_w, half_l)),
+        ];
+        let layer_index = layers.len() as u8;
+        layers.push(Map1NavLayer { translation, rotation, outer_world, holes_world: Vec::new() });
+
+        // local Y = -half_l is the ramp's "start" edge (below.elevation
+        // end, see simple_ramp_stacked/ramp_segment: start comes first in
+        // the (start,end) pair that becomes (heading, local +Y) —
+        // local +Y points from start toward end), +half_l is the "end"
+        // edge (above.elevation). Each edge's world segment stitches this
+        // ramp layer to the corresponding floor layer.
+        stitches.push(Map1NavStitch {
+            from: below_idx as u8,
+            to: layer_index,
+            points_world: [local_to_world(Vec2::new(-half_w, -half_l)), local_to_world(Vec2::new(half_w, -half_l))],
+        });
+        stitches.push(Map1NavStitch {
+            from: layer_index,
+            to: above_idx as u8,
+            points_world: [local_to_world(Vec2::new(-half_w, half_l)), local_to_world(Vec2::new(half_w, half_l))],
+        });
+    }
+
+    (layers, stitches)
 }
 
 #[cfg(test)]
