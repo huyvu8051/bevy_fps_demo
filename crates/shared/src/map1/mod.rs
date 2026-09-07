@@ -406,9 +406,17 @@ pub fn map1_zombie_spawn_points_computed() -> Vec<(Vec3, f32)> {
 
     let floors: [FloorLevel; 4] = [MAP1_B1, MAP1_G, MAP1_F2, MAP1_F3];
     let mut points = Vec::with_capacity(OFFSETS.len() * floors.len());
-    for floor in floors {
-        let y = floor.elevation + crate::zombie::ZOMBIE_RADIUS + crate::zombie::ZOMBIE_LENGTH / 2.0;
-        for (dx, dz) in OFFSETS {
+    // Vòng ngoài chạy theo OFFSETS, vòng trong theo floors (không phải
+    // ngược lại) — để danh sách XEN KẼ theo tầng (B1,G,F2,F3, B1,G,F2,F3,
+    // ...) thay vì gom hết 1 tầng rồi mới sang tầng khác. seed tăng dần
+    // (`map1_zombie_spawn_pos`, cycling `seed % len`) nên thứ tự này mới
+    // đảm bảo N zombie đầu tiên trải đều cả 4 tầng ngay từ đầu — gom theo
+    // tầng sẽ làm ZombieTargetCount mặc định (10) chỉ lấp đầy B1 rồi mới
+    // tràn sang G, chưa từng chạm F2/F3 — đúng hành vi round-robin hàm cũ
+    // (`random_map1_zombie_spawn_pos`, chọn tầng qua `seed % 4`) đã có.
+    for (dx, dz) in OFFSETS {
+        for floor in floors {
+            let y = floor.elevation + crate::zombie::ZOMBIE_RADIUS + crate::zombie::ZOMBIE_LENGTH / 2.0;
             let x = dx;
             let z = MAP1_STAIR_SHAFT_Z + dz;
             // Quay mặt về tâm phòng — atan2(-dx, -dz) khớp quy ước
