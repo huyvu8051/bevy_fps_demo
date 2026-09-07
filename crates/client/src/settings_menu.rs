@@ -839,6 +839,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 })
                 .with_children(|row| {
                     spawn_cheat_action_button(row, "-10", ZombieCountDecButton);
+                    spawn_cheat_action_button(row, "-1", ZombieCountDec1Button);
                     row.spawn((
                         Text::new("10"),
                         TextFont {
@@ -848,6 +849,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         TextColor(Color::WHITE),
                         ZombieCountText,
                     ));
+                    spawn_cheat_action_button(row, "+1", ZombieCountInc1Button);
                     spawn_cheat_action_button(row, "+10", ZombieCountIncButton);
                     spawn_cheat_toggle_button(row, "Auto", AutoMaintainButton);
                 });
@@ -1046,6 +1048,10 @@ pub(crate) struct CheatKillAllButton;
 pub(crate) struct ZombieCountDecButton;
 #[derive(Component)]
 pub(crate) struct ZombieCountIncButton;
+#[derive(Component)]
+pub(crate) struct ZombieCountDec1Button;
+#[derive(Component)]
+pub(crate) struct ZombieCountInc1Button;
 #[derive(Component)]
 pub(crate) struct ZombieCountText;
 #[derive(Component)]
@@ -1655,7 +1661,7 @@ pub(crate) fn debug_bot_buttons(
     }
 }
 
-// -/+ step the client's own tracked target by 10 (clamped to
+// -/+ step the client's own tracked target by 10 or 1 (clamped to
 // 0..=ZOMBIE_SPAWNS.len(), same bounds the server itself clamps to — see
 // on_set_zombie_count) and send the new absolute value; update_zombie_count_text
 // reflects ZombieCountUi.0 on screen immediately, no round-trip needed.
@@ -1664,7 +1670,10 @@ pub(crate) fn zombie_count_buttons(
     mut count: ResMut<ZombieCountUi>,
     dec_btn: Query<&Interaction, (With<ZombieCountDecButton>, Changed<Interaction>)>,
     inc_btn: Query<&Interaction, (With<ZombieCountIncButton>, Changed<Interaction>)>,
+    dec1_btn: Query<&Interaction, (With<ZombieCountDec1Button>, Changed<Interaction>)>,
+    inc1_btn: Query<&Interaction, (With<ZombieCountInc1Button>, Changed<Interaction>)>,
 ) {
+    let max = ZOMBIE_SPAWNS.len() as u32;
     let mut changed = false;
     for interaction in &dec_btn {
         if *interaction == Interaction::Pressed {
@@ -1674,7 +1683,19 @@ pub(crate) fn zombie_count_buttons(
     }
     for interaction in &inc_btn {
         if *interaction == Interaction::Pressed {
-            count.0 = (count.0 + 10).min(ZOMBIE_SPAWNS.len() as u32);
+            count.0 = (count.0 + 10).min(max);
+            changed = true;
+        }
+    }
+    for interaction in &dec1_btn {
+        if *interaction == Interaction::Pressed {
+            count.0 = count.0.saturating_sub(1);
+            changed = true;
+        }
+    }
+    for interaction in &inc1_btn {
+        if *interaction == Interaction::Pressed {
+            count.0 = (count.0 + 1).min(max);
             changed = true;
         }
     }

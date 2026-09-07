@@ -2446,13 +2446,13 @@ fn setup(
     match current_scenario().map_kind() {
         MapKind::ItemGallery => {
             let (pieces, panels) = shared::item_gallery_level_pieces();
-            spawn_level_pieces(&mut commands, pieces, panels);
+            spawn_level_pieces(&mut commands, pieces, panels, false);
             spawn_item_gallery_test_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
             spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
         }
         MapKind::Campaign(map_id) => {
             let (pieces, panels) = shared::campaign_level_pieces(map_id);
-            spawn_level_pieces(&mut commands, pieces, panels);
+            spawn_level_pieces(&mut commands, pieces, panels, true);
             // spawn_map1_lights is hand-tuned for Map 1's own floors — only
             // map_id 1 has real geometry today anyway (campaign_level_pieces
             // panics otherwise), so this stays gated on it rather than
@@ -3075,9 +3075,20 @@ fn spawn_level_panel_visuals(
 /// `Added<LevelPanel>` regardless of where the entity came from, so they
 /// pick these up and build mesh+collider the same way they used to for
 /// server-replicated ones — no changes needed there.
-fn spawn_level_pieces(commands: &mut Commands, pieces: Vec<shared::BoxPiece>, panels: Vec<shared::PanelPiece>) {
+fn spawn_level_pieces(commands: &mut Commands, pieces: Vec<shared::BoxPiece>, panels: Vec<shared::PanelPiece>, tag_boxes_as_nav_obstacle: bool) {
     for (translation, rotation, size, color, roughness) in pieces {
-        commands.spawn((shared::LevelBox::new(size, color, roughness), shared::LevelTransform::new(translation, rotation)));
+        let mut piece = commands.spawn((shared::LevelBox::new(size, color, roughness), shared::LevelTransform::new(translation, rotation)));
+        // TEMP DIAGNOSTIC (2026-09-07): Map 1's test pillar (BoxPiece) needs
+        // ClientNavObstacle so nav_debug's own NavmeshUpdaterPlugin::
+        // <Collider, ClientNavObstacle> carves it out of the CLIENT's navmesh
+        // mirror too — otherwise the debug path-trace overlay doesn't bend
+        // around it even though the server's real navmesh (ArenaObstacle-
+        // tagged there) already does. ItemGallery's decorative boxes don't
+        // need this (no client navmesh active for that map), hence the flag
+        // instead of tagging unconditionally.
+        if tag_boxes_as_nav_obstacle {
+            piece.insert(ClientNavObstacle);
+        }
     }
     for (translation, rotation, width, height, color, roughness, collider_thickness, collider_offset) in panels {
         let panel = match collider_thickness {

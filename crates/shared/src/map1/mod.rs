@@ -229,40 +229,6 @@ impl FloorLevel {
         ]
     }
 
-    /// Như `floor_slab_with_hole`, nhưng đục 2 lỗ CÙNG dải Z (khác tâm X)
-    /// — dùng khi 1 tầng có cả cầu thang chính LẪN cầu thang thoát hiểm
-    /// (Fire Escape, xem GDD/`docs/maps/map01_highrise.md` mục "Lối thoát
-    /// hiểm") chạy song song, cùng chiều dài đường dốc nên trùng dải Z.
-    /// Người gọi tự đảm bảo 2 lỗ không chồng nhau (hole_a bên Đông, hole_b
-    /// bên Tây) — chỉ là hình học thuần túy, không tự kiểm tra.
-    pub fn floor_slab_with_two_holes(
-        &self,
-        hole_a_x: f32,
-        hole_b_x: f32,
-        hole_center_z: f32,
-        hole_half_x: f32,
-        hole_half_z: f32,
-    ) -> [(Vec3, f32, f32); 5] {
-        let y = self.elevation - ARENA_WALL_THICKNESS / 2.0;
-        let (ax0, ax1) = (hole_a_x - hole_half_x, hole_a_x + hole_half_x);
-        let (bx0, bx1) = (hole_b_x - hole_half_x, hole_b_x + hole_half_x);
-        let (hz0, hz1) = (hole_center_z - hole_half_z, hole_center_z + hole_half_z);
-        let (fx0, fx1) = (-self.half_size_x, self.half_size_x);
-        let (fz0, fz1) = (self.north_wall_z, self.south_wall_z());
-        [
-            // Bắc: mép Bắc sàn → mép Bắc lỗ, đủ bề rộng X (cả 2 lỗ đều
-            // nằm trong dải Z này nên không cần chia theo lỗ).
-            (Vec3::new(0.0, y, (fz0 + hz0) / 2.0), fx1 - fx0, hz0 - fz0),
-            // Nam: mép Nam lỗ → mép Nam sàn.
-            (Vec3::new(0.0, y, (hz1 + fz1) / 2.0), fx1 - fx0, fz1 - hz1),
-            // Tây xa: mép Tây sàn → mép Tây lỗ B (lỗ B ở phía Tây hơn).
-            (Vec3::new((fx0 + bx0) / 2.0, y, hole_center_z), bx0 - fx0, hz1 - hz0),
-            // Giữa 2 lỗ.
-            (Vec3::new((bx1 + ax0) / 2.0, y, hole_center_z), ax0 - bx1, hz1 - hz0),
-            // Đông xa: mép Đông lỗ A → mép Đông sàn.
-            (Vec3::new((ax1 + fx1) / 2.0, y, hole_center_z), fx1 - ax1, hz1 - hz0),
-        ]
-    }
 }
 
 /// (center, rotation quanh trục X, full-size xyz) cho khối collider/mesh
@@ -354,7 +320,7 @@ pub fn small_room_walls(center: (f32, f32), half: Vec3, base_y: f32, door: RoomD
 /// Trước đây hàm này (`random_map1_zombie_spawn_pos`) rải ngẫu nhiên theo
 /// R2 low-discrepancy trong biên NGOÀI của cả tầng — an toàn hồi tầng còn
 /// là 1 sàn phẳng liền mạch, nhưng từ khi tầng chồng thật xuyên giếng
-/// thang (`floor_slab_with_two_holes`, có LỖ THẬT giữa sàn), random thuần
+/// thang (`floor_slab_with_hole`, có LỖ THẬT giữa sàn), random thuần
 /// theo biên ngoài có thể rơi trúng lỗ — zombie spawn giữa không trung,
 /// không có sàn bên dưới nên không rơi xuống (zombie không có RigidBody
 /// vật lý thật, xem `spawn_zombies` — di chuyển do AI/replication tự
@@ -389,9 +355,9 @@ fn map1_zombie_spawn_points() -> &'static Vec<(Vec3, f32)> {
 /// học Map 1 đổi. Cùng tinh thần "Rust tính, RON lưu kết quả" như
 /// `map1_level_pieces_computed`/`level_pieces_to_ron`.
 ///
-/// 7 điểm/tầng, chọn thủ công để CHẮC CHẮN né cả 2 lỗ giếng thang (mỗi lỗ
-/// rộng `TOWER_STAIR_WIDTH` quanh `TOWER_SHAFT_X`/`FIRE_ESCAPE_SHAFT_X`,
-/// dài `simple_ramp_stacked_half_len()*2` quanh `MAP1_STAIR_SHAFT_Z`) —
+/// 7 điểm/tầng, chọn thủ công để CHẮC CHẮN né lỗ giếng thang (rộng
+/// `TOWER_STAIR_WIDTH` quanh `TOWER_SHAFT_X`, dài
+/// `simple_ramp_stacked_half_len()*2` quanh `MAP1_STAIR_SHAFT_Z`) —
 /// không phải random/thuật toán tổng quát, vì chỉ có đúng 1 layout tầng
 /// (4 tầng giống hệt nhau) cần tính, làm thuật toán né-lỗ tổng quát cho
 /// đúng 1 layout là phí công hơn liệt kê tay. Hướng nhìn ban đầu (yaw)
@@ -404,7 +370,11 @@ pub fn map1_zombie_spawn_points_computed() -> Vec<(Vec3, f32)> {
     // nếu đổi TOWER_SHAFT_X/TOWER_STAIR_WIDTH/MAP1_RAMP_RUN.
     const OFFSETS: [(f32, f32); 7] = [(0.0, 0.0), (8.0, 8.0), (8.0, -8.0), (-8.0, 8.0), (-8.0, -8.0), (0.0, 8.0), (0.0, -8.0)];
 
-    let floors: [FloorLevel; 4] = [MAP1_B1, MAP1_G, MAP1_F2, MAP1_F3];
+    // TEMP DIAGNOSTIC (2026-09-07): only B1 — matches the 1-big-floor test
+    // in map1_level_pieces_computed (G/F2/F3 don't physically exist right
+    // now, spawning zombies at their elevation would float). Revert to
+    // `[MAP1_B1, MAP1_G, MAP1_F2, MAP1_F3]` once done.
+    let floors: [FloorLevel; 1] = [MAP1_B1];
     let mut points = Vec::with_capacity(OFFSETS.len() * floors.len());
     // Vòng ngoài chạy theo OFFSETS, vòng trong theo floors (không phải
     // ngược lại) — để danh sách XEN KẼ theo tầng (B1,G,F2,F3, B1,G,F2,F3,
@@ -416,7 +386,11 @@ pub fn map1_zombie_spawn_points_computed() -> Vec<(Vec3, f32)> {
     // (`random_map1_zombie_spawn_pos`, chọn tầng qua `seed % 4`) đã có.
     for (dx, dz) in OFFSETS {
         for floor in floors {
-            let y = floor.elevation + crate::zombie::ZOMBIE_RADIUS + crate::zombie::ZOMBIE_LENGTH / 2.0;
+            const SPAWN_CLEARANCE: f32 = 0.1;
+            let y = floor.elevation
+                + crate::zombie::ZOMBIE_RADIUS
+                + crate::zombie::ZOMBIE_LENGTH / 2.0
+                + SPAWN_CLEARANCE;
             let x = dx;
             let z = MAP1_STAIR_SHAFT_Z + dz;
             // Quay mặt về tâm phòng — atan2(-dx, -dz) khớp quy ước
@@ -473,21 +447,13 @@ pub fn campaign_zombie_spawn_pos(map_id: u8, seed: usize) -> (Vec3, f32) {
 // `crates/server/src/main.rs`'s `spawn_zombie_navmesh`.
 //
 // Layer indices: 0..=3 are the 4 floors (B1,G,F2,F3, same order as
-// `[MAP1_B1, MAP1_G, MAP1_F2, MAP1_F3]` elsewhere in this file), 4..=9
-// are the 6 ramps (main+fire-escape for each of the 3 floor pairs, in
-// `MAP1_RAMPS`' own order below).
+// `[MAP1_B1, MAP1_G, MAP1_F2, MAP1_F3]` elsewhere in this file), 4..=6
+// are the 3 ramps (1 per floor pair, in `MAP1_RAMPS`' own order below).
 
 /// (floor pair index, shaft X) for every ramp in the building — same 3
 /// floor-to-floor connections `map1_level_pieces_computed` already builds
-/// visually, times 2 shafts (main + fire escape) each.
-const MAP1_RAMPS: [(usize, usize, f32); 6] = [
-    (0, 1, TOWER_SHAFT_X),
-    (0, 1, FIRE_ESCAPE_SHAFT_X),
-    (1, 2, TOWER_SHAFT_X),
-    (1, 2, FIRE_ESCAPE_SHAFT_X),
-    (2, 3, TOWER_SHAFT_X),
-    (2, 3, FIRE_ESCAPE_SHAFT_X),
-];
+/// visually.
+const MAP1_RAMPS: [(usize, usize, f32); 3] = [(0, 1, TOWER_SHAFT_X), (1, 2, TOWER_SHAFT_X), (2, 3, TOWER_SHAFT_X)];
 
 /// 1 navmesh layer's world-space placement + boundary, generic over
 /// "floor" or "ramp" — the caller (server) turns `outer_world`/
@@ -547,7 +513,7 @@ fn map1_hole_corners_world(shaft_x: f32, elevation: f32) -> Vec<Vec3> {
     ]
 }
 
-/// All 10 navmesh layers (4 floors + 6 ramps) + every stitch connecting
+/// All 7 navmesh layers (4 floors + 3 ramps) + every stitch connecting
 /// them, in world space. `crates/server`'s `spawn_zombie_navmesh` is the
 /// only consumer — see this module's own doc comment above for why the
 /// split (pure geometry here, `Triangulation`/`NavMeshSettings` there).
@@ -563,7 +529,7 @@ pub fn map1_navmesh_layers() -> (Vec<Map1NavLayer>, Vec<Map1NavStitch>) {
             // computed's own walls_enclosed() treatment of it).
             Vec::new()
         } else {
-            vec![map1_hole_corners_world(TOWER_SHAFT_X, floor.elevation), map1_hole_corners_world(FIRE_ESCAPE_SHAFT_X, floor.elevation)]
+            vec![map1_hole_corners_world(TOWER_SHAFT_X, floor.elevation)]
         };
         layers.push(Map1NavLayer {
             translation: Vec3::new(0.0, floor.elevation, MAP1_STAIR_SHAFT_Z),
@@ -656,13 +622,6 @@ mod regenerate_spawns {
 /// mốc "chân cầu thang xoắn ốc" cũ (LOBBY_STAIRCASE_POS/
 /// F2_STAIRCASE_POS...) đã dùng.
 pub const TOWER_SHAFT_X: f32 = 6.0;
-/// Thang thoát hiểm (Fire Escape, xem GDD/`docs/maps/map01_highrise.md`
-/// mục "Mái nhà & Lối thoát hiểm") — 1 giếng thang RIÊNG, chạy song song
-/// với thang chính, phía bên Tây tòa nhà (đối xứng X qua tâm). Cùng chiều
-/// dài/độ dốc/dải Z với thang chính (`simple_ramp_stacked` dùng chung cho
-/// cả 2, chỉ khác shaft_x) nên `floor_slab_with_two_holes` đục được cả 2
-/// lỗ cùng lúc mà không cần tính lại dải Z riêng.
-pub const FIRE_ESCAPE_SHAFT_X: f32 = -TOWER_SHAFT_X;
 /// Bề rộng lối đi (không có tường/lan can 2 bên — đơn giản hoá theo yêu
 /// cầu, chỉ có sàn).
 pub const TOWER_STAIR_WIDTH: f32 = 3.0;
@@ -782,48 +741,66 @@ pub const fn simple_stairwell_half_len() -> f32 {
 /// hằng số đo đạc (docs/maps/*) đổi — xem level_piece.rs's module doc
 /// comment cho lý do tách RON ra khỏi việc tính toán.
 pub fn map1_level_pieces_computed() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
-    let pieces: Vec<BoxPiece> = Vec::new();
+    // TEMP DIAGNOSTIC (2026-09-07): 1 pillar dead center of the 1-big-floor
+    // navmesh test — Arena's navmesh always has 8 pillar obstacles carved
+    // into it (NavmeshUpdaterPlugin::<Collider, ArenaObstacle>) and works
+    // fine; this test map had ZERO obstacles and its navmesh.transformed_
+    // path() returned waypoints pointing at roughly the mesh's own center
+    // instead of the real target (confirmed via server log, not navmesh
+    // vs Arena's construction — those are now byte-identical). Testing
+    // whether a mesh with at least 1 real obstacle (matching Arena's
+    // shape more closely) avoids the bug. The matching ArenaObstacle-
+    // tagged collider (for the auto-navmesh carve) is spawned separately
+    // in server::spawn_zombie_navmesh's Campaign(1) branch — this is just
+    // the visual + walk-blocking collider via the normal level-piece path.
+    let pieces: Vec<BoxPiece> = vec![(Vec3::new(0.0, 2.0, MAP1_STAIR_SHAFT_Z), Quat::IDENTITY, Vec3::new(1.5, 4.0, 1.5), [0.55, 0.5, 0.45], 0.8)];
     let mut panels: Vec<PanelPiece> = Vec::new();
     let floor_color = [0.5, 0.5, 0.52];
+    #[allow(unused_variables)]
     let wall_color = [0.6, 0.58, 0.55];
+    #[allow(unused_variables)]
     let stair_color = [0.45, 0.43, 0.4];
-    // Đỏ cam cảnh báo — khớp màu sơn/biển báo thang thoát hiểm thật ngoài
-    // đời, giúp người chơi phân biệt ngay với thang chính (màu xám trung
-    // tính ở trên) chỉ bằng mắt.
-    let fire_escape_color = [0.75, 0.25, 0.15];
 
-    // B1 Garage — ground floor: solid slab (nothing below to cut a
-    // stairwell hole for), walls fully enclosed (the only way up is the
-    // stairwell hole in G's floor above, not a wall gap).
-    let (c, sx, sz) = MAP1_B1.floor_slab();
+    // TEMP DIAGNOSTIC (2026-09-07): all 4 floors + walls + stairs
+    // commented out, replaced with ONE big flat floor (no walls at all) —
+    // "map 1 và 2 dùng chung hàm move_zombies nên phải giống nhau chứ" —
+    // testing whether Map 1's navmesh behaves the same as Arena's once
+    // it's reduced to the exact same shape of navmesh (1 simple flat
+    // layer, no stitches — see the matching temp swap in
+    // server::spawn_zombie_navmesh / client::sync_client_navmesh's
+    // Campaign(1) branches). Revert to the loop below once done.
+    let (c, sx, sz) = (Vec3::new(0.0, -ARENA_WALL_THICKNESS / 2.0, MAP1_STAIR_SHAFT_Z), 40.0, 40.0);
     panels.push(floor_panel(c, sx, sz, ARENA_WALL_THICKNESS, floor_color, 0.85));
-    for (c, sx, sz) in MAP1_B1.walls_enclosed() {
-        panels.push(wall_panel(c, sx, sz, MAP1_B1.wall_height, wall_color, 0.75));
-    }
 
-    // G / F2 / F3 — each stacks DIRECTLY on the floor below (same X/Z
-    // footprint, see MAP1_B1..MAP1_F3's own doc comment for why this
-    // replaced the earlier Z-offset layout): floor slab has a stairwell
-    // hole cut in it, walls fully enclosed, connected down to the floor
-    // below by simple_stairwell's real 2-flight stair + landing.
-    for (level, below) in [(MAP1_G, MAP1_B1), (MAP1_F2, MAP1_G), (MAP1_F3, MAP1_F2)] {
-        for (c, sx, sz) in level.floor_slab_with_two_holes(
-            TOWER_SHAFT_X,
-            FIRE_ESCAPE_SHAFT_X,
-            MAP1_STAIR_SHAFT_Z,
-            TOWER_STAIR_WIDTH / 2.0,
-            simple_ramp_stacked_half_len(),
-        ) {
-            panels.push(floor_panel(c, sx, sz, ARENA_WALL_THICKNESS, floor_color, 0.85));
-        }
-        for (c, sx, sz) in level.walls_enclosed() {
-            panels.push(wall_panel(c, sx, sz, level.wall_height, wall_color, 0.75));
-        }
-        let (center, rotation, size) = simple_ramp_stacked(TOWER_SHAFT_X, MAP1_STAIR_SHAFT_Z, &below, &level);
-        panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stair_color, 0.9));
-        let (center, rotation, size) = simple_ramp_stacked(FIRE_ESCAPE_SHAFT_X, MAP1_STAIR_SHAFT_Z, &below, &level);
-        panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, fire_escape_color, 0.9));
-    }
+    // // B1 Garage — ground floor: solid slab (nothing below to cut a
+    // // stairwell hole for), walls fully enclosed (the only way up is the
+    // // stairwell hole in G's floor above, not a wall gap).
+    // let (c, sx, sz) = MAP1_B1.floor_slab();
+    // panels.push(floor_panel(c, sx, sz, ARENA_WALL_THICKNESS, floor_color, 0.85));
+    // for (c, sx, sz) in MAP1_B1.walls_enclosed() {
+    //     panels.push(wall_panel(c, sx, sz, MAP1_B1.wall_height, wall_color, 0.75));
+    // }
+    //
+    // // G / F2 / F3 — each stacks DIRECTLY on the floor below (same X/Z
+    // // footprint, see MAP1_B1..MAP1_F3's own doc comment for why this
+    // // replaced the earlier Z-offset layout): floor slab has a stairwell
+    // // hole cut in it, walls fully enclosed, connected down to the floor
+    // // below by simple_stairwell's real 2-flight stair + landing.
+    // for (level, below) in [(MAP1_G, MAP1_B1), (MAP1_F2, MAP1_G), (MAP1_F3, MAP1_F2)] {
+    //     for (c, sx, sz) in level.floor_slab_with_hole(
+    //         TOWER_SHAFT_X,
+    //         MAP1_STAIR_SHAFT_Z,
+    //         TOWER_STAIR_WIDTH / 2.0,
+    //         simple_ramp_stacked_half_len(),
+    //     ) {
+    //         panels.push(floor_panel(c, sx, sz, ARENA_WALL_THICKNESS, floor_color, 0.85));
+    //     }
+    //     for (c, sx, sz) in level.walls_enclosed() {
+    //         panels.push(wall_panel(c, sx, sz, level.wall_height, wall_color, 0.75));
+    //     }
+    //     let (center, rotation, size) = simple_ramp_stacked(TOWER_SHAFT_X, MAP1_STAIR_SHAFT_Z, &below, &level);
+    //     panels.push(ramp_panel(center, rotation, size.x, size.y, size.z, stair_color, 0.9));
+    // }
 
     (pieces, panels)
 }

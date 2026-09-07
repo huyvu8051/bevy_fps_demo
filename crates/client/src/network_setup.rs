@@ -789,13 +789,13 @@ pub(crate) fn map_select_button(
         match scenario.map_kind() {
             MapKind::ItemGallery => {
                 let (pieces, panels) = shared::item_gallery_level_pieces();
-                spawn_level_pieces(&mut commands, pieces, panels);
+                spawn_level_pieces(&mut commands, pieces, panels, false);
                 spawn_item_gallery_test_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
                 spawn_item_gallery_zombie_showcase(&mut commands, &asset_server);
             }
             MapKind::Campaign(map_id) => {
                 let (pieces, panels) = shared::campaign_level_pieces(map_id);
-                spawn_level_pieces(&mut commands, pieces, panels);
+                spawn_level_pieces(&mut commands, pieces, panels, true);
             }
             MapKind::Arena => {
                 spawn_test_arena(&mut commands, &mut meshes, &mut materials, scenario.map_id());

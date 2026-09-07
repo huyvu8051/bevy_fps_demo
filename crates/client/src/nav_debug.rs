@@ -153,38 +153,30 @@ fn sync_client_navmesh(mut commands: Commands, existing: Query<Entity, With<Mana
             ));
         }
         shared::MapKind::Campaign(1) if existing_count == 0 => {
-            // Exact mirror of server/main.rs's spawn_zombie_navmesh
-            // Campaign(1) branch — see its own comment for why this is a
-            // duplicate rather than a shared helper (client/server are
-            // separate binaries; crates/shared deliberately doesn't
-            // depend on vleue_navigator).
-            let (layers, stitches) = shared::map1_navmesh_layers();
-            for (index, layer) in layers.iter().enumerate() {
-                let index = index as u8;
-                let to_local = |p: Vec3| shared::map1_world_to_layer_local(layer.translation, layer.rotation, p);
-                let mut fixed = Triangulation::from_outer_edges(&layer.outer_world.iter().map(|&p| to_local(p)).collect::<Vec<_>>());
-                if !layer.holes_world.is_empty() {
-                    fixed.add_obstacles(layer.holes_world.iter().map(|hole| hole.iter().map(|&p| to_local(p)).collect::<Vec<_>>()));
-                }
-                let layer_stitches: Vec<((u8, u8), [Vec2; 2])> = stitches
-                    .iter()
-                    .filter(|s| s.from == index || s.to == index)
-                    .map(|s| ((s.from, s.to), [to_local(s.points_world[0]), to_local(s.points_world[1])]))
-                    .collect();
-                commands.spawn((
-                    ManagedNavMesh::single(),
-                    NavMeshSettings {
-                        fixed,
-                        layer: Some(index),
-                        stitches: layer_stitches,
-                        build_timeout: Some(shared::ARENA_NAVMESH_BUILD_TIMEOUT_SECS),
-                        agent_radius: shared::ARENA_NAVMESH_AGENT_RADIUS,
-                        ..default()
-                    },
-                    NavMeshUpdateMode::Direct,
-                    Transform::from_translation(layer.translation).with_rotation(layer.rotation),
-                ));
-            }
+            // TEMP DIAGNOSTIC (2026-09-07): mirrors the temp swap in
+            // server/main.rs's spawn_zombie_navmesh Campaign(1) branch —
+            // 1 simple flat single-layer navmesh instead of the real
+            // multi-layer one, see that fn's own comment for why. Revert
+            // together with it once done.
+            let half = 20.0;
+            let cz = shared::MAP1_STAIR_SHAFT_Z;
+            commands.spawn((
+                ManagedNavMesh::single(),
+                NavMeshSettings {
+                    fixed: Triangulation::from_outer_edges(&[
+                        Vec2::new(-half, cz - half),
+                        Vec2::new(half, cz - half),
+                        Vec2::new(half, cz + half),
+                        Vec2::new(-half, cz + half),
+                    ]),
+                    simplify: shared::ARENA_NAVMESH_SIMPLIFY,
+                    build_timeout: Some(shared::ARENA_NAVMESH_BUILD_TIMEOUT_SECS),
+                    agent_radius: shared::ARENA_NAVMESH_AGENT_RADIUS,
+                    ..default()
+                },
+                NavMeshUpdateMode::Direct,
+                navmesh_plane(),
+            ));
         }
         shared::MapKind::Arena | shared::MapKind::Campaign(1) => {} // already spawned this map, nothing to do
         _ => {

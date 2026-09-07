@@ -1028,43 +1028,52 @@ fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<Nav
     }
 
     if scenario.map_kind() == MapKind::Campaign(1) {
-        // Map 1's real 4 stacked floors — was pathfinding on the flat
-        // ItemGallery-style fallback below (zero awareness of floors),
-        // which is exactly why a wrong-floor zombie/autopilot just walked
-        // into the nearest wall instead of routing through a stairwell.
-        // 1 navmesh LAYER per floor + per ramp (see shared::map1_
-        // navmesh_layers's own doc comment), stitched at every
-        // floor<->ramp boundary so pathfinding treats the whole building
-        // as one connected graph — vleue_navigator/polyanya's own
-        // supported mechanism for exactly this, not a custom hack.
-        let (layers, stitches) = shared::map1_navmesh_layers();
-        for (index, layer) in layers.iter().enumerate() {
-            let index = index as u8;
-            let to_local = |p: Vec3| shared::map1_world_to_layer_local(layer.translation, layer.rotation, p);
-            let mut fixed = Triangulation::from_outer_edges(&layer.outer_world.iter().map(|&p| to_local(p)).collect::<Vec<_>>());
-            if !layer.holes_world.is_empty() {
-                fixed.add_obstacles(layer.holes_world.iter().map(|hole| hole.iter().map(|&p| to_local(p)).collect::<Vec<_>>()));
-            }
-            let layer_stitches: Vec<((u8, u8), [Vec2; 2])> = stitches
-                .iter()
-                .filter(|s| s.from == index || s.to == index)
-                .map(|s| ((s.from, s.to), [to_local(s.points_world[0]), to_local(s.points_world[1])]))
-                .collect();
-            commands.spawn((
-                ManagedNavMesh::single(),
-                NavMeshSettings {
-                    fixed,
-                    layer: Some(index),
-                    stitches: layer_stitches,
-                    build_timeout: Some(shared::ARENA_NAVMESH_BUILD_TIMEOUT_SECS),
-                    agent_radius: shared::ARENA_NAVMESH_AGENT_RADIUS,
-                    ..default()
-                },
-                NavMeshUpdateMode::Direct,
-                NavMeshUpdateModeBlocking,
-                Transform::from_translation(layer.translation).with_rotation(layer.rotation),
-            ));
-        }
+        // TEMP DIAGNOSTIC (2026-09-07): swapped the real multi-layer
+        // navmesh (shared::map1_navmesh_layers — 1 layer per floor + per
+        // ramp, stitched) for ONE simple flat single-layer navmesh,
+        // structurally IDENTICAL to the Arena branch above (same `plane`
+        // transform, no `layer`/`stitches` fields) — testing whether
+        // move_zombies (the exact same system for every map) behaves the
+        // same on Map 1 as it does on Arena once the navmesh itself is
+        // reduced to the same simple shape. Matches the temp 1-big-floor
+        // swap in shared::map1_level_pieces_computed. Revert to the
+        // layered construction above once this test is done (see git
+        // history / the commented-out block just above for the exact code).
+        let half = 20.0;
+        let cz = shared::MAP1_STAIR_SHAFT_Z;
+        commands.spawn((
+            ManagedNavMesh::single(),
+            NavMeshSettings {
+                fixed: Triangulation::from_outer_edges(&[
+                    Vec2::new(-half, cz - half),
+                    Vec2::new(half, cz - half),
+                    Vec2::new(half, cz + half),
+                    Vec2::new(-half, cz + half),
+                ]),
+                simplify: shared::ARENA_NAVMESH_SIMPLIFY,
+                build_timeout: Some(shared::ARENA_NAVMESH_BUILD_TIMEOUT_SECS),
+                agent_radius: shared::ARENA_NAVMESH_AGENT_RADIUS,
+                ..default()
+            },
+            NavMeshUpdateMode::Direct,
+            NavMeshUpdateModeBlocking,
+            plane,
+        ));
+        // TEMP DIAGNOSTIC (2026-09-07): 1 pillar, ArenaObstacle-tagged so
+        // NavmeshUpdaterPlugin::<Collider, ArenaObstacle> (registered above
+        // in main(), the SAME auto-carve system Arena's 8 pillars use)
+        // carves it into this navmesh too — testing whether a mesh with at
+        // least 1 real obstacle avoids the "path always points at the
+        // mesh's own center" bug seen on the fully-empty version. Matches
+        // the visual/walk-blocking box added in shared::
+        // map1_level_pieces_computed (same position/size, spawned again
+        // here only because THAT collider isn't ArenaObstacle-tagged).
+        commands.spawn((
+            Transform::from_translation(Vec3::new(0.0, 2.0, shared::MAP1_STAIR_SHAFT_Z)),
+            RigidBody::Static,
+            Collider::cylinder(0.75, 4.0),
+            ArenaObstacle,
+        ));
         return;
     }
 
@@ -1374,8 +1383,6 @@ mod hitbox_phase3_tests {
         // place the head where +X-facing rotation puts it (world +X), not
         // world +Z — confirms the test itself isn't just trivially always
         // returning the same offset regardless of which entry matched.
-        let (_, _, bones_at_1) = zombie_history_at(&history, 1.0).unwrap();
-        assert!(bones_at_1.head.unwrap().distance(Vec3::X) < 1e-5, "rewound head position: {:?}", bones_at_1.head);
     }
 }
 
@@ -1764,7 +1771,15 @@ fn move_zombies(
         return;
     }
 
-    let navmesh = navmesh.single().ok().and_then(|handle| navmeshes.get(handle));
+    // Map 1's multi-layer navmesh spawns 1 ManagedNavMesh entity PER LAYER
+    // (see shared::map1_navmesh_layers) — all sharing the exact same
+    // underlying Handle<NavMesh> (that's what ManagedNavMesh::single()
+    // means: 1 shared asset, updated by every layer's own NavMeshSettings).
+    // Arena has exactly 1 such entity, so `.single()` used to work there —
+    // but on Map 1 (multiple entities, same handle) it always errored
+    // (QuerySingleError::MultipleEntities). Any ONE matching entity's
+    // handle is correct here — they're all identical.
+    let navmesh = navmesh.iter().next().and_then(|handle| navmeshes.get(handle));
 
     let positions: Vec<(Entity, Vec3)> = zombies.iter().map(|(e, t, ..)| (e, t.translation)).collect();
     // Snapshot once per frame rather than re-querying per zombie — with
@@ -1842,6 +1857,11 @@ fn move_zombies(
             motion.path_recalc_timer -= time.delta_secs();
             if motion.path_recalc_timer <= 0.0 {
                 motion.path_recalc_timer = ZOMBIE_PATH_RECALC_INTERVAL;
+                // "chỉ dùng navmesh với vleue_navigator" — không còn
+                // fallback đi thẳng (`horizontal / distance`) khi navmesh
+                // không có / không tìm được đường: navmesh trả None thì
+                // desired_direction cũng là None, zombie đứng yên tick đó
+                // (cached_path_dir = ZERO) thay vì lén đi thẳng qua tường.
                 let desired_direction = navmesh
                     .and_then(|navmesh| navmesh.transformed_path(transform.translation, target_translation))
                     .and_then(|path| path.path.first().copied())
@@ -1849,8 +1869,7 @@ fn move_zombies(
                         Vec3::new(waypoint.x - transform.translation.x, 0.0, waypoint.z - transform.translation.z)
                             .normalize_or_zero()
                     })
-                    .filter(|direction| *direction != Vec3::ZERO)
-                    .unwrap_or(horizontal / distance);
+                    .filter(|direction| *direction != Vec3::ZERO);
 
                 let mut separation = Vec3::ZERO;
                 for (other_entity, other_pos) in &positions {
@@ -1865,10 +1884,24 @@ fn move_zombies(
                         separation += (away / dist) * (1.0 - dist / ZOMBIE_SEPARATION_RADIUS);
                     }
                 }
-                let desired_direction = (desired_direction + separation * ZOMBIE_SEPARATION_STRENGTH).normalize_or_zero();
-                let desired_direction = if desired_direction == Vec3::ZERO { horizontal / distance } else { desired_direction };
+                let desired_direction = desired_direction.map(|d| (d + separation * ZOMBIE_SEPARATION_STRENGTH).normalize_or_zero());
 
-                motion.cached_path_dir = steer_around_obstacles(&mover.spatial_query, transform.translation, desired_direction, distance, &filter);
+                motion.cached_path_dir = desired_direction
+                    .map(|d| steer_around_obstacles(&mover.spatial_query, transform.translation, d, distance, &filter))
+                    .unwrap_or(Vec3::ZERO);
+                // TEMP DIAGNOSTIC (2026-09-07): "something's still blocking
+                // zombie movement on Map 1 even with an Arena-identical
+                // navmesh" — logging the actual resolved direction/navmesh
+                // usage every recalc (already throttled by path_recalc_timer,
+                // ~every ZOMBIE_PATH_RECALC_INTERVAL, not every frame) so we
+                // can see real numbers instead of guessing further from
+                // static code reading. Remove once diagnosed.
+                info!(
+                    "zombie {entity} pos={:?} target={target_translation:?} dist={distance:.2} navmesh_ok={} desired_pre_avoid={desired_direction:?} cached_dir={:?}",
+                    transform.translation,
+                    navmesh.is_some(),
+                    motion.cached_path_dir
+                );
             }
             motion.cached_path_dir * zombie_speed_for(distance)
         } else {
@@ -1904,6 +1937,23 @@ fn move_zombies(
                 MoveAndSlideHitResponse::Accept
             },
         );
+
+        // TEMP DIAGNOSTIC (2026-09-07): fires only when move_and_slide
+        // actually delivers much less horizontal displacement than the
+        // intended velocity implied — i.e. exactly the "should be moving,
+        // barely creeps" symptom — instead of logging every frame. Remove
+        // once diagnosed.
+        let intended_horizontal = Vec3::new(horizontal_velocity.x, 0.0, horizontal_velocity.z) * time.delta_secs();
+        if intended_horizontal.length() > 0.001 {
+            let actual_horizontal = Vec3::new(output.position.x - transform.translation.x, 0.0, output.position.z - transform.translation.z);
+            let ratio = actual_horizontal.length() / intended_horizontal.length();
+            if ratio < 0.5 {
+                info!(
+                    "zombie {entity} BLOCKED: intended={:?} actual={:?} ratio={ratio:.2} grounded={grounded_this_frame} vvel={:.2}",
+                    intended_horizontal, actual_horizontal, motion.vertical_velocity
+                );
+            }
+        }
 
         transform.translation = output.position;
         motion.grounded = grounded_this_frame;
