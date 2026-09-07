@@ -348,40 +348,80 @@ pub fn small_room_walls(center: (f32, f32), half: Vec3, base_y: f32, door: RoomD
     }
 }
 
-/// Rải 1 điểm spawn zombie lên 1 TRONG 4 TẦNG THẬT của Map 1, thay vì mù
-/// quáng dùng lại lưới của arena phẳng cũ (`shared::zombie::
-/// random_zombie_spawn_pos`, dựa trên `ARENA_HALF_SIZE=36` — không liên
-/// quan gì tới B1/G/F2/F3, khiến phần lớn zombie rơi vào khoảng trống
-/// giữa các tầng, xem map1 coordinate audit). Cùng cách R2
-/// low-discrepancy `random_zombie_spawn_pos` đã dùng (deterministic theo
-/// `seed`, không cần crate `rand`) — chỉ khác là CHỌN TẦNG trước (round-
-/// robin theo `seed % 4`) rồi mới rải trong đúng biên tầng đó.
-pub fn random_map1_zombie_spawn_pos(seed: usize) -> Vec3 {
-    const INV_G: f32 = 0.754_877_7; // 1/g, g = plastic number (R2 sequence)
-    const INV_G2: f32 = 0.569_840_3; // 1/g^2
-    // Lùi vào trong 1 chút so với tường, tránh spawn dính luôn vào tường/
-    // góc phòng — cùng tinh thần "half = ARENA_HALF_SIZE - 3.0" bên
-    // random_zombie_spawn_pos, chỉ nhỏ hơn vì các tầng Map 1 hẹp hơn
-    // nhiều so với arena test 72×72m.
-    const WALL_INSET: f32 = 2.0;
-
-    let floors: [FloorLevel; 4] = [MAP1_B1, MAP1_G, MAP1_F2, MAP1_F3];
-    let floor = floors[seed % floors.len()];
-    // Seed riêng cho chuỗi R2 TRONG tầng đó — nếu dùng thẳng `seed` thì 4
-    // tầng sẽ lặp lại đúng 1/4 số điểm trong chuỗi chung, dễ trùng cụm;
-    // chia cho số tầng để mỗi tầng có chuỗi rải đều của riêng nó.
-    let in_floor_seed = (seed / floors.len()) as f32;
-
-    let half_x = (floor.half_size_x - WALL_INSET).max(0.5);
-    let half_z = (floor.half_size_z - WALL_INSET).max(0.5);
-    let x = (-1.0 + 2.0 * (in_floor_seed * INV_G).fract()) * half_x;
-    let z = floor.center_z() + (-1.0 + 2.0 * (in_floor_seed * INV_G2).fract()) * half_z;
-    let y = floor.elevation + crate::zombie::ZOMBIE_RADIUS + crate::zombie::ZOMBIE_LENGTH / 2.0;
-    Vec3::new(x, y, z)
+/// (position, yaw radians) — 1 điểm spawn zombie ĐÃ ĐƯỢC KIỂM CHỨNG AN
+/// TOÀN, đọc từ `crates/client/assets/data/map1_zombie_spawns.ron`.
+///
+/// Trước đây hàm này (`random_map1_zombie_spawn_pos`) rải ngẫu nhiên theo
+/// R2 low-discrepancy trong biên NGOÀI của cả tầng — an toàn hồi tầng còn
+/// là 1 sàn phẳng liền mạch, nhưng từ khi tầng chồng thật xuyên giếng
+/// thang (`floor_slab_with_two_holes`, có LỖ THẬT giữa sàn), random thuần
+/// theo biên ngoài có thể rơi trúng lỗ — zombie spawn giữa không trung,
+/// không có sàn bên dưới nên không rơi xuống (zombie không có RigidBody
+/// vật lý thật, xem `spawn_zombies` — di chuyển do AI/replication tự
+/// set Transform, không phải do gravity mô phỏng). Bug này báo trực tiếp
+/// trong lúc chơi thật ("zombie bị spawn trên trời và không rơi xuống").
+///
+/// Sửa bằng cách bỏ hẳn việc TÍNH TOÁN vị trí lúc runtime — thay bằng 1
+/// danh sách vị trí CỐ ĐỊNH, đã kiểm chứng nằm trên sàn thật (tránh cả 2
+/// giếng thang), đọc từ RON. Vẫn giữ tính "seed xoay vòng" (cùng 1 seed
+/// luôn ra cùng 1 điểm, seed tăng dần đi hết danh sách rồi quay lại đầu)
+/// — chỉ khác nguồn dữ liệu, không đổi cách gọi ở server/main.rs.
+pub fn map1_zombie_spawn_pos(seed: usize) -> (Vec3, f32) {
+    let points = map1_zombie_spawn_points();
+    points[seed % points.len()]
 }
 
-/// `MapKind::Campaign(map_id)` counterpart to `random_map1_zombie_spawn_pos`
-/// — same generalization relationship as `campaign_level_pieces` has to
+/// Đọc + cache `map1_zombie_spawns.ron` — mỗi dòng `(x, y, z, yaw_rad)`.
+fn map1_zombie_spawn_points() -> &'static Vec<(Vec3, f32)> {
+    static DATA: std::sync::OnceLock<Vec<(Vec3, f32)>> = std::sync::OnceLock::new();
+    DATA.get_or_init(|| {
+        let text = crate::read_ron_data_file!("map1_zombie_spawns.ron");
+        let rows: Vec<(f32, f32, f32, f32)> =
+            ron::de::from_str(&text).unwrap_or_else(|e| panic!("failed to parse map1_zombie_spawns.ron: {e}"));
+        rows.into_iter().map(|(x, y, z, yaw)| (Vec3::new(x, y, z), yaw)).collect()
+    })
+}
+
+/// Tính toán tham số hoá danh sách spawn point an toàn cho `map1_zombie_
+/// spawns.ron` — KHÔNG phải đường chạy chính lúc chơi game (đó là `map1_
+/// zombie_spawn_pos`, đọc RON), chỉ được `regenerate_map1_zombie_spawns_
+/// ron` (test dưới, `--ignored`) gọi để (tái) sinh file RON mỗi khi hình
+/// học Map 1 đổi. Cùng tinh thần "Rust tính, RON lưu kết quả" như
+/// `map1_level_pieces_computed`/`level_pieces_to_ron`.
+///
+/// 7 điểm/tầng, chọn thủ công để CHẮC CHẮN né cả 2 lỗ giếng thang (mỗi lỗ
+/// rộng `TOWER_STAIR_WIDTH` quanh `TOWER_SHAFT_X`/`FIRE_ESCAPE_SHAFT_X`,
+/// dài `simple_ramp_stacked_half_len()*2` quanh `MAP1_STAIR_SHAFT_Z`) —
+/// không phải random/thuật toán tổng quát, vì chỉ có đúng 1 layout tầng
+/// (4 tầng giống hệt nhau) cần tính, làm thuật toán né-lỗ tổng quát cho
+/// đúng 1 layout là phí công hơn liệt kê tay. Hướng nhìn ban đầu (yaw)
+/// quay mặt vào tâm phòng — chỉ mang tính thẩm mỹ lúc vừa spawn, AI
+/// (`ChaseAction`) ghi đè hướng thật ngay khi phát hiện người chơi.
+pub fn map1_zombie_spawn_points_computed() -> Vec<(Vec3, f32)> {
+    // Cách tâm (0, MAP1_STAIR_SHAFT_Z) đủ xa để không dính cả 2 lỗ dù ở
+    // cạnh nào: |x|=8 > TOWER_SHAFT_X(6) + TOWER_STAIR_WIDTH/2(1.5) =
+    // 7.5, và |z|=8 > simple_ramp_stacked_half_len()(3.0) — kiểm tra lại
+    // nếu đổi TOWER_SHAFT_X/TOWER_STAIR_WIDTH/MAP1_RAMP_RUN.
+    const OFFSETS: [(f32, f32); 7] = [(0.0, 0.0), (8.0, 8.0), (8.0, -8.0), (-8.0, 8.0), (-8.0, -8.0), (0.0, 8.0), (0.0, -8.0)];
+
+    let floors: [FloorLevel; 4] = [MAP1_B1, MAP1_G, MAP1_F2, MAP1_F3];
+    let mut points = Vec::with_capacity(OFFSETS.len() * floors.len());
+    for floor in floors {
+        let y = floor.elevation + crate::zombie::ZOMBIE_RADIUS + crate::zombie::ZOMBIE_LENGTH / 2.0;
+        for (dx, dz) in OFFSETS {
+            let x = dx;
+            let z = MAP1_STAIR_SHAFT_Z + dz;
+            // Quay mặt về tâm phòng — atan2(-dx, -dz) khớp quy ước
+            // Quat::from_rotation_y (yaw=0 nhìn về -Z, xem movement.rs).
+            let yaw = (-dx).atan2(-dz);
+            points.push((Vec3::new(x, y, z), yaw));
+        }
+    }
+    points
+}
+
+/// `MapKind::Campaign(map_id)` counterpart to `map1_zombie_spawn_pos` —
+/// same generalization relationship as `campaign_level_pieces` has to
 /// `map1_level_pieces` above. This is ONLY the sandbox-style "scatter
 /// baseline population" spawn (`ZOMBIE_SPAWNS`-equivalent) — real campaign
 /// play should use the scripted wave system instead (see
@@ -391,9 +431,9 @@ pub fn random_map1_zombie_spawn_pos(seed: usize) -> Vec3 {
 /// editor, manual `SetZombieCount`) before their real wave data exists.
 /// Only `map_id: 1` has real floor bounds to scatter within; any other id
 /// panics — same reasoning as `campaign_level_pieces`' panic branch.
-pub fn campaign_zombie_spawn_pos(map_id: u8, seed: usize) -> Vec3 {
+pub fn campaign_zombie_spawn_pos(map_id: u8, seed: usize) -> (Vec3, f32) {
     if map_id == 1 {
-        return random_map1_zombie_spawn_pos(seed);
+        return map1_zombie_spawn_pos(seed);
     }
     panic!(
         "no sandbox zombie spawn bounds for campaign map_id {map_id} — \
@@ -401,6 +441,29 @@ pub fn campaign_zombie_spawn_pos(map_id: u8, seed: usize) -> Vec3 {
          data (docs/ZOMBIE_SPAWN_SYSTEM.md) before real play anyway, not a \
          sandbox scatter fallback"
     )
+}
+
+#[cfg(test)]
+mod regenerate_spawns {
+    use super::*;
+
+    /// `cargo test -p shared regenerate_map1_zombie_spawns_ron -- --ignored --nocapture`
+    /// — re-derives `map1_zombie_spawns.ron` from `map1_zombie_spawn_
+    /// points_computed()`, same pattern as `level_piece::regenerate::
+    /// regenerate_level_piece_ron`. Run after changing Map 1's floor
+    /// geometry (footprint size, stairwell shaft positions) so the safe
+    /// spawn points stay actually safe.
+    #[test]
+    #[ignore]
+    fn regenerate_map1_zombie_spawns_ron() {
+        let points = map1_zombie_spawn_points_computed();
+        let rows: Vec<(f32, f32, f32, f32)> = points.iter().map(|(p, yaw)| (p.x, p.y, p.z, *yaw)).collect();
+        let text = ron::ser::to_string_pretty(&rows, ron::ser::PrettyConfig::default().struct_names(false))
+            .expect("serializing map1 zombie spawns to RON");
+        let path = format!("{}/../client/assets/data/map1_zombie_spawns.ron", env!("CARGO_MANIFEST_DIR"));
+        std::fs::write(&path, text).unwrap_or_else(|e| panic!("failed to write {path}: {e}"));
+        println!("wrote {path} ({} points)", rows.len());
+    }
 }
 
 // --- Giếng thang bộ "4 góc cuộn" — nối các tầng CHỒNG THẬT (cùng tâm

@@ -657,10 +657,11 @@ fn run_ai_director(
     // horde well below ground on spawn (same bug ZOMBIE_SPAWNS/
     // ZOMBIE_LOD_REST_HEIGHT already hit — see their own comments).
     let spawn_y = ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0;
-    let spawns: Vec<Vec3> = (0..DIRECTOR_HORDE_SIZE)
+    let spawns: Vec<(Vec3, f32)> = (0..DIRECTOR_HORDE_SIZE)
         .map(|i| {
             let angle = i as f32 / DIRECTOR_HORDE_SIZE as f32 * std::f32::consts::TAU;
-            Vec3::new(center.x + angle.cos() * DIRECTOR_HORDE_SPAWN_RADIUS, spawn_y, center.z + angle.sin() * DIRECTOR_HORDE_SPAWN_RADIUS)
+            let pos = Vec3::new(center.x + angle.cos() * DIRECTOR_HORDE_SPAWN_RADIUS, spawn_y, center.z + angle.sin() * DIRECTOR_HORDE_SPAWN_RADIUS);
+            (pos, 0.0)
         })
         .collect();
     info!("AI Director: sustained calm, spawning a {}-zombie horde near {center}", DIRECTOR_HORDE_SIZE);
@@ -1100,10 +1101,14 @@ struct NextZombieSpawnIndex(usize);
 // manual SetZombieCount) goes through this instead of calling the raw fns
 // directly, so none can drift back to spawning zombies in the void between
 // a campaign map's floors.
-fn zombie_spawn_pos_for(kind: MapKind, seed: usize) -> Vec3 {
+fn zombie_spawn_pos_for(kind: MapKind, seed: usize) -> (Vec3, f32) {
     match kind {
         MapKind::Campaign(map_id) => campaign_zombie_spawn_pos(map_id, seed),
-        MapKind::Arena | MapKind::ItemGallery => random_zombie_spawn_pos(seed),
+        // Arena/ItemGallery's flat single-plane floor has no stairwell
+        // holes to dodge — no per-point yaw data exists for it either
+        // (random_zombie_spawn_pos predates this refactor), so 0.0 (same
+        // "face -Z" default every zombie already spawned facing before).
+        MapKind::Arena | MapKind::ItemGallery => (random_zombie_spawn_pos(seed), 0.0),
     }
 }
 
@@ -1115,8 +1120,8 @@ fn spawn_initial_zombies(
 ) {
     let kind = scenario.map_kind();
     let count = (target.0 as usize).min(ZOMBIE_SPAWNS.len());
-    let positions: Vec<Vec3> = (0..count).map(|seed| zombie_spawn_pos_for(kind, seed)).collect();
-    spawn_zombies(&mut commands, &positions, ZOMBIE_AI_ENABLED, false);
+    let spawns: Vec<(Vec3, f32)> = (0..count).map(|seed| zombie_spawn_pos_for(kind, seed)).collect();
+    spawn_zombies(&mut commands, &spawns, ZOMBIE_AI_ENABLED, false);
     next_spawn_index.0 = count;
 }
 
@@ -1138,11 +1143,11 @@ fn on_set_zombie_count(
     target.0 = trigger.message.0.min(ZOMBIE_SPAWNS.len() as u32);
     let current = baseline_zombies.iter().count() as u32;
     if current < target.0 {
-        let to_spawn: Vec<Vec3> = (0..target.0 - current)
+        let to_spawn: Vec<(Vec3, f32)> = (0..target.0 - current)
             .map(|_| {
-                let pos = zombie_spawn_pos_for(kind, next_spawn_index.0);
+                let spawn = zombie_spawn_pos_for(kind, next_spawn_index.0);
                 next_spawn_index.0 += 1;
-                pos
+                spawn
             })
             .collect();
         spawn_zombies(&mut commands, &to_spawn, ZOMBIE_AI_ENABLED, false);
@@ -1175,7 +1180,7 @@ fn on_set_auto_maintain_zombies(trigger: On<FromClient<SetAutoMaintainZombies>>,
 }
 
 fn spawn_more_zombies(_trigger: On<FromClient<SpawnMoreZombies>>, mut commands: Commands) {
-    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, ZOMBIE_AI_ENABLED, false);
+    spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS), ZOMBIE_AI_ENABLED, false);
 }
 
 // Marks a zombie spawned by run_ai_director as a bonus horde rather than
@@ -1339,66 +1344,85 @@ mod hitbox_phase3_tests {
 // `ai_enabled` used to be the global ZOMBIE_AI_ENABLED const unconditionally
 // — now a per-call flag so normal/stress-test zombies keep the usual global
 // toggle while other call sites can opt out.
-fn spawn_zombies(commands: &mut Commands, spawns: &[Vec3], ai_enabled: bool, director_spawned: bool) {
-    for &spawn_pos in spawns {
-        let mut zombie = commands.spawn_empty();
-        let phase = entity_phase(zombie.id());
-        zombie.insert((
-            Transform::from_translation(spawn_pos),
-            Zombie,
-            // ~1/3-1/3-1/3 Classic/Meshy/Soldier from the same per-entity
-            // hash the path-recalc stagger uses — replicated, so the
-            // client builds the matching mesh (on_zombie_replicated /
-            // on_zombie_kind).
-            zombie_kind_for_phase(phase, ZOMBIE_KIND_WEIGHTS),
-            ZombieMotion {
-                path_recalc_timer: phase * ZOMBIE_PATH_RECALC_INTERVAL,
-                ..default()
-            },
-            KnockbackVelocity::default(),
-            ZombieAttackTimer::default(),
-            NetTransform {
-                translation: spawn_pos,
-                yaw: 0.0,
-                moving: false,
-                sprinting: false,
-            },
-            Health(ZOMBIE_MAX_HEALTH),
-            Replicated,
-            // Raycast-only: no RigidBody, matching how this worked
-            // client-side before zombies moved server-side — avian3d's
-            // spatial queries pick up a bare Collider fine.
-            Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
-            ZombieHistory::default(),
-            // Phase 2 (HITBOX_PLAN.md): populated by wire_zombie_hitbox_bones
-            // (shared, same system the client already ran) once
-            // on_zombie_spawned's child scene finishes loading — real bone
-            // entities for Phase 4's per-bone hit detection, not the
-            // Y-threshold guess zombie_hit_damage_geometric uses today.
-            ZombieHitboxBones::default(),
-            // See ZombiePose's own doc comment (crates/shared) — server now
-            // drives its own real pose transitions instead of sitting
-            // frozen on Idle.
-            ZombiePose::default(),
-            // Needed on the root too, not just the child scene entity — an
-            // InheritedVisibility child under a parent with no Visibility
-            // at all trips Bevy's own B0004 warning every tick.
-            Visibility::default(),
-        ));
-        if ai_enabled {
-            zombie.insert(Thinker::build().picker(FirstToScore { threshold: 0.8 }).when(NearPlayer, ChaseAction));
-        }
-        if director_spawned {
-            zombie.insert(DirectorSpawned);
-        }
+//
+// Split out of what used to be spawn_zombies' own for-loop body (refactor
+// requested directly: 1 single-zombie fn taking position + facing, so any
+// future spawn source — RON-authored points, a scripted wave, a debug
+// command — can spawn exactly 1 zombie without building a throwaway
+// 1-element Vec first). `yaw` is initial facing only (radians, matching
+// NetTransform.yaw/movement.rs's own convention) — purely cosmetic, the
+// AI (ChaseAction) overrides it the moment it actually notices the player.
+fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: bool, director_spawned: bool) {
+    let mut zombie = commands.spawn_empty();
+    let phase = entity_phase(zombie.id());
+    zombie.insert((
+        Transform::from_translation(position).with_rotation(Quat::from_rotation_y(yaw)),
+        Zombie,
+        // ~1/3-1/3-1/3 Classic/Meshy/Soldier from the same per-entity
+        // hash the path-recalc stagger uses — replicated, so the
+        // client builds the matching mesh (on_zombie_replicated /
+        // on_zombie_kind).
+        zombie_kind_for_phase(phase, ZOMBIE_KIND_WEIGHTS),
+        ZombieMotion {
+            path_recalc_timer: phase * ZOMBIE_PATH_RECALC_INTERVAL,
+            ..default()
+        },
+        KnockbackVelocity::default(),
+        ZombieAttackTimer::default(),
+        NetTransform {
+            translation: position,
+            yaw,
+            moving: false,
+            sprinting: false,
+        },
+        Health(ZOMBIE_MAX_HEALTH),
+        Replicated,
+        // Raycast-only: no RigidBody, matching how this worked
+        // client-side before zombies moved server-side — avian3d's
+        // spatial queries pick up a bare Collider fine.
+        Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
+        ZombieHistory::default(),
+        // Phase 2 (HITBOX_PLAN.md): populated by wire_zombie_hitbox_bones
+        // (shared, same system the client already ran) once
+        // on_zombie_spawned's child scene finishes loading — real bone
+        // entities for Phase 4's per-bone hit detection, not the
+        // Y-threshold guess zombie_hit_damage_geometric uses today.
+        ZombieHitboxBones::default(),
+        // See ZombiePose's own doc comment (crates/shared) — server now
+        // drives its own real pose transitions instead of sitting
+        // frozen on Idle.
+        ZombiePose::default(),
+        // Needed on the root too, not just the child scene entity — an
+        // InheritedVisibility child under a parent with no Visibility
+        // at all trips Bevy's own B0004 warning every tick.
+        Visibility::default(),
+    ));
+    if ai_enabled {
+        zombie.insert(Thinker::build().picker(FirstToScore { threshold: 0.8 }).when(NearPlayer, ChaseAction));
     }
+    if director_spawned {
+        zombie.insert(DirectorSpawned);
+    }
+}
+
+fn spawn_zombies(commands: &mut Commands, spawns: &[(Vec3, f32)], ai_enabled: bool, director_spawned: bool) {
+    for &(position, yaw) in spawns {
+        spawn_zombie(commands, position, yaw, ai_enabled, director_spawned);
+    }
+}
+
+// ZOMBIE_SPAWNS (Arena/ItemGallery's flat grid) has no per-point facing
+// data — every call site feeding it into spawn_zombies wants the same
+// "just face -Z" default every zombie there already spawned with.
+fn with_zero_yaw(positions: &[Vec3]) -> Vec<(Vec3, f32)> {
+    positions.iter().map(|&p| (p, 0.0)).collect()
 }
 
 // Scenario::StressTest's Startup spawn — STRESS_TEST_ZOMBIE_COUNT zombies
 // with normal chase AI, taken from the front of the same ZOMBIE_SPAWNS
 // grid the normal game uses.
 fn spawn_stress_test_zombies(mut commands: Commands) {
-    spawn_zombies(&mut commands, &ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT], true, false);
+    spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT]), true, false);
 }
 
 // --- Phase 2 (HITBOX_PLAN.md): real skeleton on every server zombie -------
@@ -2254,10 +2278,10 @@ fn on_request_restart(
     // see spawn_stress_test_zombies/spawn_initial_zombies' own doc comments.
     match *scenario {
         Scenario::Normal => {
-            spawn_zombies(&mut commands, &ZOMBIE_SPAWNS, ZOMBIE_AI_ENABLED, false);
+            spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS), ZOMBIE_AI_ENABLED, false);
         }
         Scenario::StressTest => {
-            spawn_zombies(&mut commands, &ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT], true, false);
+            spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT]), true, false);
         }
         // No zombies/gameplay — pure walk-around scale-reference rig.
         Scenario::ItemGallery => {}
