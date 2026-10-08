@@ -5,6 +5,32 @@ use crate::*;
 #[derive(Resource, Default)]
 pub(crate) struct InspectMode(pub(crate) bool);
 
+#[derive(Resource, Default)]
+pub(crate) struct KillCount(pub(crate) u32);
+
+pub(crate) const RECENTLY_HIT_ZOMBIE_TTL: f32 = 2.0;
+
+#[derive(Resource, Default)]
+pub(crate) struct RecentlyHitZombies(pub(crate) std::collections::HashMap<Entity, f32>);
+
+pub(crate) fn count_local_kills(
+    time: Res<Time>,
+    mut removed_zombies: RemovedComponents<Zombie>,
+    mut recently_hit: ResMut<RecentlyHitZombies>,
+    mut kill_count: ResMut<KillCount>,
+) {
+    let dt = time.delta_secs();
+    recently_hit.0.retain(|_, ttl| {
+        *ttl -= dt;
+        *ttl > 0.0
+    });
+    for entity in removed_zombies.read() {
+        if recently_hit.0.remove(&entity).is_some() {
+            kill_count.0 += 1;
+        }
+    }
+}
+
 #[derive(Component)]
 pub(crate) struct HealthUi;
 

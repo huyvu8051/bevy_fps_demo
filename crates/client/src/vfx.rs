@@ -94,6 +94,56 @@ pub(crate) struct SparkAssets {
     pub(crate) material: Handle<StandardMaterial>,
 }
 
+#[derive(Resource)]
+pub(crate) struct GunshotSound(pub(crate) Handle<AudioSource>);
+
+#[derive(Resource)]
+pub(crate) struct ReloadSound(pub(crate) Handle<AudioSource>);
+
+#[derive(SystemParam)]
+pub(crate) struct VfxAssets<'w, 's> {
+    pub(crate) hit_assets: Res<'w, HitMarkerAssets>,
+    pub(crate) muzzle_fx: Res<'w, MuzzleFxAssets>,
+    pub(crate) tracer: Res<'w, TracerAssets>,
+    pub(crate) blood: Res<'w, BloodAssets>,
+    pub(crate) sparks: Res<'w, SparkAssets>,
+    pub(crate) gunshot: Res<'w, GunshotSound>,
+    pub(crate) reload_sound: Res<'w, ReloadSound>,
+
+    pub(crate) stance: Query<'w, 's, &'static PlayerStance, With<Player>>,
+
+    pub(crate) recently_hit: ResMut<'w, RecentlyHitZombies>,
+}
+
+pub(crate) fn on_shot_confirmed(
+    trigger: On<ShotConfirmed>,
+    mut commands: Commands,
+    time: Res<Time>,
+    vfx_assets: VfxAssets,
+    spatial_query: SpatialQuery,
+    zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
+    globals: Query<&GlobalTransform>,
+    show_floating_damage: Res<ShowFloatingDamage>,
+) {
+    let ShotConfirmed { point, normal, damage, killed } = *trigger.event();
+    if damage > 0.0 {
+        info!("[shot] server confirmed: inner bone capsule hit, damage={damage:.1} killed={killed}");
+    } else {
+        info!("[shot] server confirmed: outer capsule hit but missed every inner bone capsule (0 damage)");
+    }
+
+    let nearest_bone = if killed {
+        None
+    } else {
+        zombies
+            .iter()
+            .min_by(|(_, a, _), (_, b, _)| a.translation.distance_squared(point).total_cmp(&b.translation.distance_squared(point)))
+            .and_then(|(_, _, bones)| nearest_zombie_bone(bones, point, &globals))
+    };
+    let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
+    spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0);
+}
+
 pub(crate) fn spawn_blood_effects(
     commands: &mut Commands,
     blood_assets: &BloodAssets,
@@ -329,6 +379,18 @@ pub(crate) fn set_hitbox_gizmo_depth_bias(mut config_store: ResMut<GizmoConfigSt
 
     let (config, _) = config_store.config_mut::<DefaultGizmoConfigGroup>();
     config.depth_bias = -1.0;
+}
+
+fn draw_bone_capsule(gizmos: &mut Gizmos, a: Vec3, b: Vec3, radius: f32, color: Color) {
+    let segment = b - a;
+    let Ok(direction) = Dir3::new(segment) else {
+        return;
+    };
+    gizmos.primitive_3d(
+        &Capsule3d { radius, half_length: segment.length() / 2.0 },
+        Isometry3d::new(a.midpoint(b), Quat::from_rotation_arc(Vec3::Y, *direction)),
+        color,
+    );
 }
 
 pub(crate) fn draw_zombie_hitboxes(

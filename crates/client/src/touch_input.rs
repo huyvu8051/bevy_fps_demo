@@ -86,6 +86,15 @@ pub(crate) struct NoclipFlyInput {
     pub(crate) down: bool,
 }
 
+pub(crate) fn update_noclip_fly_input(
+    mut fly: ResMut<NoclipFlyInput>,
+    jump_button: Query<&Interaction, With<TouchJumpButton>>,
+    crouch_button: Query<&Interaction, With<TouchCrouchButton>>,
+) {
+    fly.up = jump_button.iter().any(|interaction| *interaction == Interaction::Pressed);
+    fly.down = crouch_button.iter().any(|interaction| *interaction == Interaction::Pressed);
+}
+
 #[derive(SystemParam)]
 pub(crate) struct TouchGameplayInputs<'w> {
     pub(crate) aiming: Res<'w, TouchAiming>,

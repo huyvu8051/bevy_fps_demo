@@ -62,6 +62,25 @@ pub(crate) struct Noclip(pub(crate) bool);
 #[derive(Resource)]
 pub(crate) struct GunVisible(pub(crate) bool);
 
+#[derive(Resource, Default)]
+pub(crate) struct PredictedInputs(pub(crate) std::collections::VecDeque<(u32, ClientInput, f32, f32, bool)>);
+
+pub(crate) const INPUT_SEND_HZ: f32 = 32.0;
+
+const RECONCILE_POS_THRESHOLD: f32 = 0.15;
+const RECONCILE_SMOOTH_SECS: f32 = 0.12;
+
+#[derive(Resource, Default)]
+pub(crate) struct PredictionSmooth {
+    offset: Vec3,
+}
+
+#[derive(Default)]
+pub(crate) struct InputSendThrottleState {
+    elapsed: f32,
+    jump_edge_pending: bool,
+}
+
 pub(crate) fn predict_player_movement(
     local: Query<
         (&NetTransform, &LastProcessedInput),
