@@ -324,6 +324,180 @@ pub(crate) fn update_compass_ui(
     }
 }
 
+#[derive(Component)]
+pub(crate) struct RadarSweepLine {
+    trail_index: u8,
+}
+
+#[derive(Component)]
+pub(crate) struct RadarHeading;
+
+#[derive(Component)]
+pub(crate) struct RadarBlip {
+    zombie: Entity,
+}
+
+fn spawn_radar_sweep_pivot(root: &mut ChildSpawnerCommands<'_>, radius: f32, marker: impl Component, line_color: Color) {
+    root.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(RADAR_RADIUS - radius),
+            top: Val::Px(RADAR_RADIUS - radius),
+            width: Val::Px(radius * 2.0),
+            height: Val::Px(radius * 2.0),
+            ..default()
+        },
+        UiTransform::default(),
+        marker,
+    ))
+    .with_children(|pivot| {
+        pivot.spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(radius - 1.5),
+                top: Val::Px(radius),
+                width: Val::Px(3.0),
+                height: Val::Px(radius),
+                ..default()
+            },
+            BackgroundColor(line_color),
+        ));
+    });
+}
+
+pub(crate) fn spawn_radar_ui(commands: &mut Commands) {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(RADAR_LEFT),
+                top: Val::Px(RADAR_TOP),
+                width: Val::Px(RADAR_SIZE),
+                height: Val::Px(RADAR_SIZE),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(RADAR_RADIUS)),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.05, 0.02, 0.55)),
+            BorderColor::all(Color::srgba(0.3, 1.0, 0.45, 0.6)),
+            GlobalZIndex(STATIC_UI_Z_INDEX),
+        ))
+        .with_children(|root| {
+            for ring_fraction in [0.34, 0.68] {
+                let size = RADAR_SIZE * ring_fraction;
+                root.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px((RADAR_SIZE - size) / 2.0),
+                        top: Val::Px((RADAR_SIZE - size) / 2.0),
+                        width: Val::Px(size),
+                        height: Val::Px(size),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(size / 2.0)),
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgba(0.3, 1.0, 0.45, 0.25)),
+                ));
+            }
+
+            root.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(RADAR_RADIUS - 0.5),
+                    width: Val::Px(RADAR_SIZE),
+                    height: Val::Px(1.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.3, 1.0, 0.45, 0.2)),
+            ));
+            root.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(RADAR_RADIUS - 0.5),
+                    top: Val::Px(0.0),
+                    width: Val::Px(1.0),
+                    height: Val::Px(RADAR_SIZE),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.3, 1.0, 0.45, 0.2)),
+            ));
+
+            for trail_index in 0..=RADAR_TRAIL_COUNT {
+                let alpha = 0.85 * (1.0 - trail_index as f32 / (RADAR_TRAIL_COUNT as f32 + 1.0));
+                spawn_radar_sweep_pivot(root, RADAR_RADIUS, RadarSweepLine { trail_index }, Color::srgba(0.4, 1.0, 0.5, alpha));
+            }
+
+            spawn_radar_sweep_pivot(root, RADAR_RADIUS * 0.4, RadarHeading, Color::srgb(1.0, 0.85, 0.2));
+
+            root.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(RADAR_RADIUS - 3.0),
+                    top: Val::Px(RADAR_RADIUS - 3.0),
+                    width: Val::Px(6.0),
+                    height: Val::Px(6.0),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(1.0, 0.85, 0.2)),
+            ));
+        });
+}
+
+pub(crate) fn spawn_radar_blip(commands: &mut Commands, zombie: Entity) {
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Px(RADAR_BLIP_SIZE_PX),
+            height: Val::Px(RADAR_BLIP_SIZE_PX),
+            border_radius: BorderRadius::all(Val::Px(RADAR_BLIP_SIZE_PX / 2.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(1.0, 0.25, 0.2)),
+        GlobalZIndex(STATIC_UI_Z_INDEX),
+        RadarBlip { zombie },
+    ));
+}
+
+pub(crate) fn update_radar_ui(
+    time: Res<Time>,
+    mut sweep_angle: Local<f32>,
+    camera: Query<&FpsCamera>,
+    player: Query<&Transform, With<Player>>,
+    zombies: Query<&Transform, With<Zombie>>,
+    mut commands: Commands,
+    mut sweep_lines: Query<(&RadarSweepLine, &mut UiTransform)>,
+    mut heading: Query<&mut UiTransform, (With<RadarHeading>, Without<RadarSweepLine>)>,
+    mut blips: Query<(Entity, &RadarBlip, &mut Node)>,
+) {
+    *sweep_angle = (*sweep_angle + RADAR_SWEEP_DEG_PER_SEC * time.delta_secs()) % 360.0;
+    for (line, mut transform) in &mut sweep_lines {
+        transform.rotation = Rot2::degrees(*sweep_angle - line.trail_index as f32 * RADAR_TRAIL_STEP_DEG);
+    }
+
+    if let (Ok(cam), Ok(mut transform)) = (camera.single(), heading.single_mut()) {
+        transform.rotation = Rot2::degrees(heading_deg(cam.yaw) - 180.0);
+    }
+
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+    let origin = player_transform.translation;
+
+    for (entity, blip, mut node) in &mut blips {
+        let Ok(zombie_transform) = zombies.get(blip.zombie) else {
+            commands.entity(entity).try_despawn();
+            continue;
+        };
+        let offset = Vec2::new(zombie_transform.translation.x - origin.x, zombie_transform.translation.z - origin.z);
+        let scaled = (offset / RADAR_RANGE * RADAR_RADIUS).clamp_length_max(RADAR_RADIUS - RADAR_BLIP_SIZE_PX / 2.0);
+        node.left = Val::Px(RADAR_LEFT + RADAR_RADIUS + scaled.x - RADAR_BLIP_SIZE_PX / 2.0);
+        node.top = Val::Px(RADAR_TOP + RADAR_RADIUS + scaled.y - RADAR_BLIP_SIZE_PX / 2.0);
+    }
+}
+
 pub(crate) fn update_ammo_ui(gun: Query<&Gun, Changed<Gun>>, mut text: Query<&mut Text, With<AmmoUi>>) {
     let Ok(gun) = gun.single() else {
         return;

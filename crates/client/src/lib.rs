@@ -1119,6 +1119,7 @@ impl Plugin for GamePlugin {
                     update_health_ui,
                     update_inspect_ui,
                     update_compass_ui,
+                    update_radar_ui,
                     update_zombie_health_bars,
                     update_floating_damage_texts,
                 )
@@ -1571,6 +1572,7 @@ fn setup_gameplay(
     spawn_ammo_ui(&mut commands);
     spawn_ping_ui(&mut commands);
     spawn_compass_ui(&mut commands);
+    spawn_radar_ui(&mut commands);
     spawn_inspect_ui(&mut commands);
     spawn_settings_menu(&mut commands);
     spawn_settings_toggle_button(&mut commands);
@@ -1783,6 +1785,16 @@ const COMPASS_PX_PER_DEG: f32 = 2.2;
 
 const COMPASS_MARKS: [(f32, &str); 8] =
     [(0.0, "N"), (45.0, "NE"), (90.0, "E"), (135.0, "SE"), (180.0, "S"), (225.0, "SW"), (270.0, "W"), (315.0, "NW")];
+
+const RADAR_LEFT: f32 = 16.0;
+const RADAR_TOP: f32 = 56.0;
+const RADAR_SIZE: f32 = 150.0;
+const RADAR_RADIUS: f32 = RADAR_SIZE / 2.0;
+const RADAR_RANGE: f32 = 40.0;
+const RADAR_BLIP_SIZE_PX: f32 = 8.0;
+const RADAR_SWEEP_DEG_PER_SEC: f32 = 60.0;
+const RADAR_TRAIL_COUNT: u8 = 3;
+const RADAR_TRAIL_STEP_DEG: f32 = 10.0;
 
 fn count_local_kills(
     time: Res<Time>,

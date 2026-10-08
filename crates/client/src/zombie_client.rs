@@ -226,7 +226,7 @@ pub(crate) fn on_zombie_replicated(
     }
     commands.entity(entity).insert(zombie_cosmetic_bundle());
     spawn_zombie_health_bar(&mut commands, entity);
-
+    spawn_radar_blip(&mut commands, entity);
 }
 
 pub(crate) fn on_zombie_kind_replicated(
@@ -257,6 +257,7 @@ pub(crate) fn spawn_local_zombie(commands: &mut Commands, asset_server: &AssetSe
         .with_child(zombie_mesh_bundle(asset_server, ZombieKind::Classic))
         .id();
     spawn_zombie_health_bar(commands, zombie_entity);
+    spawn_radar_blip(commands, zombie_entity);
 }
 
 pub(crate) fn spawn_item_gallery_zombie_showcase(commands: &mut Commands, asset_server: &AssetServer) {
