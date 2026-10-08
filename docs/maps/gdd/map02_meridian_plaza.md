@@ -1,7 +1,7 @@
 # Map 2 — "Phố mua sắm" (Meridian Plaza)
 
 Campaign 1 "Ground Zero", Map 2/5. Xem GDD.md mục 14.3. Cùng legend với
-Map 1 (`docs/maps/map01_highrise.md`).
+Map 1 (`docs/maps/gdd/map01_highrise.md`).
 
 Map này chia theo **khu vực** thay vì tầng (chủ yếu 1 mặt bằng, trừ khu
 bãi đỗ xe cuối map) — không gian mở hơn hẳn Map 1.

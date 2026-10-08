@@ -1,17 +1,3 @@
-// --- MapKind::Arena geometry: F9 save back to the per-map-id RON --------
-//
-// The flat arena (floor + walls + pillars + centre ramp) is spawned from
-// crates/client/assets/data/arena_layout_map<ID>.ron by spawn_test_arena
-// (crates/client/src/lib.rs), one file per Arena map id (only 2 = StressTest
-// today). This module is the write-back half: with EDITOR=1, drag / rotate /
-// scale a wall or the ramp in the dev editor (F2) and press F9 — every
-// ArenaBox's live Transform + size is written back to that map's own RON,
-// in the original row order.
-//
-// Deliberately a near-copy of item_gallery_cars.rs's F9 saver (same
-// EulerRot::YXZ split, same header-preservation, same F9SaveToast) rather
-// than a shared abstraction — the two data files have different row
-// shapes and the duplication is small and readable.
 
 use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
@@ -25,29 +11,18 @@ use crate::{current_scenario, ArenaBoxDims};
 pub(crate) struct ArenaLayoutPlugin;
 
 impl Plugin for ArenaLayoutPlugin {
-    // `app` only gets used inside the non-wasm32 branch below — on wasm32
-    // this method body is empty, which would otherwise warn on the
-    // now-unused parameter.
+
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     fn build(&self, app: &mut App) {
-        // Gated on EDITOR=1 exactly like ItemGalleryCarsPlugin's own F9
-        // saver — F9SaveToast / spawn_f9_toast_ui / tick_f9_toast are only
-        // registered there under the same guard, so this system must not
-        // exist without them (it reads ResMut<F9SaveToast>). Also wasm32-
-        // gated for the same reason as that plugin — see its own comment.
+
         #[cfg(not(target_arch = "wasm32"))]
         if std::env::var("EDITOR").is_ok() {
-            // .run_if(debug_keys_allowed) — see that fn's own doc comment
-            // (lib.rs) for why every F9/debug-toggle system reading raw
-            // keyboard input is guarded the same way.
+
             app.add_systems(Update, save_arena_layout_on_key.run_if(crate::debug_keys_allowed));
         }
     }
 }
 
-// Definition (not just its registration above) is wasm32-gated too — see
-// ItemGalleryCarsPlugin's own comment on why an EDITOR=1 F9 saver can't
-// exist there at all, not just be unregistered.
 #[cfg(not(target_arch = "wasm32"))]
 fn save_arena_layout_on_key(
     keys: Res<ButtonInput<KeyCode>>,
@@ -59,19 +34,16 @@ fn save_arena_layout_on_key(
     }
     let scenario = current_scenario();
     if scenario.map_kind() != MapKind::Arena {
-        return; // F9 on a non-arena map is the cars'/zombie's to handle
+        return;
     }
     let map_id = scenario.map_id();
 
-    // (row index, "(shape, ...9 numbers...)", trailing-comment label)
     let mut rows: Vec<(usize, String, &'static str)> = boxes
         .iter()
         .map(|(t, dims)| {
-            // Same EulerRot::YXZ split spawn_test_arena / shared::arena_layout
-            // rebuild from — returns (y_angle, x_angle, z_angle).
+
             let (ry, rx, rz) = t.rotation.to_euler(EulerRot::YXZ);
-            // Fold the editor's scale gizmo into the saved size so it
-            // round-trips (spawn rebuilds every piece at scale 1).
+
             let size = dims.size * t.scale;
             let core = format!(
                 "({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
@@ -105,7 +77,6 @@ fn save_arena_layout_on_key(
         env!("CARGO_MANIFEST_DIR")
     );
 
-    // Preserve the header: keep every line up to and including the lone `[`.
     let existing = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(e) => {

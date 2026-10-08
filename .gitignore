@@ -67,3 +67,6 @@ crates/client/assets/props/car_wagon/mesh/car_wagon.glb
 crates/client/assets/props/car_motorcycle/mesh/car_motorcycle.glb
 crates/client/assets/props/car_muscle/mesh/car_muscle.glb
 crates/client/assets/props/car_minivan/mesh/car_minivan.glb
+
+# Local pre-import backup of the old car .glb files, not source.
+crates/client/assets/props/_old_cars_backup_*/

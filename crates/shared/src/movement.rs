@@ -7,14 +7,6 @@ use crate::{
     PRONE_LENGTH, PRONE_SPEED_MULTIPLIER, SPRINT_MULTIPLIER,
 };
 
-// The one authoritative player-movement step, shared by crates/server
-// (where it's the real simulation, driven by whatever ClientInput actually
-// arrived) and crates/client (where it's client-side prediction, run
-// immediately on the local input before the server round-trip completes,
-// then re-run during reconciliation to replay any not-yet-confirmed
-// inputs on top of the server's latest confirmed position). Both sides
-// must do the *exact* same math here or prediction will constantly
-// mispredict and visibly correct itself.
 pub fn simulate_player_step(mover: &MoveAndSlide, transform: &mut Transform, player: &mut Player, stance: PlayerStance, input: &ClientInput, dt: f32) {
     if input.noclip {
         simulate_noclip_step(transform, input, dt);
@@ -84,11 +76,6 @@ pub fn simulate_player_step(mover: &MoveAndSlide, transform: &mut Transform, pla
     player.vertical_velocity = if grounded_this_frame { vertical_velocity.min(0.0) } else { vertical_velocity };
 }
 
-// No MoveAndSlide/collision at all — flies straight through geometry.
-// Horizontal direction is move_axis rotated by yaw same as normal movement;
-// vertical is jump=ascend / crouch=descend (ClientInput has no pitch to fly
-// "the way you're looking", only yaw, so this is the simplest fly scheme
-// that doesn't need one).
 fn simulate_noclip_step(transform: &mut Transform, input: &ClientInput, dt: f32) {
     let speed = if input.sprint { NOCLIP_SPEED * SPRINT_MULTIPLIER } else { NOCLIP_SPEED };
 

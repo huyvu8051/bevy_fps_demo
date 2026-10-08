@@ -1,46 +1,13 @@
-// --- Settings menu / cheat panel UI ---
-// Extracted from lib.rs (Phase 2 of the gameplay-code-organization pass —
-// see chat/commit history). Every item here is `pub(crate)` so lib.rs's
-// single master `.chain()`'d Update system list (unchanged — pure code
-// motion, no execution-order change) can still reference these by name.
-//
-// `use crate::*;` pulls in every crate-root item this module needs
-// (constants, other components/resources, helper fns) — root-private
-// items ARE visible to a descendant module like this one per Rust's
-// normal privacy rules, just not name-resolved without an explicit
-// `use`/path, hence the glob rather than hunting down each one by hand.
 
 use bevy::prelude::*;
 use crate::*;
 
-// Toggled by F1 or tapping SettingsToggleButton (desktop key + touch
-// button). Drives the settings panel's Node.display in
-// update_settings_menu.
-// OPEN_SETTINGS_MENU=1 starts the game with it already open — same idea as
-// TOUCH_UI_PREVIEW/MAP_ID: a launch-time override so this (and, on iOS, the
-// cadisplaylink Metal renderer's own draw of it) can be visually verified
-// without having to tap/press F1 through every redeploy first.
 #[derive(Resource)]
 pub(crate) struct SettingsMenuVisible(pub(crate) bool);
 
-// Toggled by Tab (desktop/hardware keyboard only — no touch button, since
-// this exists specifically to stop a Bluetooth mouse's clicks from hitting
-// touch UI buttons; a touchscreen player has no such problem). While
-// locked, suppress_ui_interaction_when_locked forces every Button's
-// Interaction back to None each frame, right after multi_touch_button_
-// interaction/ui_focus_system compute it and before any *_button consumer
-// system reads it — so a mouse click can never register as a UI tap, only
-// as gameplay input (shoot()/reload_gun etc., which read ButtonInput<
-// MouseButton>/KeyCode directly, not Interaction).
 #[derive(Resource, Default)]
 pub(crate) struct MouseUiLocked(pub(crate) bool);
 
-// Which touch (if any) is currently dragging the settings menu's scroll
-// area — touch_scroll_settings_menu's own equivalent of TouchMoveState/
-// TouchLookState for the joystick/look-drag. scroll_settings_menu (desktop
-// mouse wheel) already exists; this is the touch counterpart, since the
-// menu's own Overflow::scroll_y() + ScrollPosition only gets driven by a
-// wheel today — nothing drags it by finger on a touch-only device.
 #[derive(Resource, Default)]
 pub(crate) struct SettingsMenuScrollState {
     pub(crate) touch_id: Option<u64>,
@@ -50,16 +17,9 @@ pub(crate) struct SettingsMenuScrollState {
 #[derive(Component)]
 pub(crate) struct SettingsMenuRoot;
 
-// Which page of the settings menu is currently shown — the menu still
-// scrolls too (see scroll_settings_menu/touch_scroll_settings_menu), but
-// paging avoids ever needing to on a screen this small.
 #[derive(Resource, Default)]
 pub(crate) struct SettingsMenuPageIndex(usize);
 
-// Marks each page container; update_settings_menu_pages compares this to
-// SettingsMenuPageIndex to decide that page's Node.display. A child of
-// SettingsMenuRoot, so it inherits the root's GlobalZIndex/stacking rather
-// than needing its own.
 #[derive(Component)]
 pub(crate) struct SettingsMenuPage(usize);
 
@@ -70,76 +30,42 @@ pub(crate) struct SettingsMenuNextButton;
 #[derive(Component)]
 pub(crate) struct SettingsMenuPageLabel;
 
-// One per RESOLUTION_SCALE_PRESETS entry — resolution_scale_buttons reads
-// Interaction on these to know which preset was tapped/clicked.
 #[derive(Component)]
 pub(crate) struct ResolutionScaleButton(f32);
 
-// One per FPS_CAP_PRESETS entry — same shape as ResolutionScaleButton.
 #[derive(Component)]
 pub(crate) struct FpsCapButton(u32);
 
-// One per texture-quality tier (1..=5) — texture_quality_buttons reads
-// Interaction on these the same way ResolutionScaleButton does. See
-// TextureQuality's own doc comment in lib.rs for what each tier means.
 #[derive(Component)]
 pub(crate) struct TextureQualityButton(u8);
 
-// One per polygon-quality tier (1..=5) — same shape as
-// TextureQualityButton, independent resource (see PolyQuality's own doc
-// comment in lib.rs).
 #[derive(Component)]
 pub(crate) struct PolyQualityButton(u8);
 
-// One per AK47-texture-quality tier (0..=5) — same shape as
-// TextureQualityButton, but for the separate GunTextureQuality resource
-// (see its own doc comment in lib.rs).
 #[derive(Component)]
 pub(crate) struct GunTextureQualityButton(u8);
 
-// One per AK47-polygon-quality tier (1..=5) — same shape as
-// PolyQualityButton, but for the separate GunPolyQuality resource (see its
-// own doc comment in lib.rs).
 #[derive(Component)]
 pub(crate) struct GunPolyQualityButton(u8);
 
-// One per zombie-texture-quality tier (0..=5) — same shape as
-// TextureQualityButton, but for the separate ZombieTextureQuality
-// resource (see its own doc comment in lib.rs for why cars and zombies
-// don't share one texture-quality knob).
 #[derive(Component)]
 pub(crate) struct ZombieTextureQualityButton(u8);
 
-// One per shadow-quality tier (0..=5, 0 = off) — same shape as
-// TextureQualityButton, independent resource (see ShadowQuality's own doc
-// comment in lib.rs).
 #[derive(Component)]
 pub(crate) struct ShadowQualityButton(u8);
 
-// One per light-quality tier (0..=5, 0 = off) — same shape as
-// ShadowQualityButton, independent resource (see LightQuality's own doc
-// comment in lib.rs).
 #[derive(Component)]
 pub(crate) struct LightQualityButton(u8);
 
-// One per point-light-quality tier (0..=5, 0 = off) — same shape as
-// LightQualityButton, independent resource (see PointLightQuality's own
-// doc comment in lib.rs for why the arena's static lights got split off
-// from LightQuality/MainSun into their own slider).
 #[derive(Component)]
 pub(crate) struct PointLightQualityButton(u8);
 
 #[derive(Component)]
 pub(crate) struct SettingsToggleButton;
 
-// Marks the small "UI locked (Tab)" HUD text — update_mouse_ui_lock_indicator
-// shows/hides it via Node.display in step with MouseUiLocked.
 #[derive(Component)]
 pub(crate) struct MouseUiLockIndicator;
 
-// window physical size * scale, floored at RESOLUTION_SCALE_MIN_TEXTURE_PX
-// on each axis so a tiny window at a low scale never asks wgpu for a
-// zero-size (or otherwise degenerate) render target.
 pub(crate) fn scaled_scene_extent(window_width: u32, window_height: u32, scale: f32) -> Extent3d {
     Extent3d {
         width: ((window_width as f32 * scale) as u32).max(RESOLUTION_SCALE_MIN_TEXTURE_PX),
@@ -187,10 +113,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 position_type: PositionType::Absolute,
                 left: Val::Px(16.0),
                 top: Val::Px(16.0),
-                // Safety cap, not something the player is expected to hit
-                // in normal use — content is split across
-                // SettingsMenuPage(N) containers (settings_menu_page_
-                // buttons/SettingsMenuPageIndex) instead.
+
                 max_height: Val::Px(400.0),
                 overflow: Overflow::scroll_y(),
                 padding: UiRect::all(Val::Px(12.0)),
@@ -201,33 +124,12 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
             ScrollPosition::default(),
-            // STATIC_UI_Z_INDEX + 50, NOT the plain STATIC_UI_Z_INDEX every
-            // touch-control button (touch_input.rs) also uses — bevy_ui's
-            // ui_focus_system (the system that actually sets Interaction,
-            // independent of bevy_picking/HoverMap) walks its own UiStack
-            // top-down and stops at the first FocusPolicy::Block node it
-            // finds under the touch; at EQUAL z-index it's tie-broken by
-            // UiStack insertion order, not "which one is visually drawn on
-            // top" the way a naive reading of GlobalZIndex would suggest.
-            // That tie is what let a tap on the menu panel register as a
-            // press on whatever touch-control button (Sprint/Jump/Lean/
-            // Crouch/Prone) happened to sit underneath it at the same
-            // screen position — reported again after this file grew (Gun
-            // quality rows) despite the real HoverMap fix (touch_input.rs's
-            // multi_touch_button_interaction) staying intact, because that
-            // fix only ever covered the SECOND+ simultaneous touch;
-            // ui_focus_system itself, which owns the first/primary touch,
-            // never used HoverMap. Giving the whole menu panel a strictly
-            // higher z-index (matching the map-select overlay's own
-            // STATIC_UI_Z_INDEX + 100 in network_setup.rs) makes it always
-            // win regardless of spawn order, on both touch paths.
+
             GlobalZIndex(STATIC_UI_Z_INDEX + 50),
             SettingsMenuRoot,
         ))
         .with_children(|menu| {
-            // Page nav row — a sibling of the SettingsMenuPage(N)
-            // containers below (not inside one), so it's always visible
-            // regardless of which page is active.
+
             menu.spawn(Node {
                 flex_direction: FlexDirection::Row,
                 column_gap: Val::Px(8.0),
@@ -679,10 +581,6 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     }
                 });
 
-                // Autopilot — real player-facing feature (see its own doc
-                // comment), so unlike everything in the "Cheats" section
-                // below this row is NOT debug-gated: it's the mobile
-                // equivalent of desktop's always-available KeyI.
                 page.spawn(Node {
                     flex_direction: FlexDirection::Row,
                     column_gap: Val::Px(8.0),
@@ -693,14 +591,6 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     spawn_cheat_toggle_button(row, "Autopilot", AutopilotButton);
                 });
 
-                // Gun visibility — also a real player-facing feature (hide
-                // the viewmodel for screenshots/clean framing), not a cheat,
-                // so pulled out of the debug-only "Cheats" section below:
-                // that gate meant this button silently didn't exist on any
-                // release/mobile build, the only place touch players could
-                // reach it at all (desktop has no keybinding for it either
-                // — see native_menu's gun_visible for the one other place
-                // this resource is toggled, a macOS/iOS app-menu item).
                 page.spawn(Node {
                     flex_direction: FlexDirection::Row,
                     column_gap: Val::Px(8.0),
@@ -712,20 +602,6 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     spawn_cheat_toggle_button(row, "Cars", CheatCarsButton);
                 });
 
-                // Touch equivalent of the desktop debug panel's keyboard-only
-                // cheats (KeyN/KeyG/KeyF/Digit1/Digit2) — that panel is
-                // unreachable on mobile (no keyboard), so none of it existed
-                // there before. Reuses the exact same Noclip/GodMode/
-                // FreezeZombies resources and kill-all/spawn-one actions the
-                // desktop keys already drive, just from a tap instead of a
-                // keypress — same underlying behavior on both platforms.
-                // Gated to debug builds only (previously spawned
-                // unconditionally, in every build including release) — same
-                // reasoning as the KeyP debug panel these mirror, which was
-                // always implicitly "hidden" behind requiring a physical
-                // keyboard but had no actual build-time gate either; a real
-                // player shouldn't find a God Mode/Kill All button in their
-                // Settings menu.
                 #[cfg(debug_assertions)]
                 {
                     page.spawn((
@@ -795,12 +671,9 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         ..default()
                     })
                     .with_children(|row| {
-                        // Client navmesh + zombie path-trace overlay
-                        // (nav_debug.rs) — Arena maps only.
+
                         spawn_cheat_toggle_button(row, "NavDbg", CheatNavDebugButton);
-                        // Concentric horizontal-distance rings around the
-                        // player (draw_distance_rings, vfx.rs) — a ruler
-                        // for the texture/polygon LOD-by-distance planning.
+
                         spawn_cheat_toggle_button(row, "DistRings", CheatDistanceRingsButton);
                     });
                 }
@@ -810,9 +683,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     ..default()
                 })
                 .with_children(|row| {
-                    // Distance/texture/poly-by-distance auto LOD (cars +
-                    // zombies) — see DistanceLodEnabled's own doc comment
-                    // in lib.rs.
+
                     spawn_cheat_toggle_button(row, "DistLOD", CheatDistanceLodButton);
                 });
                 spawn_lod_stepper_row(page, "LOD Dist(m)", LodParam::Distance, ["15".into(), "30".into(), "50".into()]);
@@ -907,9 +778,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     ));
                     spawn_cheat_action_button(row, "+", DamageMultiplierIncButton);
                 });
-                // Same debug-build-only gate as page 0's "Cheats" section
-                // above — Kill All / Heal Nearest / 1HP Nearest are testing
-                // tools, not something a real player should have.
+
                 #[cfg(debug_assertions)]
                 {
                     page.spawn(Node {
@@ -930,9 +799,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_action_button(row, "Heal Nearest", HealNearestButton);
                         spawn_cheat_action_button(row, "1HP Nearest", NearDeathNearestButton);
                     });
-                    // Spawn-one-zombie and the "debug bot" fake-NetPlayer
-                    // testing tools — see debug_bot_buttons' own doc
-                    // comment.
+
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
                         column_gap: Val::Px(8.0),
@@ -956,9 +823,8 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 }
             });
         });
-}// Shared visual style for both cheat button flavors below — toggle buttons
-// additionally get recolored by update_cheat_toggle_colors once spawned;
-// action buttons (momentary, no on/off state) stay this same color always.
+}
+
 pub(crate) fn spawn_cheat_button_node(parent: &mut ChildSpawnerCommands, label: &str, marker: impl Component) {
     parent
         .spawn((
@@ -997,12 +863,6 @@ pub(crate) fn spawn_cheat_action_button(parent: &mut ChildSpawnerCommands, label
     spawn_cheat_button_node(parent, label, marker);
 }
 
-// One row: a text label followed by 3 "-/value/+" stepper groups, one per
-// LOD band — shared by all 4 distance-LOD stepper rows (distance/car
-// texture/car poly/zombie texture) so the row layout only needs writing
-// once. `initial` is the text shown before update_lod_stepper_texts first
-// runs (same "hardcode the matching default" convention as SensitivityText
-// above).
 pub(crate) fn spawn_lod_stepper_row(parent: &mut ChildSpawnerCommands, label: &str, param_of_band: impl Fn(usize) -> LodParam, initial: [String; 3]) {
     parent.spawn((
         Text::new(label),
@@ -1069,22 +929,12 @@ pub(crate) struct DamageMultiplierIncButton;
 #[derive(Component)]
 pub(crate) struct DamageMultiplierText;
 
-// Client's own best guess at the server's current zombie population
-// target, so the cheat panel has a number to show and step from without
-// waiting on a round-trip — SetZombieCount is fire-and-forget (see its own
-// doc comment in crates/shared), the server never echoes the value back.
-// Default matches ZombieTargetCount's own default on the server so the
-// displayed number is right from the start, not just after the first tap.
 #[derive(Resource)]
 pub(crate) struct ZombieCountUi(pub(crate) u32);
 
-// Same "client's own best guess" reasoning as ZombieCountUi — defaults to
-// true to match AutoMaintainZombies' own server-side default.
 #[derive(Resource)]
 pub(crate) struct AutoMaintainUi(pub(crate) bool);
 
-// Same "client's own best guess" reasoning as ZombieCountUi — defaults to
-// 1.0 to match DamageMultiplierServer's own server-side default.
 #[derive(Resource)]
 pub(crate) struct DamageMultiplierUi(pub(crate) f32);
 impl Default for DamageMultiplierUi {
@@ -1093,9 +943,6 @@ impl Default for DamageMultiplierUi {
     }
 }
 
-// True if any entity matching `T` was tapped/clicked this frame — shared by
-// every touch/click button in this file that just needs a plain
-// Changed<Interaction>-gated Pressed check (most of the cheat panel).
 pub(crate) fn tapped<T: Component>(q: &Query<&Interaction, (With<T>, Changed<Interaction>)>) -> bool {
     q.iter().any(|i| *i == Interaction::Pressed)
 }
@@ -1114,10 +961,7 @@ pub(crate) struct CheatZombieLodButton;
 pub(crate) struct CheatPlayerModelButton;
 #[derive(Component)]
 pub(crate) struct CheatDofAltButton;
-// NOT a "Cheat*" marker on purpose — Autopilot is a real player-facing
-// feature (see its own module doc comment), not a debug cheat, so its
-// button lives outside the #[cfg(debug_assertions)] "Cheats" section
-// below, same reasoning as ResolutionScaleButton/SensitivityText.
+
 #[derive(Component)]
 pub(crate) struct AutopilotButton;
 #[derive(Component)]
@@ -1132,11 +976,7 @@ pub(crate) struct CheatNextBotButton;
 pub(crate) struct CheatMoveBotButton;
 #[derive(Component)]
 pub(crate) struct CheatDespawnBotButton;
-// Mobile toggle for AutopilotLookOnly (see its own doc comment,
-// autopilot.rs) — a debug/testing tool (forces the camera onto the
-// nearest zombie without touching movement/fire), so it's gated inside
-// the "Cheats" section like the other debug-only buttons, unlike the real
-// AutopilotButton above.
+
 #[derive(Component)]
 pub(crate) struct CheatLookAtTargetButton;
 #[derive(Component)]
@@ -1147,27 +987,16 @@ pub(crate) struct CheatShowHitMarkersButton;
 pub(crate) struct CheatShowFloatingDamageButton;
 #[derive(Component)]
 pub(crate) struct CheatShowTracersButton;
-// Flips NavDebugVisible (nav_debug.rs) — handled by nav_debug_toggle_button
-// / update_nav_debug_button_color there, not the cheat_toggle_buttons_*
-// family, to keep those systems under Bevy's param-count ceiling.
+
 #[derive(Component)]
 pub(crate) struct CheatNavDebugButton;
-// Flips ShowDistanceRings (lib.rs) — handled by its own standalone
-// distance_rings_toggle_button/update_distance_rings_button_color pair
-// (vfx.rs), same reasoning as CheatNavDebugButton above.
+
 #[derive(Component)]
 pub(crate) struct CheatDistanceRingsButton;
-// Flips DistanceLodEnabled (lib.rs) — handled by its own standalone
-// distance_lod_toggle_button/update_distance_lod_button_color pair below,
-// same reasoning as CheatNavDebugButton above.
+
 #[derive(Component)]
 pub(crate) struct CheatDistanceLodButton;
 
-// Which of the 3 distance-LOD numbers a stepper row's -/+/text triplet
-// controls — one small set of generic systems (lod_stepper_buttons/
-// update_lod_stepper_texts below) handles all 9 stepper rows instead of
-// 9 near-duplicate systems, since they're all "clamp a value in an
-// array by an index" with only the array/clamp-range differing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum LodParam {
     Distance(usize),
@@ -1183,11 +1012,6 @@ pub(crate) struct LodIncButton(pub(crate) LodParam);
 #[derive(Component)]
 pub(crate) struct LodValueText(pub(crate) LodParam);
 
-// Changed<Interaction>-gated like every other touch button in this file —
-// each tap flips the same resource the matching desktop key
-// (N/G/F/H/B/M/J/K/T respectively) does. None of these toggles were
-// reachable on mobile at all before (no keyboard), see this fn's own
-// callers.
 pub(crate) fn cheat_toggle_buttons(
     mut commands: Commands,
     mut noclip: ResMut<Noclip>,
@@ -1208,8 +1032,7 @@ pub(crate) fn cheat_toggle_buttons(
     if tapped(&noclip_btn) {
         noclip.0 = !noclip.0;
     }
-    // Same bundling as desktop's toggle_inspect_mode (KeyL) — see
-    // InspectMode's own doc comment.
+
     if tapped(&inspect_btn) {
         inspect.0 = !inspect.0;
         noclip.0 = inspect.0;
@@ -1220,8 +1043,7 @@ pub(crate) fn cheat_toggle_buttons(
     }
     if tapped(&freeze_btn) {
         freeze.0 = !freeze.0;
-        // See toggle_debug_flags' KeyF handler for why this also needs to
-        // reach the server, not just flip the local cosmetic flag.
+
         commands.client_trigger(SetFreezeZombies(freeze.0));
     }
     if tapped(&gun_btn) {
@@ -1235,19 +1057,13 @@ pub(crate) fn cheat_toggle_buttons(
     }
 }
 
-// Applies GunVisible/MapMsaaOn/ShadowQuality/LightQuality every frame —
-// same resource-drives-a-component pattern as sync_player_model, cheap
-// enough (3 single-entity queries) not to bother gating on
-// resource_changed.
 pub(crate) fn apply_map_render_toggles(
     gun_visible: Res<GunVisible>,
     map_msaa: Res<MapMsaaOn>,
     shadow_quality: Res<ShadowQuality>,
     light_quality: Res<LightQuality>,
     mut gun: Query<&mut Visibility, With<Gun>>,
-    // FpsCamera, not Camera3d — the AK scope's own render-to-texture
-    // camera (see setup()) is ALSO a Camera3d, which would make
-    // .single_mut() below error out with two matches.
+
     mut camera_msaa: Query<&mut Msaa, With<FpsCamera>>,
     mut sun: Query<&mut DirectionalLight, With<MainSun>>,
 ) {
@@ -1272,16 +1088,6 @@ pub(crate) fn apply_map_render_toggles(
     }
 }
 
-// Separate from apply_map_render_toggles above (own system so that one's
-// param list doesn't grow further) — scales every static PointLight (see
-// PointLightQuality's own doc comment in lib.rs for why this exists as
-// its own slider, split off from LightQuality/MainSun) back to its own
-// spawn-time PointLightBaseIntensity * level/5. Gated on
-// PointLightQuality actually changing, same reasoning as
-// apply_map_render_toggles not bothering with resource_changed for its 3
-// cheap single-entity queries — this one iterates up to 11 lights
-// (1 arena + 10 across Map 1's garage/lobby/F2/F3), still cheap, but no
-// reason to redo the multiply every frame when nothing's asked to.
 pub(crate) fn apply_point_light_quality(
     quality: Res<PointLightQuality>,
     mut lights: Query<(&mut PointLight, &PointLightBaseIntensity)>,
@@ -1298,9 +1104,6 @@ pub(crate) fn apply_point_light_quality(
     }
 }
 
-// Split from cheat_toggle_buttons — one function with all 9 toggles' worth
-// of params (18 total: 9 ResMut + 9 Query) exceeded the max arity Bevy's
-// blanket impl supports for turning a plain fn into a System.
 pub(crate) fn cheat_toggle_buttons_2(
     mut show_hitboxes: ResMut<ShowHitboxes>,
     mut aim_blur: ResMut<AimBlurEnabled>,
@@ -1335,9 +1138,6 @@ pub(crate) fn cheat_toggle_buttons_2(
     }
 }
 
-// Split out for the same arity reason as cheat_toggle_buttons_2 — this is
-// the merged mobile equivalent of desktop's KeyV (see AimDofFocalDistanceAlt's
-// own doc comment for what it A/B tests).
 pub(crate) fn cheat_toggle_buttons_3(
     mut dof_alt: ResMut<AimDofFocalDistanceAlt>,
     mut look_only: ResMut<AutopilotLookOnly>,
@@ -1377,25 +1177,12 @@ pub(crate) fn cheat_toggle_buttons_3(
     }
 }
 
-// Mobile equivalent of desktop's KeyI — see AutopilotButton's own doc
-// comment for why this isn't grouped with the cheat_toggle_buttons* family
-// despite the identical tapped()-flips-a-bool shape.
 pub(crate) fn autopilot_toggle_button(mut autopilot: ResMut<Autopilot>, btn: Query<&Interaction, (With<AutopilotButton>, Changed<Interaction>)>) {
     if tapped(&btn) {
         autopilot.0 = !autopilot.0;
     }
 }
 
-
-// Recolors the 3 toggle buttons green-ish while their cheat is active —
-// desktop's debug panel shows this as "[ON]"/"[OFF]" text instead, but
-// these buttons have no room for that plus a label, so color stands in.
-// One query with Option<&Marker> per button instead of 9 separate
-// Query<&mut BackgroundColor, With<Marker>> params — Bevy's borrow checker
-// can't prove 9 differently-filtered `&mut BackgroundColor` queries never
-// alias the same entity without spelling out all 36 pairwise Without<>
-// combinations, which Has<T>-via-Option sidesteps entirely by only ever
-// borrowing BackgroundColor once per matched entity.
 #[allow(clippy::type_complexity)]
 pub(crate) fn update_cheat_toggle_colors(
     noclip: Res<Noclip>,
@@ -1475,11 +1262,6 @@ pub(crate) fn update_cheat_toggle_colors(
     }
 }
 
-// Same color-feedback idea as update_cheat_toggle_colors, split into its
-// own query — AutopilotButton isn't a "Cheat*" marker (see its own doc
-// comment), and folding a 14th Option<&Marker> into that fn's already-13-
-// field tuple risked hitting Bevy's WorldQuery tuple arity ceiling for no
-// real benefit.
 #[allow(clippy::type_complexity)]
 pub(crate) fn update_extra_toggle_colors(
     autopilot: Res<Autopilot>,
@@ -1542,12 +1324,6 @@ pub(crate) fn update_extra_toggle_colors(
     }
 }
 
-// Kill All is authoritative (ClearAllZombies), unlike the old desktop-only
-// debug panel's Digit2 action which just despawned the client's own local
-// replicated copy and silently got it back on the next replication update
-// (see ClearAllZombies' own doc comment in crates/shared) — worth fixing
-// here since a real button inviting repeated taps would make that bug much
-// more obvious/annoying than an easy-to-forget keyboard shortcut did.
 pub(crate) fn cheat_kill_all_button(mut commands: Commands, kill_btn: Query<&Interaction, (With<CheatKillAllButton>, Changed<Interaction>)>) {
     for interaction in &kill_btn {
         if *interaction == Interaction::Pressed {
@@ -1563,9 +1339,6 @@ pub(crate) struct HealNearestButton;
 #[derive(Component)]
 pub(crate) struct NearDeathNearestButton;
 
-// Health writes here are cosmetic — Health is server-authoritative/
-// replicated, so a client-side write like set_nearest_zombie_health's gets
-// overwritten by the next replication update.
 pub(crate) fn cheat_zombie_health_buttons(
     mut commands: Commands,
     player: Query<&Transform, With<Player>>,
@@ -1588,7 +1361,6 @@ pub(crate) fn cheat_zombie_health_buttons(
     }
 }
 
-// Spawns one local-only zombie 2m in front of the player.
 pub(crate) fn cheat_spawn_zombie_button(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -1606,8 +1378,6 @@ pub(crate) fn cheat_spawn_zombie_button(
     spawn_local_zombie(&mut commands, &asset_server, player_transform.translation + forward * 2.0);
 }
 
-// Spawns/selects/moves/despawns a fake NetPlayer "debug bot" for testing
-// multiplayer zombie targeting without a second real client.
 pub(crate) fn debug_bot_buttons(
     mut commands: Commands,
     player: Query<&Transform, With<Player>>,
@@ -1661,10 +1431,6 @@ pub(crate) fn debug_bot_buttons(
     }
 }
 
-// -/+ step the client's own tracked target by 10 or 1 (clamped to
-// 0..=ZOMBIE_SPAWNS.len(), same bounds the server itself clamps to — see
-// on_set_zombie_count) and send the new absolute value; update_zombie_count_text
-// reflects ZombieCountUi.0 on screen immediately, no round-trip needed.
 pub(crate) fn zombie_count_buttons(
     mut commands: Commands,
     mut count: ResMut<ZombieCountUi>,
@@ -1739,8 +1505,6 @@ pub(crate) fn update_sensitivity_text(scale: Res<SensitivityScale>, mut text: Qu
     }
 }
 
-// Standalone rather than folded into cheat_toggle_buttons_* — same
-// param-count-ceiling reasoning as nav_debug_toggle_button.
 pub(crate) fn distance_lod_toggle_button(mut enabled: ResMut<DistanceLodEnabled>, btn: Query<&Interaction, (With<CheatDistanceLodButton>, Changed<Interaction>)>) {
     if tapped(&btn) {
         enabled.0 = !enabled.0;
@@ -1757,11 +1521,6 @@ pub(crate) fn update_distance_lod_button_color(enabled: Res<DistanceLodEnabled>,
     }
 }
 
-// Generic +/- handler for all 9 distance-LOD stepper buttons (3 bands x
-// {distance, car texture, car poly, zombie texture}) — one system instead
-// of 9 near-duplicates, since every case is just "clamp array[band] by a
-// step within a range" with only the array/step/range differing per
-// LodParam variant.
 pub(crate) fn lod_stepper_buttons(
     mut distance: ResMut<LodBandDistance>,
     mut car_texture: ResMut<LodCarTextureLevel>,
@@ -1820,11 +1579,6 @@ pub(crate) fn update_lod_stepper_texts(
     }
 }
 
-// Same Changed<Interaction>-gated tap-steps-a-value shape as
-// sensitivity_buttons, but fire-and-forget SetDamageMultiplier to the
-// server (same as zombie_count_buttons' own SetZombieCount) since the real
-// value is server-authoritative — see SetDamageMultiplier's own doc
-// comment in crates/shared/src/hitbox.rs.
 pub(crate) fn damage_multiplier_buttons(
     mut commands: Commands,
     mut multiplier: ResMut<DamageMultiplierUi>,
@@ -1858,7 +1612,6 @@ pub(crate) fn update_damage_multiplier_text(multiplier: Res<DamageMultiplierUi>,
     }
 }
 
-
 pub(crate) fn auto_maintain_button(
     mut commands: Commands,
     mut auto_maintain: ResMut<AutoMaintainUi>,
@@ -1882,9 +1635,6 @@ pub(crate) fn update_auto_maintain_button_color(auto_maintain: Res<AutoMaintainU
     }
 }
 
-// Small always-visible gear button (top-right) so touch users — who have no
-// F1 key — can still reach the settings menu; toggle_settings_menu reads
-// Interaction on it the same way touch_fire_button reads the fire button.
 pub(crate) fn spawn_settings_toggle_button(commands: &mut Commands) {
     commands
         .spawn((
@@ -1900,10 +1650,7 @@ pub(crate) fn spawn_settings_toggle_button(commands: &mut Commands) {
                 border_radius: BorderRadius::all(Val::Px(20.0)),
                 ..default()
             },
-            // Alpha bumped + a border outline added, same reasoning as
-            // spawn_touch_controls' own comment on why (too faint to notice
-            // against a bright scene, reported as "can't see the menu
-            // button" on-device).
+
             BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
             Button,
@@ -1913,12 +1660,7 @@ pub(crate) fn spawn_settings_toggle_button(commands: &mut Commands) {
             TouchControlButton("=="),
         ))
         .with_children(|btn| {
-            // Plain ASCII, not a Unicode glyph (e.g. gear "\u{2699}") —
-            // Bevy's default bundled font is a Latin-subset font that
-            // doesn't include most symbol-block characters, so a glyph
-            // there would silently render as nothing instead of an error,
-            // making the whole button look empty/invisible even though its
-            // background+border were still there.
+
             btn.spawn((
                 Text::new("=="),
                 TextFont {
@@ -1930,11 +1672,6 @@ pub(crate) fn spawn_settings_toggle_button(commands: &mut Commands) {
         });
 }
 
-// F1 (desktop) or tapping SettingsToggleButton (any platform) flips
-// SettingsMenuVisible; update_settings_menu applies it to the panel's
-// Node.display. Changed<Interaction> (not a plain iter) so holding the
-// button down doesn't toggle every single frame — only the instant it
-// transitions to Pressed.
 pub(crate) fn toggle_settings_menu(
     keys: Res<ButtonInput<KeyCode>>,
     mut visible: ResMut<SettingsMenuVisible>,
@@ -1987,8 +1724,6 @@ pub(crate) fn update_settings_menu_pages(
     }
 }
 
-// Starts hidden (Display::None) — update_mouse_ui_lock_indicator flips it
-// on only once the player actually locks UI input via Tab.
 pub(crate) fn spawn_mouse_ui_lock_indicator(commands: &mut Commands) {
     commands.spawn((
         Text::new("UI LOCKED (Tab to unlock)"),
@@ -2015,12 +1750,6 @@ pub(crate) fn toggle_mouse_ui_lock(keys: Res<ButtonInput<KeyCode>>, mut locked: 
     }
 }
 
-// Must run after multi_touch_button_interaction/Bevy's own ui_focus_system
-// (both of which set Interaction from touch/mouse position) and before
-// every *_button consumer system in this file — see MouseUiLocked's own
-// doc comment. Forcing back to None (not just skipping) matters: without
-// this, a click that started before the lock was toggled on could still
-// read as Pressed by a downstream system this same frame.
 pub(crate) fn suppress_ui_interaction_when_locked(locked: Res<MouseUiLocked>, mut buttons: Query<&mut Interaction, With<Button>>) {
     if !locked.0 {
         return;
@@ -2032,27 +1761,6 @@ pub(crate) fn suppress_ui_interaction_when_locked(locked: Res<MouseUiLocked>, mu
     }
 }
 
-// Display::None on a Button/the joystick base hides its entire subtree in
-// one write — border, text children, and (for the joystick) the knob child
-// all go with it, no separate per-component alpha bookkeeping needed. Also
-// cheaper than dimming: a Display::None node is skipped by UI layout and
-// never reaches the render extraction/draw step at all, vs. a dimmed node
-// which still gets laid out and drawn (just with a low-alpha quad/glyphs)
-// every frame. Only touches nodes that are Display::Flex to begin with
-// (idle_only marker components toggling Display::None for other reasons —
-// none currently apply to Button/joystick nodes — would otherwise get
-// incorrectly forced back to Flex on unlock).
-//
-// Scoped to `TouchControlButton` (the Sprint/Jump/Crouch/Lean/... cluster
-// this system actually exists for), NOT the bare `Button` marker — a plain
-// `With<Button>` filter here used to also match Settings/GameOver/
-// MapSelect buttons, which all use the same generic `Button` component.
-// Harmless as long as those screens only stayed open for a few seconds
-// (idle_elapsed never crossed TOUCH_CONTROLS_IDLE_HIDE_SECS), but became a
-// real lockout once Map Select started waiting indefinitely for a tap
-// before connecting: with no touches registered yet, the idle timer ran
-// out and Display::None'd every Map Select button too — no touch reaches
-// them once hidden, so there was no way back in.
 pub(crate) fn hide_ui_when_locked(
     locked: Res<MouseUiLocked>,
     idle_hidden: Res<TouchControlsIdleHidden>,
@@ -2081,11 +1789,6 @@ pub(crate) fn update_mouse_ui_lock_indicator(locked: Res<MouseUiLocked>, mut tex
     node.display = if locked.0 { Display::Flex } else { Display::None };
 }
 
-// Desktop mouse wheel scroll for the settings menu — only while it's open
-// (avoids stealing the same wheel adjust_scope_zoom already uses for scope
-// zoom while aiming). MouseScrollUnit::Line (typical mouse wheel "clicks")
-// vs ::Pixel (trackpad) get different multipliers since a "line" is a much
-// bigger logical step than a trackpad pixel delta.
 pub(crate) fn scroll_settings_menu(
     visible: Res<SettingsMenuVisible>,
     mut wheel: MessageReader<MouseWheel>,
@@ -2107,9 +1810,6 @@ pub(crate) fn scroll_settings_menu(
     }
 }
 
-// Same Changed<Interaction>-gated Pressed check as toggle_settings_menu — a
-// tap/click sets RenderResolutionScale directly; resize_scene_render_target
-// picks up the change next frame.
 pub(crate) fn resolution_scale_buttons(
     mut scale: ResMut<RenderResolutionScale>,
     buttons: Query<(&Interaction, &ResolutionScaleButton), Changed<Interaction>>,
@@ -2121,14 +1821,6 @@ pub(crate) fn resolution_scale_buttons(
     }
 }
 
-// Same color-feedback idea as update_cheat_toggle_colors, but keyed off
-// which preset matches RenderResolutionScale's current value instead of a
-// plain bool — was entirely missing before (spawned with a fixed
-// BackgroundColor and never touched again), so every preset button always
-// looked unselected even though clicking one did change the resolution;
-// the exact `==` is safe here since `scale.0` is only ever set to a
-// `button.0` value directly (resolution_scale_buttons above), never
-// computed/interpolated.
 pub(crate) fn update_resolution_scale_button_colors(
     scale: Res<RenderResolutionScale>,
     mut buttons: Query<(&mut BackgroundColor, &ResolutionScaleButton)>,
@@ -2139,8 +1831,6 @@ pub(crate) fn update_resolution_scale_button_colors(
     }
 }
 
-// Same Changed<Interaction>-gated tap-sets-the-resource shape as
-// resolution_scale_buttons.
 pub(crate) fn fps_cap_buttons(mut cap: ResMut<FpsCap>, buttons: Query<(&Interaction, &FpsCapButton), Changed<Interaction>>) {
     for (interaction, button) in &buttons {
         if *interaction == Interaction::Pressed {
@@ -2149,7 +1839,6 @@ pub(crate) fn fps_cap_buttons(mut cap: ResMut<FpsCap>, buttons: Query<(&Interact
     }
 }
 
-// Same color-feedback idea as update_resolution_scale_button_colors.
 pub(crate) fn update_fps_cap_button_colors(cap: Res<FpsCap>, mut buttons: Query<(&mut BackgroundColor, &FpsCapButton)>) {
     for (mut bg, button) in &mut buttons {
         let on = button.0 == cap.0;
@@ -2157,8 +1846,6 @@ pub(crate) fn update_fps_cap_button_colors(cap: Res<FpsCap>, mut buttons: Query<
     }
 }
 
-// Same Changed<Interaction>-gated tap-sets-the-resource shape as
-// resolution_scale_buttons.
 pub(crate) fn texture_quality_buttons(
     mut quality: ResMut<TextureQuality>,
     buttons: Query<(&Interaction, &TextureQualityButton), Changed<Interaction>>,
@@ -2170,7 +1857,6 @@ pub(crate) fn texture_quality_buttons(
     }
 }
 
-// Same highlight-the-active-preset idea as update_resolution_scale_button_colors.
 pub(crate) fn update_texture_quality_button_colors(
     quality: Res<TextureQuality>,
     mut buttons: Query<(&mut BackgroundColor, &TextureQualityButton)>,
@@ -2181,9 +1867,6 @@ pub(crate) fn update_texture_quality_button_colors(
     }
 }
 
-// Same Changed<Interaction>-gated tap-sets-the-resource shape as
-// texture_quality_buttons — independent resource, see
-// ZombieTextureQuality's own doc comment in lib.rs.
 pub(crate) fn zombie_texture_quality_buttons(
     mut quality: ResMut<ZombieTextureQuality>,
     buttons: Query<(&Interaction, &ZombieTextureQualityButton), Changed<Interaction>>,
@@ -2205,9 +1888,6 @@ pub(crate) fn update_zombie_texture_quality_button_colors(
     }
 }
 
-// Same Changed<Interaction>-gated tap-sets-the-resource shape as
-// texture_quality_buttons — independent resource, see PolyQuality's own
-// doc comment in lib.rs.
 pub(crate) fn poly_quality_buttons(
     mut quality: ResMut<PolyQuality>,
     buttons: Query<(&Interaction, &PolyQualityButton), Changed<Interaction>>,
@@ -2229,9 +1909,6 @@ pub(crate) fn update_poly_quality_button_colors(
     }
 }
 
-// Same Changed<Interaction>-gated tap-sets-the-resource shape as
-// texture_quality_buttons — independent resource, see GunTextureQuality's
-// own doc comment in lib.rs.
 pub(crate) fn gun_texture_quality_buttons(
     mut quality: ResMut<GunTextureQuality>,
     buttons: Query<(&Interaction, &GunTextureQualityButton), Changed<Interaction>>,
@@ -2253,9 +1930,6 @@ pub(crate) fn update_gun_texture_quality_button_colors(
     }
 }
 
-// Same Changed<Interaction>-gated tap-sets-the-resource shape as
-// poly_quality_buttons — independent resource, see GunPolyQuality's own
-// doc comment in lib.rs.
 pub(crate) fn gun_poly_quality_buttons(
     mut quality: ResMut<GunPolyQuality>,
     buttons: Query<(&Interaction, &GunPolyQualityButton), Changed<Interaction>>,
@@ -2277,8 +1951,6 @@ pub(crate) fn update_gun_poly_quality_button_colors(
     }
 }
 
-// Same Changed<Interaction>-gated tap-sets-the-resource shape as
-// texture_quality_buttons — see ShadowQuality's own doc comment in lib.rs.
 pub(crate) fn shadow_quality_buttons(
     mut quality: ResMut<ShadowQuality>,
     buttons: Query<(&Interaction, &ShadowQualityButton), Changed<Interaction>>,
@@ -2300,8 +1972,6 @@ pub(crate) fn update_shadow_quality_button_colors(
     }
 }
 
-// Same Changed<Interaction>-gated tap-sets-the-resource shape as
-// texture_quality_buttons — see LightQuality's own doc comment in lib.rs.
 pub(crate) fn light_quality_buttons(
     mut quality: ResMut<LightQuality>,
     buttons: Query<(&Interaction, &LightQualityButton), Changed<Interaction>>,
@@ -2323,9 +1993,6 @@ pub(crate) fn update_light_quality_button_colors(
     }
 }
 
-// Same Changed<Interaction>-gated tap-sets-the-resource shape as
-// light_quality_buttons — independent resource, see PointLightQuality's
-// own doc comment in lib.rs.
 pub(crate) fn point_light_quality_buttons(
     mut quality: ResMut<PointLightQuality>,
     buttons: Query<(&Interaction, &PointLightQualityButton), Changed<Interaction>>,
@@ -2347,16 +2014,6 @@ pub(crate) fn update_point_light_quality_button_colors(
     }
 }
 
-// Unlike RenderResolutionScale (a render-target size the offscreen camera
-// re-reads every frame — see resize_scene_render_target), a car prop's
-// mesh/material is baked into whichever asset handles it was spawned
-// with — changing either TextureQuality or PolyQuality alone doesn't
-// touch an already-spawned car, so this despawns and re-spawns every
-// ItemGalleryTestProp at the new tiers whenever EITHER resource actually
-// changes. Gated on at least one existing car so this never SPAWNS cars
-// onto a map that doesn't have them (e.g. tapping a quality button while
-// on Map 1) — Changed<...> would otherwise fire once even on maps with
-// zero cars.
 pub(crate) fn respawn_item_gallery_cars_on_quality_change(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -2364,9 +2021,7 @@ pub(crate) fn respawn_item_gallery_cars_on_quality_change(
     texture_quality: Res<TextureQuality>,
     poly_quality: Res<PolyQuality>,
     existing: Query<Entity, With<ItemGalleryTestProp>>,
-    // Also despawned here — see ItemGalleryCarNavObstacle's own doc
-    // comment (nav_debug.rs) for the real crash leaving these behind used
-    // to cause.
+
     existing_nav_obstacles: Query<Entity, With<ItemGalleryCarNavObstacle>>,
 ) {
     let texture_changed = texture_quality.is_changed() && !texture_quality.is_added();
@@ -2385,4 +2040,3 @@ pub(crate) fn respawn_item_gallery_cars_on_quality_change(
     }
     spawn_item_gallery_test_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
 }
-

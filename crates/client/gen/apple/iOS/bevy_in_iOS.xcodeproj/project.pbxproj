@@ -57,8 +57,8 @@
 
 /* Begin PBXFileReference section */
 		0201D3F45F1DFD3C0056C58C /* GameControllerInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameControllerInput.swift; sourceTree = "<group>"; };
-		06C0606E8F9B06EE30EE687B /* WatchConnectivityManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WatchConnectivityManager.swift; path = ../../../watchOS/bevy_watch_Watch_App/WatchConnectivityManager.swift; sourceTree = "<group>"; };
-		1875C9E58B7F8E0C11DE3701 /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ContentView.swift; path = ../../../watchOS/bevy_watch_Watch_App/ContentView.swift; sourceTree = "<group>"; };
+		06C0606E8F9B06EE30EE687B /* WatchConnectivityManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchConnectivityManager.swift; sourceTree = "<group>"; };
+		1875C9E58B7F8E0C11DE3701 /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		43A4592B435DC9CBCC94883B /* bevy_watch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "bevy_watch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		ABFF1EF359D90F2D357C2A71 /* GameController.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = GameController.framework; path = System/Library/Frameworks/GameController.framework; sourceTree = SDKROOT; };
 		AD4B1FE926EB1B90008A6AEE /* bevy_in_iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bevy_in_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -78,8 +78,8 @@
 		ADA4699226EB2F9A008B1C7B /* bevy_in_iOS-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "bevy_in_iOS-Bridging-Header.h"; sourceTree = "<group>"; };
 		ADC0D0EF295161DA00388970 /* libbevy_in_app.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libbevy_in_app.a; path = libs/debug/libbevy_in_app.a; sourceTree = "<group>"; };
 		ADC0D0F1295172CA00388970 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX13.1.sdk/System/Library/Frameworks/AudioToolbox.framework; sourceTree = DEVELOPER_DIR; };
-		D20FB2D2624CC3AD9399E2FB /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = ../../../watchOS/bevy_watch_Watch_App/Assets.xcassets; sourceTree = "<group>"; };
-		D8CA3A502809B915B27CDB84 /* bevy_watchApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = bevy_watchApp.swift; path = ../../../watchOS/bevy_watch_Watch_App/bevy_watchApp.swift; sourceTree = "<group>"; };
+		D20FB2D2624CC3AD9399E2FB /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		D8CA3A502809B915B27CDB84 /* bevy_watchApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = bevy_watchApp.swift; sourceTree = "<group>"; };
 		F3D288F668C218B4CB209538 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		F56E10E32988D2B7FAAEBB2B /* WatchSessionManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WatchSessionManager.swift; path = WatchSessionManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -116,7 +116,7 @@
 				D20FB2D2624CC3AD9399E2FB /* Assets.xcassets */,
 			);
 			name = watchOS;
-			path = watchOS/bevy_watch_Watch_App;
+			path = ../watchOS/bevy_watch_Watch_App;
 			sourceTree = "<group>";
 		};
 		AD0CB7E127A4061E0041811B /* base */ = {

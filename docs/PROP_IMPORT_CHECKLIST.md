@@ -50,7 +50,7 @@ done on a sedan car (see mục 5 for what that run actually cost/found).
      downloaded at whatever arbitrary scale Meshy generated at,
      needed `scale ≈ 2.2` fixed up by hand afterward, see mục 3) — use
      it going forward, it's strictly better than fixing scale in code.
-     Take the height number straight from `docs/maps/map01_dimensions.md`
+     Take the height number straight from `docs/maps/gdd/map01_dimensions.md`
      section 1's item library (e.g. sedan = 150cm) so every item stays
      consistent with the sizes already decided there.
 

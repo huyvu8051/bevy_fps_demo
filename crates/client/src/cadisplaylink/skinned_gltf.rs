@@ -1,12 +1,3 @@
-//! Phase 2 of the wgpu-replacement plan (see
-//! /Users/huyvu8051/.claude/plans/reactive-foraging-goose.md): skeletal
-//! animation / GPU skinning for models/soldier.glb and models/zombie.glb,
-//! loaded via the same `gltf` crate as gltf_scene.rs's static path (no
-//! Model I/O, no OS dependency). Unlike gltf_scene.rs, vertex
-//! positions/normals here stay in bind-pose local space — the whole point
-//! of skinning is blending per-joint matrices in the vertex shader every
-//! frame, so nothing gets baked at load time the way the static Sponza
-//! loader bakes node transforms once.
 
 use metal::{Device, MTLResourceOptions};
 
@@ -46,8 +37,6 @@ fn quat_normalize(q: [f32; 4]) -> [f32; 4] {
     if len > 1e-6 { [q[0] / len, q[1] / len, q[2] / len, q[3] / len] } else { [0.0, 0.0, 0.0, 1.0] }
 }
 
-// Shortest-path linear quaternion interpolation (nlerp) — cheaper than
-// slerp and visually fine for the frame-rate this animates at.
 fn quat_nlerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     let dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
     let b = if dot < 0.0 { [-b[0], -b[1], -b[2], -b[3]] } else { b };
@@ -139,12 +128,7 @@ fn sample_channel(times: &[f32], sample_time: f32) -> (usize, usize, f32) {
 }
 
 impl SkinnedModel {
-    // Evaluates `clip_index` at `time_secs` (looped against the clip's own
-    // duration) and returns one 4x4 matrix per joint, ready to upload as a
-    // vertex-shader buffer — same math bevy_animation does internally
-    // (sample keyframes, compose local TRS, walk the node hierarchy
-    // parent-first, then jointMatrix = worldTransform(joint) *
-    // inverseBindMatrix(joint)).
+
     pub fn compute_joint_matrices(&self, clip_index: usize, time_secs: f32) -> Vec<Mat4> {
         let mut local_trs = self.node_rest_trs.clone();
 
@@ -301,12 +285,7 @@ pub fn load_skinned_gltf(device: &Device, path: &std::path::Path) -> Option<Skin
             );
 
             let pbr = primitive.material().pbr_metallic_roughness();
-            // Confirmed via a device/Simulator console read that this binds
-            // correctly for zombie.glb specifically (base_color_texture=
-            // true, factor=[1,1,1,1]) — the earlier "renders solid black"
-            // report wasn't a texture-loading bug at all; see
-            // native_metal_renderer.rs's skinned_fragment for what it actually
-            // was (a since-reverted per-channel color floor).
+
             let base_color_texture =
                 pbr.base_color_texture().and_then(|info| textures.get(info.texture().source().index()).cloned().flatten());
 

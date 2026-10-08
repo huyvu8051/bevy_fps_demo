@@ -25,7 +25,7 @@ watch_dir = File.join(__dir__, 'watchOS', 'bevy_watch_Watch_App')
 # --- watch app target -------------------------------------------------
 watch_target = project.new_target(:application, 'bevy_watch Watch App', :watchos, '10.0')
 
-watch_group = project.main_group.new_group('watchOS', 'watchOS/bevy_watch_Watch_App')
+watch_group = project.main_group.new_group('watchOS', '../watchOS/bevy_watch_Watch_App')
 %w[bevy_watchApp.swift ContentView.swift WatchConnectivityManager.swift].each do |name|
   ref = watch_group.new_reference(File.join(watch_dir, name))
   watch_target.add_file_references([ref])

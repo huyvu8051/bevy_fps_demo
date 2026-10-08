@@ -1,65 +1,26 @@
-// --- Zombies (server-authoritative AI/movement, see crates/server) ---
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::arena::ARENA_HALF_SIZE;
 
-// Marks the root of a zombie's spawned scene, so a raycast hit anywhere in
-// its (deep, multi-node) hierarchy can be traced back up to something we can
-// despawn, and so move_zombies can find every zombie each frame. Replicated
-// (server spawns/AI-drives these; client reacts to Add<Zombie> to spawn the
-// cosmetic GLTF scene — see crates/client's spawn_zombie).
 #[derive(Component, Default, Serialize, Deserialize)]
 #[require(Transform)]
 pub struct Zombie;
 
-// Gravity/ground state, same idea as Player but tracked per-zombie.
-// path_recalc_timer/cached_path_dir throttle move_zombies' navmesh
-// pathfinding AND local obstacle-avoidance raycasts instead of recomputing
-// both every single frame for every chasing zombie — cached_path_dir holds
-// the final, already-steered movement direction.
 #[derive(Component, Default)]
 pub struct ZombieMotion {
     pub vertical_velocity: f32,
     pub grounded: bool,
     pub path_recalc_timer: f32,
     pub cached_path_dir: Vec3,
-    // Set by move_zombies each frame (distance > ZOMBIE_LOD_DISTANCE) —
-    // freeze_zombie_animations pauses animation/skinning for these, and
-    // update_zombie_health_bars hides their bar, since neither is worth
-    // paying for on a zombie too far away to be scrutinized.
+
     pub far: bool,
 }
 
-// Horizontal impulse from a bullet hit, added on top of chase movement in
-// move_zombies and exponentially decayed back to zero — a hit knocks a
-// zombie back for a moment instead of its position being unaffected by
-// anything but its own chase logic.
 #[derive(Component, Default)]
 pub struct KnockbackVelocity(pub Vec3);
 
-// Bone entities used for real per-bone hit detection (see HITBOX_PLAN.md
-// Phase 4 — this replaces zombie_hit_damage_geometric's fixed-Y-threshold
-// guess once wired into damage). zombie.glb's rig names its nodes after
-// standard humanoid bones; wire_zombie_hitbox_bones (below) matches
-// against those names as they show up while the glTF scene loads.
-// Fields are individually optional/incrementally filled rather than an
-// all-or-nothing bundle, so a hit lands correctly even mid-load using
-// whichever bones have resolved so far. Moved here from crates/client
-// (Phase 2) so the server's own zombie skeletons (Phase 2's real point)
-// can populate the exact same component the client already did —
-// one system, two callers, instead of two copies drifting apart.
-//
-// left_arm/right_arm/left_leg/right_leg are ordered joint chains
-// ([shoulder/hip, elbow/knee, hand/foot]) rather than an unordered bag —
-// zombie_hit_damage_bones tests each CONSECUTIVE pair as a capsule segment
-// (shoulder->elbow, elbow->hand) instead of a lone point-sphere at each
-// joint. A point-sphere-per-joint approach left real "dead zones" along
-// the visible forearm/shin — a clean hit partway between two joints landed
-// outside every sphere and scored 0 damage even though it clearly hit the
-// mesh. Capsule segments have no such gap. Same reasoning applies to
-// belly/chest below (see zombie_hit_damage_bones).
 #[derive(Component, Default)]
 pub struct ZombieHitboxBones {
     pub head: Option<Entity>,
@@ -71,18 +32,6 @@ pub struct ZombieHitboxBones {
     pub right_leg: [Option<Entity>; 3],
 }
 
-// Matches newly-spawned bone entities (glTF nodes get a Name component
-// from their node name) against zombie.glb's known rig names, and
-// records whichever ones matter on the zombie root's ZombieHitboxBones.
-// Registered in both crates/client (cosmetic gizmo today) and
-// crates/server (Phase 2 onward — real hit detection) — same system,
-// same component, so there's exactly one place this bone-name mapping
-// can drift out of sync with the actual rig.
-// Each entry is (rig node name, setter) — the setter both picks which field
-// this bone belongs on and, for the limb chains, which position in the
-// [shoulder/hip, elbow/knee, hand/foot] ordering, so zombie_hit_damage_bones
-// can always build its capsule segments in the right order regardless of
-// what order glTF nodes happen to load in.
 type HitboxSetter = fn(&mut ZombieHitboxBones, Entity);
 
 const CLASSIC_HITBOX_SLOTS: &[(&str, HitboxSetter)] = &[
@@ -103,10 +52,6 @@ const CLASSIC_HITBOX_SLOTS: &[(&str, HitboxSetter)] = &[
     ("RightFoot", |b, e| b.right_leg[2] = Some(e)),
 ];
 
-// zombie_meshy's rig is Mixamo-named too — identical to CLASSIC except the
-// chest bone is "Spine02" (it also carries Spine01 / LeftShoulder /
-// RightShoulder that the classic rig lacks; the game's arm chains still
-// start at LeftArm/RightArm, so those aren't mapped).
 const MESHY_HITBOX_SLOTS: &[(&str, HitboxSetter)] = &[
     ("Head", |b, e| b.head = Some(e)),
     ("Spine", |b, e| b.belly = Some(e)),
@@ -128,10 +73,7 @@ const MESHY_HITBOX_SLOTS: &[(&str, HitboxSetter)] = &[
 pub fn zombie_hitbox_bone_slots(kind: ZombieKind) -> &'static [(&'static str, HitboxSetter)] {
     match kind {
         ZombieKind::Classic => CLASSIC_HITBOX_SLOTS,
-        // zombie_soldier shares zombie_meshy's exact same 26-node Mixamo
-        // rig (verified node-for-node before wiring it up — see
-        // ZOMBIE_SOLDIER_PATH's own doc comment), so the same slot mapping
-        // applies unchanged.
+
         ZombieKind::Meshy | ZombieKind::Soldier => MESHY_HITBOX_SLOTS,
     }
 }
@@ -143,7 +85,7 @@ pub fn wire_zombie_hitbox_bones(
 ) {
     for (bone_entity, name) in &new_names {
         let n = name.as_str();
-        // Cheap reject before the ChildOf walk: not a bone name in either rig.
+
         if n != "Spine02" && !CLASSIC_HITBOX_SLOTS.iter().any(|&(s, _)| s == n) {
             continue;
         }
@@ -165,15 +107,8 @@ pub fn wire_zombie_hitbox_bones(
     }
 }
 
-// How often a zombie in melee range can bite — see ZombieAttackTimer.
 pub const ZOMBIE_ATTACK_INTERVAL: f32 = 1.0;
 
-// Counts down to the next bite — only ticks while the zombie is actually in
-// range (zombies_damage_player), so wandering out of melee range and back
-// doesn't let an attack "bank" while it was away. Starts at
-// ZOMBIE_ATTACK_INTERVAL rather than 0.0 so a zombie that just caught up
-// gets a beat before its first bite instead of landing one the instant it
-// arrives.
 #[derive(Component)]
 pub struct ZombieAttackTimer(pub f32);
 
@@ -183,32 +118,17 @@ impl Default for ZombieAttackTimer {
     }
 }
 
-// Driven by big-brain's Thinker/Scorer/Action (NearPlayer scorer picks
-// ChaseAction once in range — both server-only, see crates/server).
-// ChaseAction's Requested/Cancelled handlers insert/remove this component —
-// move_zombies reads its presence to know which zombies should be walking
-// at all. No `target` field: with more than one player connected, the
-// nearest one can change moment to moment, so move_zombies just re-picks
-// the nearest connected player fresh every frame instead of chasing
-// whichever one happened to be nearest when this was first inserted.
 #[derive(Component, Clone)]
 #[component(storage = "SparseSet")]
 pub struct Chase;
 
 pub const ZOMBIE_AI_ENABLED: bool = true;
-// Large enough that zombies start chasing basically as soon as they spawn —
-// this is meant as target practice, not a stealth encounter.
+
 pub const ZOMBIE_CHASE_RANGE: f32 = 60.0;
-// Was a single ZOMBIE_SPEED (1.0) regardless of pose — split so the Run
-// pose (see ZOMBIE_RUN_DISTANCE/zombie_pose_for) actually moves faster
-// than Walk instead of just looking like it does. 1.5x/3x the old value.
+
 pub const ZOMBIE_WALK_SPEED: f32 = 1.5;
 pub const ZOMBIE_RUN_SPEED: f32 = 3.0;
 
-// Single formula for "how fast is a zombie moving at this distance",
-// mirroring zombie_pose_for's own ZOMBIE_RUN_DISTANCE threshold so the
-// Run pose and the actual speed boost always kick in at the same range —
-// see move_zombies (crates/server) for the caller.
 pub fn zombie_speed_for(distance: f32) -> f32 {
     if distance <= ZOMBIE_RUN_DISTANCE {
         ZOMBIE_RUN_SPEED
@@ -217,204 +137,40 @@ pub fn zombie_speed_for(distance: f32) -> f32 {
     }
 }
 
-// Visual mesh scale multiplier for zombie.glb (crates/client's ZOMBIE_PATH)
-// — lives here rather than client-only because the physics/hit-detection
-// capsule below needs to stay sized to match it. Keeping them in the same
-// crate is what stops them silently drifting apart: previously ZOMBIE_SCALE
-// was bumped 0.1 -> 0.25 directly in the client without resizing the
-// capsule to match, so the visual head grew well above where the actual
-// collider ended and headshots stopped registering as hits at all (the
-// capsule/hitbox constants below are now all *derived* from this value
-// instead of separately hardcoded, specifically so that can't happen again).
 pub const ZOMBIE_SCALE: f32 = 0.25;
-// Raw mesh height in zombie.glb's own unscaled local units, actually
-// measured from the file (not guessed): its POSITION accessor's Y
-// bounding box is [-0.0000837, 0.0760498] (height 0.0761335), but the
-// glTF scene's "Zombie" node — the one crates/client's SceneRoot load
-// actually renders through — bakes in its own 107.006576 scale on top of
-// that raw vertex data. 0.0761335 * 107.006576 = 8.1468, i.e. this
-// constant already includes that node scale, so ZOMBIE_WORLD_HEIGHT below
-// only needs to multiply by ZOMBIE_SCALE, not by both. (Two earlier
-// values here were both wrong: 20.0 was a guess never checked against the
-// file, and 1.0 made ZOMBIE_LENGTH go negative — see ZOMBIE_LENGTH's own
-// comment on why that's a real bug, not just a bad guess.)
+
 const ZOMBIE_MESH_REFERENCE_HEIGHT: f32 = 8.1468;
 const ZOMBIE_WORLD_HEIGHT: f32 = ZOMBIE_MESH_REFERENCE_HEIGHT * ZOMBIE_SCALE;
-// Relative to the original 0.1 calibration (factor 1.0 at ZOMBIE_SCALE =
-// 0.1) — KNOCKBACK_FORCE and the old debug-gizmo-only HITBOX_*_MIN_Y ring
-// constants (crate::hitbox) still scale off this so they stay proportional
-// to whatever ZOMBIE_SCALE currently is, instead of separately hardcoded
-// numbers. ZOMBIE_RADIUS itself no longer uses this — see its own doc
-// comment for why. pub(crate): crate::hitbox needs it too.
+
 pub(crate) const ZOMBIE_SCALE_FACTOR: f32 = ZOMBIE_SCALE / 0.1;
-// Raw mesh X-axis extent (torso depth) in zombie.glb's own unscaled local
-// units, measured the same way as ZOMBIE_MESH_REFERENCE_HEIGHT above: its
-// POSITION accessor's X bounding box is [-0.00656874990090728,
-// 0.0093571599572897] (extent 0.0159259099), times the same 107.006576
-// node scale baked into that accessor. Deliberately the X axis, not Z
-// (extent ~7.65 at this same scale) — Z is the mesh's T-pose left/right ARM
-// SPAN, which massively overstates how wide the character actually reads
-// standing normally; X is front-to-back torso depth, unaffected by the
-// arms being spread out in the bind pose. See ZOMBIE_RADIUS below.
+
 const ZOMBIE_MESH_REFERENCE_TORSO_WIDTH: f32 = 1.7042;
-// Used to be a guessed multiple of the old PLAYER_RADIUS-aliased value
-// (0.35 * ZOMBIE_SCALE_FACTOR = 0.875 at the current ZOMBIE_SCALE) — that
-// number turned out to be close to the mesh's full T-pose arm span, not its
-// actual torso width, so the raycast capsule ended up roughly 2x wider than
-// the visible character: shots that clearly missed the model still
-// registered as a capsule hit (see spawn_zombie_hit_feedback's own doc
-// comment in crates/client for the other half of that bug — those phantom
-// hits landing outside every real bone hitbox still showed blood/floating
-// damage before that fix). Now derived from the mesh's actual measured
-// torso width instead of a guess, same treatment ZOMBIE_MESH_REFERENCE_HEIGHT
-// already got. Halved for radius since TORSO_WIDTH above is a full extent.
-// This stays the ACCURATE value — HEAD_HITBOX_RADIUS/TORSO_HITBOX_RADIUS/
-// LIMB_HITBOX_RADIUS (the real per-bone damage regions, crate::hitbox) all
-// derive from this, so damage decisions keep matching the real mesh. See
-// ZOMBIE_OUTER_RADIUS below for the (deliberately wider) broad-phase
-// capsule instead.
+
 pub const ZOMBIE_RADIUS: f32 = ZOMBIE_MESH_REFERENCE_TORSO_WIDTH * ZOMBIE_SCALE / 2.0;
-// Capsule height (2*radius + length) is set to exactly ZOMBIE_WORLD_HEIGHT
-// so a raycast/capsule-cast covers the mesh's full height, including the
-// very top of the head — no gap left uncovered like before. ZOMBIE_RADIUS
-// is derived from a different axis of the same mesh (torso width vs.
-// height) rather than from ZOMBIE_WORLD_HEIGHT itself, so this can in
-// principle still go negative if ZOMBIE_MESH_REFERENCE_HEIGHT is ever set
-// too small relative to 2*ZOMBIE_RADIUS — avian3d's capsule
-// collider doesn't panic on that (SharedShape::capsule just takes two
-// endpoints, so a negative length silently flips them and produces a
-// capsule sized off |length| instead — see the client's draw_zombie_hitboxes
-// for why that made the debug capsule gizmo visibly lie about the real
-// hitbox size). A negative value here is always a bug, not a valid "smaller
-// zombie" — shrink ZOMBIE_SCALE instead, which scales both terms together.
+
 pub const ZOMBIE_LENGTH: f32 = ZOMBIE_WORLD_HEIGHT - 2.0 * ZOMBIE_RADIUS;
 
-// The broad-phase shape ("did this shot even reach the zombie AT ALL" —
-// handle_fire_shot's first pass + lag-comp rewind, debug_bot_fire's own
-// fire branch, shoot()'s local prediction, and the zombie's own attached
-// physics Collider used for generic SpatialQuery casts). Deliberately
-// WIDER than ZOMBIE_RADIUS to make that first pass forgiving. A plain
-// cylinder (flat top/bottom, no caps), so ZOMBIE_OUTER_HEIGHT is just
-// ZOMBIE_WORLD_HEIGHT directly (no end-cap contribution to subtract like a
-// capsule). Does NOT affect the real per-bone damage regions
-// (HEAD/TORSO/LIMB_HITBOX_RADIUS still derive from the accurate
-// ZOMBIE_RADIUS above) — zombie_hit_damage_ray still decides how much (if
-// any) damage actually lands; a shot that only reaches this outer shell
-// and no real bone region is a genuine miss, not a graze.
-//
-// This is HIT-DETECTION only. The cylinder move_zombies pushes the zombie
-// around with is ZOMBIE_MOVE_RADIUS below — kept separate so the shot
-// broad-phase can stay generous while the physical footprint is small
-// enough to fit gaps a player clears.
 pub const ZOMBIE_OUTER_RADIUS: f32 = ZOMBIE_RADIUS * 4.0;
 pub const ZOMBIE_OUTER_HEIGHT: f32 = ZOMBIE_WORLD_HEIGHT;
 
-/// Radius of the MoveAndSlide cylinder in `move_zombies` — the zombie's
-/// physical footprint for walking / colliding with level geometry. Small
-/// (≈ the accurate torso half-width) so zombies fit the same gaps a player
-/// does; unrelated to the shooting broad-phase (ZOMBIE_OUTER_RADIUS).
-/// Height is still ZOMBIE_OUTER_HEIGHT (full body).
 pub const ZOMBIE_MOVE_RADIUS: f32 = 0.3;
 
-// How far below the zombie root's own Transform/NetTransform.translation
-// (capsule center) the mesh's own local origin needs to sit so its feet
-// land at the capsule's bottom — capsule center to feet. Applied to the
-// mesh/skeleton CHILD's own Transform (in world units — the child's
-// parent, the zombie entity itself, is never scaled, only this child is),
-// alongside a ZOMBIE_SCALE scale-down, not baked into the scaled
-// mesh-local space. Both crates/client (the visible mesh, zombie_mesh_
-// bundle) and crates/server (the real skeleton used for hit detection,
-// on_zombie_spawned) need this exact same transform — a skeleton spawned
-// without it sits at the raw unscaled mesh size (~4x too big at the
-// current ZOMBIE_SCALE) and offset from the root, so its bones end up
-// nowhere near the outer capsule/visible mesh a shot is actually aimed at.
 pub const ZOMBIE_MODEL_Y_OFFSET: f32 = -(ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0);
 
-// Was two separately-declared consts (ZOMBIE_PATH in crates/client,
-// SERVER_ZOMBIE_PATH in crates/server) both pointing at the same file —
-// same "shouldn't silently drift" reasoning as ZOMBIE_MODEL_Y_OFFSET
-// above. "Animated Zombie" by Quaternius (poly.pizza, CC-BY 3.0) —
-// https://poly.pizza/m/jkrEvQZb8J — keep this attribution if shared/
-// published.
 pub const ZOMBIE_PATH: &str = "characters/zombie/mesh/zombie.glb";
-// zombie.glb's animation order (read from the file's own animations list):
-// 0=Bite, 1=Crawl, 2=Idle, 3=Run, 4=Walk. Was two separately-declared sets
-// of these five indices (crates/client's ZOMBIE_ANIM_*, crates/server's
-// SERVER_ZOMBIE_ANIM_* — the latter's own doc comment even called out the
-// "a drift between them would silently desync which clip each name means"
-// risk this now closes) — a single set here instead, used by both.
+
 pub const ZOMBIE_ANIM_BITE: usize = 0;
 pub const ZOMBIE_ANIM_CRAWL: usize = 1;
 pub const ZOMBIE_ANIM_IDLE: usize = 2;
 pub const ZOMBIE_ANIM_RUN: usize = 3;
 pub const ZOMBIE_ANIM_WALK: usize = 4;
 
-// --- Second zombie mesh ---
-//
-// A fully separate Meshy-generated zombie — different 24-joint rig, 7 clips
-// (0..4 Text-to-Motion, 5=Running, 6=Walking). Originally added purely for
-// spawn_item_gallery_zombie_showcase (crates/client, one instance per clip,
-// to eyeball its animations next to the classic zombie's own row — see
-// commit bf3614c) but later also wired into real gameplay spawns
-// (zombie_kind_for_phase, crates/server) for a ~50/50 mix of both rigs.
 pub const ZOMBIE_MESHY_PATH: &str = "characters/zombie_meshy/mesh/zombie_meshy.glb";
 
-// --- Third zombie mesh: a Meshy "Full body game ready" biped, reskinned
-// as a soldier zombie ---
-//
-// Same 26-node Mixamo-named rig as soldier_meshy/zombie_meshy (root
-// renamed "Armature" -> "target_character" via scripts/rename_glb_root_node.py
-// to match), split from the start (scripts/extract_glb_mesh_only.py).
-//
-// POLICY (changed after a real incident — see ZOMBIE_SOLDIER_ANIM_PATH's
-// own doc comment): mesh and animation stay split into 2 files per
-// character (keeps the pipeline/tooling uniform, RON-editor-friendly,
-// small mesh files), but animation is NO LONGER shared across different
-// characters' rigs — each character gets its OWN dedicated anim file
-// now, even if that means less clip reuse. Matching bone names/hierarchy
-// between 2 DIFFERENT characters' rigs is not enough to safely share one
-// animation file — each joint's own REST rotation convention has to
-// match too, and 2 different Meshy exports (even same "Full body game
-// ready" template) aren't guaranteed to agree on that. Splitting mesh
-// from anim WITHIN one character's own files is still fine and still
-// done (that split never had this problem — it's the SAME rig's own
-// rest pose on both sides), only cross-character sharing is retired.
 pub const ZOMBIE_SOLDIER_PATH: &str = "characters/zombie_soldier/mesh/zombie_soldier.glb";
 
-// Soldier's OWN dedicated animation file — NOT shared with soldier_meshy/
-// zombie_meshy any more. Extracted (scripts/extract_glb_animations.py)
-// from the same fresh Meshy export zombie_soldier.glb's mesh itself came
-// from, so its clip's rest-pose baseline is guaranteed to match (it's
-// literally the same rig) — no retargeting needed or attempted.
-//
-// History: this used to point at characters/_shared_anims/mixamo_base.glb
-// (shared with soldier_meshy/zombie_meshy). That caused a real, confirmed
-// bug: mixamo_base.glb's clips set each joint's LOCAL rotation to an
-// ABSOLUTE value every keyframe (standard glTF/Mixamo animation, not a
-// delta from rest), calibrated against zombie_meshy's specific rest pose.
-// zombie_soldier's actual rest pose measured differently (Hips->Foot
-// world direction ran along Z instead of the expected -Y) — same class of
-// bug the Mixamo/Unreal/Godot community calls "T-pose vs A-pose
-// retargeting breaks unless both rigs share a rest pose" (bone names/
-// hierarchy matching alone is NOT enough). Symptoms: legs visibly bent/
-// floated wrong while running, torso hitbox spun continuously (see
-// wire_zombie_hitbox_bones). A same-session attempt to fix it by
-// rewriting zombie_soldier's rest rotations to match zombie_meshy's
-// (scripts/retarget_rest_pose.py) made it far WORSE in actual gameplay —
-// the mesh deformed into a stretched, distorted shape, not just posed
-// wrong — and was reverted rather than shipped. Root cause of that
-// deformation is still unknown (the rebuilt inverseBindMatrices math
-// checked out on paper); an earlier, separate attempt at this same
-// rest-pose-retarget fix (see retarget_rest_pose.py's own git history)
-// hit the same "still looks wrong" wall. Given 2 independent retarget
-// attempts both failed, the policy above (no more cross-character anim
-// sharing) replaces trying a third time.
 pub const ZOMBIE_SOLDIER_ANIM_PATH: &str = "characters/zombie_soldier/anims/soldier_running.glb";
 
-/// Which glTF file a kind's animation clips should be loaded from — the
-/// mesh's own file for Classic/Meshy (neither split), the separate
-/// anim-only library for Soldier (see ZOMBIE_SOLDIER_ANIM_PATH's own doc
-/// comment).
 pub fn zombie_kind_anim_path(kind: ZombieKind) -> &'static str {
     match kind {
         ZombieKind::Classic => ZOMBIE_PATH,
@@ -423,77 +179,6 @@ pub fn zombie_kind_anim_path(kind: ZombieKind) -> &'static str {
     }
 }
 
-// Meshy/Soldier's placement used to be a per-kind runtime scale/Y-offset/
-// rotation, eyeballed in the F2 editor and F9-saved to a RON file
-// (zombie_meshy_transform.ron / zombie_soldier_transform.ron — both now
-// deleted). zombie_meshy carries that correction baked permanently into
-// its own scene root node instead (scripts/bake_mesh_transform.py — the
-// general-purpose successor to normalize_glb_root_rotation.py, rotation
-// only), since ITS raw Meshy export needed one (rot_x 90°, offset_y
-// -1.0) to stand upright. zombie_soldier does NOT — see the debugging
-// history below for why that isn't just an assumption.
-//
-// zombie_soldier debugging history (multiple wrong turns, kept here so
-// nobody repeats them):
-// 1. Original mesh shipped lying on its back — no rotation baked into
-//    root at all. Fixed by re-importing from a fresh Meshy export.
-// 2. Assumed (WRONG) that the new export needed the exact same bake
-//    zombie_meshy did (rot_x 90°, offset_y -1.0) and applied it blindly
-//    without checking the raw file first. This "fixed" the lying-down
-//    symptom enough to look upright ONLY because the mesh was, at the
-//    time, still driven by zombie_meshy's own SHARED animation (see
-//    ZOMBIE_SOLDIER_ANIM_PATH's doc comment) — that animation's absolute
-//    Hips rotation values happened to impose a standing-looking pose
-//    regardless of this mesh's own (now wrongly-rotated) rest geometry.
-//    Real symptom this masked: legs bent/floated wrong while running,
-//    torso hitbox spun continuously (wire_zombie_hitbox_bones tracks
-//    these same joints' live world rotation) — a genuine rest-pose
-//    mismatch against the shared animation's source rig, the same class
-//    of bug the Mixamo/Unreal/Godot community knows as "T-pose vs A-pose
-//    retargeting breaks unless both rigs share a rest pose".
-// 3. Tried `scripts/retarget_rest_pose.py` (copy zombie_meshy's per-joint
-//    rest rotations onto zombie_soldier's matching-named joints, rebuild
-//    inverseBindMatrices) to fix step 2's mismatch. Verified numerically
-//    that this fixed the Hips->Foot world direction — but in actual
-//    gameplay the mesh came out catastrophically deformed (limbs
-//    stretched into a distorted shape), far worse than step 2's bug.
-//    Reverted.
-// 4. Switched policy instead: gave zombie_soldier its OWN dedicated
-//    animation file (extracted from the same fresh Meshy export this
-//    mesh came from, so its rest pose is guaranteed to match — see
-//    ZOMBIE_SOLDIER_ANIM_PATH), no longer sharing any rig's animation
-//    across characters. This is when step 2's wrong rotation bake (still
-//    applied to the mesh) finally became visible on its own, undisguised
-//    by the shared animation's masking rotation: the character rendered
-//    face-down. Checked the RAW, un-baked export directly (world Hips/
-//    Foot/Head Y positions) and found it was ALREADY correctly
-//    oriented — no rotation needed at all. Step 2's rot_x 90° bake was
-//    never needed for this mesh; applying it rotated an already-correct
-//    standing mesh INTO a lying one. Fixed by re-extracting mesh-only +
-//    renaming the root (scripts/rename_glb_root_node.py) with NO
-//    rotation baked in.
-// 5. Rotation fixed, but now visibly floating ~1m above the ground (the
-//    raw export's own feet-at-y~=0.02 turned out to be relative to ITS
-//    OWN origin, not this game's root-height convention — a real, separate
-//    axis from step 4's rotation question, easy to conflate but not the
-//    same thing). Fixed with `scripts/bake_mesh_transform.py ... --offset-y
-//    -1.0` (rotation left at identity this time, only translation baked)
-//    — same numeric offset zombie_meshy happens to use, but arrived at by
-//    measuring THIS mesh in-game, not copied over blind (see step 2's
-//    mistake). zombie_kind_mesh_transform below returns Transform::IDENTITY
-//    for Soldier for the same reason as Meshy now: the correction is
-//    baked into the mesh's own root, not applied at runtime.
-//
-// Moral that cost real time more than once: verify a mesh's placement
-// in-engine (rotation AND ground height are separate questions) before
-// copying ANY other character's baked correction values onto it — "same
-// export pipeline" does not mean "same raw orientation/height convention".
-
-/// Which of the three zombie meshes an entity uses. Replicated on gameplay
-/// zombies (server picks per-spawn, roughly evenly split — see
-/// crates/server's spawn_zombies); the ItemGallery showcase rig sets it
-/// locally. Absence still means `Classic` (older call sites / client's
-/// `spawn_local_zombie`).
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Default, Debug, Serialize, Deserialize)]
 pub enum ZombieKind {
     #[default]
@@ -502,20 +187,8 @@ pub enum ZombieKind {
     Soldier,
 }
 
-/// Default [Classic, Meshy, Soldier] spawn-mix ratio — every real spawn
-/// site passes this to `zombie_kind_for_phase` rather than hand-rolling
-/// its own weights, so there's one obvious place to edit to change the
-/// mix game-wide. Equal thirds today; values don't need to sum to 1, only
-/// their ratio to each other matters (e.g. `[2.0, 1.0, 1.0]` for "twice as
-/// much Classic as either other kind").
 pub const ZOMBIE_KIND_WEIGHTS: [f32; 3] = [1.0, 1.0, 1.0];
 
-/// Deterministic weighted pick from an entity's own `entity_phase` hash
-/// (a uniform [0, 1) value) — the server tags each spawning zombie with
-/// this so a horde shows a mix of all three rigs. `weights` is
-/// `[Classic, Meshy, Soldier]`; pass `ZOMBIE_KIND_WEIGHTS` for the normal
-/// default mix, or a custom `[f32; 3]` for a one-off scenario (e.g. an
-/// isolation test that wants only one kind — `[1.0, 0.0, 0.0]`).
 pub fn zombie_kind_for_phase(phase: f32, weights: [f32; 3]) -> ZombieKind {
     let total: f32 = weights.iter().sum();
     if total <= 0.0 {
@@ -542,10 +215,6 @@ impl std::fmt::Display for ZombieKind {
     }
 }
 
-/// Marks a showcase zombie (ItemGallery) whose animation is pinned to this
-/// clip index for its whole life — client's `wire_zombie_animations` plays
-/// it once and `update_zombie_animation` skips the entity, so no pose logic
-/// ever runs. Never replicated; these entities are client-local.
 #[derive(Component, Clone, Copy)]
 pub struct ZombieShowcaseClip(pub usize);
 
@@ -557,19 +226,6 @@ pub fn zombie_kind_mesh_path(kind: ZombieKind) -> &'static str {
     }
 }
 
-/// `assets/`-relative path to a kind's base-color texture at a given
-/// `ZombieTextureQuality` tier (0..=5, a separate resource from cars' own
-/// `TextureQuality`) — baked by scripts/bake_zombie_textures.py
-/// into `<kind_dir>/mesh/textures/base_color_q{N}.jpg`. Read by both
-/// render paths: desktop's `apply_zombie_texture_quality`
-/// (crates/client/src/zombie_client.rs) swaps the kind's shared
-/// `StandardMaterial.base_color_texture` handle to whichever tier this
-/// returns; native_metal_probe.rs's own texture-quality handling re-
-/// uploads the `SkinnedModel`'s `base_color_texture` from the same file.
-/// Every kind's mesh.glb ships exactly one material with only a
-/// baseColorTexture (no normal/metallic-roughness slots at all — a real
-/// inspection of all three .glb files confirmed this, unlike cars which
-/// have all three), so this is the only texture-quality path zombies need.
 pub fn zombie_kind_texture_path(kind: ZombieKind, tier: u8) -> String {
     let dir = match kind {
         ZombieKind::Classic => "zombie",
@@ -579,40 +235,15 @@ pub fn zombie_kind_texture_path(kind: ZombieKind, tier: u8) -> String {
     format!("characters/{dir}/mesh/textures/base_color_q{}.jpg", tier.min(5))
 }
 
-/// How many animation clips the kind's anim source (zombie_kind_anim_path)
-/// ships — one showcase zombie is spawned per clip.
 pub fn zombie_kind_clip_count(kind: ZombieKind) -> usize {
     match kind {
         ZombieKind::Classic => 5,
         ZombieKind::Meshy => 7,
-        // soldier_running.glb's own clip count — just the 1 real "running"
-        // clip Meshy shipped with this rig (see ZOMBIE_SOLDIER_ANIM_PATH's
-        // own doc comment: no longer sharing mixamo_base.glb's 19).
+
         ZombieKind::Soldier => 1,
     }
 }
 
-// zombie_kind_mesh_transform / zombie_kind_gameplay_mesh_transform /
-// zombie_kind_showcase_root_y used to live here, each a per-kind match
-// returning Transform::IDENTITY / 0.0 for every variant — removed
-// (2026-09-04) since there was nothing left to switch on: every kind's
-// scale/offset/rotation is baked directly into its own glb's scene root
-// node now (Classic's own bake — scripts/bake_mesh_transform.py --scale
-// 0.25 --offset-y -1.01835 — was the last holdout; see
-// zombie_kind_metal_model_name's own doc comment below for the real bug
-// that investigation was chasing). Call sites just use Transform::IDENTITY
-// / 0.0 directly now.
-
-/// Clip indices into a kind's anim source (zombie_kind_anim_path) for the 5
-/// gameplay poses, in order `[idle, walk, run, crawl, bite]`. Classic maps
-/// 1:1 to its named `ZOMBIE_ANIM_*`; Meshy only has real Walking (6) /
-/// Running (5) clips, so idle/crawl/bite fall back to its first
-/// Text-to-Motion clip until more are generated. Soldier now has exactly 1
-/// real clip (its own dedicated Running animation — see
-/// ZOMBIE_SOLDIER_ANIM_PATH's own doc comment for why it no longer shares
-/// soldier_meshy's mixamo_base.glb) — index 0 stands in for every pose
-/// until more clips get generated FOR THIS SPECIFIC RIG (reusing another
-/// character's clip is exactly what caused the retired bug).
 pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; 5] {
     match kind {
         ZombieKind::Classic => [
@@ -627,26 +258,6 @@ pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; 5] {
     }
 }
 
-/// `SkinnedModelRegistry` key the iOS native Metal renderer (a hand-written
-/// GPU path that never goes through `bevy_render` — see
-/// crates/client/src/cadisplaylink's own doc comments) registers/draws
-/// each kind's mesh under. Lives here, next to `zombie_kind_mesh_path`,
-/// rather than as its own match in native_metal_probe.rs, so the two
-/// "which glb is kind X" answers (bevy's own asset path vs. this custom
-/// renderer's registry key) can't independently drift apart the way they
-/// already did once: native_metal_probe.rs used to register only ONE
-/// zombie model ever, under a single hardcoded "zombie" name, and the
-/// per-frame draw call passed that same literal for every zombie
-/// regardless of its real `ZombieKind` — so on iOS, a Meshy or Soldier
-/// zombie's real (correct) per-joint skeleton got applied to Classic's
-/// mesh every time, producing a garbled render that looked kind-specific
-/// but was actually "right skeleton, wrong mesh, always Classic's."
-/// bevy_render/wgpu (desktop/web) never had this bug — that path always
-/// read `ZombieKind` off the entity via `zombie_kind_mesh_path` like
-/// everything else here — only this hand-rolled renderer needed its own
-/// name-keyed registry in the first place (see skinned_actor.rs's own doc
-/// comment for why: the renderer core is generic over "a named skinned
-/// actor", not aware of gameplay types like ZombieKind at all).
 pub fn zombie_kind_metal_model_name(kind: ZombieKind) -> &'static str {
     match kind {
         ZombieKind::Classic => "zombie_classic",
@@ -656,48 +267,17 @@ pub fn zombie_kind_metal_model_name(kind: ZombieKind) -> &'static str {
 }
 
 pub const ZOMBIE_PATH_RECALC_INTERVAL: f32 = 0.8;
-// How long a zombie sticks with its current chase target before re-picking
-// the nearest connected player. Without this, two players standing close
-// together make a zombie flicker between them every frame (recomputed
-// "nearest" changes sign-flips with tiny position noise) — committing to a
-// target for a while and only re-evaluating periodically (or immediately if
-// that target disconnects) fixes the flicker while still adapting when
-// someone new gets closer.
+
 pub const ZOMBIE_RETARGET_INTERVAL: f32 = 1.5;
-// Threat/aggro scoring (server-only state, see crates/server's
-// PlayerThreat): recent gunfire makes a player "louder" to nearby zombies
-// than pure distance alone would — a player shooting from further away can
-// still pull a zombie's attention off someone standing closer but quiet.
-// PLAYER_THREAT_PER_SHOT is added per shot fired (hit or miss — the noise is
-// what matters); PLAYER_THREAT_DECAY_RATE is the fraction of remaining
-// threat lost per second; ZOMBIE_THREAT_DISTANCE_BONUS converts 1.0 threat
-// into meters subtracted from that player's effective distance when a
-// zombie compares candidates.
+
 pub const PLAYER_THREAT_PER_SHOT: f32 = 1.0;
 pub const PLAYER_THREAT_DECAY_RATE: f32 = 0.5;
 pub const ZOMBIE_THREAT_DISTANCE_BONUS: f32 = 8.0;
-// Meters added to a candidate's effective distance per zombie already
-// chasing them — a small nudge so re-evaluating zombies lean toward
-// under-targeted players instead of everyone piling onto whoever's already
-// getting the most attention. Deliberately small relative to
-// ZOMBIE_THREAT_DISTANCE_BONUS: it should only break close ties, not
-// override a real difference in distance or threat.
+
 pub const ZOMBIE_LOAD_BALANCE_PENALTY: f32 = 1.0;
 
-// --- AI Director (server-only, see crates/server) ---
-// Paces bonus zombie hordes on top of the fixed baseline population
-// (ZOMBIE_SPAWNS + 1:1 respawn-on-kill): if the server-visible "pressure"
-// (how many zombies are currently in melee range of a player) stays low for
-// a while, players are due for a scare — spawn a burst near one of them.
-// Player Health/damage is purely client-local (see PlayerDied's own doc
-// comment), so pressure is measured from something the server can actually
-// see instead: zombies close enough to bite. Director-spawned zombies don't
-// get 1:1 respawned on death (see crates/server's DirectorSpawned) so a
-// sustained-calm streak doesn't permanently grow the population every time
-// it fires.
 pub const DIRECTOR_MELEE_RANGE: f32 = 2.5;
-// How fast the smoothed pressure value chases the instantaneous melee-range
-// zombie count — higher reacts faster, lower is steadier/less twitchy.
+
 pub const DIRECTOR_PRESSURE_SMOOTHING: f32 = 0.5;
 pub const DIRECTOR_CALM_PRESSURE_THRESHOLD: f32 = 1.0;
 pub const DIRECTOR_CALM_DURATION_SECS: f32 = 20.0;
@@ -705,31 +285,6 @@ pub const DIRECTOR_HORDE_SIZE: usize = 10;
 pub const DIRECTOR_HORDE_SPAWN_RADIUS: f32 = 6.0;
 pub const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
 
-// Which animation clip a zombie should be playing right now — moved here
-// (was client-only) so crates/server can drive its OWN AnimationPlayer
-// through the exact same pose transitions instead of sitting frozen on
-// Idle forever. That mismatch mattered: crates/server's zombie_hit_damage_
-// bones tests hit points against THIS skeleton's live bone positions, not
-// the client's — a server skeleton stuck in Idle meant every hit test was
-// checked against arms/legs in their idle sway, never the real Walk/Run/
-// Bite pose the shooter was actually looking at, for the entire time a
-// zombie was doing anything but standing still. zombie_pose_for below is
-// the single formula both sides now call, so there's exactly one place
-// this priority order (Bite > Crawl > Run > Walk > Idle) can drift between
-// client and server. Getting the EXACT same animation frame/phase on both
-// sides isn't the goal (and isn't achievable — network latency alone rules
-// that out); getting the same POSE CATEGORY is, since crates/server's
-// existing lag-compensated rewind (ZombieHistory/zombie_history_at) already
-// records real per-tick bone positions and reconstructs whatever the
-// shooter's own screen was likely showing at the time they fired — once
-// the server's own skeleton is actually cycling through the right poses at
-// the right (server-authoritative) moments, that existing mechanism closes
-// most of the remaining gap for free, no new sync channel needed.
-// Reflect + register_type (GamePlugin, crates/client/src/lib.rs) so
-// bevy_editor_pls's inspector (EDITOR=1, F2) can show/edit this on a
-// selected zombie entity — an enum dropdown to force a pose for testing
-// without needing the real health/distance conditions that normally drive
-// zombie_pose_for. Debug-only convenience; nothing else needs this Reflect.
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq, Debug, Reflect)]
 #[reflect(Component)]
 pub enum ZombiePose {
@@ -741,36 +296,13 @@ pub enum ZombiePose {
     Bite,
 }
 
-// Health fraction at/below which a zombie switches to the Crawl pose
-// (dragging itself, can't stand) instead of Walk/Run — checked before
-// Run/Walk so a badly hurt zombie always crawls even while still in chase
-// range, but after Bite so point-blank still always reads as an attack.
 pub const ZOMBIE_CRAWL_HEALTH_FRACTION: f32 = 0.35;
-// Distance (same units as ZOMBIE_STOP_DISTANCE/ZOMBIE_CHASE_RANGE) inside
-// which a moving zombie reads as sprinting toward you (Run) rather than
-// the ordinary Walk — deliberately well short of ZOMBIE_STOP_DISTANCE
-// (which gates the Bite pose/actual damage tick), so the visual "closing
-// in fast" cue reads before the attack itself lands. Was 10.0.
+
 pub const ZOMBIE_RUN_DISTANCE: f32 = 20.0;
 
-// The single formula deciding ZombiePose — see its own doc comment for why
-// this lives here instead of being duplicated per-crate. `distance` is to
-// whichever player this zombie is tracking, `health_fraction` is
-// Health/ZOMBIE_MAX_HEALTH, `moving` mirrors NetTransform.moving.
-// Points a zombie's (or any animated character's) root entity at the
-// specific descendant entity that carries its AnimationPlayer, recorded
-// once wire_zombie_animations/wire_server_zombie_animations finds it (the
-// glTF scene loads asynchronously, so it doesn't exist yet at spawn time).
-// Public field so both crates' own update_*_pose systems can read link.0
-// directly.
 #[derive(Component)]
 pub struct ZombieAnimationPlayer(pub Entity);
 
-// Walks up from a newly-spawned AnimationPlayer through ChildOf looking for
-// an ancestor matching `is_root`, up to 20 hops (glTF scenes nest deeply).
-// Shared by crates/client's wire_zombie_animations/wire_player_model_animations
-// and crates/server's wire_server_zombie_animations so each only has to say
-// what root type it's looking for, not re-implement the walk.
 pub fn find_animation_root(entity: Entity, child_of: &Query<&ChildOf>, is_root: impl Fn(Entity) -> bool) -> Option<Entity> {
     let mut current = entity;
     for _ in 0..20 {
@@ -797,30 +329,16 @@ pub fn zombie_pose_for(distance: f32, health_fraction: f32, moving: bool) -> Zom
 }
 
 pub const ZOMBIE_LOD_DISTANCE: f32 = 15.0;
-// The Y a far (motion.far, beyond ZOMBIE_LOD_DISTANCE) zombie is pinned to
-// each frame instead of running full physics — has to match how high the
-// capsule naturally rests when grounded (radius + length/2), or a far
-// zombie visibly sinks/floats relative to the capsule-height everyone else
-// uses. Was a hardcoded 0.9 tuned for the old fixed-size capsule, derived
-// now so it can't drift out of sync with ZOMBIE_RADIUS/ZOMBIE_LENGTH again
-// (exactly what just happened when ZOMBIE_SCALE grew the capsule but this
-// stayed put — far zombies sank into the ground).
+
 pub const ZOMBIE_LOD_REST_HEIGHT: f32 = ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0;
 pub const ZOMBIE_AVOID_PROBE_DISTANCE: f32 = 2.5;
 pub const ZOMBIE_AVOID_ANGLES_DEG: [f32; 6] = [25.0, -25.0, 50.0, -50.0, 80.0, -80.0];
 pub const ZOMBIE_SEPARATION_RADIUS: f32 = 1.1;
 pub const ZOMBIE_SEPARATION_STRENGTH: f32 = 1.2;
 pub const KNOCKBACK_DECAY_RATE: f32 = 6.0;
-// Max degrees/sec a zombie's facing can turn — move_zombies rotates toward
-// its movement direction gradually instead of snapping instantly whenever
-// that direction changes (every path_recalc_timer tick, or a full turn on
-// retarget). Turning much faster than a real jog-turn would still be
-// visible as a near-instant snap, so this is deliberately not huge.
+
 pub const ZOMBIE_TURN_RATE_DEG: f32 = 180.0;
 
-// A 10x10 grid spanning -half_x..half_x / -half_z..half_z at height y —
-// used to generate a large ZOMBIE_SPAWNS (100 entries) without writing them
-// out by hand. const fn, so this still runs at compile time.
 pub const fn zombie_spawn_grid(half_x: f32, half_z: f32, y: f32) -> [Vec3; 100] {
     let mut spawns = [Vec3::ZERO; 100];
     let mut i = 0usize;
@@ -835,88 +353,33 @@ pub const fn zombie_spawn_grid(half_x: f32, half_z: f32, y: f32) -> [Vec3; 100] 
     spawns
 }
 
-// Inset a few meters from the arena walls so nothing spawns stuck inside
-// geometry. Spawn Y matches the capsule's natural grounded height (radius +
-// length/2) — was hardcoded 0.9 for the old fixed-size capsule, which after
-// ZOMBIE_RADIUS/ZOMBIE_LENGTH grew with ZOMBIE_SCALE left every zombie
-// spawning already deeply embedded in the floor (bottom of the capsule
-// ended up well below y=0), which move_and_slide couldn't fully resolve
-// back out of on its own — that's what was still showing as "sunk into the
-// ground" even after fixing ZOMBIE_LOD_REST_HEIGHT.
 pub const ZOMBIE_SPAWNS: [Vec3; 100] =
     zombie_spawn_grid(ARENA_HALF_SIZE - 3.0, ARENA_HALF_SIZE - 3.0, ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0);
 
-// Scatters zombie fill-spawns (spawn_initial_zombies/on_set_zombie_count/
-// tick_respawns, crates/server) across the whole arena instead of always
-// walking ZOMBIE_SPAWNS' fixed grid in the same row-major order — same
-// "no rand crate, deterministic per-index hash" approach entity_phase
-// (crates/shared/src/hitbox.rs) already uses for per-entity staggering,
-// extended to 2D via the R2 low-discrepancy sequence (successive `seed`s
-// land at well-spread, non-repeating points instead of clumping the way a
-// naive single-multiplier hash would for two correlated axes). `seed` is
-// just NextZombieSpawnIndex's own ever-incrementing counter — same role
-// it already played indexing into ZOMBIE_SPAWNS, just no longer tied to
-// that grid's cell order.
 pub fn random_zombie_spawn_pos(seed: usize) -> Vec3 {
-    const INV_G: f32 = 0.754_877_7; // 1/g, g = plastic number (R2 sequence)
-    const INV_G2: f32 = 0.569_840_3; // 1/g^2
+    const INV_G: f32 = 0.754_877_7;
+    const INV_G2: f32 = 0.569_840_3;
     let half = ARENA_HALF_SIZE - 3.0;
     let x = (-1.0 + 2.0 * (seed as f32 * INV_G).fract()) * half;
     let z = (-1.0 + 2.0 * (seed as f32 * INV_G2).fract()) * half;
     Vec3::new(x, ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0, z)
 }
 
-// Sent by the client's "spawn 100 more" debug button — spawning must be a
-// server decision now, since zombies are server-authoritative.
 #[derive(Event, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct SpawnMoreZombies;
 
-// Mobile cheat panel's zombie population controls (crates/server's
-// maintain_zombie_population/on_clear_all_zombies). Absolute target, not a
-// delta — the client tracks its own last-set value locally (see
-// ZombieCountUi) and sends the new total each tap, simplest way to stay in
-// sync without the server needing to echo the current target back.
 #[derive(Event, Clone, Copy, Serialize, Deserialize)]
 pub struct SetZombieCount(pub u32);
 
-// Despawns every zombie server-side (baseline AND director-spawned) and
-// clears pending respawns — unlike a client just despawning its own local
-// replicated copy (what the old desktop-only "Digit2: kill all" debug
-// action does), this is authoritative, so they don't just reappear on the
-// next replication update.
 #[derive(Event, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct ClearAllZombies;
 
-// Toggles whether tick_respawns actually replaces a killed baseline zombie
-// — off lets the population drain down through normal play instead of
-// staying pinned at the target count.
 #[derive(Event, Clone, Copy, Serialize, Deserialize)]
 pub struct SetAutoMaintainZombies(pub bool);
 
-// Debug-panel "Freeze zombies" (KeyF / mobile CheatFreezeButton) — unlike
-// most of the other panel toggles (ShowHitboxes, ZombieAnimDisabled, ...),
-// which are purely cosmetic client-local state, freeze needs the server to
-// actually stop moving zombies: their real position is server-authoritative
-// (see move_zombies in crates/server), so a client-only flag can pause the
-// client's own AnimationPlayer all it wants but the zombie keeps walking
-// underneath it — every frame the still-moving server position gets
-// replicated back down and re-interpolated into Transform regardless,
-// which also kept re-triggering update_zombie_animation's pose-change
-// detection and undoing the animation pause. One global bool, not per-
-// player: zombies are shared world entities (this server process is
-// already scoped to one map/room — see Scenario), so there's no
-// "freeze only for me" that would make sense here the way noclip/autopilot
-// (per-player state) do.
 #[derive(Event, Clone, Copy, Serialize, Deserialize)]
 pub struct SetFreezeZombies(pub bool);
 
-// A dead zombie is replaced after this long, keeping the population topped
-// up instead of thinning out.
 pub const ZOMBIE_RESPAWN_DELAY: f32 = 1.0;
-// Horizontal-only impulse applied to a zombie that survives a hit, along
-// the bullet's own travel direction. Scaled by ZOMBIE_SCALE_FACTOR (see
-// ZOMBIE_RADIUS's own comment) — an unscaled push displaces the same
-// absolute world distance regardless of the zombie's visual size, which
-// reads as "barely any knockback at all" once the zombie is several times
-// bigger than the original ~2m calibration.
+
 pub const KNOCKBACK_FORCE: f32 = 3.5 * ZOMBIE_SCALE_FACTOR;

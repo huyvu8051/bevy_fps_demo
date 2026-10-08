@@ -9,7 +9,7 @@
 // there's no width/height/depth here.
 //
 // All 16 re-exported (2026-09-05) via Meshy's "Resize + Origin: Bottom"
-// download option, each Height set from docs/maps/map01_dimensions.md
+// download option, each Height set from docs/maps/gdd/map01_dimensions.md
 // section 1's item library — confirmed by inspecting each new `_light.glb`'s
 // own POSITION accessor bbox: real-world height matches the docs table
 // exactly and min_y = 0.000 for every one. So every car now sits at

@@ -1,25 +1,7 @@
-// --- VFX: scope camera, hit feedback, particles/decals, gun view anim ---
-// Extracted from lib.rs (Phase 5 of the gameplay-code-organization pass —
-// see chat/commit history). Every item here is `pub(crate)` so lib.rs's
-// single master `.chain()`'d Update system list (unchanged — pure code
-// motion, no execution-order change) can still reference these by name.
-//
-// `use crate::*;` pulls in every crate-root item this module needs
-// (constants, other components/resources, helper fns) — root-private
-// items ARE visible to a descendant module like this one per Rust's
-// normal privacy rules, just not name-resolved without an explicit
-// `use`/path, hence the glob rather than hunting down each one by hand.
 
 use bevy::prelude::*;
 use crate::*;
 
-// Debug/dev toggle for the Cheats panel's "Scope" button — disables the
-// secondary ScopeCamera (the AK47 scope's own render-to-texture camera,
-// see setup()) and its lens quad entirely while ADS'd, instead of just
-// hiding the gun/map render toggles' own targets. When off, ADS still
-// narrows FOV the normal way (AIM_FOV_MULTIPLIER) but shows no scope
-// picture-in-picture — useful to cut the extra camera pass on weaker
-// devices, or just to compare with/without it. See update_scope_lens.
 #[derive(Resource)]
 pub(crate) struct ScopeCameraEnabled(pub(crate) bool);
 impl Default for ScopeCameraEnabled {
@@ -28,25 +10,15 @@ impl Default for ScopeCameraEnabled {
     }
 }
 
-// The second camera that renders the scope's actual zoomed view onto
-// SCOPE_TEXTURE_SIZE² render target, sampled by ScopeLens's material.
-// Starts inactive — update_scope_lens only turns it on while ADS'd, so it
-// isn't paying for a second render pass the rest of the time.
 #[derive(Component)]
 pub(crate) struct ScopeCamera;
 
-// The small quad in front of the gun showing the scope camera's render
-// target — the thing the player actually looks "through".
 #[derive(Component)]
 pub(crate) struct ScopeLens;
 
-// Marks the static reticle chevron so shoot()'s raycast can exclude it —
-// see VfxAssets.vfx_meshes.
 #[derive(Component)]
 pub(crate) struct ScopeReticle;
 
-// Current scope magnification, adjusted by mouse wheel while aiming (see
-// adjust_scope_zoom) and clamped to [SCOPE_MIN_ZOOM, SCOPE_MAX_ZOOM].
 #[derive(Resource)]
 pub(crate) struct ScopeZoom(pub(crate) f32);
 
@@ -66,33 +38,23 @@ pub(crate) struct Smoke {
     pub(crate) remaining: f32,
 }
 
-// A thin glowing streak from muzzle to impact — see TRACER_CHANCE's own doc
-// comment for why this doesn't spawn on every shot. Pure VFX, spawned after
-// the real hit is already resolved, so it never affects hit detection.
 #[derive(Component)]
 pub(crate) struct BulletTracer {
     pub(crate) remaining: f32,
 }
 
-// A single flying blood droplet — spurts outward from a zombie hit, falls
-// under its own gravity (separate from GRAVITY, blood falls faster/looks
-// punchier), and despawns once its lifetime runs out.
 #[derive(Component)]
 pub(crate) struct BloodParticle {
     pub(crate) velocity: Vec3,
     pub(crate) remaining: f32,
 }
 
-// A single flying spark — the environment-hit counterpart of BloodParticle,
-// see spawn_spark_effects.
 #[derive(Component)]
 pub(crate) struct SparkParticle {
     pub(crate) velocity: Vec3,
     pub(crate) remaining: f32,
 }
 
-// A static decal left where blood actually landed — either right at the
-// hit point, or on a floor found by raycasting straight down from there.
 #[derive(Component)]
 pub(crate) struct BloodStain {
     pub(crate) remaining: f32,
@@ -112,9 +74,6 @@ pub(crate) struct MuzzleFxAssets {
     pub(crate) smoke_material: Handle<StandardMaterial>,
 }
 
-// Unit cylinder (radius 1, height 1, centered on origin) — spawn_bullet_tracer
-// scales it per-shot (X/Z = TRACER_RADIUS, Y = the shot's actual length)
-// rather than building a fresh mesh every time.
 #[derive(Resource)]
 pub(crate) struct TracerAssets {
     pub(crate) mesh: Handle<Mesh>,
@@ -135,26 +94,6 @@ pub(crate) struct SparkAssets {
     pub(crate) material: Handle<StandardMaterial>,
 }
 
-// Spawns a burst of flying blood particles at a zombie hit, plus two static
-// stains: one right at the hit point (blood on the wound/whatever surface
-// was actually struck), and one on the floor beneath it if a downward
-// raycast finds one within BLOOD_FLOOR_RAYCAST_DISTANCE (blood dripping
-// down and landing) — reuses the shoot()'s own SpatialQuery rather than
-// taking one as a fresh parameter, since shoot() is already at Bevy's
-// 16-parameter-per-system limit (see VfxAssets' doc comment).
-// `bone` is `Some` only when the hit zombie survived (shoot() checks
-// health after applying damage) — a wound stain parented to a despawning
-// corpse would just despawn right along with it, so there's no point. It's
-// the specific BONE nearest the hit (see nearest_zombie_bone/
-// spawn_blood_stain_on_zombie's own doc comment for why a bone, not the
-// zombie's root entity), not "the zombie" in general.
-// `killed` skips the wound stain entirely instead of falling back to a
-// world-space one at hit_point: that fallback sits right where the corpse
-// just was, so it visually reads as "blood still stuck on the body" for
-// its own full BLOOD_STAIN_LIFETIME even though the body itself (and any
-// bone-parented decal on it) is already gone. The floor drips below are
-// left untouched — those are real drips that already fell and landed
-// separately, not blood riding along on the corpse.
 pub(crate) fn spawn_blood_effects(
     commands: &mut Commands,
     blood_assets: &BloodAssets,
@@ -166,9 +105,7 @@ pub(crate) fn spawn_blood_effects(
     killed: bool,
 ) {
     for i in 0..BLOOD_PARTICLE_COUNT {
-        // Same "deterministic pseudo-randomness via sin" trick used
-        // elsewhere (recoil jitter, bullet spread) — offset each particle's
-        // seed by its index so they don't all fly the same direction.
+
         let seed = time.elapsed_secs() * 977.0 + i as f32 * 131.7;
         let dir = Vec3::new(ops::sin(seed * 1.3), ops::sin(seed * 0.7).abs() * 0.6, ops::sin(seed * 2.1))
             .normalize_or_zero();
@@ -183,8 +120,6 @@ pub(crate) fn spawn_blood_effects(
         ));
     }
 
-    // The wound itself — follows that bone's own animation if it's still
-    // alive, otherwise just sits in world space wherever it landed.
     match bone {
         Some((entity, bone_global)) => {
             spawn_blood_stain_on_zombie(commands, blood_assets, entity, bone_global, hit_point, hit_normal);
@@ -193,9 +128,6 @@ pub(crate) fn spawn_blood_effects(
         None => {}
     }
 
-    // A random number of drips land on whatever's below — not always
-    // exactly one, and not all from the exact same spot, so a burst doesn't
-    // read as a single too-tidy dot.
     let range = (BLOOD_FLOOR_STAIN_MAX - BLOOD_FLOOR_STAIN_MIN + 1) as f32;
     let count = (BLOOD_FLOOR_STAIN_MIN as f32 + ops::sin(time.elapsed_secs() * 457.0).abs() * range) as usize;
     let count = count.clamp(BLOOD_FLOOR_STAIN_MIN, BLOOD_FLOOR_STAIN_MAX);
@@ -210,31 +142,12 @@ pub(crate) fn spawn_blood_effects(
         let origin = hit_point + jitter;
         if let Some(floor_hit) = spatial_query.cast_ray(origin, down, BLOOD_FLOOR_RAYCAST_DISTANCE, true, &filter) {
             let floor_point = origin + Vec3::NEG_Y * floor_hit.distance;
-            // Floor drips are always world-space (not parented) even if the
-            // zombie survived — they've already fallen and landed
-            // separately from the body, so there's nothing to follow.
+
             spawn_blood_stain(commands, blood_assets, None, floor_point, floor_hit.normal);
         }
     }
 }
 
-// Gates the "you dealt real damage" feedback (floating number + blood) on
-// damage actually being > 0. Before this, a shot that hit the broad-phase
-// zombie capsule (ZOMBIE_OUTER_RADIUS/ZOMBIE_OUTER_HEIGHT — deliberately
-// wider than the visible mesh, see its own doc comment) but landed outside
-// every real bone
-// hitbox (zombie_hit_damage_bones) still spawned a floating damage number
-// and a blood spray with 0 actual HP lost — a clean miss looked and felt
-// exactly like a landed hit, which is why zombies could take forever to die
-// despite what looked like a stream of hits. A 0-damage "hit" now reads as
-// a graze (spark burst, same as a wall hit) instead, so what you see
-// matches what the zombie's health actually did. Called from on_shot_fx
-// (remote players' shots) and on_shot_confirmed (the local shooter's own
-// shot, once the server confirms it — see ShotConfirmed's own doc comment
-// for why this waits instead of using a local guess); both spawn their own
-// HitMarker decal separately, immediately, regardless of this — that's an
-// honest "the raycast physically stopped here" signal either way, not
-// duplicated here.
 pub(crate) fn spawn_zombie_hit_feedback(
     commands: &mut Commands,
     blood_assets: &BloodAssets,
@@ -258,10 +171,6 @@ pub(crate) fn spawn_zombie_hit_feedback(
     }
 }
 
-// Spawns a burst of flying sparks at a non-zombie (wall/environment) hit —
-// the mirror image of spawn_blood_effects. Biased outward from hit_normal
-// (lerped toward a random direction, not fully random) so they read as
-// bouncing off the surface rather than scattering every which way.
 pub(crate) fn spawn_spark_effects(commands: &mut Commands, spark_assets: &SparkAssets, time: &Time, hit_point: Vec3, hit_normal: Vec3) {
     let normal = hit_normal.normalize_or_zero();
     let range = (SPARK_PARTICLE_MAX - SPARK_PARTICLE_MIN + 1) as f32;
@@ -273,8 +182,7 @@ pub(crate) fn spawn_spark_effects(commands: &mut Commands, spark_assets: &SparkA
         let random_dir =
             Vec3::new(ops::sin(seed * 1.3), ops::sin(seed * 0.7), ops::sin(seed * 2.1)).normalize_or_zero();
         let dir = (normal + random_dir).normalize_or_zero();
-        // Varies each spark's speed a bit too, so the burst doesn't look
-        // like a uniform ring.
+
         let speed = SPARK_PARTICLE_SPEED * (0.6 + ops::sin(seed * 3.7).abs() * 0.6);
         commands.spawn((
             Mesh3d(spark_assets.mesh.clone()),
@@ -288,19 +196,11 @@ pub(crate) fn spawn_spark_effects(commands: &mut Commands, spark_assets: &SparkA
     }
 }
 
-// A thin glowing streak from `start` to `end` — shown on only a fraction of
-// shots (TRACER_CHANCE), same sin-based deterministic "randomness" already
-// used for spread/recoil jitter elsewhere in this file (no rand crate). The
-// seed passed in lets each call site (local shooter vs. each remote shot)
-// use its own unrelated-looking frequency, so two shots landing the same
-// frame don't roll identically. Pure VFX — called only after the real hit
-// is already resolved, so this can never affect damage.
 pub(crate) fn spawn_bullet_tracer(commands: &mut Commands, tracer_assets: &TracerAssets, seed: f32, start: Vec3, end: Vec3, show_tracers: bool) {
     if !show_tracers {
         return;
     }
-    // (sin(seed) + 1) / 2 maps to a roughly-uniform [0, 1] value — below
-    // TRACER_CHANCE means "this shot gets a tracer".
+
     if (ops::sin(seed) + 1.0) * 0.5 >= TRACER_CHANCE {
         return;
     }
@@ -322,8 +222,6 @@ pub(crate) fn spawn_bullet_tracer(commands: &mut Commands, tracer_assets: &Trace
     ));
 }
 
-// `parent` is Some when this stain should be attached to (and move with)
-// that entity instead of sitting still in world space.
 pub(crate) fn spawn_blood_stain(
     commands: &mut Commands,
     blood_assets: &BloodAssets,
@@ -346,18 +244,6 @@ pub(crate) fn spawn_blood_stain(
     }
 }
 
-// Parented onto the specific BONE nearest the hit (see nearest_zombie_bone),
-// not the zombie's root entity — the root's own Transform only carries
-// position + yaw (interpolate_net_transform), never the per-bone animation
-// (arms swinging, torso bobbing) that actually moves the visible skin. A
-// stain parented to the root stayed rigidly offset from the root while the
-// real mesh underneath animated independently, reading as floating instead
-// of stuck to skin. Parenting to the actual animated bone entity instead
-// means it inherits that bone's own GlobalTransform — no different than any
-// other cosmetic child of a bone (the mesh itself is one). GlobalTransform::
-// reparented_to handles both the bone's current rotation and ZOMBIE_SCALE —
-// without this, a child entity's declared size would end up multiplied by
-// that scale, same issue as the capsule Collider in spawn_zombie.
 pub(crate) fn spawn_blood_stain_on_zombie(
     commands: &mut Commands,
     blood_assets: &BloodAssets,
@@ -426,10 +312,6 @@ pub(crate) fn despawn_blood_stains(mut commands: Commands, time: Res<Time>, mut 
     }
 }
 
-// Shows the slider only while actually ADS'd — inverse of update_
-// crosshair's own CrosshairRoot toggle (that one hides on aim, this one
-// shows on aim), same is_aiming(...) check so both agree on the exact
-// same frame.
 pub(crate) fn update_scope_zoom_slider_visibility(
     mouse: Res<ButtonInput<MouseButton>>,
     touch_aiming: Res<TouchAiming>,
@@ -443,25 +325,8 @@ pub(crate) fn update_scope_zoom_slider_visibility(
     node.display = if aiming { Display::Flex } else { Display::None };
 }
 
-// Draws the real hitbox shapes zombie_hit_damage_bones (crates/shared)
-// tests a hit against — the outer broad-phase capsule (white), the torso
-// capsule (belly<->chest), 8 limb capsule segments (shoulder->elbow->hand,
-// hip->knee->foot), and the head sphere — so what you see on screen lines
-// up exactly with what determines damage, not an approximation of it.
-// Falls back to the old height-band rings (drawn relative to the zombie's
-// root, not any bone) only for a zombie whose bones haven't resolved yet —
-// see wire_zombie_hitbox_bones.
-// Split out of draw_zombie_hitboxes — `Gizmos` (used there) already borrows
-// `Res<GizmoConfigStore>` internally to look up per-group config, so also
-// taking `ResMut<GizmoConfigStore>` directly in that same system panics at
-// startup (B0002: a ResMut conflicting with a Res access already in the
-// same system's param set). Setting the depth bias in its own system,
-// chained to run first, avoids the two ever being live in the same param
-// list at once.
 pub(crate) fn set_hitbox_gizmo_depth_bias(mut config_store: ResMut<GizmoConfigStore>) {
-    // Depth bias -1.0 so debug hitboxes/gizmos render in front of meshes —
-    // idempotent (same value every call), so no harm setting it every
-    // frame rather than only once at Startup.
+
     let (config, _) = config_store.config_mut::<DefaultGizmoConfigGroup>();
     config.depth_bias = -1.0;
 }
@@ -481,15 +346,6 @@ pub(crate) fn draw_zombie_hitboxes(
     for (zombie_entity, transform, bones) in &zombies {
         let is_autopilot_target = autopilot_state.target == Some(zombie_entity);
 
-        // The actual collision shape handle_fire_shot/debug_bot_fire test
-        // shots against (Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
-        // centered on this Transform — see ZOMBIE_MODEL_Y_OFFSET's own doc
-        // comment for why the rendered mesh is offset to put its feet at the
-        // cylinder's bottom). Drawn in white so it's visually distinct from
-        // the colored damage-region markers below — if this cylinder's top
-        // ends up rendering above the visible head, that's ZOMBIE_SCALE/
-        // ZOMBIE_MESH_REFERENCE_HEIGHT not actually matching the mesh's real
-        // height, not a bug in the raycast itself.
         gizmos.primitive_3d(
             &Cylinder { radius: ZOMBIE_OUTER_RADIUS, half_height: ZOMBIE_OUTER_HEIGHT / 2.0 },
             Isometry3d::from_translation(transform.translation),
@@ -500,9 +356,6 @@ pub(crate) fn draw_zombie_hitboxes(
         let bone_pos = |e: Entity| globals.get(e).ok().map(GlobalTransform::translation);
         let mut joints_to_draw = Vec::new();
 
-        // Single sphere at the Head bone's own raw resolved position — no
-        // offset, no separate neck sphere (reverted per request). No second
-        // joint to span a capsule to, so it stays a plain sphere.
         if let Some(pos) = bones.head.and_then(bone_pos) {
             gizmos.sphere(Isometry3d::from_translation(pos), HEAD_HITBOX_RADIUS, Color::srgb(1.0, 0.2, 0.2));
             joints_to_draw.push(pos);
@@ -528,17 +381,15 @@ pub(crate) fn draw_zombie_hitboxes(
             }
         }
 
-        // Draw the joint positions as small distinct spheres (green, or cyan if targeted by autopilot and target trace is enabled)
         let joint_color = if is_autopilot_target && show_aim.0 {
-            Color::srgb(0.0, 1.0, 1.0) // Cyan
+            Color::srgb(0.0, 1.0, 1.0)
         } else {
-            Color::srgb(0.0, 1.0, 0.0) // Green
+            Color::srgb(0.0, 1.0, 0.0)
         };
         for joint_pos in &joints_to_draw {
             gizmos.sphere(Isometry3d::from_translation(*joint_pos), 0.04, joint_color);
         }
 
-        // Highlight the targeted zombie's aim point with a red sphere (if target trace is enabled)
         if is_autopilot_target && show_aim.0 {
             let resolved_bones = resolve_bone_world_positions(bones, |bone| globals.get(bone).ok().map(|g| g.translation()));
             if let Some((aim_point, _)) = shared::random_aim_point(&resolved_bones, zombie_entity) {
@@ -549,8 +400,7 @@ pub(crate) fn draw_zombie_hitboxes(
         if any_bone {
             continue;
         }
-        // No bones resolved yet (scene still loading) — show the geometric
-        // fallback so there's still *something* visible.
+
         let root = transform.translation;
         let ring_rotation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
         gizmos.circle(
@@ -571,10 +421,6 @@ pub(crate) fn draw_zombie_hitboxes(
     }
 }
 
-// Standalone rather than folded into settings_menu's cheat_toggle_buttons_*
-// family — those are already near Bevy's system param-count ceiling (see
-// cheat_toggle_buttons_2's own doc comment), same reasoning as
-// nav_debug_toggle_button.
 pub(crate) fn distance_rings_toggle_button(mut show: ResMut<ShowDistanceRings>, btn: Query<&Interaction, (With<CheatDistanceRingsButton>, Changed<Interaction>)>) {
     if tapped(&btn) {
         show.0 = !show.0;
@@ -591,15 +437,6 @@ pub(crate) fn update_distance_rings_button_color(show: Res<ShowDistanceRings>, m
     }
 }
 
-// Concentric horizontal circles centered on the player, flat on the
-// ground (same Isometry3d rotation as the hitbox fallback rings above),
-// toggled by the "DistRings" settings button. One ring per LodBandDistance
-// entry — the same 3 numbers that drive apply_item_gallery_car_distance_lod
-// / apply_zombie_distance_lod_texture, so this is a direct visual ruler
-// for wherever those bands are currently set, not a fixed reference
-// distance. Colored by distance — nearest a "safe" green fading toward
-// red at the outermost band — so the far ring is easy to pick out at a
-// glance without reading labels.
 pub(crate) fn draw_distance_rings(show: Res<ShowDistanceRings>, bands: Res<LodBandDistance>, player: Query<&Transform, With<Player>>, mut gizmos: Gizmos) {
     if !show.0 {
         return;
@@ -617,14 +454,6 @@ pub(crate) fn draw_distance_rings(show: Res<ShowDistanceRings>, bands: Res<LodBa
     }
 }
 
-// Finds whichever bone (head/belly/chest/any limb joint) of `bones` is
-// nearest to `point` and has actually resolved a GlobalTransform — used to
-// pick which specific bone a wound decal should parent onto (see
-// spawn_blood_stain_on_zombie's own doc comment for why a bone, not the
-// zombie's root, is the one that actually animates). Purely a VFX
-// placement choice, not the same "nearest region" zombie_hit_nearest_region
-// (crates/shared) computes for damage-miss diagnostics — this returns an
-// actual Entity to parent onto, not a named region/radius.
 pub(crate) fn nearest_zombie_bone(bones: &ZombieHitboxBones, point: Vec3, globals: &Query<&GlobalTransform>) -> Option<(Entity, GlobalTransform)> {
     bones
         .head
@@ -639,11 +468,6 @@ pub(crate) fn nearest_zombie_bone(bones: &ZombieHitboxBones, point: Vec3, global
         .min_by(|(_, a), (_, b)| a.translation().distance_squared(point).total_cmp(&b.translation().distance_squared(point)))
 }
 
-// Plays the server-decided outcome of a shot — for every client EXCEPT the
-// shooter, who already predicted and showed this same hit locally in
-// shoot() and is excluded from receiving it at all (see handle_fire_shot's
-// SendMode::BroadcastExcept). A remote player's shot was never predicted by
-// this client, so it always gets the full effect here.
 pub(crate) fn on_shot_fx(
     trigger: On<ShotFx>,
     mut commands: Commands,
@@ -673,16 +497,9 @@ pub(crate) fn on_shot_fx(
                     },
                 ));
             }
-            // Seeded off `point` (not just time) so multiple remote shots
-            // landing the same frame don't all roll the same tracer chance.
+
             spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 619.0 + point.x * 13.7 + point.z * 7.3, origin, point, show_tracers.0);
 
-            // The server doesn't send which zombie entity it was (avoiding
-            // cross-network entity mapping for a purely cosmetic detail) —
-            // whichever zombie is nearest the hit point, then whichever of
-            // ITS bones is nearest, is visually indistinguishable from the
-            // real one and much simpler (see nearest_zombie_bone's own doc
-            // comment for why a bone, not the zombie root).
             let nearest_bone = if killed {
                 None
             } else {
@@ -713,14 +530,6 @@ pub(crate) fn on_shot_fx(
     }
 }
 
-// Recoil/reload/bob numbers derived purely from Gun's own state — used to
-// be computed by hand, identically, in THREE places (gun_view_animation,
-// sync_scope_camera, update_scope_lens): same recoil_t/reload_t/dip/
-// bob_aim_scale/bob_x/bob_y arithmetic, three separate copies of one
-// formula. That's exactly the kind of duplication that quietly drifts —
-// tweak GUN_BOB_AMOUNT_X once and forget the other two call sites, and the
-// gun/camera/lens stop moving in lockstep without any compile error to
-// catch it. One pure function of `&Gun`, called by all three, instead.
 pub(crate) struct GunPoseTimings {
     recoil_t: f32,
     dip: f32,
@@ -731,8 +540,7 @@ pub(crate) struct GunPoseTimings {
 pub(crate) fn gun_pose_timings(gun: &Gun) -> GunPoseTimings {
     let recoil_t = gun.recoil / RECOIL_DURATION;
     let reload_t = gun.reload_remaining / RELOAD_DURATION;
-    // Parabola: 0 at both ends of the reload, 1 at the midpoint — the gun
-    // dips down/tilts away and comes back up as the reload finishes.
+
     let dip = 4.0 * reload_t * (1.0 - reload_t);
     let bob_aim_scale = 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER);
     let bob_x = ops::sin(gun.bob_phase) * GUN_BOB_AMOUNT_X * gun.bob_blend * bob_aim_scale;
@@ -740,21 +548,6 @@ pub(crate) fn gun_pose_timings(gun: &Gun) -> GunPoseTimings {
     GunPoseTimings { recoil_t, dip, bob_x, bob_y }
 }
 
-// The FULL sway + recoil-yaw-kick + recoil-roll-kick + reload/recoil-tilt
-// rotation stack — used by update_scope_lens (the physical glass quad the
-// player sees on screen; its own rotation reads as "the whole optic
-// wobbling/kicking with the gun" the same way gun_view_animation's own
-// mesh rotation does). NOT used for sync_scope_camera (see
-// gun_camera_tilt_rotation's own doc comment right below for why the
-// ScopeCamera itself only gets the tilt term, not this full stack) and
-// NOT used by gun_view_animation either: the gun mesh's own rotation
-// composes an extra base model-facing rotation (GUN_ROTATION_Y_DEG) and
-// wall-raise tilt IN BETWEEN these same terms, which changes the
-// composition order — quaternion multiplication doesn't commute, so
-// forcing the mesh through this exact stack would change its own visual
-// result in a way there's no device here to verify; gun_view_animation
-// still uses the same underlying GunPoseTimings numbers, just composes
-// its own rotation around them.
 pub(crate) fn gun_recoil_sway_rotation(gun: &Gun, timings: &GunPoseTimings) -> Quat {
     Quat::from_rotation_z(gun.look_sway_roll.to_radians())
         * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
@@ -762,9 +555,6 @@ pub(crate) fn gun_recoil_sway_rotation(gun: &Gun, timings: &GunPoseTimings) -> Q
         * Quat::from_rotation_x((RELOAD_TILT_DEG * timings.dip + RECOIL_TILT_UP_DEG * timings.recoil_t).to_radians())
 }
 
-// Keeps the scope's render-to-texture camera glued to the main camera's
-// position/orientation every frame — it has no parent/player-follow logic
-// of its own, it just mirrors the real camera exactly.
 pub(crate) fn sync_scope_camera(
     camera: Query<&Transform, (With<FpsCamera>, Without<ScopeCamera>, Without<Gun>)>,
     gun: Query<(&Gun, &Transform), (Without<FpsCamera>, Without<ScopeCamera>)>,
@@ -777,55 +567,18 @@ pub(crate) fn sync_scope_camera(
     };
     *scope_transform = *camera_transform;
 
-    // Converts a delta expressed in the same local X/Y/Z space Gun's own
-    // Transform.translation uses (see gun_view_animation) into a world
-    // offset for the (unparented) scope camera: local X/Y map straight onto
-    // right()/up(), but local Z is inverted relative to forward() since the
-    // camera faces its own local -Z.
     let local_to_world = |local: Vec3| {
         camera_transform.right() * local.x + camera_transform.up() * local.y
             - camera_transform.forward() * local.z
     };
 
-    // The gun mesh's own already-computed local Transform.translation
-    // (gun_view_animation, this same frame) — shoulder-swap, ADS sweep,
-    // recoil kick, reload dip, walk-bob, wall-raise, all already baked
-    // in. Reused directly instead of a second, hand-written copy of that
-    // same formula (see GunPoseTimings' own doc comment for the
-    // shared-FORMULA-but-still-two-call-sites version of this that used
-    // to be here) — "the camera goes wherever the gun mesh goes" as
-    // literally as possible: it reads the gun's own real position result,
-    // not a parallel calculation that merely aims for the same numbers.
-    // Not literally ChildOf(Gun) — Gun's own rotation carries an extra
-    // GUN_ROTATION_Y_DEG model-facing correction that would wrongly spin
-    // the camera's view direction if inherited, so only translation is
-    // shared this way; rotation stays computed separately below.
     scope_transform.translation += local_to_world(gun_transform.translation)
-        // The eye sits at a genuinely different height than wherever the
-        // gun mesh's own origin is (SCOPE_HIP_HEIGHT_OFFSET while not
-        // aiming, SCOPE_CAMERA_HEIGHT_OFFSET once ADS'd) — this isn't
-        // part of the gun's own translation, so it's still a separate
-        // additive term.
+
         + camera_transform.up() * (SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend) + SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend);
-    // Full sync with ScopeLens's own rotation (was a tilt-only subset) —
-    // per request, ScopeCamera now matches every axis ScopeLens gets:
-    // sway, recoil yaw-kick, recoil roll-kick, and tilt.
-    // NOTE: the roll component (look_sway_roll + RECOIL_ROLL_DEG) is
-    // mathematically a no-op on the actual picture the player sees
-    // through the scope: ScopeCamera rolling by θ renders its captured
-    // texture rotated -θ, and ScopeLens (the quad displaying that
-    // texture) is rotated +θ on screen — they cancel to 0 net tilt in
-    // what the player actually perceives. Only the translate sync (above)
-    // and the yaw-kick/tilt rotation terms have any real visible effect
-    // on the scope picture; the roll term only still matters for
-    // ScopeCamera's OWN captured framing being self-consistent with the
-    // lens glass's shape, not for "the picture visibly tilting".
+
     scope_transform.rotation *= gun_recoil_sway_rotation(gun, &gun_pose_timings(gun));
 }
 
-// Scroll wheel steps ScopeZoom up/down while aiming — ignored (and drained,
-// so a scroll during ADS doesn't "carry over" and suddenly apply once you
-// start aiming again) the rest of the time.
 pub(crate) fn adjust_scope_zoom(
     mut wheel: MessageReader<MouseWheel>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -844,11 +597,7 @@ pub(crate) fn adjust_scope_zoom(
         wheel.clear();
         return;
     }
-    // Auto-zoom only while Autopilot is actually driving — AutopilotState.
-    // target lingers (last-locked entity) even after autopilot is turned
-    // back off, since autopilot_pick_target stops updating it rather than
-    // clearing it; without this check that stale target kept overriding
-    // real scroll-wheel zoom for a manually-aiming player indefinitely.
+
     if autopilot.0 {
         if let Some(target_entity) = autopilot_state.target {
             if let (Ok(camera_global), Ok(zombie_transform)) =
@@ -870,14 +619,6 @@ pub(crate) fn adjust_scope_zoom(
     }
 }
 
-// Turns the scope camera/lens on as soon as ADS starts blending in at all
-// (off again once the gun raises for a wall), applies the current
-// ScopeZoom to the scope camera's FOV, and slides the lens quad in from
-// GUN_OFFSET (the gun's own hip-fire pose) to SCOPE_LENS_OFFSET using the
-// exact same gun.ads_blend lerp gun_view_animation drives the gun mesh's
-// own translation with, then mirrors its X onto whichever shoulder the gun
-// is currently on — so the lens visually travels in/out together with the
-// gun instead of just popping in once ADS is mostly done.
 pub(crate) fn update_scope_lens(
     gun: Query<&Gun>,
     zoom: Res<ScopeZoom>,
@@ -900,23 +641,12 @@ pub(crate) fn update_scope_lens(
         }
     }
 
-    // Keeps the reticle roughly constant on screen across zoom levels (see
-    // SCOPE_RETICLE_WIDTH/HEIGHT's doc comment) — it's sized to look right
-    // at SCOPE_DEFAULT_ZOOM, so scale down as zoom increases past that.
     if let Ok(mut reticle_transform) = reticle.single_mut() {
         reticle_transform.scale = Vec3::splat(SCOPE_DEFAULT_ZOOM / zoom.0);
     }
 
     if let Ok((mut transform, mut visibility)) = lens.single_mut() {
-        // X and Z both sweep in from GUN_OFFSET to SCOPE_LENS_OFFSET with
-        // ads_blend — same lateral + "pulled in closer" travel as the gun
-        // mesh and the scope camera (sync_scope_camera). Y also dips down a
-        // little below SCOPE_LENS_OFFSET.y while not aiming. Recoil kick and
-        // reload dip/tilt stack on top the same way they do on the gun
-        // mesh's own Transform.translation — this is a plain local-space
-        // translation just like Gun's, so no right()/forward() conversion
-        // is needed here (unlike sync_scope_camera, which has to rebuild a
-        // world offset for the free-floating scope camera).
+
         let lens_x = GUN_OFFSET.x + (SCOPE_LENS_OFFSET.x - GUN_OFFSET.x) * gun.ads_blend;
         let timings = gun_pose_timings(gun);
         let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend) - RELOAD_LEFT_DIP * timings.dip + timings.bob_x;
@@ -932,10 +662,6 @@ pub(crate) fn update_scope_lens(
     }
 }
 
-// Drives the gun mesh's Transform from Gun's recoil/reload_remaining state —
-// both are just countdown timers, this is the only system that turns them
-// into an actual pose each frame (also where reload_remaining hitting 0
-// refills the magazine).
 pub(crate) fn gun_view_animation(
     time: Res<Time>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -950,24 +676,13 @@ pub(crate) fn gun_view_animation(
 ) {
     let camera_single = camera.single().ok();
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
-    // Was `keys.pressed(KeyCode::KeyQ)` directly — meant the actual visible
-    // "gun swings to the left shoulder" effect only ever fired for a real
-    // keyboard Q press, missing both touch lean (TouchLeanHeld only feeds
-    // apply_lean_input's Lean.current, never a raw key) and autopilot's
-    // own corner-peek (autopilot_think also only writes Lean.current — see
-    // its own comment on "owns the lean while fully on" — never presses a
-    // key). Reading Lean.current instead (same threshold direction KeyQ
-    // used to represent: apply_lean_input's `left` maps to target -1.0)
-    // makes every lean source — keyboard, touch, autopilot — drive this
-    // the same way apply_view_recoil's roll and sync_camera_to_player's
-    // side_offset already do.
+
     let shoulder_target = if game_over.0 {
         0.0
     } else {
         camera_single.is_some_and(|(_, lean)| lean.current < -0.5) as u8 as f32
     };
-    // Wall-raise probe: how close is the wall directly in front of the
-    // camera? 0.0 = clear, 1.0 = right up against it.
+
     let wall_target = camera_single.map_or(0.0, |(camera_transform, _)| {
         let filter = SpatialQueryFilter::default();
         spatial_query
@@ -1003,15 +718,6 @@ pub(crate) fn gun_view_animation(
         let shoulder_step = (LEAN_SPEED * time.delta_secs()).min(1.0);
         gun.shoulder_blend += (shoulder_target - gun.shoulder_blend) * shoulder_step;
 
-        // LocalPlayerMoving instead of is_moving(&keys) directly — that
-        // raw key check is blind to touch input and, more importantly, to
-        // Autopilot's synthetic movement (which never touches
-        // ButtonInput<KeyCode> at all, see crate::autopilot), so the gun
-        // wouldn't bob while Autopilot walked the player around, and would
-        // conversely bob for no reason if the player happened to still be
-        // resting fingers on WASD while Autopilot was steering. LocalPlayerMoving
-        // is already the single unified signal send_player_input sets from
-        // whichever input source actually produced this frame's move_axis.
         let moving = local_moving.0;
         let bob_target = if moving { 1.0 } else { 0.0 };
         let bob_blend_step = (GUN_BOB_BLEND_SPEED * time.delta_secs()).min(1.0);
@@ -1019,23 +725,16 @@ pub(crate) fn gun_view_animation(
         if moving {
             gun.bob_phase += GUN_BOB_SPEED * time.delta_secs();
         }
-        // Sign flipped from the initial guess — reported backwards in-game.
+
         let sway_target =
             (look_delta.0.x * LOOK_SWAY_SENSITIVITY).clamp(-LOOK_SWAY_MAX_DEG, LOOK_SWAY_MAX_DEG);
         let sway_step = (LOOK_SWAY_SPEED * time.delta_secs()).min(1.0);
         gun.look_sway_roll += (sway_target - gun.look_sway_roll) * sway_step;
 
-        // Same GunPoseTimings sync_scope_camera/update_scope_lens read —
-        // see its own doc comment for why this used to be three separate
-        // hand-written copies of this exact arithmetic.
         let timings = gun_pose_timings(&gun);
 
         let base_pos = gun.base_offset.lerp(GUN_ADS_OFFSET, gun.ads_blend);
-        // Holding the lean-left key swaps the gun over to the left shoulder
-        // by mirroring its X offset, instead of just nudging it —
-        // shoulder_blend eases 0 (right shoulder, normal) -> 1 (fully
-        // mirrored to the left). Leaning right keeps the normal right-
-        // shoulder pose.
+
         let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
         transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)
             + Vec3::new(
@@ -1044,18 +743,10 @@ pub(crate) fn gun_view_animation(
                     + WALL_GUN_RAISE_HEIGHT * gun.wall_raise,
                 RECOIL_KICK * timings.recoil_t,
             );
-        // Recoil tilt is applied as the outer rotation (camera-local space),
-        // not composed inside the model's own base orientation like the
-        // reload tilt is — doing it inside meant the -90° base Y rotation
-        // twisted "tilt around local X" into something closer to a sideways
-        // roll than an up/down pitch (reported as the gun leaning right on
-        // recoil instead of the muzzle rising).
+
         let base_rotation = Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians())
             * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip);
-        // Sign flipped: the previous sign raised the stock/rear instead of
-        // the muzzle.
-        // Same outer/camera-space composition as the recoil tilt above, same
-        // sign so it pitches the muzzle up rather than down.
+
         let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
         transform.rotation = Quat::from_rotation_x(wall_raise_tilt)
             * Quat::from_rotation_z(gun.look_sway_roll.to_radians())
@@ -1105,8 +796,6 @@ pub(crate) fn despawn_bullet_tracers(
     }
 }
 
-// Puffs drift up/forward and swell as they age, then vanish once their
-// lifetime runs out.
 pub(crate) fn update_smoke(mut commands: Commands, time: Res<Time>, mut query: Query<(Entity, &mut Transform, &mut Smoke)>) {
     let dt = time.delta_secs();
     for (entity, mut transform, mut smoke) in &mut query {
@@ -1120,15 +809,6 @@ pub(crate) fn update_smoke(mut commands: Commands, time: Res<Time>, mut query: Q
     }
 }
 
-// Broadcast the instant ANY client fires (see PlayerFiredFx's own doc
-// comment in crate::shared for why no such signal existed before this
-// pass) — finds that specific shooter's own NetPlayer entity via its
-// replicated NetworkId and plays a brief, non-looping Gun_Shoot pose on
-// their third-person model, for every OTHER client watching (the shooter's
-// own client already knows it fired locally and has no third-person view
-// of itself in normal play). A linear scan over connected players/roots is
-// fine at this player count — same shape as the local/remote animation
-// systems above, no indexed lookup infrastructure exists for this either.
 pub(crate) fn on_player_fired_fx(
     trigger: On<PlayerFiredFx>,
     net_players: Query<(Entity, &NetworkId), With<NetPlayer>>,
@@ -1143,19 +823,11 @@ pub(crate) fn on_player_fired_fx(
         return;
     };
     if let Ok(mut player) = players.get_mut(link.0) {
-        // Not .repeat() — a one-shot pose. update_remote_player_model_animation
-        // will naturally take back over and restart Idle/Walk/Run the next
-        // time this player's NetTransform.moving/sprinting actually changes;
-        // until then this just plays once and holds its last frame, which
-        // reads fine for a quick recoil-of-the-arms gesture.
+
         player.play(anim.shoot);
     }
 }
 
-// Same shooter-lookup shape as on_player_fired_fx above, but marks the
-// player's model PlayerModelDead first so the ordinary Idle/Walk/Run
-// system (which keeps running — NetTransform doesn't stop replicating just
-// because this player died) doesn't cut the Death pose short.
 pub(crate) fn on_player_died_fx(
     trigger: On<PlayerDiedFx>,
     mut commands: Commands,
@@ -1176,4 +848,3 @@ pub(crate) fn on_player_died_fx(
         player.play(anim.death);
     }
 }
-

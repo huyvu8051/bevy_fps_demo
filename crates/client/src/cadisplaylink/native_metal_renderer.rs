@@ -1,16 +1,3 @@
-//! The iOS renderer — drives the real game (crate::cadisplaylink's
-//! `native_game_app`/`native_game_extract`) straight to screen via the
-//! `metal` crate (classic MTLCommandQueue/MTLRenderCommandEncoder), no
-//! bevy_render/wgpu involved. This started as a control experiment
-//! (mirroring an old Swift native-Metal demo, checking whether writing
-//! the renderer in Rust instead of Swift brought wgpu's "high CPU
-//! encoding cost" overhead back) — that question's long since answered
-//! (no), and this is now the sole, permanent iOS rendering path, not a
-//! spike kept around for comparison. `NativeMetalRenderer` still has a
-//! fallback demo/patrol scene (a handful of hardcoded cuboids) it draws
-//! when no headless game App is attached — that's a real, still-used
-//! secondary path (e.g. for isolating rendering-only bugs), not leftover
-//! dead code from the original experiment.
 
 use bevy::asset::AssetId;
 use bevy::image::Image;
@@ -24,12 +11,6 @@ use metal::{
 };
 use objc::{runtime::Object, *};
 
-// Phase 6 Step 4: draws the REAL game's own level (spawn_test_arena's walls
-// + floor, the ak47_scope gun) instead of this probe's own hardcoded
-// Sponza/box-arena — reusing every pipeline/shader built below unchanged,
-// only the vertex data and camera pose source change. See
-// native_game_app.rs (headless App) and native_game_extract.rs
-// (extraction).
 use super::metal_math::{look_at, mat_mul, orthographic, perspective, transform_point};
 use super::native_game_app::build_headless_game_ecs_app;
 use super::native_game_extract::{
@@ -37,61 +18,20 @@ use super::native_game_extract::{
     LightSnapshot, SunSnapshot,
 };
 
-// Lighting was never actually ported when this renderer took over from
-// bevy_render/wgpu — every fragment shader below used a single hardcoded
-// "sun" direction unrelated to any real light in the scene (see
-// render_frame's own former `light_dir` constant). Real-game mode now
-// extracts BOTH real lights crate::lib actually spawns: the always-present
-// `DirectionalLight`/"MainSun" (per its own doc comment, the *primary*
-// light for the open USE_TEST_ARENA room) as an unattenuated directional
-// term, and the arena's overhead `PointLight` (LightSnapshot) as a
-// secondary term attenuated by real distance/range — missing the sun
-// entirely was an oversight in the first lighting-port pass, which only
-// grabbed the point light. Point-light position/color/range only (not raw
-// lumen `intensity`, which can be in the millions) — see LightSnapshot's
-// own doc comment for why; same reasoning for not extracting the sun's
-// `illuminance` (lux, also not a 0..1 scalar this non-PBR shader could use
-// directly) — it contributes at the same fixed weight the old hardcoded
-// directional term always used, just with the real direction/color now.
 #[derive(Copy, Clone)]
 struct LightUniform {
     position: [f32; 3],
     range: f32,
-    // [f32; 4] (not 3) with an unused trailing 0.0 — every Uniforms struct
-    // below places a float4 (base_color_factor, or sun_color right after)
-    // and MSL's float4 *always* self-aligns to a 16-byte offset inside a
-    // struct regardless of what precedes it. Padding light_pos (12) +
-    // light_range (4) = 16 exactly, then making light_color a full
-    // 16-byte float4 too, keeps every subsequent field's offset landing
-    // on a clean 16-byte boundary in both Rust's repr(C) layout and
-    // MSL's — no manual `_pad` field needed, and no repeat of the exact
-    // struct-layout mismatch bug documented on skinned_fragment below.
+
     color: [f32; 4],
-    // Direction the sun's light travels *toward* (see SunSnapshot's own
-    // doc comment) — same [f32;3]+f32-pad-to-16 pairing as position/range
-    // above; the trailing f32 is unused (no per-sun range concept).
+
     sun_dir: [f32; 3],
     _sun_pad: f32,
     sun_color: [f32; 4],
 }
 
 impl LightUniform {
-    // `sun_fraction` mirrors the desktop render path's own LightQuality ->
-    // MainSun.illuminance = MAIN_SUN_ILLUMINANCE * level / 5 (see
-    // apply_map_render_toggles, crate::settings_menu) — this renderer never
-    // reads that component, so scaling sun_color by the same fraction here
-    // is the equivalent brightness level for the fragment shaders'
-    // `uniforms.sunColor.rgb * sunDiffuse` term. Expected range 0.0..=1.0
-    // (level/5), not clamped since a value outside that range would just
-    // scale proportionally further, same as illuminance would.
-    // `point_fraction` mirrors PointLightQuality's own desktop effect
-    // (apply_point_light_quality scales the real PointLight's intensity to
-    // PointLightBaseIntensity * level/5) — this renderer never reads
-    // intensity at all (LightSnapshot only ever extracts position/color/
-    // range, see its own doc comment), so scaling `color` by the same
-    // fraction here is the equivalent brightness change for the fragment
-    // shaders' `uniforms.lightColor.rgb * pointDiffuse`/`pointSpecular`
-    // terms.
+
     fn from_snapshots(light: Option<&LightSnapshot>, sun: Option<&SunSnapshot>, sun_fraction: f32, point_fraction: f32) -> Self {
         let (position, range, color_base) = match light {
             Some(l) => (l.position, l.range, [l.color[0], l.color[1], l.color[2], 0.0]),
@@ -112,11 +52,6 @@ impl LightUniform {
     }
 }
 
-// Fallback for whenever there's no real light to extract (the toy demo/
-// patrol probe world, which has no ECS lights at all) — a distant,
-// huge-range point light plus a downward directional term approximates
-// the old fixed-direction "sun" look well enough for that non-gameplay
-// path.
 const FALLBACK_LIGHT: LightUniform = LightUniform {
     position: [400.0, 800.0, 400.0],
     range: 4000.0,
@@ -126,15 +61,6 @@ const FALLBACK_LIGHT: LightUniform = LightUniform {
     sun_color: [1.0, 1.0, 1.0, 0.0],
 };
 
-// Rust has no direct equivalent of Swift's `Bundle.main.resourcePath` —
-// reach into Foundation via objc the same way the rest of this module
-// already talks to UIKit/CAMetalLayer.
-//
-// pub(crate): also called from lib.rs's load_character_ron_by_dir (real
-// device only — see that fn's own doc comment for the crash this fixed:
-// character.ron was being read via a CARGO_MANIFEST_DIR-relative path
-// that only resolves on the dev machine that built the app, not a real
-// device's sandboxed bundle).
 pub(crate) fn bundle_resource_path() -> Option<String> {
     unsafe {
         let bundle_class = class!(NSBundle);
@@ -357,19 +283,10 @@ struct SponzaUniforms {
     point_light_view_projection: [[f32; 4]; 4],
     camera_pos: [f32; 3],
     _camera_pad: f32,
-    // See MSL Uniforms::modelMatrix's own doc comment. Field order must
-    // match the MSL struct exactly — this is uploaded as raw bytes via
-    // set_vertex_bytes/set_fragment_bytes, no per-field marshaling.
+
     model_matrix: [[f32; 4]; 4],
 }
 
-// Phase 2 of the wgpu-replacement plan: GPU skinning for
-// models/soldier.glb (and later zombie.glb) — up to 4 joint influences
-// per vertex, standard linear-blend skinning. jointMatrices is computed
-// CPU-side once per frame (see skinned_gltf.rs's compute_joint_matrices,
-// same keyframe-sampling + hierarchy-walk math bevy_animation does
-// internally) and uploaded as a plain buffer the vertex shader indexes by
-// joint id.
 const SKINNED_SHADER_SOURCE: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -510,20 +427,6 @@ fragment float4 skinned_fragment(VertexOut in [[stage_in]],
 }
 "#;
 
-// Sun-only shadow map: renders every shadow-casting mesh (arena walls/
-// floor/gun via shadow_vertex_sponza, zombies/remote players via
-// shadow_vertex_skinned) from the light's own point of view into a
-// depth-only render target — see NativeMetalRenderer::shadow_map's own doc
-// comment for the texture itself, and render_frame's "Pass 0" for how the
-// resulting `lightViewProjection` matrix is built (an orthographic box
-// centered on the camera, since a directional light has no single
-// position/frustum of its own). No fragment function at all — a depth-
-// only pass only needs position, and Metal explicitly supports a
-// fragmentFunction-less pipeline for exactly this (`set_fragment_function
-// (None)`, see this shader's two RenderPipelineDescriptors in `new()`).
-// Position math is otherwise a stripped copy of sponza_vertex/
-// skinned_vertex (same model/skinning transforms, just projected through
-// the light's viewProjection instead of the camera's).
 const SHADOW_SHADER_SOURCE: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -604,58 +507,17 @@ struct SkinnedShadowUniforms {
     model_matrix: [[f32; 4]; 4],
 }
 
-// Fixed square resolution for the sun's shadow map — no cascades, no
-// resize-on-demand (unlike msaa_targets' screen-sized depth buffer): this
-// renderer's whole shadow frustum is a fixed-size box recentered on the
-// camera every frame (see render_frame's "Pass 0"), so its texture
-// resolution has nothing to do with screen size. 2048 is generous for a
-// single non-cascaded map covering a ~44-unit box — soft enough at the
-// PCF-filtered edges (see SPONZA_SHADER_SOURCE's shadowBias) without the
-// blocky look a smaller map would show up close.
 const SHADOW_MAP_SIZE: u64 = 2048;
-// Per-`ShadowQuality`-tier (crate::lib, 0..=5) shadow-map resolution —
-// index 0 is never actually sampled meaningfully (level 0 skips the
-// shadow-caster draw entirely, see `shadow_quality`'s own field doc
-// comment), kept as a real small size anyway rather than 0 so the texture
-// is never literally zero-sized. 5 matches the old fixed SHADOW_MAP_SIZE
-// above (still used by the non-real-game toy/patrol probe path, which has
-// no ShadowQuality resource to read).
+
 const SHADOW_MAP_SIZES: [u64; 6] = [512, 512, 1024, 1536, 2048, 3072];
-// Same floor as desktop's RESOLUTION_SCALE_MIN_TEXTURE_PX (crate::lib) —
-// keeps a tiny drawable at a very low RenderResolutionScale from asking
-// Metal for a zero-size (or otherwise degenerate) scene_color_texture.
+
 const RENDER_SCALE_MIN_PX: u64 = 64;
-// Half-extent (world units) of the shadow frustum's ortho box, and how far
-// back along the light direction its "eye" sits — see render_frame's
-// "Pass 0" for the actual light_view_projection construction. Centered on
-// the camera every frame rather than fit to the whole arena, so resolution
-// stays concentrated on what's actually visible instead of being spread
-// across geometry far outside the current view.
+
 const SHADOW_HALF_EXTENT: f32 = 22.0;
 const SHADOW_DISTANCE: f32 = 40.0;
 
-// Phase 3's other half: a second camera (narrow FOV, same
-// position/orientation as the main one — simulates a rifle scope) rendered
-// into an offscreen texture, then composited as a small picture-in-picture
-// quad over the main view. Same offscreen-render-target-then-present-on-a-
-// quad indirection the real game's own scope camera already uses (see
-// setup()'s own comment there), reimplemented against this renderer
-// instead of bevy_render.
 const SCOPE_TEXTURE_SIZE: u64 = 512;
 
-// No anti-aliasing anywhere in this renderer at all — every model edge
-// (zombies, walls, gun) rendered visibly jagged, unlike bevy_render's own
-// Msaa::Off... wait, actually unlike this codebase's *other* rendering
-// path, which defaults MSAA on (see crate::lib's Camera3d bundle — Msaa::
-// Off is set there deliberately, but only because bevy_render's TAA/SSAO
-// stack made MSAA redundant on that path; this renderer has neither, so
-// there was nothing softening edges at all). 4x MSAA — the standard
-// quality/cost tradeoff — applied uniformly to every pipeline used by
-// either the main pass or the scope PIP pass, so a single compiled
-// RenderPipelineState per shader still works in both (Metal requires a
-// pipeline's rasterSampleCount to match whatever render pass it's bound
-// to; keeping sample count uniform everywhere avoids needing two compiled
-// variants of every shader).
 const MSAA_SAMPLE_COUNT: u64 = 4;
 
 const QUAD_SHADER_SOURCE: &str = r#"
@@ -724,19 +586,6 @@ struct QuadVertex {
     uv: [f32; 2],
 }
 
-// bevy_ui was never drawn by this renderer at all (it draws its own scene
-// straight via the `metal` crate, never touching bevy_render's UI render
-// graph) — zombie health bars and floating damage numbers looked simply
-// "not ported" but were actually never screen-projected in the first place
-// (see prime_camera_viewport's doc comment in native_game_extract.rs).
-// Once that's fixed, this is the other half: actually draw them. Reuses
-// the same "position/uv quad straight into NDC, no view/projection" shape
-// as QUAD_SHADER_SOURCE's scope PIP above, plus a per-draw tint uniform so
-// one pipeline covers both flat-colored rects (health bar background/fill,
-// sampling `white_texture` so `texColor` is always (1,1,1,1) and the
-// result is just `tint`) and glyph quads (sampling `font_atlas_texture`,
-// whose texels are (1,1,1,coverage) — see build_font_atlas — so the result
-// is `tint` masked by per-pixel glyph coverage).
 const UI_SHADER_SOURCE: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -786,12 +635,6 @@ struct UiUniforms {
     tint: [f32; 4],
 }
 
-// Fullscreen upscale blit — samples scene_color_texture (rendered at
-// drawable_size * RenderResolutionScale, see that field's own doc comment)
-// stretched to fill the real drawable via a single opaque triangle-pair, no
-// depth test, no blending. Plain NDC positions (not real clip-space like
-// QUAD_SHADER_SOURCE's per-corner-projected scope PIP) since this quad
-// always covers the whole screen with no perspective involved.
 const BLIT_SHADER_SOURCE: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -829,68 +672,54 @@ struct BlitVertex {
     uv: [f32; 2],
 }
 
-// A tiny built-in 5x7 dot-matrix font — just enough glyphs for floating
-// damage numbers ("12.0") and health bar labels ("6.0/8"): digits, '.',
-// and '/'. Generated procedurally into a small RGBA8 atlas texture at
-// startup (build_font_atlas) instead of shipping a font asset/using
-// CoreText, since this renderer already draws everything else via raw
-// vertex data with no asset pipeline of its own. One row, GLYPH_COUNT
-// cells wide, each cell GLYPH_W x GLYPH_H texels — see glyph_index for the
-// character -> cell mapping and glyph_uv_rect for the per-glyph UV rect.
 const GLYPH_W: usize = 5;
 const GLYPH_H: usize = 7;
 const GLYPH_COUNT: usize = 43;
-// Row-major bits, MSB (bit 4) = leftmost pixel, 7 rows per glyph, in
-// glyph_index order: '0'..'9', '.', '/', then the full A-Z uppercase
-// alphabet (added incrementally as touch-control/HUD/settings-menu labels
-// needed more of it — G/':' for HP/ammo/ping, then B/F/K/Q/V/W/X/Y/Z once
-// the settings menu's own labels — HITBOXES, FREEZE, SHADOW, ... — showed
-// missing letters simply get skipped by glyph_index, silently compacting
-// the text instead of erroring), plus a handful of symbols (<, >, =).
+
 const GLYPH_BITMAPS: [[u8; GLYPH_H]; GLYPH_COUNT] = [
-    [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110], // 0
-    [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110], // 1
-    [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111], // 2
-    [0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110], // 3
-    [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010], // 4
-    [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110], // 5
-    [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110], // 6
-    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000], // 7
-    [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110], // 8
-    [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100], // 9
-    [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100], // .
-    [0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b00000, 0b00000], // /
-    [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001], // A
-    [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111], // C
-    [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110], // D
-    [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111], // E
-    [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001], // H
-    [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110], // I
-    [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100], // J
-    [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111], // L
-    [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001], // M
-    [0b10001, 0b11001, 0b10101, 0b10101, 0b10011, 0b10001, 0b10001], // N
-    [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110], // O
-    [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000], // P
-    [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001], // R
-    [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110], // S
-    [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100], // T
-    [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110], // U
-    [0b00001, 0b00010, 0b00100, 0b01000, 0b00100, 0b00010, 0b00001], // <
-    [0b10000, 0b01000, 0b00100, 0b00010, 0b00100, 0b01000, 0b10000], // >
-    [0b00000, 0b00000, 0b11111, 0b00000, 0b11111, 0b00000, 0b00000], // =
-    [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000], // space
-    [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111], // G
-    [0b00000, 0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100], // :
-    [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110], // B
-    [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000], // F
-    [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001], // K
-    [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101], // Q
-    [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100], // V
-    [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010], // W
-    [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001], // X
-    [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100], // Y
-    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111], // Z
+    [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+    [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+    [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
+    [0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110],
+    [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+    [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110],
+    [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+    [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+    [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
+    [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100],
+    [0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b00000, 0b00000],
+    [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+    [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111],
+    [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+    [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+    [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+    [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+    [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100],
+    [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+    [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+    [0b10001, 0b11001, 0b10101, 0b10101, 0b10011, 0b10001, 0b10001],
+    [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+    [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
+    [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+    [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+    [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+    [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+    [0b00001, 0b00010, 0b00100, 0b01000, 0b00100, 0b00010, 0b00001],
+    [0b10000, 0b01000, 0b00100, 0b00010, 0b00100, 0b01000, 0b10000],
+    [0b00000, 0b00000, 0b11111, 0b00000, 0b11111, 0b00000, 0b00000],
+    [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000],
+    [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111],
+    [0b00000, 0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100],
+    [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+    [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+    [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+    [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+    [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+    [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010],
+    [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+    [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
 ];
 
 fn glyph_index(c: char) -> Option<usize> {
@@ -933,20 +762,12 @@ fn glyph_index(c: char) -> Option<usize> {
     }
 }
 
-// Cell N occupies texels [N*GLYPH_W, (N+1)*GLYPH_W) horizontally, the full
-// GLYPH_H rows vertically — see build_font_atlas for how the texture
-// itself is laid out.
 fn glyph_uv_rect(index: usize) -> (f32, f32) {
     let u0 = index as f32 / GLYPH_COUNT as f32;
     let u1 = (index + 1) as f32 / GLYPH_COUNT as f32;
     (u0, u1)
 }
 
-// One-time RGBA8 atlas build: GLYPH_COUNT cells side by side, each
-// GLYPH_W x GLYPH_H texels. Lit pixels are opaque white (1,1,1,1), unlit
-// pixels fully transparent (0,0,0,0) — see UI_SHADER_SOURCE's own doc
-// comment for why that makes `texColor * tint` do the right thing for
-// both flat rects (sampling `white_texture` instead) and glyphs.
 fn build_font_atlas(device: &Device) -> metal::Texture {
     let width = (GLYPH_W * GLYPH_COUNT) as u64;
     let height = GLYPH_H as u64;
@@ -996,276 +817,112 @@ pub struct NativeMetalRenderer {
     layer: MetalLayer,
     queue: CommandQueue,
     depth_state: metal::DepthStencilState,
-    // Less-compare, write-DISABLED depth-stencil state for draw_scene's
-    // blend pass — see its own construction comment (in `new()`).
+
     blend_depth_state: metal::DepthStencilState,
-    // Always-pass, no-write depth-stencil state for the bevy_ui overlay —
-    // see its own construction comment (in `new()`) for why the overlay
-    // can't just inherit `depth_state` above.
+
     ui_depth_state: metal::DepthStencilState,
-    // Main pass's depth/color render targets — see metal_msaa.rs's own doc
-    // comment. The color one is resolved into the real drawable texture
-    // each frame (MTLStoreAction::MultisampleResolve), never sampled
-    // directly.
+
     msaa_targets: super::metal_msaa::MsaaTargets,
-    // This frame's MapMsaaOn value (native_game_extract.rs), read each
-    // frame the real game App ticks — decides which pipeline/texture twin
-    // above render_frame binds. Defaults matching MapMsaaOn's own Default
-    // (false/off) until the first extraction.
+
     msaa_enabled: bool,
-    // This frame's ShadowQuality value (native_game_extract.rs), 0..=5 —
-    // 0 gates off Pass 0/0b (below) actually drawing shadow casters into
-    // shadow_map/shadow_map_point; both textures stay at their Clear-to-1.0
-    // (far plane) value from the pass descriptor's own load_action in that
-    // case, so sample_shadow's depth compare passes for every fragment
-    // (nothing is ever farther than the far plane) — i.e. "off" reads as
-    // fully lit everywhere, no shader changes needed. 1..=5 also picks
-    // shadow_map/shadow_map_point's actual resolution — see
-    // ensure_shadow_map_size and SHADOW_MAP_SIZES. Defaults to 5 (matching
-    // ShadowQuality's own light_shadows_enabled() default) until the first
-    // extraction.
+
     shadow_quality: u8,
-    // This frame's RenderResolutionScale value (crate::lib, 0.1..=1.0) —
-    // same "desktop-only resource, dead on this renderer" gap as
-    // map_msaa_on/shadow_quality/light_quality above. Desktop's
-    // RenderResolutionScale only ever resized a bevy_render Image asset
-    // used as an offscreen camera target (resize_scene_render_target,
-    // crate::settings_menu) — this renderer never touches bevy_render, so
-    // the whole 3D+UI frame is rendered straight into scene_color_texture
-    // at drawable_size * this scale, then upscale-blitted into the real
-    // drawable (see render_frame's final blit pass and
-    // ensure_scene_color_texture). Unlike desktop, this scales the UI too
-    // (not just the 3D scene) — a deliberate simplification: splitting UI
-    // into its own full-resolution pass would mean restructuring this
-    // renderer's single combined 3D+UI encoder, a much bigger change for
-    // marginally crisper HUD text at low scales. Defaults to 1.0 (matching
-    // this field's pre-extraction-safe value for the non-real-game toy/
-    // patrol probe path, which has no RenderResolutionScale resource to
-    // read) until the first extraction.
+
     render_resolution_scale: f32,
-    // This frame's TextureQuality value (native_game_extract.rs), 0..=5 —
-    // see apply_zombie_texture_quality's own doc comment. `255` sentinel
-    // (not a real tier — TextureQuality is always clamped 0..=5) so the
-    // very first extraction always re-uploads every zombie kind's texture,
-    // same "always differs from any real value" trick shadow_quality's
-    // struct-literal init (5) doesn't need since 5 IS a real value there;
-    // this field needs an explicit non-value instead since 0 would
-    // wrongly skip re-uploading on a legitimate first-frame tier-0 default
-    // (mobile's TextureQuality default).
+
     zombie_texture_quality: u8,
-    // The offscreen target render_frame's 3D scene + UI overlay actually
-    // draw into (at drawable_size * render_resolution_scale) — see
-    // render_resolution_scale's own doc comment. `(0, 0)` sentinel so
-    // ensure_scene_color_texture always (re)allocates on the first call.
+
     scene_color_size: (u64, u64),
     scene_color_texture: metal::Texture,
-    // Fullscreen blit pipeline for the upscale pass — samples
-    // scene_color_texture with sponza_sampler's existing Linear/Linear
-    // filtering (no dedicated sampler needed, same filtering is exactly
-    // what an upscale blit wants).
+
     blit_pipeline: Option<RenderPipelineState>,
     blit_vertex_buffer: metal::Buffer,
     sponza_pipeline: Option<RenderPipelineState>,
     sponza_pipeline_no_msaa: Option<RenderPipelineState>,
     sponza_sampler: metal::SamplerState,
-    // Sun shadow map — see SHADOW_SHADER_SOURCE's own doc comment.
-    // Depth-only, fixed SHADOW_MAP_SIZE resolution, no MSAA twin needed
-    // (never multisampled — shadow maps are sampled with PCF instead, see
-    // shadow_sampler below).
+
     shadow_map: metal::Texture,
-    // The arena's overhead PointLight's own shadow map — same shape/
-    // pipelines as shadow_map above (render_frame's "Pass 0b" just runs
-    // draw_shadow_casters a second time with a different light_view_
-    // projection into this texture instead), kept as a separate texture
-    // rather than a second layer/slice since Metal render targets are
-    // simplest as whole textures. Without this, only the sun casts a
-    // shadow — a real difference from bevy_render's own PBR path (which
-    // shadows both), visible as one real shadow direction on this
-    // renderer vs. two distinct overlapping ones on desktop.
+
     shadow_map_point: metal::Texture,
     shadow_pipeline_sponza: Option<RenderPipelineState>,
     shadow_pipeline_skinned: Option<RenderPipelineState>,
-    // Depth-only state for Pass 0 (see render_frame) — write-enabled,
-    // Less-compare, same convention as `depth_state` below (nearer wins);
-    // a dedicated field only because `depth_state`'s pixel format is tied
-    // to the main pass's own depth attachment format at creation time on
-    // some platforms, and keeping them distinct avoids ever having to
-    // reason about whether reusing one for the other is safe.
+
     shadow_depth_state: metal::DepthStencilState,
-    // Comparison sampler — `set_compare_function(LessEqual)` makes
-    // `shadowMap.sample_compare(...)` in the fragment shaders return
-    // hardware-filtered (free bilinear, effectively a 2x2 PCF tap) shadow
-    // visibility directly instead of a raw depth value to compare by hand.
+
     shadow_sampler: metal::SamplerState,
     white_texture: metal::Texture,
-    // Fallback for meshes with no real normal map (most of them — see
-    // ExtractedMesh::normal_texture's own doc comment) — a single tangent-
-    // space "pointing straight up" texel (RGB 128,128,255 decodes to
-    // roughly (0,0,1) once sponza_fragment's `* 2.0 - 1.0` unpacks it),
-    // which leaves the TBN-transformed normal equal to the untouched
-    // geometric normal. Same "always bind something, skip the branch"
-    // reasoning as white_texture above.
+
     flat_normal_texture: metal::Texture,
     camera_position: [f32; 3],
     camera_yaw: f32,
     camera_pitch: f32,
     skinned_pipeline: Option<RenderPipelineState>,
     skinned_pipeline_no_msaa: Option<RenderPipelineState>,
-    // See skinned_actor.rs's own doc comment — this project's zombie/soldier
-    // models are just two entries registered here, not a special case the
-    // renderer core knows about.
+
     skinned_models: super::skinned_actor::SkinnedModelRegistry,
     scope_color_texture: metal::Texture,
-    // Multisampled scope-pass render target, resolved into
-    // scope_color_texture above — see its own doc comment at construction.
+
     scope_color_texture_msaa: metal::Texture,
     scope_depth_texture: metal::Texture,
-    // Sample-count-1 twin of scope_depth_texture, used when MapMsaaOn is
-    // off.
+
     scope_depth_texture_no_msaa: metal::Texture,
     quad_pipeline: Option<RenderPipelineState>,
     quad_pipeline_no_msaa: Option<RenderPipelineState>,
     quad_vertex_buffer: metal::Buffer,
     start_time: std::time::Instant,
-    // Loaded once in new() (see load_splash_texture) — needs to be a plain
-    // Texture rather than a lazily-loaded Option so render_frame can read
-    // it with `&self` instead of `&mut self`: by the time the splash quad
-    // gets drawn, `self.layer.next_drawable()`'s immutable borrow is
-    // already alive for the rest of the frame (held until
-    // present_drawable at the very end), so any `&mut self` call in
-    // between fails to borrow-check.
+
     splash_texture: metal::Texture,
-    // `Some` only when constructed via `new(view, true)` — the headless
-    // real game (build_game_common: physics/networking/AI/prediction),
-    // ticked and extracted every frame. When
-    // present, `render_frame` draws its static geometry (arena+gun) and
-    // drives the camera from its `FpsCamera` instead of touch input.
+
     real_game_app: Option<bevy::app::App>,
-    // Cache of uploaded GPU textures, keyed by the source `Image` asset's
-    // own stable AssetId — GPU texture upload is far more expensive than the
-    // small per-frame vertex buffer rebuild, so unlike vertex data (which
-    // must be rebaked every frame since Transform can change — gun sway/
-    // recoil), each unique texture is uploaded once and reused after that.
-    // Used to be keyed positionally by index into
-    // `RenderSnapshot::static_meshes` instead — that relied on "the same
-    // entities keep existing once spawned", which held for arena walls/gun
-    // meshes but broke the moment transient VFX meshes (muzzle flash,
-    // smoke — both textured) started spawning/despawning on every shot: the
-    // Vec's length (and which mesh sat at which index) changed constantly,
-    // so a cached texture from index N one frame could silently end up
-    // bound to a completely different mesh at index N the next, or trigger
-    // a full re-upload of every texture on the same frame a shot fired.
-    // Identity-keyed avoids both: uploads happen exactly once per unique
-    // image regardless of entity churn, and a lookup can never bind the
-    // wrong texture to the wrong mesh. Pruned to exactly this frame's
-    // referenced AssetIds at the end of every render_frame call (see
-    // render_frame's own `retain()`) — a car's texture DOES change now
-    // (item_gallery_cars::apply_item_gallery_car_distance_lod swaps tiers
-    // live), so without this every tier a car ever visited stayed
-    // resident as a real GPU texture forever; confirmed climbing without
-    // bound on a real device once distance-LOD shipped.
+
     real_game_textures: std::collections::HashMap<AssetId<Image>, metal::Texture>,
-    // Identity-keyed the same way real_game_textures is (same "entity churn
-    // can't scramble an index-keyed cache" reasoning) — one LOCAL-space
-    // (not world-space) vertex buffer per unique `Mesh` asset, uploaded
-    // once and reused every frame that asset shows up again, for every
-    // ExtractedMesh with `is_gpu_transformed` set (currently just cars —
-    // see that field's own doc comment). A given `Mesh` asset's own vertex
-    // data still never changes after load — only the model-matrix uniform
-    // each draw call sends alongside it does — but distance-LOD now swaps
-    // WHICH Mesh asset a car's Mesh3d points at as it crosses bands, so
-    // the buffer for a tier the car has since left behind is dead weight;
-    // pruned the same way as real_game_textures above. usize is the
-    // triangle-list vertex count (draw_primitives' own count, mirroring
-    // RealGameMeshDraw::vertex_count).
+
     gpu_transformed_mesh_cache: std::collections::HashMap<AssetId<Mesh>, (metal::Buffer, usize)>,
-    // Real-game mode only: the FpsCamera entity's actual world-space
-    // rotation quaternion (xyzw), straight from GlobalTransform — includes
-    // ViewRecoil's kick and Lean's roll, unlike camera_yaw/camera_pitch
-    // (which only ever hold the pre-recoil base angles). Identity when not
-    // yet set / not in real-game mode.
+
     real_game_camera_rotation: [f32; 4],
-    // Real `Gun.ads_blend`/`ScopeZoom` — drive whether the scope PIP
-    // overlay shows at all (only while actually aiming, not the demo
-    // probe's always-on PIP) and its FOV (matching the real game's
-    // `SCOPE_BASE_FOV / zoom` formula instead of a fixed guess).
+
     real_game_ads_blend: f32,
     real_game_scope_zoom: f32,
     real_game_wall_raise: f32,
-    // The real ScopeCamera entity's own state (see ScopeCameraSnapshot's
-    // doc comment on native_game_extract.rs) — using this directly instead
-    // of the main camera's transform + our own reconstructed show/hide
-    // condition is what gives the scope view its real shoulder-swap sweep,
-    // recoil kick, reload dip, and walk-bob for free, and the real
-    // Camera.is_active/Projection.fov instead of an approximation.
+
     real_game_scope_eye: [f32; 3],
     real_game_scope_rotation: [f32; 4],
     real_game_scope_active: bool,
     real_game_scope_fov: f32,
-    // Real ScopeLens entity's own world position — see
-    // ScopeCameraSnapshot::lens_world_pos's own doc comment
-    // (native_game_extract.rs). Projected through the main camera's
-    // view_projection each frame to place the scope PIP quad where the
-    // real 3D lens glass actually is, instead of a fixed screen center.
+
     real_game_scope_lens_world_pos: [f32; 3],
-    // See ScopeCameraSnapshot::lens_local_rotation's own doc comment.
+
     real_game_scope_lens_local_rotation: [f32; 4],
-    // The scene's real PointLight, if any — see LightSnapshot's own doc
-    // comment. `None` (falls back to FALLBACK_LIGHT) before the first
-    // extraction, or for the toy demo/patrol probe world, which has no
-    // ECS lights at all.
+
     real_game_light: LightUniform,
-    // bevy_ui overlay: pipeline/atlas/sampler for drawing zombie health
-    // bars and floating damage numbers (see UI_SHADER_SOURCE's own doc
-    // comment) plus this frame's already-extracted screen-space data —
-    // `None` pipeline means the shader failed to compile, same
-    // fail-soft pattern sponza/skinned/quad already use.
+
     ui_pipeline: Option<RenderPipelineState>,
     ui_pipeline_no_msaa: Option<RenderPipelineState>,
     ui_sampler: metal::SamplerState,
     font_atlas_texture: metal::Texture,
     ui_floating_damage: Vec<FloatingDamageSnapshot>,
     ui_health_bars: Vec<HealthBarSnapshot>,
-    // Touch controls (HUD buttons + joystick) — see TouchButtonSnapshot/
-    // TouchJoystickSnapshot's own doc comments (native_game_extract.rs).
-    // Drawn with the exact same `ui_pipeline`/white_texture/font_atlas_texture
-    // as the health bars/floating damage above, just a separate cached Vec
-    // so this frame's set replaces last frame's wholesale like those do.
+
     ui_touch_buttons: Vec<super::native_game_extract::TouchButtonSnapshot>,
     ui_touch_joystick: Option<super::native_game_extract::TouchJoystickSnapshot>,
     ui_scope_zoom_slider: Option<super::native_game_extract::ScopeZoomSliderSnapshot>,
-    // HP/ammo/ping readouts + crosshair — see HudTextSnapshot/
-    // CrosshairLineSnapshot's own doc comments (native_game_extract.rs).
+
     ui_hud_texts: Vec<super::native_game_extract::HudTextSnapshot>,
     ui_crosshair_lines: Vec<super::native_game_extract::CrosshairLineSnapshot>,
-    // Settings menu — see SettingsMenuButtonSnapshot's own doc comment
-    // (native_game_extract.rs).
+
     ui_settings_menu_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_settings_menu_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_settings_menu_texts: Vec<super::native_game_extract::HudTextSnapshot>,
-    // GAME OVER overlay — see extract_panel's own doc comment
-    // (native_game_extract.rs).
+
     ui_game_over_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_game_over_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_game_over_texts: Vec<super::native_game_extract::HudTextSnapshot>,
-    // Map-select overlay — see extract_panel's own doc comment
-    // (native_game_extract.rs).
+
     ui_map_select_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_map_select_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_map_select_texts: Vec<super::native_game_extract::HudTextSnapshot>,
 }
 
-// Flattens ONE of the real game's extracted static meshes (arena
-// walls/floor, or one of the gun's glTF-scene child meshes — see
-// native_game_extract.rs) into a plain triangle list in the SAME
-// `GltfVertex{position,normal,uv}` layout Sponza's own meshes already use
-// (see gltf_scene.rs) — so drawing them with real textures needs no new
-// shader/pipeline, just reusing `self.sponza_pipeline`/`self.sponza_sampler`
-// unchanged, with a fresh `MTLBuffer` each frame (same "rebuild a small
-// buffer per frame" precedent as the skinned-mesh joint buffer below).
-// Bakes each mesh's `Transform` into world-space positions/normals on the
-// CPU, matching how Sponza/box-arena vertices are already pre-baked at
-// load time (no per-draw model matrix in this shader).
 fn bake_static_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::GltfVertex> {
     let mut verts = Vec::new();
     let vertex_at = |idx: usize| -> super::gltf_scene::GltfVertex {
@@ -1278,9 +935,7 @@ fn bake_static_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::Glt
         let uv = if mesh.uvs.is_empty() { [0.0, 0.0] } else { mesh.uvs[idx] };
         let world_pos = mesh.transform.transform_point(local_pos);
         let world_normal = (mesh.transform.rotation * local_normal).normalize_or_zero();
-        // Only the xyz direction rotates into world space like the normal
-        // above — w is glTF's handedness sign, not a spatial component, so
-        // it carries straight through unchanged.
+
         let tangent = if mesh.tangents.is_empty() {
             [1.0, 0.0, 0.0, 1.0]
         } else {
@@ -1302,15 +957,6 @@ fn bake_static_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::Glt
     verts
 }
 
-// Local-space twin of bake_static_mesh_vertices above, for
-// `is_gpu_transformed` meshes (cars) — leaves position/normal/tangent in
-// the source Mesh asset's own local space instead of applying
-// `mesh.transform`, since the vertex shader now does that multiply itself
-// every draw (see the Uniforms::modelMatrix this feeds — SPONZA_SHADER_
-// SOURCE's own doc comment on `modelMatrix`). This is what actually makes
-// caching the resulting buffer safe: a `Mesh` asset's local-space geometry
-// never changes after load, only which entity's transform gets multiplied
-// against it at draw time.
 fn bake_local_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::GltfVertex> {
     let mut verts = Vec::new();
     let vertex_at = |idx: usize| -> super::gltf_scene::GltfVertex {
@@ -1332,32 +978,6 @@ fn bake_local_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::Gltf
     verts
 }
 
-// One real-game static mesh (arena wall/floor, or a gun scene child mesh),
-// ready to draw this frame — see bake_static_mesh_vertices and
-// render_frame's texture-cache handling for how these get built.
-// `texture: None` (untextured material, or an unsupported CPU pixel format
-// — see native_game_extract.rs) falls back to `self.white_texture` in
-// `draw_scene`, same fallback Sponza's own meshes already use.
-// Real-game scope PIP: instead of a flat always-facing-camera NDC quad
-// with position/roll faked on top (the previous two approaches — dead
-// center, then a projected center + a single 2D roll angle), this builds
-// the real ScopeLens circle mesh's own 4 corners in actual WORLD space
-// (`lens_world_pos` + the lens's real world rotation, at its real
-// `radius`) and projects each one individually through `view_projection`,
-// exactly like any other 3D quad in the scene. That's what naturally
-// picks up EVERY axis of update_scope_lens's real motion for free —
-// translation, roll, the recoil yaw-kick (a true horizontal turn of the
-// glass, not representable by a flat 2D quad + one roll angle), reload
-// tilt, AND real perspective-correct scaling as the lens sweeps toward/
-// away from the camera (ADS in/out, recoil kick along its own local Z) —
-// instead of the fixed apparent size every earlier version used. Passing
-// each corner's own homogeneous clip-space `[x, y, z, w]` straight to the
-// GPU (not pre-divided by `w` on the CPU) is what makes Metal's
-// rasterizer interpolate `uv` correctly across a quad that's no longer
-// perfectly fronto-parallel to the screen — see quad_vertex's own MSL
-// comment. `world_rotation` is `camera_rotation * lens_local_rotation`,
-// mirroring exactly how Bevy composes a ChildOf(camera) entity's own
-// GlobalTransform from its parent's.
 fn build_projected_quad(
     device: &Device,
     view_projection: [[f32; 4]; 4],
@@ -1368,12 +988,7 @@ fn build_projected_quad(
     let right = (world_rotation * bevy::math::Vec3::X) * radius;
     let up = (world_rotation * bevy::math::Vec3::Y) * radius;
     let center = bevy::math::Vec3::from_array(center);
-    // V=0 is the texture's TOP row (image-space convention, same as
-    // ndc_ui_rect's own doc comment) — so the TOP corners (+up) must
-    // carry uv.y = 0.0, not the bottom ones. Had this backwards before
-    // (bottom-of-quad -> uv.y=0), which sampled scope_color_texture's top
-    // row at the screen's bottom and vice versa — a vertical flip, the
-    // scope PIP rendering upside down.
+
     let corner = |signed_right: f32, signed_up: f32, uv: [f32; 2]| {
         let world = center + right * signed_right + up * signed_up;
         QuadVertex { position: transform_point(view_projection, world.to_array()), uv }
@@ -1392,13 +1007,6 @@ fn build_projected_quad(
     )
 }
 
-// Screen-space rect helper for the UI overlay: `x`/`y`/`w`/`h` are
-// top-left-origin logical points (matching bevy_ui's `Node.left`/`.top`,
-// per prime_camera_viewport's doc comment), converted straight to Metal
-// NDC (-1..1, Y up) — no view/projection needed, same "straight into clip
-// space" approach build_centered_quad/the scope PIP quad already use.
-// `uv` is [bottom-left, bottom-right, top-right, top-left], V increasing
-// downward (image-space convention) to match `build_font_atlas`.
 fn ndc_ui_rect(x: f32, y: f32, w: f32, h: f32, view_w: f32, view_h: f32, uv: [[f32; 2]; 4]) -> [UiVertex; 6] {
     let ndc_x0 = (x / view_w) * 2.0 - 1.0;
     let ndc_x1 = ((x + w) / view_w) * 2.0 - 1.0;
@@ -1414,14 +1022,6 @@ fn ndc_ui_rect(x: f32, y: f32, w: f32, h: f32, view_w: f32, view_h: f32, uv: [[f
     ]
 }
 
-// `set_vertex_bytes`/`set_fragment_bytes` instead of a real `metal::Buffer`
-// — each UI quad is tiny (96 bytes of vertex data) and drawn once, so a
-// full buffer allocation per quad would be pure overhead; Metal's inline
-// "bytes" path exists exactly for this.
-// Same read-file/decode/upload sequence as apply_zombie_texture_quality
-// (a method, since it re-loads at runtime on a settings change) — this is
-// a free fn instead since it only ever runs once, in new(), before there's
-// a `self` to call a method on yet.
 fn load_splash_texture(device: &metal::Device) -> Option<metal::Texture> {
     let resource_path = bundle_resource_path().unwrap_or_default();
     let path = std::path::Path::new(&resource_path).join("assets").join("branding/open_diy_splash.png");
@@ -1451,17 +1051,6 @@ fn draw_ui_quad(encoder: &metal::RenderCommandEncoderRef, verts: &[UiVertex; 6],
     encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
 }
 
-// Draws a list of HudTextSnapshot-shaped text entries (HP/ammo/ping
-// readouts, and the settings menu's own text — see HudTextSnapshot's own
-// doc comment in native_game_extract.rs) with nearest-edge anchoring: the
-// bitmap font (fixed 5px-wide glyphs) measures the same string to a
-// different width/height than Bevy's real proportional font, so only
-// whichever edge sits closer to its own screen edge — the text's real
-// fixed anchor — stays put; the far edge grows/shrinks by our own
-// measurement instead of the real layout's, or it'd drift off-screen.
-// Uppercases before drawing — the bitmap atlas only has uppercase letters
-// (see glyph_index's own doc comment), while the real Text these come
-// from is mixed-case ("Ping: 34 ms").
 fn draw_hud_text_list(
     encoder: &metal::RenderCommandEncoderRef,
     texts: &[super::native_game_extract::HudTextSnapshot],
@@ -1492,13 +1081,6 @@ fn draw_hud_text_list(
     }
 }
 
-// Draws a "panel + buttons + text" UI subtree — shared by the settings
-// menu and the GAME OVER overlay (see extract_panel's own doc comment in
-// native_game_extract.rs for why both extract into the same
-// SettingsMenuButtonSnapshot/HudTextSnapshot shapes). The panel's own
-// backdrop is drawn first, so the real buttons/text land on top of it;
-// buttons are plain rects (no label — labels are `texts`' own Text
-// children, drawn last via draw_hud_text_list).
 fn draw_panel(
     encoder: &metal::RenderCommandEncoderRef,
     panel: &Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
@@ -1532,50 +1114,27 @@ struct RealGameMeshDraw<'a> {
     emissive: [f32; 4],
     texture: Option<&'a metal::Texture>,
     normal_texture: Option<&'a metal::Texture>,
-    // See ExtractedMesh::is_blend's own doc comment — this is what
-    // draw_scene actually splits its two static-mesh passes on now.
+
     is_blend: bool,
-    // Squared distance from the main camera's eye to this mesh's own
-    // world-space transform.translation — used to sort the blend pass
-    // back-to-front (farthest first) so overlapping translucent meshes
-    // composite in the right order, same as any standard forward-
-    // renderer transparency pass. Squared to skip a sqrt() per mesh per
-    // frame; only the relative ordering it produces is ever used.
+
     camera_dist_sq: f32,
-    // Identity for the old CPU-baked-to-world-space meshes (walls/gun) —
-    // multiplying by identity is a no-op, so their behavior is unchanged.
-    // The real transform for `is_gpu_transformed` meshes (cars), whose
-    // vertex_buffer above is cached in LOCAL space — see
-    // ExtractedMesh::is_gpu_transformed's own doc comment.
+
     model_matrix: [[f32; 4]; 4],
 }
 
 const MAT4_IDENTITY: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
 
 impl NativeMetalRenderer {
-    // `view` is the raw UIView* handed over from Swift — same FFI contract
-    // as the existing cadisplaylink module (see ios_view.rs). We reach
-    // into it via objc msg_send! to grab its CAMetalLayer, exactly what
-    // MetalView.swift's `layerClass` override already made it.
+
     pub unsafe fn new(view: *mut Object) -> Self {
         let device = Device::system_default().expect("no Metal device");
         let raw_layer: *mut Object = msg_send![view, layer];
-        // MetalLayer wraps a CAMetalLayer* Objective-C object the same way
-        // MetalView.swift's `layerClass` override already made metalV's
-        // backing layer — from_ptr takes ownership of a +1 retain count,
-        // so bump the refcount here since `layer` (owned by the UIView)
-        // shouldn't be released out from under Swift.
+
         let retained: *mut Object = msg_send![raw_layer, retain];
         let layer = MetalLayer::from_ptr(retained as *mut CAMetalLayer);
         layer.set_device(&device);
         layer.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-        // CAMetalLayer's drawableSize does NOT auto-track the view's
-        // bounds when the layer is driven manually like this (unlike
-        // MTKView, which keeps it in sync every layout pass) — has to be
-        // set explicitly or nextDrawable()'s texture ends up 0x0, which
-        // crashes the depth-texture descriptor validation. Set once here
-        // from the view's current bounds * scale_factor; fine for this
-        // diagnostic probe (no rotation handling needed).
+
         let bounds: CGRect = msg_send![view, bounds];
         let scale = layer.contents_scale();
         layer.set_drawable_size(CGSize::new(bounds.size.width * scale, bounds.size.height * scale));
@@ -1589,47 +1148,16 @@ impl NativeMetalRenderer {
         depth_descriptor.set_depth_write_enabled(true);
         let depth_state = device.new_depth_stencil_state(&depth_descriptor);
 
-        // Same Less-compare as depth_state above, but write DISABLED — for
-        // draw_scene's blend pass (translucent meshes, see ExtractedMesh::
-        // is_blend). Still correctly hidden behind anything nearer that's
-        // already in the depth buffer (opaque geometry, zombies), but
-        // doesn't itself write depth, so it can never occlude anything —
-        // the standard "opaque writes, transparent only tests" split any
-        // forward renderer needs for correct transparency, instead of
-        // relying on draw order alone (see draw_scene's own comment on
-        // why draw order alone wasn't enough for two overlapping blended
-        // meshes).
         let blend_depth_descriptor = metal::DepthStencilDescriptor::new();
         blend_depth_descriptor.set_depth_compare_function(metal::MTLCompareFunction::Less);
         blend_depth_descriptor.set_depth_write_enabled(false);
         let blend_depth_state = device.new_depth_stencil_state(&blend_depth_descriptor);
 
-        // The bevy_ui overlay (health bars, floating damage, touch controls)
-        // is drawn with the SAME `encoder` as the 3D scene right before it,
-        // in the SAME render pass — Metal never resets depth-stencil state
-        // between draw calls, so without an explicit override here the
-        // overlay inherits `depth_state` above (Less-compare, write
-        // enabled) and gets depth-tested against the 3D scene's own
-        // just-written depth buffer. UI_SHADER_SOURCE's vertex shader
-        // always outputs z=0.0 (nearest possible in Metal's [0,1] NDC
-        // range), which should in principle always beat real scene
-        // geometry — but real-device testing (screenshots of the same
-        // frame data taken moments apart) showed the overlay intermittently
-        // NOT rendering at all depending on what 3D geometry happened to be
-        // behind it, which is exactly what a marginal/borderline depth
-        // comparison produces. A screen-space overlay should never be
-        // depth-tested against the 3D scene in the first place — same
-        // reasoning any real renderer's HUD pass uses — so this is a
-        // dedicated always-pass, no-write state instead of trying to tune
-        // z=0.0 to reliably win.
         let ui_depth_descriptor = metal::DepthStencilDescriptor::new();
         ui_depth_descriptor.set_depth_compare_function(metal::MTLCompareFunction::Always);
         ui_depth_descriptor.set_depth_write_enabled(false);
         let ui_depth_state = device.new_depth_stencil_state(&ui_depth_descriptor);
 
-        // Builds one Sponza RenderPipelineDescriptor (shared blend setup)
-        // at the given sample count — used twice below (MSAA on/off) so the
-        // two pipelines can't drift out of sync with each other.
         fn build_sponza_descriptor(
             vertex_fn: &metal::FunctionRef,
             fragment_fn: &metal::FunctionRef,
@@ -1640,17 +1168,7 @@ impl NativeMetalRenderer {
             descriptor.set_fragment_function(Some(fragment_fn));
             let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
             color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-            // Real-game materials with `AlphaMode::Blend` (e.g. the scope
-            // lens glass on the ak47_scope model) carry alpha < 1 in their
-            // base_color/texture — without blending enabled here, Metal
-            // ignores that alpha and paints every fragment fully opaque
-            // regardless of what the fragment shader returns, which is why
-            // the lens looked solid instead of see-through once real
-            // textures/materials replaced the earlier flat-color
-            // placeholder. Standard "source over" blending: opaque
-            // (alpha=1) surfaces render identically to unblended, so this
-            // is safe for the arena/gun's mostly-opaque geometry too, not
-            // just the lens.
+
             color_attachment.set_blending_enabled(true);
             color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
             color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
@@ -1689,10 +1207,6 @@ impl NativeMetalRenderer {
         sampler_descriptor.set_address_mode_t(metal::MTLSamplerAddressMode::Repeat);
         let sponza_sampler = device.new_sampler(&sampler_descriptor);
 
-        // Fallback for meshes/materials with no base color texture (glTF
-        // materials aren't required to have one, just a factor) — sample a
-        // 1x1 white texture so baseColorFactor alone still comes through
-        // correctly instead of needing a separate untextured shader path.
         let white_texture_descriptor = metal::TextureDescriptor::new();
         white_texture_descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm);
         white_texture_descriptor.set_width(1);
@@ -1701,17 +1215,8 @@ impl NativeMetalRenderer {
         let white_texture = device.new_texture(&white_texture_descriptor);
         white_texture.replace_region(metal::MTLRegion::new_2d(0, 0, 1, 1), 0, [255u8, 255, 255, 255].as_ptr() as *const _, 4);
 
-        // iOS port of splash_screen.rs's desktop bevy_ui splash — loaded
-        // once here (not lazily in render_frame) so the render loop only
-        // ever needs a `&self` read of it, see splash_texture's own field
-        // doc comment for why that borrow-checking constraint exists.
-        // Falls back to a clone of white_texture (a plain 1x1 white pixel)
-        // on any read/decode failure — the splash backdrop quad is already
-        // white, so a missing logo just reads as a very brief blank white
-        // screen instead of a panic over a purely cosmetic asset.
         let splash_texture = load_splash_texture(&device).unwrap_or_else(|| white_texture.clone());
 
-        // See flat_normal_texture's own field doc comment.
         let flat_normal_descriptor = metal::TextureDescriptor::new();
         flat_normal_descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm);
         flat_normal_descriptor.set_width(1);
@@ -1720,13 +1225,6 @@ impl NativeMetalRenderer {
         let flat_normal_texture = device.new_texture(&flat_normal_descriptor);
         flat_normal_texture.replace_region(metal::MTLRegion::new_2d(0, 0, 1, 1), 0, [128u8, 128, 255, 255].as_ptr() as *const _, 4);
 
-        // Sun + point-light shadow maps — see SHADOW_SHADER_SOURCE/
-        // SHADOW_MAP_SIZE's own doc comments. Private storage (GPU-only,
-        // never CPU-read) + RenderTarget (Pass 0/0b write them) |
-        // ShaderRead (the main/scope passes' fragment shaders sample
-        // them). Same descriptor shape reused for both — see
-        // shadow_map_point's own field doc comment for why they're two
-        // separate textures rather than one.
         let shadow_map_descriptor = metal::TextureDescriptor::new();
         shadow_map_descriptor.set_pixel_format(MTLPixelFormat::Depth32Float);
         shadow_map_descriptor.set_width(SHADOW_MAP_SIZE);
@@ -1741,12 +1239,6 @@ impl NativeMetalRenderer {
         shadow_depth_descriptor.set_depth_write_enabled(true);
         let shadow_depth_state = device.new_depth_stencil_state(&shadow_depth_descriptor);
 
-        // Comparison sampler for `sample_compare` in the fragment shaders —
-        // see shadow_sampler's own field doc comment (struct definition).
-        // Clamp-to-edge (not Repeat, unlike sponza_sampler above): outside
-        // the shadow frustum's box should read as "no occluder recorded"
-        // (handled explicitly by the shadowUv bounds check in the shader),
-        // not tile the shadow map's edge texels.
         let shadow_sampler_descriptor = metal::SamplerDescriptor::new();
         shadow_sampler_descriptor.set_min_filter(metal::MTLSamplerMinMagFilter::Linear);
         shadow_sampler_descriptor.set_mag_filter(metal::MTLSamplerMinMagFilter::Linear);
@@ -1755,12 +1247,6 @@ impl NativeMetalRenderer {
         shadow_sampler_descriptor.set_compare_function(metal::MTLCompareFunction::LessEqual);
         let shadow_sampler = device.new_sampler(&shadow_sampler_descriptor);
 
-        // Depth-only pipelines — no fragment function, no color
-        // attachments at all (see SHADOW_SHADER_SOURCE's own doc comment).
-        // Single sample count only: the shadow map is never multisampled
-        // (PCF via shadow_sampler above already softens its edges), so
-        // unlike every other pipeline in this renderer there's no MSAA/
-        // no-MSAA twin to build.
         let (shadow_pipeline_sponza, shadow_pipeline_skinned) =
             match device.new_library_with_source(SHADOW_SHADER_SOURCE, &compile_options) {
                 Ok(shadow_library) => {
@@ -1816,44 +1302,18 @@ impl NativeMetalRenderer {
                     (None, None)
                 }
             };
-        // Registers this project's two skinned actor types under the names
-        // native_game_extract.rs's zombie/remote-player extraction tags its
-        // SkinnedActorDraws with (see skinned_actor.rs's own doc comment) —
-        // the renderer core itself has no idea these are "zombies" or
-        // "soldiers", only that something registered these names.
+
         let resource_path = bundle_resource_path().unwrap_or_default();
         let mut skinned_models = super::skinned_actor::SkinnedModelRegistry::default();
         let soldier_path = std::path::Path::new(&resource_path).join("assets/characters/soldier_meshy/mesh/soldier_meshy.glb");
         if let Some(soldier_model) = super::skinned_gltf::load_skinned_gltf(&device, &soldier_path) {
-            // Hand-copied from assets/characters/soldier_meshy/character.ron
-            // — this custom Metal renderer never queries PlayerModelTuning
-            // (the real game's dynamic RON-loaded source of truth on the
-            // desktop/wgpu path) at all, only this hardcoded registration
-            // determines what's drawn here, so these 3 numbers have to be
-            // kept in sync BY HAND with that file. (This was already true
-            // before switching to soldier_meshy — PLAYER_MODEL_SCALE/
-            // _Y_OFFSET/_FACING_CORRECTION were themselves hand-copied
-            // consts, now replaced by PlayerModelTuning; loading the RON
-            // file dynamically here too would need bundle_resource_path(),
-            // not PlayerModelTuning::load's CARGO_MANIFEST_DIR-relative
-            // std::fs read, which only resolves correctly on the dev
-            // machine that built the app, not a real device — untouched,
-            // pre-existing gap, not introduced by this change.)
+
             const SCALE: f32 = 1.04;
             const Y_OFFSET: f32 = -0.76;
             const FACING_DEG: f32 = 0.0;
             skinned_models.register("soldier", soldier_model, SCALE, Y_OFFSET, FACING_DEG.to_radians());
         }
-        // One registration per `ZombieKind`, under the name
-        // `shared::zombie_kind_metal_model_name` picks — see that fn's own
-        // doc comment for the real bug this replaced (a single Classic-
-        // only "zombie" registration silently drawn for every kind). All
-        // three glb files bake their own scale/offset/rotation into their
-        // own scene root now (see the comment where
-        // zombie_kind_mesh_transform used to live in crates/shared), so
-        // every registration here is scale 1.0 / offset 0.0 / facing 0.0 —
-        // the desktop/wgpu path's mesh-child Transform::IDENTITY, mirrored
-        // here.
+
         for kind in [shared::ZombieKind::Classic, shared::ZombieKind::Meshy, shared::ZombieKind::Soldier] {
             let path = std::path::Path::new(&resource_path).join("assets").join(shared::zombie_kind_mesh_path(kind));
             if let Some(model) = super::skinned_gltf::load_skinned_gltf(&device, &path) {
@@ -1861,20 +1321,12 @@ impl NativeMetalRenderer {
             }
         }
 
-        // Real device metrics (bounds/scale computed above for the Metal
-        // drawable size) threaded into the headless App's Window too — see
-        // build_headless_game_ecs_app's own doc comment for why a mismatch
-        // here breaks touch-driven UI hit-testing (drag-to-scroll silently
-        // never engaging, taps landing on the wrong element).
         let real_game_app = Some(build_headless_game_ecs_app(
             (bounds.size.width * scale) as u32,
             (bounds.size.height * scale) as u32,
             scale as f32,
         ));
 
-        // Resolve target — single-sample, still what quad_fragment (the PIP
-        // composite) actually samples from; MSAA never touches this one
-        // directly, see scope_color_texture_msaa below.
         let scope_color_descriptor = metal::TextureDescriptor::new();
         scope_color_descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
         scope_color_descriptor.set_width(SCOPE_TEXTURE_SIZE);
@@ -1883,10 +1335,6 @@ impl NativeMetalRenderer {
         scope_color_descriptor.set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
         let scope_color_texture = device.new_texture(&scope_color_descriptor);
 
-        // The scope pass's actual render target — multisampled, resolved
-        // into scope_color_texture above at the end of the pass (see
-        // render_frame's MTLStoreAction::MultisampleResolve). Never sampled
-        // itself, so no ShaderRead usage needed.
         let scope_color_msaa_descriptor = metal::TextureDescriptor::new();
         scope_color_msaa_descriptor.set_texture_type(metal::MTLTextureType::D2Multisample);
         scope_color_msaa_descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
@@ -1907,10 +1355,6 @@ impl NativeMetalRenderer {
         scope_depth_descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
         let scope_depth_texture = device.new_texture(&scope_depth_descriptor);
 
-        // Sample-count-1 counterpart of scope_depth_texture, for the
-        // MapMsaaOn-off path — the scope pass then renders straight into
-        // scope_color_texture with no resolve step at all (see
-        // render_frame), same as before MSAA existed in this renderer.
         let scope_depth_no_msaa_descriptor = metal::TextureDescriptor::new();
         scope_depth_no_msaa_descriptor.set_pixel_format(MTLPixelFormat::Depth32Float);
         scope_depth_no_msaa_descriptor.set_width(SCOPE_TEXTURE_SIZE);
@@ -1925,12 +1369,7 @@ impl NativeMetalRenderer {
             descriptor.set_fragment_function(Some(fragment_fn));
             let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
             color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-            // Was opaque (no blending) — the scope PIP painted fully solid
-            // over whatever the main camera already drew there, unlike the
-            // real game's translucent ScopeLens glass (see
-            // build_sponza_descriptor's comment). quad_fragment now returns
-            // alpha < 1, so this needs the same standard "source over"
-            // blend setup as that pipeline to actually show through.
+
             color_attachment.set_blending_enabled(true);
             color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
             color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
@@ -1938,17 +1377,7 @@ impl NativeMetalRenderer {
             color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::SourceAlpha);
             color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
             color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-            // Missing on a real device (confirmed via crash log): the quad
-            // PIP draws into the SAME render pass as the 3D scene (see
-            // build_sponza_descriptor's own comment on why the UI overlay
-            // shares 1 pass) — that pass has a Depth32Float attachment
-            // bound, so every pipeline used in it needs to declare the
-            // same depth format or Metal's validation layer rejects
-            // set_render_pipeline_state with "pixelFormat
-            // (MTLPixelFormatInvalid) does not match the framebuffer's
-            // pixelFormat (MTLPixelFormatDepth32Float)" — fatal on device,
-            // where that validation is enforced; happened to go unnoticed
-            // on Simulator.
+
             descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
             descriptor.set_raster_sample_count(sample_count);
             descriptor
@@ -1971,15 +1400,7 @@ impl NativeMetalRenderer {
                     (None, None)
                 }
             };
-        // Picture-in-picture rectangle in the top-right corner, in NDC
-        // (-1..1) space — no view/projection needed, it's drawn directly
-        // over the finished main-camera frame. z=0/w=1 makes this plain
-        // NDC-as-clip-space, same as before quad_vertex started taking
-        // real per-vertex clip positions (see its own MSL doc comment) —
-        // this demo-probe quad is still flat/fixed, unlike the real-game
-        // scope PIP's build_projected_quad. Two triangles, position + uv
-        // interleaved per vertex (same "raw device buffer, no vertex
-        // descriptor" reasoning as every other shader in this file).
+
         let quad_verts = [
             QuadVertex { position: [0.55, 0.55, 0.0, 1.0], uv: [0.0, 0.0] },
             QuadVertex { position: [0.95, 0.55, 0.0, 1.0], uv: [1.0, 0.0] },
@@ -1994,12 +1415,6 @@ impl NativeMetalRenderer {
             MTLResourceOptions::StorageModeShared,
         );
 
-        // Fullscreen NDC (-1..1) quad for the upscale blit pass — see
-        // BLIT_SHADER_SOURCE's own doc comment. render_frame's blit pass
-        // always draws into the real drawable at sample count 1 (never
-        // multisampled, no depth attachment at all), so unlike quad_pipeline
-        // above this needs only one pipeline variant, not an MSAA/no-MSAA
-        // pair.
         let blit_pipeline = match device.new_library_with_source(BLIT_SHADER_SOURCE, &compile_options) {
             Ok(library) => {
                 let vertex_fn = library.get_function("blit_vertex", None).unwrap();
@@ -2015,16 +1430,7 @@ impl NativeMetalRenderer {
                 None
             }
         };
-        // Metal's viewport transform puts clip-space y=+1 at the render
-        // target's TOP raster row (same for scene_color_texture and the
-        // drawable — both are plain render-target textures, no per-target
-        // difference), but texture2d::sample's uv is top-left-origin/v-down
-        // (uv.y=0 samples that same top row). So a vertex at the TOP of
-        // this blit's target (position y=+1) must sample uv.y=0 to show
-        // scene_color_texture's top row there, and a BOTTOM vertex
-        // (position y=-1) must sample uv.y=1 — the opposite of a naive
-        // "position y tracks uv y" mapping, confirmed by an actual
-        // upside-down frame on device/Simulator before this fix.
+
         let blit_verts = [
             BlitVertex { position: [-1.0, -1.0], uv: [0.0, 1.0] },
             BlitVertex { position: [1.0, -1.0], uv: [1.0, 1.0] },
@@ -2038,9 +1444,7 @@ impl NativeMetalRenderer {
             (blit_verts.len() * std::mem::size_of::<BlitVertex>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
-        // 1x1 placeholder — ensure_scene_color_texture always reallocates
-        // on its first real call since scene_color_size starts at (0, 0),
-        // never matching a real drawable size.
+
         let scene_color_placeholder_descriptor = metal::TextureDescriptor::new();
         scene_color_placeholder_descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
         scene_color_placeholder_descriptor.set_width(1);
@@ -2055,10 +1459,7 @@ impl NativeMetalRenderer {
             descriptor.set_fragment_function(Some(fragment_fn));
             let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
             color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-            // Health bar backgrounds are translucent black and glyph quads
-            // carry a coverage-shaped alpha (see build_font_atlas) — both
-            // need real alpha blending, same as quad_pipeline's own scope
-            // PIP above (also blended now, see build_quad_descriptor).
+
             color_attachment.set_blending_enabled(true);
             color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
             color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
@@ -2066,10 +1467,7 @@ impl NativeMetalRenderer {
             color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::SourceAlpha);
             color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
             color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-            // Same missing-depth-format bug as build_quad_descriptor above
-            // (see its own comment) — the UI overlay (health bars, floating
-            // damage, touch controls) draws in the same Depth32Float-backed
-            // render pass as the 3D scene.
+
             descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
             descriptor.set_raster_sample_count(sample_count);
             descriptor
@@ -2092,10 +1490,7 @@ impl NativeMetalRenderer {
                     (None, None)
                 }
             };
-        // Nearest, not linear — this is a crisp pixel font/flat-colored
-        // rects, not a photo texture; linear filtering would just blur
-        // glyph edges. Clamp instead of sponza_sampler's Repeat, since a
-        // glyph quad's UV can legitimately sit exactly on a cell boundary.
+
         let ui_sampler_descriptor = metal::SamplerDescriptor::new();
         ui_sampler_descriptor.set_min_filter(metal::MTLSamplerMinMagFilter::Nearest);
         ui_sampler_descriptor.set_mag_filter(metal::MTLSamplerMinMagFilter::Nearest);
@@ -2183,24 +1578,10 @@ impl NativeMetalRenderer {
         }
     }
 
-    // Phase 6 Step 3: exposes the headless real-game App to ffi.rs's
-    // `native_metal_probe_touch_*`/`key_changed`/`mouse_*` functions so they
-    // can write real Bevy input messages (`TouchInput`/`KeyboardInput`/
-    // `MouseMotion`/`MouseButtonInput`) straight into it — the exact same
-    // message-writing helpers `cadisplaylink_*` already uses against the
-    // toy/real `cadisplaylink_create_game_app`, just re-targeted. Always
-    // `Some` in practice (every `NativeMetalRenderer` builds one) — `Option`
-    // mainly so callers don't need a separate liveness check.
     pub fn real_game_app_mut(&mut self) -> Option<&mut bevy::app::App> {
         self.real_game_app.as_mut()
     }
 
-    // Same touch-driven free-fly camera as the Swift-only demo used to
-    // have — Swift now tracks the raw touches (see ViewController.swift's
-    // moveTouch/lookTouch) and passes the resulting per-frame deltas here
-    // instead of moving its own camera fields, so this Rust probe can
-    // actually be walked around like the real game for a feel of
-    // real-world performance, not just a static shot.
     pub fn update_camera(&mut self, forward: f32, strafe: f32, look_dx: f32, look_dy: f32, dt: f32) {
         self.camera_yaw -= look_dx * 0.005;
         self.camera_pitch = (self.camera_pitch - look_dy * 0.005).clamp(-1.54, 1.54);
@@ -2216,21 +1597,6 @@ impl NativeMetalRenderer {
         }
     }
 
-
-    // Same per-frame work as the Swift demo: one render pass, one draw
-    // call per mesh, camera fixed (no touch/camera movement in this Rust
-    // version — it exists purely to measure encoding cost, not to be a
-    // playable probe). Draws Sponza if it loaded, otherwise falls back to
-    // the box arena — same "don't show a blank screen while diagnosing"
-    // reasoning as ViewController.swift's own fallback.
-    // Re-reads the layer's own current `bounds` (in points) each frame and
-    // updates drawableSize accordingly — CAMetalLayer.drawableSize doesn't
-    // auto-track bounds changes when driven manually like this (unlike
-    // MTKView, which redoes this every layout pass), and setting it only
-    // once in `new()` used whatever bounds existed at that moment, which
-    // may predate Auto Layout settling on the view's final frame — this
-    // produced a torn/skewed image (part of the screen using stale
-    // geometry from an earlier, wrong-sized drawable).
     fn sync_drawable_size(&self) {
         unsafe {
             let raw_layer = self.layer.as_ptr() as *mut Object;
@@ -2244,12 +1610,6 @@ impl NativeMetalRenderer {
         }
     }
 
-    // The view's own size in points (not `drawable_size`'s physical
-    // pixels — that's `sync_drawable_size`'s `bounds.size * contents_scale`).
-    // Needed for prime_camera_viewport (which now also needs the real
-    // contents_scale alongside this — see its own doc comment for why
-    // both, not just points, are required for touch hit-testing to line
-    // up with the visually-drawn UI) and the UI overlay's NDC math.
     fn view_size_points(&self) -> (f32, f32) {
         unsafe {
             let raw_layer = self.layer.as_ptr() as *mut Object;
@@ -2258,40 +1618,18 @@ impl NativeMetalRenderer {
         }
     }
 
-    // Shared between the main-camera pass and the scope pass — draws
-    // Sponza's static meshes (or the box-arena fallback) plus every
-    // extracted entity, against whatever view_projection/render target
-    // the caller already bound on `encoder`. This is what actually makes
-    // "two cameras" cheap to add: same draw calls, just re-run once per
-    // camera with a different matrix and target texture.
     fn draw_scene(
         &self,
         encoder: &metal::RenderCommandEncoderRef,
         view_projection: [[f32; 4]; 4],
         light: LightUniform,
-        // anim_time is an *absolute* time to feed `compute_joint_matrices`
-        // directly, not an offset added to `now` the way the toy demo's own
-        // AnimOffset component used to work (that math now happens once at
-        // the call site instead, see both places this is built below, so
-        // this fn doesn't need `now` for animation at all anymore —
-        // real-game zombies use their actual AnimationPlayer's seek_time,
-        // not wall-clock time). `model` looks up self.skinned_models — see
-        // skinned_actor.rs's own doc comment for why this is a name, not a
-        // gameplay-type enum.
+
         extracted: &[super::skinned_actor::SkinnedActorDraw],
         _now: f32,
         real_game_meshes: Option<&[RealGameMeshDraw]>,
-        // Selects which of each shader's two compiled pipelines (see
-        // MSAA_SAMPLE_COUNT's own doc comment) to bind — must match
-        // whatever sample count the caller's render pass attachments
-        // actually have, or Metal rejects every draw call in this pass.
+
         msaa_enabled: bool,
-        // Sun/point-light shadow map read-back — see render_frame's
-        // "Pass 0"/"Pass 0b" for how `light_view_projection`/
-        // `point_light_view_projection` are built; `camera_pos` feeds the
-        // fragment shaders' Blinn-Phong specular term (see SPONZA_SHADER_
-        // SOURCE's own Uniforms doc comment for why it needs the eye
-        // position at all).
+
         light_view_projection: [[f32; 4]; 4],
         point_light_view_projection: [[f32; 4]; 4],
         camera_pos: [f32; 3],
@@ -2302,21 +1640,6 @@ impl NativeMetalRenderer {
         encoder.set_fragment_sampler_state(1, Some(&self.shadow_sampler));
         encoder.set_fragment_texture(2, Some(&self.shadow_map_point));
 
-        // `real_game_meshes` is `None` only in the brief window before the
-        // headless gameplay App's first Startup schedule has actually run
-        // (spawn_test_arena hasn't spawned the floor/walls yet) — nothing to
-        // draw here that frame, not an error. There used to be two more
-        // fallback branches here (a hardcoded box-arena demo, and a
-        // Sponza-scene "probe" demo) from earlier phases of this renderer's
-        // own development, both unreachable in the shipped app (Swift's
-        // ViewController.swift hardcodes USE_REAL_GAME_NATIVE_RENDERER =
-        // true, USE_NATIVE_METAL_DEMO = false) — removed rather than kept
-        // as dead weight; see git history if either is ever worth
-        // resurrecting for a standalone demo/probe build again.
-        // Draws one static mesh (arena wall/floor or a gun/lens child mesh)
-        // — factored out so opaque and blended meshes can be drawn as two
-        // separate passes below (see their own call sites' doc comment for
-        // why order matters) without duplicating the uniform-building.
         let draw_static_mesh = |m: &RealGameMeshDraw| {
             let sponza_uniforms = SponzaUniforms {
                 view_projection,
@@ -2353,15 +1676,7 @@ impl NativeMetalRenderer {
         };
 
         if let Some(meshes) = real_game_meshes {
-            // Reuses Sponza's own pipeline/shader (position+normal+uv,
-            // textured) unchanged — arena/gun geometry is textured exactly
-            // like Sponza's, just rebaked into world space fresh each frame
-            // (see bake_static_mesh_vertices) instead of once at load time.
-            // Opaque/Mask only here (is_blend false — see ExtractedMesh::
-            // is_blend) — real AlphaMode::Blend materials anywhere in the
-            // scene (arena or gun) are drawn in a second pass below, AFTER
-            // the skinned zombies/remote players, with depth WRITE
-            // disabled — see that pass's own comment for the full story.
+
             encoder.set_render_pipeline_state(sponza_pipeline.unwrap());
             encoder.set_fragment_sampler_state(0, Some(&self.sponza_sampler));
             for m in meshes.iter().filter(|m| !m.is_blend) {
@@ -2376,30 +1691,7 @@ impl NativeMetalRenderer {
         for actor in extracted {
             let Some(slot) = self.skinned_models.get(actor.model) else { continue };
             let (model, mesh_scale, y_offset) = (&slot.model, slot.scale, slot.y_offset);
-            // This is the ONLY place that actually determines what's drawn
-            // on screen for USE_REAL_GAME_NATIVE_RENDERER — this custom
-            // Metal renderer never queries Bevy's own scene graph (the
-            // mesh-child-entity scale/offset/facing corrections the
-            // desktop/wgpu path applies there via PlayerModelTuning,
-            // crate::lib) at all — see skinned_actor.rs's own doc comment
-            // for why each registered model instead carries its own
-            // scale/y_offset/facing_correction as plain data.
-            // See SkinnedActorPose's own doc comment: JointMatrices (the
-            // real-ECS-skeleton path) is used as-is; Clip is the fallback
-            // for actors with no live skeleton wired up to extract from yet.
-            //
-            // model_matrix is IDENTITY for JointMatrices — those already
-            // came out of the real ECS's own GlobalTransform, which already
-            // includes the mesh child entity's own scale/y-offset (the same
-            // `zombie_mesh_bundle`/ZOMBIE_SCALE transform the desktop path
-            // applies) baked in. Applying mesh_scale/y_offset/facing AGAIN
-            // here double-transformed it — scaled twice (ZOMBIE_SCALE² ≈
-            // 1/16 size) and offset twice, which is exactly what shipped
-            // briefly as "zombies render ant-sized" before this fix. Clip
-            // still needs the old scale/offset/facing model_matrix, since
-            // `compute_joint_matrices` samples the glTF's own raw
-            // bind-pose-relative hierarchy — never placed into world space
-            // by anything else.
+
             let (model_matrix, joint_matrices) = match &actor.pose {
                 super::skinned_actor::SkinnedActorPose::JointMatrices(matrices) => {
                     ([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], matrices.clone())
@@ -2424,10 +1716,7 @@ impl NativeMetalRenderer {
                     (matrix, model.compute_joint_matrices(*clip_index, *time))
                 }
             };
-            // Zero-length Metal buffer guard — see the main skinned-draw
-            // pass's own copy of this comment above for the real device
-            // crash this fixes (empty JointMatrices while a zombie's
-            // skinned mesh is still mid-async-load).
+
             if joint_matrices.is_empty() {
                 continue;
             }
@@ -2478,45 +1767,7 @@ impl NativeMetalRenderer {
         }
 
         if let Some(meshes) = real_game_meshes {
-            // Real AlphaMode::Blend/Premultiplied/Add/Multiply meshes
-            // (is_blend — the scope lens glass, the red-dot sight's own
-            // lens, or any future translucent material anywhere in the
-            // scene, arena or gun) drawn LAST, after both the opaque pass
-            // above and the skinned zombies/remote players just above
-            // this — AND with self.blend_depth_state (test-only, write
-            // disabled) instead of self.depth_state. Two distinct bugs
-            // this fixes together:
-            //   1. Draw order: self.depth_state (see its own construction
-            //      comment) writes depth for every draw regardless of
-            //      blending, so a blended mesh drawn BEFORE a zombie
-            //      behind it wrote its own (much nearer) depth first —
-            //      the zombie's later draw failed the depth test against
-            //      that and got silently culled, invisible through any
-            //      translucent geometry despite blending being enabled on
-            //      this pipeline. Drawing translucent meshes after
-            //      everything solid (opaque geometry + zombies) fixes
-            //      this the same way any forward renderer's opaque-then-
-            //      transparent pass split does — the shadow map (a wholly
-            //      separate pass/depth buffer, see draw_shadow_casters)
-            //      was never affected, which is why the zombie's shadow
-            //      still showed even though the zombie itself didn't.
-            //   2. Depth WRITE: even drawn last, a shared depth-write-
-            //      enabled state would make two overlapping translucent
-            //      meshes (e.g. the scope lens glass sitting just in
-            //      front of the red-dot sight's own lens) occlude each
-            //      other by draw order alone instead of correctly
-            //      blending both — same underlying issue, just between
-            //      two blended meshes instead of a blended mesh and a
-            //      zombie. blend_depth_state still respects real
-            //      occlusion from anything nearer already in the depth
-            //      buffer (test stays on), it just never writes its own
-            //      depth, so nothing drawn in this same pass can
-            //      incorrectly block another blended mesh behind it.
-            // Sorted back-to-front (farthest camera_dist_sq first) so
-            // overlapping blended meshes still composite in the right
-            // visual order even without a depth write to fall back on —
-            // standard transparency-pass sorting, same reasoning as
-            // camera_dist_sq's own doc comment on RealGameMeshDraw.
+
             let mut blended: Vec<&RealGameMeshDraw> = meshes.iter().filter(|m| m.is_blend).collect();
             blended.sort_by(|a, b| b.camera_dist_sq.total_cmp(&a.camera_dist_sq));
             if !blended.is_empty() {
@@ -2526,21 +1777,12 @@ impl NativeMetalRenderer {
                 for m in blended {
                     draw_static_mesh(m);
                 }
-                // Restore — nothing downstream in this same render pass
-                // (e.g. render_frame's scope PIP quad, drawn with this
-                // same encoder right after draw_scene returns) should
-                // have to reason about which depth-stencil state
-                // draw_scene happened to leave bound.
+
                 encoder.set_depth_stencil_state(&self.depth_state);
             }
         }
     }
 
-    // A depth-only, GPU-private texture at `size` — same descriptor shape
-    // used for both shadow_map and shadow_map_point (see shadow_map_point's
-    // own field doc comment for why the sun and point light need separate
-    // textures). Free function shape (no &self) so `new()` can call it
-    // before `self` exists, same as ensure_shadow_map_size below.
     fn make_shadow_texture(device: &metal::Device, size: u64) -> metal::Texture {
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_pixel_format(MTLPixelFormat::Depth32Float);
@@ -2551,12 +1793,6 @@ impl NativeMetalRenderer {
         device.new_texture(&descriptor)
     }
 
-    // Recreates shadow_map/shadow_map_point at the new tier's resolution
-    // whenever ShadowQuality actually changes — cheap to call every frame
-    // (a no-op past the `==` check) since Metal render pipelines don't bake
-    // in target texture dimensions, only pixel formats, so resizing these
-    // two textures independently at runtime is safe without recreating any
-    // pipeline state.
     fn ensure_shadow_map_size(&mut self, quality: u8) {
         let quality = quality.min(5);
         if quality == self.shadow_quality {
@@ -2568,11 +1804,6 @@ impl NativeMetalRenderer {
         self.shadow_quality = quality;
     }
 
-    // Resize-on-demand offscreen render target for render_frame's 3D+UI
-    // pass — see render_resolution_scale's own field doc comment. Returns
-    // an owned clone (cheap, retain-based, same pattern MsaaTargets'
-    // ensure_depth/ensure_color use) so callers don't hold a borrow of
-    // `self` across the rest of render_frame's &mut self calls.
     fn ensure_scene_color_texture(&mut self, width: u64, height: u64) -> metal::Texture {
         if (width, height) == self.scene_color_size {
             return self.scene_color_texture.clone();
@@ -2589,14 +1820,6 @@ impl NativeMetalRenderer {
         tex
     }
 
-    // Re-uploads every zombie kind's base_color_texture from
-    // shared::zombie_kind_texture_path's tiered JPEG whenever
-    // TextureQuality actually changes — see zombie_texture_quality's own
-    // field doc comment for the sentinel-init reasoning. Desktop's
-    // equivalent (apply_zombie_texture_quality, crate::zombie_client)
-    // patches a shared bevy StandardMaterial instead; this renderer never
-    // touches bevy_render, so it re-uploads a raw metal::Texture and
-    // writes it directly onto every mesh in the registered SkinnedModel.
     fn apply_zombie_texture_quality(&mut self, tier: u8) {
         let tier = tier.min(5);
         if tier == self.zombie_texture_quality {
@@ -2630,15 +1853,6 @@ impl NativeMetalRenderer {
         self.zombie_texture_quality = tier;
     }
 
-    // Pass 0 (see render_frame): renders the same geometry draw_scene does
-    // into the sun's shadow map instead of the screen — depth-only, no
-    // fragment shader, no lighting. The model_matrix/joint_matrices pose
-    // resolution below is a deliberate copy of draw_scene's own (not
-    // factored into a shared helper) — this renderer already accepts small
-    // duplication like this for shader-adjacent logic (see kShininess/
-    // kSpecularStrength's own "duplicated, not shared" comment) rather than
-    // threading an extra owned Vec<(model_matrix, joint_buffer)> through
-    // both call sites just to avoid it.
     fn draw_shadow_casters(
         &self,
         encoder: &metal::RenderCommandEncoderRef,
@@ -2687,10 +1901,7 @@ impl NativeMetalRenderer {
                     (matrix, model.compute_joint_matrices(*clip_index, *time))
                 }
             };
-            // Zero-length Metal buffer guard — see the main skinned-draw
-            // pass's own copy of this comment above for the real device
-            // crash this fixes (empty JointMatrices while a zombie's
-            // skinned mesh is still mid-async-load).
+
             if joint_matrices.is_empty() {
                 continue;
             }
@@ -2721,22 +1932,11 @@ impl NativeMetalRenderer {
         let (width, height) = (drawable_size.width as u64, drawable_size.height as u64);
 
         let is_real_game = self.real_game_app.is_some();
-        // Moved up from further below (used to only be needed just before
-        // the draw_scene calls) — the remote-player extraction just below
-        // now needs it too, for its static PLAYER_MODEL_ANIM_WALK pose.
+
         let now = self.start_time.elapsed().as_secs_f32();
 
-        // Tick the real headless game App and extract a fresh snapshot —
-        // camera pose comes from the game's own FpsCamera instead of touch
-        // input, and the arena+gun geometry gets rebaked into a plain
-        // vertex buffer each frame (see bake_static_meshes).
         let mut real_game_static_meshes: Vec<super::native_game_extract::ExtractedMesh> = Vec::new();
-        // Real zombies/remote players, tagged with the same "zombie"/
-        // "soldier" names registered in `new()` (see skinned_actor.rs) so
-        // draw_scene's skinned-mesh loop draws them via that generic
-        // lookup. Zombies carry their REAL AnimationPlayer's clip+seek_time
-        // (see ZombieRenderState's own doc comment: the same "extract the
-        // real thing" principle already applied to camera/scope camera).
+
         let mut real_game_extracted: Vec<super::skinned_actor::SkinnedActorDraw> = Vec::new();
         let (view_width_pts, view_height_pts) = self.view_size_points();
         if let Some(app) = &mut self.real_game_app {
@@ -2794,38 +1994,17 @@ impl NativeMetalRenderer {
                 model: shared::zombie_kind_metal_model_name(z.kind),
                 pose: super::skinned_actor::SkinnedActorPose::JointMatrices(z.joint_matrices),
             }));
-            // Remote players: same real-per-joint-skeleton extraction as
-            // zombies now — see native_game_extract.rs's remote-player
-            // extraction (find_first_skinned_mesh/joint_matrices_for,
-            // reading `PlayerModelAnimationPlayer`-driven AnimationPlayer
-            // state that `update_remote_player_model_animation` already
-            // plays for real, headless included) instead of the old static
-            // "always PLAYER_MODEL_ANIM_WALK at wall-clock time" guess.
+
             real_game_extracted.extend(snapshot.remote_players.into_iter().map(|p| super::skinned_actor::SkinnedActorDraw {
                 transform: p.transform,
                 model: "soldier",
                 pose: super::skinned_actor::SkinnedActorPose::JointMatrices(p.joint_matrices),
             }));
         }
-        // Texture cache: upload once per unique `Image` asset, keyed by its
-        // own AssetId (see `real_game_textures`'s own doc comment on the
-        // struct for why identity-keyed, not positional). A texture asset
-        // never changes its own pixels after loading — the only thing that
-        // can happen is a mesh not having ITS texture ready yet (Bevy's
-        // asset server loads the gun's texture asynchronously), which just
-        // means `mesh.texture` is `None` for a frame or two and naturally
-        // resolves to `Some` once loaded, no special-casing needed here.
-        // Must happen here — after msaa_enabled is set by the extraction
-        // above, but before real_game_meshes below borrows
-        // self.real_game_textures (immutably, for the rest of this
-        // function via RealGameMeshDraw's own lifetime), which would
-        // otherwise conflict with the &mut self this needs.
+
         let msaa_enabled = self.msaa_enabled;
         let device = self.device.clone();
-        // render_width/render_height (not width/height) size every target
-        // the 3D+UI pass below actually draws into — see
-        // render_resolution_scale's own field doc comment for why (and why
-        // this scales the UI too, unlike desktop's RenderResolutionScale).
+
         let render_width = ((width as f64 * self.render_resolution_scale as f64) as u64).max(RENDER_SCALE_MIN_PX);
         let render_height = ((height as f64 * self.render_resolution_scale as f64) as u64).max(RENDER_SCALE_MIN_PX);
         let depth_texture = if msaa_enabled {
@@ -2834,28 +2013,11 @@ impl NativeMetalRenderer {
             self.msaa_targets.ensure_depth_no_msaa(&device, render_width, render_height)
         };
         let msaa_color_texture = msaa_enabled.then(|| self.msaa_targets.ensure_color(&device, render_width, render_height));
-        // The 3D scene + scope PIP + UI overlay below all draw into this
-        // (at render_width x render_height) instead of straight into the
-        // drawable — a final blit pass at the very end of this function
-        // upscales it into the drawable at the real width x height.
-        // `texture` keeps its old name so every existing draw_scene/UI/quad
-        // call site below (written when this always was the drawable
-        // itself) needs no further changes. Must happen before
-        // `next_drawable()` below — it needs `&mut self`, which can't
-        // coexist with `drawable`'s immutable borrow of `self.layer` (kept
-        // alive until `present_drawable` in the final blit pass).
+
         let texture = self.ensure_scene_color_texture(render_width, render_height);
         let Some(drawable) = self.layer.next_drawable() else { return };
         let drawable_texture = drawable.texture();
 
-        // Prune both GPU caches down to exactly what THIS frame's
-        // extracted meshes still reference, before touching either one —
-        // has to happen before the upload loop below (which then only
-        // ever uploads/builds what's genuinely missing) and before
-        // real_game_meshes below borrows `&metal::Texture`s out of
-        // real_game_textures (a `retain()` after that point would fight
-        // those borrows). See both fields' own doc comments for why this
-        // is needed now (distance-LOD) when it wasn't before.
         let used_texture_ids: std::collections::HashSet<AssetId<Image>> = real_game_static_meshes
             .iter()
             .flat_map(|mesh| [mesh.texture.as_ref(), mesh.normal_texture.as_ref()].into_iter().flatten())
@@ -2867,9 +2029,7 @@ impl NativeMetalRenderer {
         self.gpu_transformed_mesh_cache.retain(|id, _| used_mesh_ids.contains(id));
 
         for mesh in &real_game_static_meshes {
-            // Same identity-keyed upload-once cache for both — see
-            // real_game_textures' own doc comment; normal maps are just
-            // another Image asset to it, no special-casing needed.
+
             for t in [mesh.texture.as_ref(), mesh.normal_texture.as_ref()].into_iter().flatten() {
                 if !self.real_game_textures.contains_key(&t.id) {
                     let uploaded = super::metal_texture::upload_texture(&self.device, t.width, t.height, &t.rgba);
@@ -2880,21 +2040,9 @@ impl NativeMetalRenderer {
         let real_game_meshes: Vec<RealGameMeshDraw> = real_game_static_meshes
             .iter()
             .filter_map(|mesh| {
-                // A Metal buffer can never be zero-length (hard validation
-                // assertion, not just a warning — confirmed via a real
-                // device crash: "Cannot create buffer of zero length"), so
-                // both branches below skip an empty bake defensively rather
-                // than crash the whole render loop over one bad mesh (every
-                // OTHER static mesh this frame would never draw either,
-                // since this closure runs inside the same per-frame map
-                // building the whole draw list).
+
                 let (vertex_buffer, vertex_count, model_matrix) = if mesh.is_gpu_transformed {
-                    // Cars — see ExtractedMesh::is_gpu_transformed's own
-                    // doc comment. Cache hit: reuse the buffer uploaded the
-                    // first time this exact Mesh asset was seen, no CPU
-                    // re-bake at all. Cache miss: bake once (local space,
-                    // no mesh.transform applied — the vertex shader
-                    // multiplies by modelMatrix itself now) and remember it.
+
                     let mesh_id = mesh.mesh_id?;
                     let (buffer, count) = match self.gpu_transformed_mesh_cache.get(&mesh_id) {
                         Some(cached) => cached.clone(),
@@ -2922,9 +2070,7 @@ impl NativeMetalRenderer {
                     };
                     (buffer, count, mesh.transform.to_matrix().to_cols_array_2d())
                 } else {
-                    // Arena walls/the gun — unchanged old path: CPU-bake to
-                    // world space fresh every frame, model_matrix stays
-                    // identity (a no-op multiply in the shader).
+
                     let verts = bake_static_mesh_vertices(mesh);
                     if verts.is_empty() {
                         bevy::log::warn!(
@@ -2968,15 +2114,7 @@ impl NativeMetalRenderer {
 
         let aspect = width as f32 / height.max(1) as f32;
         let far = if is_real_game { 500.0 } else { 100.0 };
-        // Real-game mode: derive look direction + up from the actual
-        // camera rotation quaternion (includes ViewRecoil kick + Lean
-        // roll — see real_game_camera_rotation's own doc comment), not
-        // reconstructed from yaw/pitch alone, so gun-fire recoil/lean
-        // actually shakes/tilts the view like the real game — previously
-        // the camera stayed perfectly steady through every shot even
-        // though the gun mesh itself visibly kicked, since both are
-        // baked from the same real transform data but only the gun's was
-        // being read from the real rotation.
+
         let (look_dir, up) = if is_real_game {
             let rotation = bevy::math::Quat::from_array(self.real_game_camera_rotation);
             (
@@ -2999,23 +2137,10 @@ impl NativeMetalRenderer {
             look_at([0.0, 3.0, 10.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0])
         };
         let proj = perspective(if is_real_game { 60.0_f32 } else { 45.0 }.to_radians(), aspect, 0.05, far);
-        // The scene's real PointLight (see LightUniform's own doc comment)
-        // — falls back to a fixed distant "sun" only for the toy demo/
-        // patrol probe world, which has no ECS lights at all.
+
         let light = self.real_game_light;
         let view_projection = mat_mul(proj, view);
-        // Scope camera: reads the REAL ScopeCamera entity's own state
-        // (see ScopeCameraSnapshot's doc comment on native_game_extract.rs)
-        // instead of reusing the main camera's transform + a hand-picked
-        // FOV/threshold — `sync_scope_camera`/`update_scope_lens`
-        // (crates/client/src/lib.rs) already compute the exact eye
-        // position (with shoulder-swap sweep, recoil kick, reload dip,
-        // walk-bob all baked in), `Camera.is_active`, and `Projection.fov`
-        // every tick, unmodified, inside this same headless App — this is
-        // just extracting that result, the same way the real desktop
-        // build already shows it working. The demo probe (not real-game
-        // mode) keeps its old always-on fixed-12°-FOV PIP reusing the main
-        // camera's transform, since it has no real ScopeCamera to read.
+
         let show_scope = if is_real_game { self.real_game_scope_active } else { true };
         let (scope_view, scope_fov) = if is_real_game {
             let rotation = bevy::math::Quat::from_array(self.real_game_scope_rotation);
@@ -3033,29 +2158,13 @@ impl NativeMetalRenderer {
         let scope_proj = perspective(scope_fov, 1.0, 0.05, far);
         let scope_view_projection = mat_mul(scope_proj, scope_view);
 
-        // Collected into an owned Vec (not a live query/World borrow) so
-        // draw_scene can be called twice — once per camera — without
-        // re-extracting in between. Used to also have a toy "patrol" World
-        // fallback here (a hand-placed ECS demo, ticked/extracted only when
-        // NOT in real-game mode) — removed once real_game=false was
-        // confirmed unreachable in the shipped app; see git history if it's
-        // ever worth resurrecting for a standalone demo/probe build again.
         let extracted: Vec<super::skinned_actor::SkinnedActorDraw> = real_game_extracted;
 
-        // Sun's shadow-map camera: an orthographic box (directional lights
-        // have no single position/frustum of their own, unlike the point
-        // light) recentered on the player every frame rather than fit to
-        // the whole arena — see SHADOW_HALF_EXTENT/SHADOW_DISTANCE's own
-        // doc comments. `sun_dir` is "direction the light travels toward"
-        // (LightUniform's own doc comment), so the light's "eye" sits back
-        // along `-sun_dir` from the camera (where the light is coming
-        // from) looking forward along `+sun_dir` toward it.
         let sun_dir = {
             let d = bevy::math::Vec3::from_array(light.sun_dir);
             if d.length_squared() > 1e-6 { d.normalize() } else { bevy::math::Vec3::new(-0.33, -0.67, -0.33).normalize() }
         };
-        // Avoid an (up parallel to forward) degenerate look_at when the sun
-        // is nearly straight overhead/underfoot.
+
         let shadow_up = if sun_dir.y.abs() > 0.99 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
         let shadow_center = self.camera_position;
         let shadow_eye = [
@@ -3074,9 +2183,6 @@ impl NativeMetalRenderer {
         );
         let light_view_projection = mat_mul(shadow_proj, shadow_view);
 
-        // Pass 0: sun shadow map, depth-only — must run before Pass 1/2,
-        // both of which sample `self.shadow_map` while shading. See
-        // draw_shadow_casters' own doc comment.
         {
             let shadow_pass_descriptor = RenderPassDescriptor::new();
             let shadow_depth = shadow_pass_descriptor.depth_attachment().unwrap();
@@ -3088,12 +2194,7 @@ impl NativeMetalRenderer {
             let shadow_command_buffer = self.queue.new_command_buffer();
             let shadow_encoder = shadow_command_buffer.new_render_command_encoder(shadow_pass_descriptor);
             shadow_encoder.set_depth_stencil_state(&self.shadow_depth_state);
-            // Skipping the draw (not the pass) when shadows are off is
-            // enough — the pass descriptor's own Clear-to-1.0 load_action
-            // above already leaves shadow_map at the far plane everywhere,
-            // which sample_shadow's depth compare reads as "nothing is
-            // occluding" for every fragment. See shadow_quality's own
-            // field doc comment.
+
             if self.shadow_quality > 0 {
                 self.draw_shadow_casters(shadow_encoder, light_view_projection, &extracted, real_game_meshes_opt);
             }
@@ -3101,13 +2202,6 @@ impl NativeMetalRenderer {
             shadow_command_buffer.commit();
         }
 
-        // The arena's overhead PointLight's own shadow camera — unlike the
-        // sun, a point light has a REAL position (light.position), so this
-        // is a genuine perspective frustum from that position toward the
-        // player, not an orthographic box. A fixed wide FOV (90°) rather
-        // than one fit tightly to SHADOW_HALF_EXTENT at the actual
-        // light-to-player distance — simpler, and safely covers the
-        // relevant area regardless of exactly how high the light sits.
         let point_light_pos = light.position;
         let point_to_center = (bevy::math::Vec3::from_array(shadow_center) - bevy::math::Vec3::from_array(point_light_pos)).normalize_or_zero();
         let point_up = if point_to_center.y.abs() > 0.99 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
@@ -3115,10 +2209,6 @@ impl NativeMetalRenderer {
         let point_light_proj = perspective(90.0_f32.to_radians(), 1.0, 0.1, light.range.max(SHADOW_DISTANCE * 2.0));
         let point_light_view_projection = mat_mul(point_light_proj, point_light_view);
 
-        // Pass 0b: point light shadow map, depth-only — same shape as
-        // Pass 0 above, into its own texture (see shadow_map_point's own
-        // field doc comment for why the sun and point light need separate
-        // shadow maps, not one).
         {
             let point_shadow_pass_descriptor = RenderPassDescriptor::new();
             let point_shadow_depth = point_shadow_pass_descriptor.depth_attachment().unwrap();
@@ -3137,17 +2227,11 @@ impl NativeMetalRenderer {
             point_shadow_command_buffer.commit();
         }
 
-        // Pass 1: scope camera into the offscreen texture — skipped
-        // entirely in real-game mode while not aiming (see `show_scope`),
-        // both to avoid the wasted render pass and so the PIP quad below
-        // doesn't composite a stale/irrelevant frame over the main view.
         if show_scope {
             let scope_pass_descriptor = RenderPassDescriptor::new();
             let scope_color = scope_pass_descriptor.color_attachments().object_at(0).unwrap();
             if msaa_enabled {
-                // Render into the multisampled texture, resolve straight
-                // into scope_color_texture (what quad_fragment actually
-                // samples) — see MSAA_SAMPLE_COUNT's own doc comment.
+
                 scope_color.set_texture(Some(&self.scope_color_texture_msaa));
                 scope_color.set_resolve_texture(Some(&self.scope_color_texture));
                 scope_color.set_store_action(MTLStoreAction::MultisampleResolve);
@@ -3182,16 +2266,10 @@ impl NativeMetalRenderer {
             scope_command_buffer.commit();
         }
 
-        // Pass 2: main camera into scene_color_texture (render_width x
-        // render_height, not the drawable — see render_resolution_scale's
-        // own doc comment), then the scope texture composited as a
-        // picture-in-picture quad on top. render_frame's final blit pass
-        // upscales the whole thing into the real drawable afterward.
         let pass_descriptor = RenderPassDescriptor::new();
         let color_attachment = pass_descriptor.color_attachments().object_at(0).unwrap();
         if let Some(msaa_color_texture) = &msaa_color_texture {
-            // Render into the multisampled texture, resolve straight into
-            // scene_color_texture — see MSAA_SAMPLE_COUNT's own doc comment.
+
             color_attachment.set_texture(Some(msaa_color_texture));
             color_attachment.set_resolve_texture(Some(&texture));
             color_attachment.set_store_action(MTLStoreAction::MultisampleResolve);
@@ -3200,15 +2278,7 @@ impl NativeMetalRenderer {
             color_attachment.set_store_action(MTLStoreAction::Store);
         }
         color_attachment.set_load_action(MTLLoadAction::Clear);
-        // No skybox in this renderer at all (see this comment's own history
-        // — was a hardcoded debug magenta, meant to make any undrawn area
-        // obvious during development, that ended up shipping as-is and
-        // visibly showing through wherever the camera can see past the
-        // arena's own geometry, e.g. over the walls or through any gap).
-        // A flat neutral near-black instead reads as "shadow/void" rather
-        // than a glaring debug color — not a real sky, but close enough to
-        // the arena's own dim ambient tone (spawn_test_arena's wall/floor
-        // base_color, crate::lib) that a stray gap doesn't stand out.
+
         color_attachment.set_clear_color(MTLClearColor::new(0.05, 0.055, 0.07, 1.0));
 
         let depth_attachment = pass_descriptor.depth_attachment().unwrap();
@@ -3236,25 +2306,7 @@ impl NativeMetalRenderer {
         if show_scope {
             let quad_pipeline_ref = if msaa_enabled { &self.quad_pipeline } else { &self.quad_pipeline_no_msaa };
             if let Some(quad_pipeline) = quad_pipeline_ref {
-                // Real-game mode: builds the real ScopeLens circle's own 4
-                // world-space corners and projects each individually — see
-                // build_projected_quad's own doc comment for the full
-                // "this replaced two earlier flat-quad approximations"
-                // story (dead-center fixed position, then a projected
-                // center + one 2D roll angle — neither could represent a
-                // true horizontal turn of the glass or real perspective-
-                // correct near/far scaling, only build_projected_quad's
-                // real per-corner projection can). SCOPE_LENS_RADIUS
-                // mirrors crate::lib's own SCOPE_LENS_SIZE / 2.0 — same
-                // "small duplicated constant, not shared across the wgpu/
-                // Metal boundary" reasoning as kShininess/kSpecularStrength
-                // above. world_rotation composes the real camera's own
-                // world rotation with the lens's LOCAL one (ChildOf
-                // (camera) — see lens_local_rotation's own doc comment on
-                // ScopeCameraSnapshot), mirroring exactly how Bevy itself
-                // derives a child's GlobalTransform. The demo probe keeps
-                // its original fixed top-right box, which has no real "is
-                // this actually where the lens sits" state to match.
+
                 const SCOPE_LENS_RADIUS: f32 = 0.015;
                 let real_game_quad_buffer = is_real_game.then(|| {
                     let camera_rotation = bevy::math::Quat::from_array(self.real_game_camera_rotation);
@@ -3277,18 +2329,9 @@ impl NativeMetalRenderer {
             }
         }
 
-        // bevy_ui overlay: zombie health bars + floating damage numbers.
-        // Drawn last, screen-space, straight over the finished 3D frame —
-        // see UI_SHADER_SOURCE's and prime_camera_viewport's own doc
-        // comments for why these were never visible before this pass.
         let ui_pipeline_ref = if msaa_enabled { &self.ui_pipeline } else { &self.ui_pipeline_no_msaa };
         if let Some(ui_pipeline) = ui_pipeline_ref {
-            // See ui_depth_state's own construction comment (in `new()`) —
-            // without this, the overlay inherits the 3D scene's own
-            // Less-compare/write-enabled depth state from `self.depth_state`
-            // (set once, above, for the whole render pass) and gets
-            // intermittently depth-tested away depending on what real scene
-            // geometry happens to be behind it.
+
             encoder.set_depth_stencil_state(&self.ui_depth_state);
             if !self.ui_health_bars.is_empty()
                 || !self.ui_floating_damage.is_empty()
@@ -3316,14 +2359,10 @@ impl NativeMetalRenderer {
                     let [x, y] = bar.screen_pos;
                     let w = crate::ZOMBIE_HEALTH_BAR_WIDTH_PX;
                     let h = crate::ZOMBIE_HEALTH_BAR_HEIGHT_PX;
-                    // Background — same translucent black
-                    // spawn_zombie_health_bar (crate::lib) gives the real
-                    // bevy_ui Node.
+
                     let bg = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
                     draw_ui_quad(encoder, &bg, [0.0, 0.0, 0.0, 0.5], &self.white_texture);
-                    // Fill — same green ZombieHealthBarFill uses, scaled to
-                    // `fraction` exactly like that Node's own Val::Percent
-                    // width.
+
                     let fill = ndc_ui_rect(x, y, w * bar.fraction, h, view_w, view_h, FULL_UV);
                     draw_ui_quad(encoder, &fill, [0.2, 0.9, 0.2, 1.0], &self.white_texture);
                 }
@@ -3344,14 +2383,6 @@ impl NativeMetalRenderer {
                     }
                 }
 
-                // Touch controls: joystick first (drawn under the buttons,
-                // matching the bevy_ui path's own spawn/z-order — see
-                // spawn_touch_controls, crate::lib) then the buttons
-                // themselves. Both flat rects, no rounded-corner mask (the
-                // real bevy_ui nodes are circles/rounded-rects via
-                // BorderRadius — UI_SHADER_SOURCE has no SDF corner
-                // rounding yet, same simplification the health bars above
-                // already accept for their own rounded corners).
                 if let Some(joystick) = &self.ui_touch_joystick {
                     let [bx, by] = joystick.base_top_left;
                     let [bw, bh] = joystick.base_size;
@@ -3363,13 +2394,6 @@ impl NativeMetalRenderer {
                     draw_ui_quad(encoder, &knob, [1.0, 1.0, 1.0, 0.55], &self.white_texture);
                 }
 
-                // Scope-zoom slider — same track-then-handle draw order/
-                // colors as the joystick above (matching spawn_touch_
-                // controls' own base-then-knob alpha values: 0.3 track,
-                // 0.55 handle). Zero-sized (drawing nothing visible) while
-                // not ADS'd — see ScopeZoomSliderSnapshot's own doc
-                // comment for why that needs no separate visibility check
-                // here.
                 if let Some(slider) = &self.ui_scope_zoom_slider {
                     let [tx, ty] = slider.track_top_left;
                     let [tw, th] = slider.track_size;
@@ -3384,11 +2408,7 @@ impl NativeMetalRenderer {
                 for button in &self.ui_touch_buttons {
                     let [x, y] = button.top_left;
                     let [w, h] = button.size;
-                    // Pressed buttons brighten (alpha bumped, same "press
-                    // feedback" idea a native UIButton highlight gives) —
-                    // there's no separate pressed-state color to extract,
-                    // so this just bumps whatever color BackgroundColor
-                    // already carries.
+
                     let mut color = button.color;
                     if button.pressed {
                         color[3] = (color[3] * 1.6).min(1.0);
@@ -3415,10 +2435,6 @@ impl NativeMetalRenderer {
                     }
                 }
 
-                // Crosshair — 4 plain rects, no label. Same "collapses to a
-                // zero-size quad when its real Node is Display::None"
-                // free ride touch controls' idle-hide gets — see
-                // CrosshairLineSnapshot's own doc comment.
                 for line in &self.ui_crosshair_lines {
                     let [x, y] = line.top_left;
                     let [w, h] = line.size;
@@ -3426,13 +2442,8 @@ impl NativeMetalRenderer {
                     draw_ui_quad(encoder, &quad, line.color, &self.white_texture);
                 }
 
-                // HP/ammo/ping readouts + (below) the settings menu's own
-                // text — see draw_hud_text_list's own doc comment.
                 draw_hud_text_list(encoder, &self.ui_hud_texts, view_w, view_h, &self.font_atlas_texture);
 
-                // Settings menu + GAME OVER + map-select overlay: same
-                // generic "panel + buttons + text" draw for all three — see
-                // draw_panel's own doc comment.
                 draw_panel(
                     encoder,
                     &self.ui_settings_menu_panel,
@@ -3466,15 +2477,6 @@ impl NativeMetalRenderer {
             }
         }
 
-        // iOS port of splash_screen.rs's desktop bevy_ui splash (see that
-        // file's own doc comment for why it needs a separate copy here at
-        // all) — drawn last, independent of the big UI `if` above so it
-        // still shows even before any HUD/menu state exists yet on the
-        // very first frames. Fully opaque + covers the whole screen, so it
-        // completely hides whatever the 3D scene/UI passes above already
-        // drew this frame — cheaper than skipping those passes outright,
-        // and keeps this block a pure "draw 2 more quads, gated on time"
-        // addition instead of threading a flag through everything above.
         if now < crate::splash_screen::SPLASH_SCREEN_DURATION_SECS {
             let ui_pipeline_ref = if msaa_enabled { &self.ui_pipeline } else { &self.ui_pipeline_no_msaa };
             if let Some(ui_pipeline) = ui_pipeline_ref {
@@ -3483,20 +2485,10 @@ impl NativeMetalRenderer {
                 encoder.set_fragment_sampler_state(0, Some(&self.ui_sampler));
                 encoder.set_depth_stencil_state(&self.ui_depth_state);
                 const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
-                // White backdrop first — matches the desktop version's
-                // BackgroundColor(Color::WHITE) (splash_screen.rs), so
-                // the square logo's letterboxed edges on a non-square
-                // phone screen blend in instead of showing whatever the
-                // hidden frame behind it happened to draw.
+
                 let backdrop = ndc_ui_rect(0.0, 0.0, view_w, view_h, view_w, view_h, FULL_UV);
                 draw_ui_quad(encoder, &backdrop, [1.0, 1.0, 1.0, 1.0], &self.white_texture);
-                // Centered square logo, sized the same way as the
-                // desktop Node (60% of the narrow dimension, capped at
-                // 480 logical points) — `min(view_w, view_h)` stands in
-                // for bevy_ui's Val::Percent(60.0), which desktop
-                // resolves against the Node's own width, not the whole
-                // window (safe here since the parent Node there is
-                // itself 100% width/height).
+
                 let logo_size = (view_w.min(view_h) * 0.6).min(480.0);
                 let logo = ndc_ui_rect((view_w - logo_size) * 0.5, (view_h - logo_size) * 0.5, logo_size, logo_size, view_w, view_h, FULL_UV);
                 draw_ui_quad(encoder, &logo, [1.0, 1.0, 1.0, 1.0], &self.splash_texture);
@@ -3506,11 +2498,6 @@ impl NativeMetalRenderer {
         encoder.end_encoding();
         command_buffer.commit();
 
-        // Pass 3: upscale-blit scene_color_texture (render_width x
-        // render_height, everything drawn above) into the real drawable
-        // (width x height) — see render_resolution_scale's own field doc
-        // comment. A no-op stretch when the scale is 1.0 (render_width ==
-        // width), still correctness-wise fine since it's just sampling 1:1.
         let blit_command_buffer = self.queue.new_command_buffer();
         if let Some(blit_pipeline) = &self.blit_pipeline {
             let blit_pass_descriptor = RenderPassDescriptor::new();

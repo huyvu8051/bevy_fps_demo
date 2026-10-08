@@ -1,65 +1,22 @@
-// --- HUD: health/ammo/ping/compass/crosshair/debug panel/floating damage ---
-// Extracted from lib.rs (Phase 6 of the gameplay-code-organization pass —
-// see chat/commit history). Every item here is `pub(crate)` so lib.rs's
-// single master `.chain()`'d Update system list (unchanged — pure code
-// motion, no execution-order change) can still reference these by name.
-//
-// `use crate::*;` pulls in every crate-root item this module needs
-// (constants, other components/resources, helper fns) — root-private
-// items ARE visible to a descendant module like this one per Rust's
-// normal privacy rules, just not name-resolved without an explicit
-// `use`/path, hence the glob rather than hunting down each one by hand.
 
 use bevy::prelude::*;
 use crate::*;
 
-// Debug/dev: toggled by KeyL. A step further than plain Noclip — this is a
-// pure spectator camera for checking a map's own geometry/scale (walls,
-// ramps, gaps lining up between floors, etc.) without any player-shaped
-// interference: turning it on forces Noclip on and the gun invisible in the
-// same frame (see toggle_inspect_mode), and shoot() early-returns while it's
-// on so flying through a zombie's aim cone can't burn ammo or trigger a
-// reload. Turning it back off restores both to their prior state. Exists
-// because manually combining Noclip + hide-gun + "don't fire" by hand every
-// time you just want to eyeball a newly-built floor is exactly the kind of
-// bookkeeping a dedicated mode should absorb.
 #[derive(Resource, Default)]
 pub(crate) struct InspectMode(pub(crate) bool);
 
-// Was DebugPanelVisible/DebugPanelText (KeyP) — a read-only text overlay
-// showing every debug toggle's state + a keyboard cheat-sheet. Removed:
-// the Settings menu (F1) already has a real button for every one of those
-// toggles/actions (CheatNoclipButton, CheatHitboxesButton,
-// cheat_zombie_health_buttons, debug_bot_buttons, etc. — settings_menu.rs),
-// so the panel had become a pure duplicate. The underlying toggles
-// (Noclip, ShowHitboxes, GodMode, ...) and their raw keyboard shortcuts
-// (toggle_debug_flags) are untouched — only this KeyP status display and
-// its number-key-gated twin (debug_panel_actions, now also removed) are
-// gone, per "centralize into one menu" (chat history).
-
-// Marks the always-visible health readout so update_health_ui can find it.
 #[derive(Component)]
 pub(crate) struct HealthUi;
 
-// Marks the InspectMode coordinate readout so update_inspect_ui can find
-// it — only shown while InspectMode is on (see that system). Exists so
-// checking a newly-built floor's geometry against its own FloorLevel
-// constants (elevation, wall lines, ramp gaps) is "fly there and read the
-// numbers off screen" instead of guessing from the render alone.
 #[derive(Component)]
 pub(crate) struct InspectUi;
 
-// A damage number that pops up at the hit point and floats/fades out.
-// Tracks its own world position (drifting upward each frame) rather than a
-// zombie Entity, since it should keep floating even if the zombie that took
-// the hit dies and despawns a moment later.
 #[derive(Component)]
 pub(crate) struct FloatingDamageText {
     world_pos: Vec3,
     remaining: f32,
 }
 
-// Marks the ammo counter text so update_ammo_ui can find it.
 #[derive(Component)]
 pub(crate) struct AmmoUi;
 
@@ -82,8 +39,7 @@ pub(crate) fn spawn_floating_damage(commands: &mut Commands, world_pos: Vec3, da
         }),
         Node {
             position_type: PositionType::Absolute,
-            // Positioned/shown by update_floating_damage_texts once it's
-            // projected — same one-frame-flash avoidance as the health bar.
+
             display: Display::None,
             ..default()
         },
@@ -154,9 +110,6 @@ pub(crate) fn update_health_ui(
     text.0 = format!("HP: {}", health.0.max(0.0).round() as i32);
 }
 
-// Bottom-center so it doesn't collide with health (top-left)/ammo
-// (bottom-right)/ping (top-right) — hidden by default, only meaningful
-// while InspectMode is on.
 pub(crate) fn spawn_inspect_ui(commands: &mut Commands) {
     commands.spawn((
         Text::new(""),
@@ -177,10 +130,6 @@ pub(crate) fn spawn_inspect_ui(commands: &mut Commands) {
     ));
 }
 
-// World position + yaw/pitch of the spectator camera, refreshed every
-// frame InspectMode is on — the whole point of the mode is comparing this
-// against a floor's own FloorLevel constants (elevation, north_wall_z,
-// etc.) to confirm the built geometry actually lines up with the design.
 pub(crate) fn update_inspect_ui(
     inspect: Res<InspectMode>,
     camera: Query<(&Transform, &FpsCamera)>,
@@ -227,7 +176,6 @@ pub(crate) fn spawn_ammo_ui(commands: &mut Commands) {
     ));
 }
 
-// Marks the always-visible ping readout so update_ping_ui can find it.
 #[derive(Component)]
 pub(crate) struct PingUi;
 
@@ -274,18 +222,10 @@ pub(crate) fn update_ping_ui(
     };
 }
 
-// cam.yaw's own convention: forward = Quat::from_rotation_y(yaw) * NEG_Z,
-// so yaw=0 already faces "North" (-Z) here — heading is just that turned
-// into a clockwise-from-North degree value (mouse-right decreases yaw,
-// which should read as turning toward East/increasing heading, hence the
-// negation; see this function's own module-level doc comment above).
 pub(crate) fn heading_deg(yaw: f32) -> f32 {
     (-yaw.to_degrees()).rem_euclid(360.0)
 }
 
-// Shortest signed difference `a - b` wrapped into (-180, 180] — how far
-// (and which way) to slide a mark whose fixed heading is `a` relative to
-// the compass window currently centered on heading `b`.
 pub(crate) fn heading_diff(a: f32, b: f32) -> f32 {
     ((a - b + 180.0).rem_euclid(360.0)) - 180.0
 }
@@ -332,7 +272,7 @@ pub(crate) fn spawn_compass_ui(commands: &mut Commands) {
                     CompassMark(heading),
                 ));
             }
-            // Center tick — stays put; the marks above scroll under it.
+
             root.spawn((
                 Node {
                     position_type: PositionType::Absolute,
@@ -346,7 +286,6 @@ pub(crate) fn spawn_compass_ui(commands: &mut Commands) {
             ));
         });
 
-    // Numeric heading readout (e.g. "047°"), centered just under the tape.
     commands.spawn((
         Text::new("000°"),
         TextFont {
@@ -377,9 +316,7 @@ pub(crate) fn update_compass_ui(
     let current = heading_deg(cam.yaw);
     for (mark, mut node) in &mut marks {
         let x = COMPASS_WIDTH / 2.0 + heading_diff(mark.0, current) * COMPASS_PX_PER_DEG;
-        // -8px: rough half-glyph-width nudge so 1-2 letter labels look
-        // centered on their heading rather than left-edge-aligned to it —
-        // not pixel-perfect (labels are 1-2 chars), close enough for a HUD.
+
         node.left = Val::Px(x - 8.0);
     }
     if let Ok(mut text) = heading_text.single_mut() {
@@ -401,22 +338,14 @@ pub(crate) fn update_ammo_ui(gun: Query<&Gun, Changed<Gun>>, mut text: Query<&mu
     };
 }
 
-// Four independent hash marks instead of a fixed cross, so update_crosshair
-// can push them apart from the center as bullet spread grows. direction
-// points away from center: (0,-1) top, (0,1) bottom, (-1,0) left, (1,0) right.
 #[derive(Component)]
 pub(crate) struct CrosshairLine {
     direction: Vec2,
 }
 
-// Marks the crosshair's root Node so update_crosshair can hide the whole
-// thing while ADS'd — the scope's own reticle takes over at that point.
 #[derive(Component)]
 pub(crate) struct CrosshairRoot;
 
-// Sets whichever zombie is closest to `from` to `value` HP — shared by
-// settings_menu.rs's cheat_zombie_health_buttons (Heal Nearest / 1HP
-// Nearest).
 pub(crate) fn set_nearest_zombie_health(
     zombies: &mut Query<(&Transform, &mut Health), With<Zombie>>,
     from: Vec3,
@@ -461,8 +390,7 @@ pub(crate) fn spawn_crosshair(commands: &mut Commands) {
                     Vec2::new(1.0, 0.0),
                 ] {
                     cross.spawn((
-                        // Sized/positioned every frame by update_crosshair —
-                        // these are just placeholders until the first update.
+
                         Node {
                             position_type: PositionType::Absolute,
                             ..default()
@@ -475,9 +403,6 @@ pub(crate) fn spawn_crosshair(commands: &mut Commands) {
         });
 }
 
-// Widens the crosshair's gap as the next shot's bullet spread grows — same
-// formula shoot() actually fires with (current_bullet_spread), so the
-// reticle always reflects real accuracy instead of just looking busy.
 pub(crate) fn update_crosshair(
     mouse: Res<ButtonInput<MouseButton>>,
     touch_aiming: Res<TouchAiming>,
@@ -494,13 +419,11 @@ pub(crate) fn update_crosshair(
     };
     let stance = player.single().copied().unwrap_or_default();
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
-    // Hidden entirely while ADS'd — the scope's own reticle takes over.
+
     if let Ok(mut root) = root.single_mut() {
         root.display = if aiming { Display::None } else { Display::Flex };
     }
-    // LocalPlayerMoving/LocalPlayerSprinting instead of raw key checks —
-    // see gun_view_animation's own comment on why (blind to touch input
-    // and Autopilot's synthetic movement otherwise).
+
     let spread = current_bullet_spread(recoil.pitch_kick, aiming, local_moving.0, stance, local_sprinting.0);
     let gap = CROSSHAIR_BASE_GAP_PX + spread * CROSSHAIR_GAP_SPREAD_SCALE;
 
@@ -522,11 +445,6 @@ pub(crate) fn update_crosshair(
     }
 }
 
-// Toggles InspectMode on KeyL — bundles Noclip + hide-gun together (and
-// restores both to their pre-inspect state on the way back out) so map
-// debugging is one keypress instead of three. See InspectMode's own doc
-// comment for why shoot() also needs to check it separately (this system
-// only handles the fly/visibility side, not firing).
 pub(crate) fn toggle_inspect_mode(
     keys: Res<ButtonInput<KeyCode>>,
     mut inspect: ResMut<InspectMode>,
@@ -542,9 +460,7 @@ pub(crate) fn toggle_inspect_mode(
 }
 
 #[allow(clippy::too_many_arguments)]
-// Registered with `.run_if(debug_keys_allowed)` (see that fn's own doc
-// comment for why) — several of these keys (F, T) collide with
-// bevy_editor_pls' own hotkeys while its F2 overlay is open.
+
 pub(crate) fn toggle_debug_flags(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
@@ -561,10 +477,7 @@ pub(crate) fn toggle_debug_flags(
 ) {
     if keys.just_pressed(KeyCode::KeyF) {
         freeze.0 = !freeze.0;
-        // Zombie position is server-authoritative — see SetFreezeZombies'
-        // own doc comment for why this client-local flag alone (used below
-        // by freeze_zombie_animations/zombies_damage_player) was never
-        // enough to actually stop a zombie from moving.
+
         commands.client_trigger(SetFreezeZombies(freeze.0));
     }
     if keys.just_pressed(KeyCode::KeyH) {
@@ -591,13 +504,8 @@ pub(crate) fn toggle_debug_flags(
     if keys.just_pressed(KeyCode::KeyT) {
         player_model_visible.0 = !player_model_visible.0;
     }
-    // I: master Autopilot on/off (client-local, crate::autopilot's own
-    // decision loop — mirrors cadisplaylink::native_menu::set_autopilot's
-    // iOS Settings-menu equivalent, just reached from a desktop hotkey
-    // instead of a UIKit button, since that module is iOS-only
-    // (#[cfg(target_os = "ios")]) and not reachable from here).
+
     if keys.just_pressed(KeyCode::KeyI) {
         autopilot.0 = !autopilot.0;
     }
 }
-
