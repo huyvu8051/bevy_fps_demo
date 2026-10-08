@@ -15,7 +15,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::text::{TextColor, TextFont};
 use bevy::transform::components::{GlobalTransform, Transform};
 use bevy::ui::widget::{Button, Text};
-use bevy::ui::{BackgroundColor, BorderColor, ComputedNode, Display, Interaction, Node, OverflowAxis, UiGlobalTransform, Val};
+use bevy::ui::{BackgroundColor, BorderColor, ComputedNode, Display, Interaction, Node, OverflowAxis, UiGlobalTransform};
 
 use shared::{NetPlayer, Zombie, ZombieKind};
 
@@ -121,13 +121,9 @@ pub struct RenderSnapshot {
     pub static_meshes: Vec<ExtractedMesh>,
     pub light: Option<LightSnapshot>,
     pub sun: Option<SunSnapshot>,
-    pub floating_damage: Vec<FloatingDamageSnapshot>,
-    pub health_bars: Vec<HealthBarSnapshot>,
     pub touch_buttons: Vec<TouchButtonSnapshot>,
     pub touch_joystick: Option<TouchJoystickSnapshot>,
     pub scope_zoom_slider: Option<ScopeZoomSliderSnapshot>,
-    pub hud_texts: Vec<HudTextSnapshot>,
-    pub crosshair_lines: Vec<CrosshairLineSnapshot>,
     pub settings_menu_panel: Option<SettingsMenuButtonSnapshot>,
     pub settings_menu_buttons: Vec<SettingsMenuButtonSnapshot>,
     pub settings_menu_texts: Vec<HudTextSnapshot>,
@@ -153,27 +149,18 @@ pub struct RenderSnapshot {
     pub generic_ui_nodes: Vec<GenericUiNode>,
 }
 
-/// A screen-space rect (filled, optionally rotated) and/or text label extracted
-/// generically from any UI subtree rooted at a `NativeUiRoot`-marked entity.
-/// No knowledge of which feature (radar, compass, ...) the entity belongs to —
-/// a feature opts in just by tagging its root entity/entities with `NativeUiRoot`.
 pub struct GenericUiNode {
     pub center: [f32; 2],
     pub size: [f32; 2],
-    /// Clockwise rotation in radians, matching Bevy's `UiTransform::rotation` convention.
+    /// Clockwise radians, matching `UiTransform::rotation`.
     pub rotation: f32,
     pub background_color: Option<[f32; 4]>,
     pub border_color: Option<[f32; 4]>,
     pub border_width: f32,
-    /// `BorderRadius` (all corners assumed equal — every current caller uses
-    /// `BorderRadius::all`). When >= half the shorter side, the renderer
-    /// treats the whole node as a circle instead of a rounded rect.
+    /// Treated as a circle, not a rounded rect, when >= half the shorter side.
     pub corner_radius: f32,
     pub text: Option<GenericUiText>,
-    /// Inherited from the nearest ancestor (within the same `NativeUiRoot`
-    /// subtree) with `overflow` set to clip on either axis — `[x, y, w, h]`
-    /// in the same logical/point space as `center`/`size`. Does not include
-    /// this node's own `overflow` setting, which only affects its children.
+    /// `[x, y, w, h]`, inherited from the nearest clipping ancestor (not self).
     pub clip_rect: Option<[f32; 4]>,
 }
 
@@ -181,18 +168,6 @@ pub struct GenericUiText {
     pub content: String,
     pub color: [f32; 4],
     pub font_size: f32,
-}
-
-pub struct FloatingDamageSnapshot {
-    pub screen_pos: [f32; 2],
-    pub text: String,
-    pub color: [f32; 4],
-    pub font_size: f32,
-}
-
-pub struct HealthBarSnapshot {
-    pub screen_pos: [f32; 2],
-    pub fraction: f32,
 }
 
 pub struct TouchButtonSnapshot {
@@ -223,12 +198,6 @@ pub struct HudTextSnapshot {
     pub text: String,
     pub color: [f32; 4],
     pub font_size: f32,
-}
-
-pub struct CrosshairLineSnapshot {
-    pub top_left: [f32; 2],
-    pub size: [f32; 2],
-    pub color: [f32; 4],
 }
 
 pub struct SettingsMenuButtonSnapshot {
@@ -500,45 +469,6 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     let mut zombie_texture_quality_state: SystemState<Res<crate::ZombieTextureQuality>> = SystemState::new(world);
     snapshot.zombie_texture_quality = zombie_texture_quality_state.get(world).0;
 
-    let mut damage_state: SystemState<
-        Query<(&Node, &Text, &TextColor, &TextFont), With<crate::FloatingDamageText>>,
-    > = SystemState::new(world);
-    snapshot.floating_damage = damage_state
-        .get(world)
-        .iter()
-        .filter(|(node, ..)| node.display == Display::Flex)
-        .filter_map(|(node, text, color, font)| {
-            let (Val::Px(x), Val::Px(y)) = (node.left, node.top) else { return None };
-            let c = color.0.to_srgba();
-            Some(FloatingDamageSnapshot {
-                screen_pos: [x, y],
-                text: text.0.clone(),
-                color: [c.red, c.green, c.blue, c.alpha],
-                font_size: font.font_size,
-            })
-        })
-        .collect();
-
-    let mut bar_state: SystemState<(
-        Query<(&Node, &Children), With<crate::ZombieHealthBar>>,
-        Query<&Node, With<crate::ZombieHealthBarFill>>,
-    )> = SystemState::new(world);
-    let (bars, fills) = bar_state.get(world);
-    snapshot.health_bars = bars
-        .iter()
-        .filter(|(node, _)| node.display == Display::Flex)
-        .filter_map(|(node, children)| {
-            let (Val::Px(x), Val::Px(y)) = (node.left, node.top) else { return None };
-            children.iter().find_map(|&child| match fills.get(child) {
-                Ok(fill_node) => match fill_node.width {
-                    Val::Percent(pct) => Some(HealthBarSnapshot { screen_pos: [x, y], fraction: (pct / 100.0).clamp(0.0, 1.0) }),
-                    _ => None,
-                },
-                Err(_) => None,
-            })
-        })
-        .collect();
-
     let mut touch_button_state: SystemState<
         Query<(&ComputedNode, &UiGlobalTransform, &BackgroundColor, &crate::TouchControlButton, &Interaction)>,
     > = SystemState::new(world);
@@ -583,34 +513,6 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             ScopeZoomSliderSnapshot { track_top_left, track_size, handle_top_left, handle_size }
         },
     );
-
-    let mut hud_text_state: SystemState<
-        Query<
-            (&ComputedNode, &UiGlobalTransform, &Text, &TextColor, &TextFont),
-            bevy::ecs::query::Or<(With<crate::HealthUi>, With<crate::AmmoUi>, With<crate::PingUi>)>,
-        >,
-    > = SystemState::new(world);
-    snapshot.hud_texts = hud_text_state
-        .get(world)
-        .iter()
-        .map(|(node, transform, text, color, font)| {
-            let (top_left, size) = logical_rect(node, transform);
-            let c = color.0.to_srgba();
-            HudTextSnapshot { top_left, size, text: text.0.clone(), color: [c.red, c.green, c.blue, c.alpha], font_size: font.font_size }
-        })
-        .collect();
-
-    let mut crosshair_state: SystemState<Query<(&ComputedNode, &UiGlobalTransform, &BackgroundColor), With<crate::CrosshairLine>>> =
-        SystemState::new(world);
-    snapshot.crosshair_lines = crosshair_state
-        .get(world)
-        .iter()
-        .map(|(node, transform, bg)| {
-            let (top_left, size) = logical_rect(node, transform);
-            let c = bg.0.to_srgba();
-            CrosshairLineSnapshot { top_left, size, color: [c.red, c.green, c.blue, c.alpha] }
-        })
-        .collect();
 
     let (settings_menu_panel, settings_menu_buttons, settings_menu_texts) = extract_panel::<crate::SettingsMenuRoot>(world);
     snapshot.settings_menu_panel = settings_menu_panel;
@@ -757,13 +659,6 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     snapshot
 }
 
-/// Walks every UI subtree rooted at a `NativeUiRoot`-marked entity and reads
-/// its generic layout/paint data (position, size, rotation, fill color,
-/// text) — no per-feature knowledge required. A feature becomes visible on
-/// iOS just by tagging its root entity/entities with `NativeUiRoot`; nothing
-/// here needs to change. Known gaps vs. the full Bevy UI renderer: no
-/// border/border-radius rendering, no `overflow: clip`, and child paint
-/// order follows spawn order rather than `UiStack` z-index.
 type GenericUiQuery<'w, 's> = Query<
     'w,
     's,

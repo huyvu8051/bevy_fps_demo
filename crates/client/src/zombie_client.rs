@@ -400,6 +400,7 @@ pub(crate) fn spawn_zombie_health_bar(commands: &mut Commands, zombie: Entity) {
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
             ZombieHealthBar { zombie },
+            NativeUiRoot,
         ))
         .with_children(|bar| {
             bar.spawn((

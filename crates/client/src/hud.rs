@@ -2,11 +2,7 @@
 use bevy::prelude::*;
 use crate::*;
 
-/// Opts a UI entity (and its whole `Children` subtree) into the generic,
-/// data-driven iOS extraction path (`native_game_extract::extract_generic_ui_nodes`)
-/// instead of requiring hand-written per-widget extraction + Metal draw code.
-/// Mark a widget's root entity (and any standalone entity outside that
-/// hierarchy, e.g. a sibling text label) with this to make it show up on iOS.
+/// Tags a UI entity (and its `Children`) for generic, data-driven rendering on iOS.
 #[derive(Component)]
 pub(crate) struct NativeUiRoot;
 
@@ -81,6 +77,7 @@ pub(crate) fn spawn_floating_damage(commands: &mut Commands, world_pos: Vec3, da
             world_pos,
             remaining: FLOATING_DAMAGE_LIFETIME,
         },
+        NativeUiRoot,
     ));
 }
 
@@ -128,6 +125,7 @@ pub(crate) fn spawn_health_ui(commands: &mut Commands) {
         },
         GlobalZIndex(STATIC_UI_Z_INDEX),
         HealthUi,
+        NativeUiRoot,
     ));
 }
 
@@ -207,6 +205,7 @@ pub(crate) fn spawn_ammo_ui(commands: &mut Commands) {
         },
         GlobalZIndex(STATIC_UI_Z_INDEX),
         AmmoUi,
+        NativeUiRoot,
     ));
 }
 
@@ -229,6 +228,7 @@ pub(crate) fn spawn_ping_ui(commands: &mut Commands) {
         },
         GlobalZIndex(STATIC_UI_Z_INDEX),
         PingUi,
+        NativeUiRoot,
     ));
 }
 
@@ -412,7 +412,6 @@ pub(crate) fn spawn_radar_ui(commands: &mut Commands) {
                 height: Val::Px(RADAR_SIZE),
                 border: UiRect::all(Val::Px(2.0)),
                 border_radius: BorderRadius::all(Val::Px(RADAR_RADIUS)),
-                overflow: Overflow::clip(),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.05, 0.02, 0.55)),
@@ -586,6 +585,7 @@ pub(crate) fn spawn_crosshair(commands: &mut Commands) {
             },
             GlobalZIndex(STATIC_UI_Z_INDEX),
             CrosshairRoot,
+            NativeUiRoot,
         ))
         .with_children(|root| {
             root.spawn(Node {

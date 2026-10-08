@@ -13,10 +13,7 @@ use objc::{runtime::Object, *};
 
 use super::metal_math::{look_at, mat_mul, orthographic, perspective, transform_point};
 use super::native_game_app::build_headless_game_ecs_app;
-use super::native_game_extract::{
-    extract_render_snapshot, prime_camera_viewport, ExtractedMesh, FloatingDamageSnapshot, HealthBarSnapshot,
-    LightSnapshot, SunSnapshot,
-};
+use super::native_game_extract::{extract_render_snapshot, prime_camera_viewport, ExtractedMesh, LightSnapshot, SunSnapshot};
 
 #[derive(Copy, Clone)]
 struct LightUniform {
@@ -900,15 +897,10 @@ pub struct NativeMetalRenderer {
     ui_pipeline_no_msaa: Option<RenderPipelineState>,
     ui_sampler: metal::SamplerState,
     font_atlas_texture: metal::Texture,
-    ui_floating_damage: Vec<FloatingDamageSnapshot>,
-    ui_health_bars: Vec<HealthBarSnapshot>,
 
     ui_touch_buttons: Vec<super::native_game_extract::TouchButtonSnapshot>,
     ui_touch_joystick: Option<super::native_game_extract::TouchJoystickSnapshot>,
     ui_scope_zoom_slider: Option<super::native_game_extract::ScopeZoomSliderSnapshot>,
-
-    ui_hud_texts: Vec<super::native_game_extract::HudTextSnapshot>,
-    ui_crosshair_lines: Vec<super::native_game_extract::CrosshairLineSnapshot>,
 
     ui_settings_menu_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_settings_menu_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
@@ -1024,9 +1016,6 @@ fn ndc_ui_rect(x: f32, y: f32, w: f32, h: f32, view_w: f32, view_h: f32, uv: [[f
     ]
 }
 
-/// Like `ndc_ui_rect` but rotates the quad (clockwise radians, matching
-/// `UiTransform::rotation`) around its own center before NDC projection.
-/// Needed by the generic UI path — `ndc_ui_rect` has no rotation support.
 fn ndc_ui_rect_rotated(center_x: f32, center_y: f32, w: f32, h: f32, rotation: f32, view_w: f32, view_h: f32, uv: [[f32; 2]; 4]) -> [UiVertex; 6] {
     let (sin, cos) = rotation.sin_cos();
     let hw = w / 2.0;
@@ -1079,9 +1068,6 @@ fn draw_ui_quad(encoder: &metal::RenderCommandEncoderRef, verts: &[UiVertex; 6],
     encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
 }
 
-/// Like `draw_ui_quad` but for an arbitrary vertex count/primitive type —
-/// needed for the generic UI path's circles/rings, which `draw_ui_quad`'s
-/// fixed 6-vertex quad can't express.
 fn draw_ui_verts(encoder: &metal::RenderCommandEncoderRef, verts: &[UiVertex], primitive: MTLPrimitiveType, tint: [f32; 4], texture: &metal::Texture) {
     if verts.is_empty() {
         return;
@@ -1093,10 +1079,7 @@ fn draw_ui_verts(encoder: &metal::RenderCommandEncoderRef, verts: &[UiVertex], p
     encoder.draw_primitives(primitive, 0, verts.len() as u64);
 }
 
-/// Builds a filled circular-arc fan (as a triangle list) centered at `center`,
-/// sweeping `sweep` radians clockwise from `start_angle` (angle 0 = +X/right,
-/// increasing clockwise since +Y is down — matches the renderer's screen
-/// space throughout). `start_angle: 0.0, sweep: TAU` draws a full circle.
+/// Angle 0 = +X, increasing clockwise (+Y is down). `0.0, TAU` sweeps a full circle.
 fn arc_fill_verts(center: [f32; 2], radius: f32, start_angle: f32, sweep: f32, view_w: f32, view_h: f32, segments: u32) -> Vec<UiVertex> {
     let to_ndc = |x: f32, y: f32| -> [f32; 2] { [(x / view_w) * 2.0 - 1.0, 1.0 - (y / view_h) * 2.0] };
     let center_ndc = to_ndc(center[0], center[1]);
@@ -1116,8 +1099,6 @@ fn arc_fill_verts(center: [f32; 2], radius: f32, start_angle: f32, sweep: f32, v
     verts
 }
 
-/// Builds a ring (annulus) arc outline as a triangle strip centered at `center`.
-/// Same angle convention as `arc_fill_verts`.
 fn arc_stroke_verts(center: [f32; 2], outer_radius: f32, inner_radius: f32, start_angle: f32, sweep: f32, view_w: f32, view_h: f32, segments: u32) -> Vec<UiVertex> {
     let to_ndc = |x: f32, y: f32| -> [f32; 2] { [(x / view_w) * 2.0 - 1.0, 1.0 - (y / view_h) * 2.0] };
     let mut verts = Vec::with_capacity((segments as usize + 1) * 2);
@@ -1132,9 +1113,7 @@ fn arc_stroke_verts(center: [f32; 2], outer_radius: f32, inner_radius: f32, star
     verts
 }
 
-/// The 4 rounded-rect corners as (arc-center, start-angle) pairs, each
-/// sweeping a quarter turn (`PI / 2`) — top-left, top-right, bottom-right,
-/// bottom-left, matching the angle convention above (0 = right, clockwise).
+/// Corner (arc-center, start-angle) pairs, top-left/top-right/bottom-right/bottom-left, each a quarter turn.
 fn rounded_rect_corners(x: f32, y: f32, w: f32, h: f32, r: f32) -> [([f32; 2], f32); 4] {
     use std::f32::consts::PI;
     [
@@ -1145,9 +1124,6 @@ fn rounded_rect_corners(x: f32, y: f32, w: f32, h: f32, r: f32) -> [([f32; 2], f
     ]
 }
 
-/// Draws a filled rounded rect as a center cross (3 quads, reusing the plain
-/// `ndc_ui_rect`/`draw_ui_quad` primitives) plus 4 corner arc fans. Ignores
-/// rotation — no current node both rotates and has `corner_radius > 0`.
 fn draw_rounded_rect_fill(encoder: &metal::RenderCommandEncoderRef, center: [f32; 2], size: [f32; 2], radius: f32, color: [f32; 4], view_w: f32, view_h: f32, white_texture: &metal::Texture) {
     const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
     const CORNER_SEGMENTS: u32 = 10;
@@ -1170,8 +1146,6 @@ fn draw_rounded_rect_fill(encoder: &metal::RenderCommandEncoderRef, center: [f32
     }
 }
 
-/// Draws a rounded rect's border as 4 straight edge quads (trimmed to the
-/// corners) plus 4 corner ring arcs. Same rotation caveat as the fill above.
 fn draw_rounded_rect_border(
     encoder: &metal::RenderCommandEncoderRef,
     center: [f32; 2],
@@ -1202,9 +1176,6 @@ fn draw_rounded_rect_border(
     }
 }
 
-/// Draws an axis-aligned rect's border as 4 thin edge quads (top/bottom/left/right).
-/// Unlike `ndc_ui_rect_rotated`, this ignores rotation — no current generic-path
-/// node both rotates and has a border, so that combination is left unhandled.
 fn draw_rect_border(
     encoder: &metal::RenderCommandEncoderRef,
     center: [f32; 2],
@@ -1283,31 +1254,29 @@ fn draw_panel(
     draw_hud_text_list(encoder, texts, view_w, view_h, font_atlas_texture);
 }
 
-/// Draws nodes produced by the generic, data-driven UI extraction path
-/// (`native_game_extract::extract_generic_ui_nodes`) — a fill rect (if any),
-/// then a centered single-line text label (if any). This is how new widgets
-/// (radar, compass) reach the iOS screen without their own hand-written
-/// extract+draw code; see `NativeUiRoot`.
-/// Converts a `GenericUiNode::clip_rect` (logical/point space, or `None` for
-/// unclipped) into a Metal scissor rect in physical pixels, clamped to the
-/// drawable's bounds.
-fn generic_ui_scissor_rect(clip: Option<[f32; 4]>, scale: f32, view_w: f32, view_h: f32) -> MTLScissorRect {
-    let phys_w = (view_w * scale).max(1.0);
-    let phys_h = (view_h * scale).max(1.0);
+/// `canvas_w`/`canvas_h` must be this pass's actual bound-texture size (e.g.
+/// `render_width`/`render_height`), not the device's native resolution — this
+/// pass may render into a `render_resolution_scale`-downscaled intermediate.
+fn generic_ui_scissor_rect(clip: Option<[f32; 4]>, canvas_w: f32, canvas_h: f32, view_w: f32, view_h: f32) -> MTLScissorRect {
+    let phys_w = canvas_w.max(1.0);
+    let phys_h = canvas_h.max(1.0);
     let Some([cx, cy, cw, ch]) = clip else {
         return MTLScissorRect { x: 0, y: 0, width: phys_w as u64, height: phys_h as u64 };
     };
-    let x = (cx * scale).clamp(0.0, phys_w - 1.0);
-    let y = (cy * scale).clamp(0.0, phys_h - 1.0);
-    let width = (cw * scale).clamp(1.0, phys_w - x);
-    let height = (ch * scale).clamp(1.0, phys_h - y);
+    let to_px_x = |v: f32| (v / view_w) * phys_w;
+    let to_px_y = |v: f32| (v / view_h) * phys_h;
+    let x = to_px_x(cx).clamp(0.0, phys_w - 1.0);
+    let y = to_px_y(cy).clamp(0.0, phys_h - 1.0);
+    let width = to_px_x(cw).clamp(1.0, phys_w - x);
+    let height = to_px_y(ch).clamp(1.0, phys_h - y);
     MTLScissorRect { x: x as u64, y: y as u64, width: width as u64, height: height as u64 }
 }
 
 fn draw_generic_ui_nodes(
     encoder: &metal::RenderCommandEncoderRef,
     nodes: &[super::native_game_extract::GenericUiNode],
-    scale: f32,
+    canvas_w: f32,
+    canvas_h: f32,
     view_w: f32,
     view_h: f32,
     white_texture: &metal::Texture,
@@ -1316,7 +1285,7 @@ fn draw_generic_ui_nodes(
     const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
     const CIRCLE_SEGMENTS: u32 = 40;
     for node in nodes {
-        encoder.set_scissor_rect(generic_ui_scissor_rect(node.clip_rect, scale, view_w, view_h));
+        encoder.set_scissor_rect(generic_ui_scissor_rect(node.clip_rect, canvas_w, canvas_h, view_w, view_h));
 
         let [cx, cy] = node.center;
         let [w, h] = node.size;
@@ -1354,9 +1323,8 @@ fn draw_generic_ui_nodes(
         if let Some(text) = &node.text {
             let scale = text.font_size / GLYPH_H as f32;
             let upper = text.content.to_ascii_uppercase();
-            let text_w: f32 = upper.chars().map(|_| GLYPH_W as f32 * scale + scale).sum();
-            let mut cursor_x = cx - text_w / 2.0;
-            let y = cy - (GLYPH_H as f32 * scale) / 2.0;
+            let mut cursor_x = cx - w / 2.0;
+            let y = cy - h / 2.0;
             for ch in upper.chars() {
                 let Some(index) = glyph_index(ch) else { continue };
                 let (u0, u1) = glyph_uv_rect(index);
@@ -1370,7 +1338,7 @@ fn draw_generic_ui_nodes(
         }
     }
 
-    encoder.set_scissor_rect(generic_ui_scissor_rect(None, scale, view_w, view_h));
+    encoder.set_scissor_rect(generic_ui_scissor_rect(None, canvas_w, canvas_h, view_w, view_h));
 }
 
 struct RealGameMeshDraw<'a> {
@@ -1825,13 +1793,9 @@ impl NativeMetalRenderer {
             ui_pipeline_no_msaa,
             ui_sampler,
             font_atlas_texture,
-            ui_floating_damage: Vec::new(),
-            ui_health_bars: Vec::new(),
             ui_touch_buttons: Vec::new(),
             ui_touch_joystick: None,
             ui_scope_zoom_slider: None,
-            ui_hud_texts: Vec::new(),
-            ui_crosshair_lines: Vec::new(),
             ui_settings_menu_panel: None,
             ui_settings_menu_buttons: Vec::new(),
             ui_settings_menu_texts: Vec::new(),
@@ -2210,13 +2174,9 @@ impl NativeMetalRenderer {
             prime_camera_viewport(app.world_mut(), view_width_pts, view_height_pts, self.layer.contents_scale() as f32);
             app.update();
             let snapshot = extract_render_snapshot(app.world_mut());
-            self.ui_floating_damage = snapshot.floating_damage;
-            self.ui_health_bars = snapshot.health_bars;
             self.ui_touch_buttons = snapshot.touch_buttons;
             self.ui_touch_joystick = snapshot.touch_joystick;
             self.ui_scope_zoom_slider = snapshot.scope_zoom_slider;
-            self.ui_hud_texts = snapshot.hud_texts;
-            self.ui_crosshair_lines = snapshot.crosshair_lines;
             self.ui_settings_menu_panel = snapshot.settings_menu_panel;
             self.ui_settings_menu_buttons = snapshot.settings_menu_buttons;
             self.ui_settings_menu_texts = snapshot.settings_menu_texts;
@@ -2601,13 +2561,9 @@ impl NativeMetalRenderer {
         if let Some(ui_pipeline) = ui_pipeline_ref {
 
             encoder.set_depth_stencil_state(&self.ui_depth_state);
-            if !self.ui_health_bars.is_empty()
-                || !self.ui_floating_damage.is_empty()
-                || !self.ui_touch_buttons.is_empty()
+            if !self.ui_touch_buttons.is_empty()
                 || self.ui_touch_joystick.is_some()
                 || self.ui_scope_zoom_slider.is_some()
-                || !self.ui_hud_texts.is_empty()
-                || !self.ui_crosshair_lines.is_empty()
                 || self.ui_settings_menu_panel.is_some()
                 || !self.ui_settings_menu_buttons.is_empty()
                 || !self.ui_settings_menu_texts.is_empty()
@@ -2624,33 +2580,6 @@ impl NativeMetalRenderer {
                 encoder.set_fragment_sampler_state(0, Some(&self.ui_sampler));
 
                 const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
-                for bar in &self.ui_health_bars {
-                    let [x, y] = bar.screen_pos;
-                    let w = crate::ZOMBIE_HEALTH_BAR_WIDTH_PX;
-                    let h = crate::ZOMBIE_HEALTH_BAR_HEIGHT_PX;
-
-                    let bg = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
-                    draw_ui_quad(encoder, &bg, [0.0, 0.0, 0.0, 0.5], &self.white_texture);
-
-                    let fill = ndc_ui_rect(x, y, w * bar.fraction, h, view_w, view_h, FULL_UV);
-                    draw_ui_quad(encoder, &fill, [0.2, 0.9, 0.2, 1.0], &self.white_texture);
-                }
-
-                for dmg in &self.ui_floating_damage {
-                    let [x, y] = dmg.screen_pos;
-                    let scale = dmg.font_size / GLYPH_H as f32;
-                    let mut cursor_x = x;
-                    for ch in dmg.text.chars() {
-                        let Some(index) = glyph_index(ch) else { continue };
-                        let (u0, u1) = glyph_uv_rect(index);
-                        let uv = [[u0, 1.0], [u1, 1.0], [u1, 0.0], [u0, 0.0]];
-                        let glyph_w = GLYPH_W as f32 * scale;
-                        let glyph_h = GLYPH_H as f32 * scale;
-                        let quad = ndc_ui_rect(cursor_x, y, glyph_w, glyph_h, view_w, view_h, uv);
-                        draw_ui_quad(encoder, &quad, dmg.color, &self.font_atlas_texture);
-                        cursor_x += glyph_w + scale;
-                    }
-                }
 
                 if let Some(joystick) = &self.ui_touch_joystick {
                     let [bx, by] = joystick.base_top_left;
@@ -2704,15 +2633,6 @@ impl NativeMetalRenderer {
                     }
                 }
 
-                for line in &self.ui_crosshair_lines {
-                    let [x, y] = line.top_left;
-                    let [w, h] = line.size;
-                    let quad = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
-                    draw_ui_quad(encoder, &quad, line.color, &self.white_texture);
-                }
-
-                draw_hud_text_list(encoder, &self.ui_hud_texts, view_w, view_h, &self.font_atlas_texture);
-
                 draw_panel(
                     encoder,
                     &self.ui_settings_menu_panel,
@@ -2744,8 +2664,7 @@ impl NativeMetalRenderer {
                     &self.font_atlas_texture,
                 );
 
-                let scale = self.layer.contents_scale() as f32;
-                draw_generic_ui_nodes(encoder, &self.ui_generic_nodes, scale, view_w, view_h, &self.white_texture, &self.font_atlas_texture);
+                draw_generic_ui_nodes(encoder, &self.ui_generic_nodes, render_width as f32, render_height as f32, view_w, view_h, &self.white_texture, &self.font_atlas_texture);
             }
         }
 
