@@ -159,17 +159,19 @@ pub(crate) fn setup_gameplay(
     };
     pending.0 = false;
     let scenario = current_scenario();
-    let player_spawn = scenario_player_spawn(scenario);
+    let player_spawn = scenario.player_spawn();
 
-    match scenario.map_kind() {
-        MapKind::Desert => {
+    match scenario {
+        Scenario::Desert => {
+            let scene = scenario.scene_path().expect("the desert is a glTF map");
             commands.spawn((
                 Name::new("DesertCity"),
-                WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(shared::DESERT_SCENE_PATH))),
+                WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene))),
                 Transform::IDENTITY,
+                shared::scene_colliders(),
             ));
         }
-        MapKind::Arena => {
+        Scenario::StressTest => {
             spawn_test_arena(&mut commands, &mut meshes, &mut materials, scenario.map_id());
             spawn_arena_car_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
         }

@@ -1,26 +1,28 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use shared::{MapKind, Scenario};
+use shared::Scenario;
 
 /// The physics bodies the server simulates against and the navmesh baker
 /// voxelizes. Both must see the same geometry, so both call this.
 pub fn spawn_map_colliders(commands: &mut Commands, scenario: Scenario, asset_server: &AssetServer) {
-    match scenario.map_kind() {
-        MapKind::Desert => spawn_desert_colliders(commands, asset_server),
-        MapKind::Arena => {
+    match scenario {
+        Scenario::Desert => spawn_desert_colliders(commands, asset_server, scenario),
+        Scenario::StressTest => {
             spawn_flat_arena_colliders(commands, scenario.map_id());
             spawn_arena_car_colliders(commands, asset_server);
         }
     }
 }
 
-fn spawn_desert_colliders(commands: &mut Commands, asset_server: &AssetServer) {
+fn spawn_desert_colliders(commands: &mut Commands, asset_server: &AssetServer, scenario: Scenario) {
     commands.spawn((
         Name::new("DesertCity"),
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(shared::DESERT_SCENE_PATH))),
+        WorldAssetRoot(asset_server.load(
+            GltfAssetLabel::Scene(0)
+                .from_asset(scenario.scene_path().expect("the desert is a glTF map")),
+        )),
         Transform::IDENTITY,
-        RigidBody::Static,
-        ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
+        shared::scene_colliders(),
     ));
 }
 

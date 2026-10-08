@@ -28,7 +28,6 @@ use shared::{
     KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform, Player, PlayerDied,
     ZombieAnimationPlayer,
     PlayerDiedFx, PlayerFiredFx,
-    MapKind, scenario_player_spawn,
     PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieMotion, ZombieShowcaseClip, wire_zombie_hitbox_bones,
     zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_anim_path,

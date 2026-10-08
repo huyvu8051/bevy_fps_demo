@@ -377,7 +377,7 @@ pub(crate) fn spawn_map_select_ui(commands: &mut Commands) {
                 },
                 TextColor(Color::WHITE),
             ));
-            for scenario in [Scenario::StressTest] {
+            for scenario in Scenario::ALL {
                 let (id, title, subtitle) = (scenario.map_id(), scenario.title(), scenario.subtitle());
                 root.spawn(Node {
                     flex_direction: FlexDirection::Column,
@@ -517,7 +517,7 @@ pub(crate) fn on_game_state_event(
         GameStateEvent::Restarted => {
             game_over.0 = false;
             if let Ok((mut transform, mut player, mut health)) = player.single_mut() {
-                transform.translation = scenario_player_spawn(current_scenario());
+                transform.translation = current_scenario().player_spawn();
                 player.vertical_velocity = 0.0;
                 player.grounded = false;
                 health.0 = PLAYER_MAX_HEALTH;

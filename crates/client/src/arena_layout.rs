@@ -1,6 +1,6 @@
 
 use bevy::prelude::*;
-use shared::{ArenaShape, MapKind};
+use shared::{ArenaShape, Scenario};
 
 use crate::arena_cars::{ron_f32, F9SaveToast};
 use crate::{current_scenario, ArenaBoxDims};
@@ -27,7 +27,7 @@ fn save_arena_layout_on_key(
         return;
     }
     let scenario = current_scenario();
-    if scenario.map_kind() != MapKind::Arena {
+    if scenario != Scenario::StressTest {
         return;
     }
     let map_id = scenario.map_id();
