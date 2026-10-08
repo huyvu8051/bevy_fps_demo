@@ -162,6 +162,13 @@ pub(crate) fn setup_gameplay(
     let player_spawn = scenario_player_spawn(scenario);
 
     match scenario.map_kind() {
+        MapKind::Desert => {
+            commands.spawn((
+                Name::new("DesertCity"),
+                WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(shared::DESERT_SCENE_PATH))),
+                Transform::IDENTITY,
+            ));
+        }
         MapKind::Arena => {
             spawn_test_arena(&mut commands, &mut meshes, &mut materials, scenario.map_id());
             spawn_arena_car_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);

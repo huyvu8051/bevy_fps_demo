@@ -38,7 +38,7 @@ Có thể chạy nhiều client cùng lúc (nhiều terminal) để test multipl
 |---|---|---|
 | `LOCAL=1` | client | Nối tới `127.0.0.1` (port theo scenario) thay vì IP Tailscale mặc định. Thay cho `SERVER_ADDR=127.0.0.1:<port>`. |
 | `SERVER_ADDR=host:port` | client | Override toàn bộ host **và** port. Ưu tiên cao nhất. |
-| `MAP_ID=2` | server + client | Chọn scenario (2 = arena + zombie). Port server = `5031 + MAP_ID`; client tự tính khớp. Không set ở client → hiện menu chọn map. |
+| `MAP_ID=1..2` | server + client | Chọn scenario (1 = Desert City; 2 = arena + zombie). Port server = `5031 + MAP_ID`; client tự tính khớp. Không set ở client → hiện menu chọn map. |
 | `RENDER_SCALE=0.1..1.0` | client | Scale render 3D (mặc định 0.4). Chỉnh live được trong Settings menu. |
 | `EDITOR=1` | client | Bật `bevy_editor_pls` (F2). Desktop-only. |
 | `ZOMBIE_COUNT=0..` | server | Số zombie baseline lúc start (mặc định 10). `ZOMBIE_COUNT=0` để mở map thuần xem/edit hình học, không có zombie/combat gì cả — dùng cùng `EDITOR=1` khi edit map. |
@@ -240,3 +240,20 @@ Chỉ khiến app **đủ điều kiện** — hệ điều hành mới quyết 
 - iOS: cần bật `CADisableMinimumFrameDurationOnPhone` trong Info.plist mới lên được ProMotion 120Hz trên iPhone (đã bật sẵn trong `crates/client/gen/apple/iOS/bevy_in_iOS/Info.plist`).
 - Chưa hỗ trợ Android (chưa có scaffold `gen/android`).
 - Chuột/bàn phím Bluetooth **có** điều khiển được game trên iOS (đã ghép nối qua Settings > Bluetooth của máy trước) — dùng Apple's GameController framework (`GCKeyboard`/`GCMouse`), bridge qua `crates/client/gen/apple/iOS/base/GameControllerInput.swift` → `cadisplaylink_key_changed`/`cadisplaylink_mouse_moved`/`cadisplaylink_mouse_button_changed` (`crates/client/src/cadisplaylink/ffi.rs`). Cắm chuột vào là look tự khoá luôn (không có con trỏ để bấm-khoá như desktop). Yêu cầu iOS 14+ (gated bằng `#available`, không ảnh hưởng máy chạy iOS 13).
+
+## Navmesh
+
+Navmesh được bake offline rồi ship kèm asset (`maps/<map>/navmesh.nav`); server chỉ load,
+không bake lúc khởi động — voxel hoá một map cỡ thị trấn quá lâu để nằm trong đường boot.
+
+```bash
+MAP_ID=1 cargo run -p server --bin navmesh_baker
+```
+
+Chạy lại lệnh này mỗi khi hình học của map đổi, nếu không navmesh sẽ lệch khỏi level.
+
+## Credits
+
+Map Desert City: ["Desert_City"](https://sketchfab.com/3d-models/desert-city-765ade489c3f4636924307b133994d37)
+by [Mikey x pc](https://sketchfab.com/mikeyxpc), licensed under
+[CC-BY-4.0](http://creativecommons.org/licenses/by/4.0/).

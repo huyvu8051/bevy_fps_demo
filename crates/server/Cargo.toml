@@ -25,5 +25,6 @@ bevy_rerecast = { version = "0.5", default-features = false, features = ["bevy_m
 avian_rerecast = "0.6"
 bevy_landmass = "0.12"
 landmass_rerecast = "0.3"
+bincode = { version = "2", features = ["serde"] }
 bevy_replicon = "0.41"
 bevy_replicon_renet2 = { version = "0.18", features = ["native_transport"] }

@@ -1,5 +1,3 @@
-mod navmesh;
-
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::SystemTime;
 
@@ -27,7 +25,7 @@ use shared::{
     MapKind, scenario_player_spawn,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
-    MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_HEIGHT, PILLAR_RADIUS,
+    MAX_SHOT_DISTANCE, MOVE_SPEED, PILLAR_RADIUS,
     PLAYER_LENGTH, PLAYER_RADIUS, Scenario,
     STRESS_TEST_ZOMBIE_COUNT,
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
@@ -89,7 +87,7 @@ fn main() {
             BigBrainPlugin::new(PreUpdate),
             RepliconPlugins,
             RepliconRenetPlugins,
-            navmesh::ServerNavmeshPlugin,
+            server::navmesh::ServerNavmeshPlugin,
         ))
         .init_asset::<StandardMaterial>()
 
@@ -150,6 +148,7 @@ fn main() {
         .init_resource::<ZombieTargetCount>()
         .init_resource::<AutoMaintainZombies>()
         .init_resource::<NextZombieSpawnIndex>()
+        .init_resource::<DesertSpawnPoints>()
         .add_systems(
             Startup,
             (
@@ -157,6 +156,9 @@ fn main() {
                 spawn_arena_colliders,
 
                 spawn_stress_test_zombies.run_if(resource_equals(Scenario::StressTest)),
+                (collect_desert_spawn_points, spawn_desert_zombies)
+                    .chain()
+                    .run_if(resource_equals(Scenario::Desert)),
                 setup_server_zombie_anim,
             ),
         )
@@ -180,7 +182,6 @@ fn main() {
 
                 wire_server_zombie_animations,
                 wire_zombie_hitbox_bones,
-                spawn_car_nav_obstacle_boxes,
             ),
         )
         .add_observer(spawn_player)
@@ -233,88 +234,7 @@ fn start_server(mut commands: Commands, channels: Res<RepliconChannels>, scenari
 }
 
 fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_server: Res<AssetServer>) {
-    match scenario.map_kind() {
-        MapKind::Arena => {
-            spawn_flat_arena_colliders(&mut commands, scenario.map_id());
-            spawn_arena_car_colliders(&mut commands, &asset_server);
-        }
-    }
-}
-
-#[derive(Component)]
-struct ArenaObstacle;
-
-fn spawn_flat_arena_colliders(commands: &mut Commands, map_id: u8) {
-    for b in shared::arena_layout(map_id) {
-        let (collider, is_obstacle) = match b.shape {
-            shared::ArenaShape::Cuboid => (Collider::cuboid(b.size.x, b.size.y, b.size.z), false),
-
-            shared::ArenaShape::Cylinder => (Collider::cylinder(b.size.x * 0.5, b.size.y), true),
-        };
-        let mut e = commands.spawn((
-            Transform::from_translation(b.translation).with_rotation(b.rotation),
-            RigidBody::Static,
-            collider,
-        ));
-        if is_obstacle {
-            e.insert(ArenaObstacle);
-        }
-    }
-}
-
-fn spawn_arena_car_colliders(commands: &mut Commands, asset_server: &AssetServer) {
-    for (path, physics) in shared::ARENA_CAR_PATHS.iter().zip(shared::arena_car_physics()) {
-        commands.spawn((
-            WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(*path))),
-            Transform::from_xyz(physics.x, physics.y, physics.z)
-                .with_rotation(physics.rotation)
-                .with_scale(Vec3::splat(physics.scale)),
-            RigidBody::Static,
-            ColliderConstructorHierarchy::new(ColliderConstructor::ConvexHullFromMesh),
-
-            CarNavObstacle,
-        ));
-    }
-}
-
-#[derive(Component)]
-struct CarNavObstacle;
-
-#[derive(Component)]
-struct CarNavBoxDone;
-
-fn spawn_car_nav_obstacle_boxes(
-    mut commands: Commands,
-    cars: Query<(Entity, &RigidBodyColliders), (With<CarNavObstacle>, Without<CarNavBoxDone>)>,
-    aabbs: Query<&ColliderAabb>,
-) {
-    for (car, colliders) in &cars {
-        let mut min = Vec3::splat(f32::INFINITY);
-        let mut max = Vec3::splat(f32::NEG_INFINITY);
-        let mut ready = !colliders.is_empty();
-        for collider in colliders.iter() {
-            match aabbs.get(collider) {
-                Ok(aabb) if aabb.min.is_finite() && aabb.max.is_finite() => {
-                    min = min.min(aabb.min);
-                    max = max.max(aabb.max);
-                }
-                _ => ready = false,
-            }
-        }
-        if !ready {
-            continue;
-        }
-        let center = Vec3::new((min.x + max.x) * 0.5, NAVMESH_HEIGHT, (min.z + max.z) * 0.5);
-        let size = Vec3::new((max.x - min.x).max(0.1), 2.0, (max.z - min.z).max(0.1));
-        commands.spawn((
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(size.x, size.y, size.z),
-            Sensor,
-            ArenaObstacle,
-        ));
-        commands.entity(car).insert(CarNavBoxDone);
-    }
+    server::map_colliders::spawn_map_colliders(&mut commands, *scenario, &asset_server);
 }
 
 fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands, scenario: Res<Scenario>) {
@@ -709,8 +629,14 @@ impl Default for AutoMaintainZombies {
 #[derive(Resource, Default)]
 struct NextZombieSpawnIndex(usize);
 
-fn zombie_spawn_pos_for(kind: MapKind, seed: usize) -> (Vec3, f32) {
+fn zombie_spawn_pos_for(kind: MapKind, seed: usize, desert: &[Vec3]) -> (Vec3, f32) {
     match kind {
+        // Desert reinforcements come from the same navmesh points the initial
+        // wave used; `desert` is empty until the navmesh asset lands.
+        MapKind::Desert if !desert.is_empty() => {
+            (desert[seed % desert.len()] + Vec3::Y * ZOMBIE_LOD_REST_HEIGHT, 0.0)
+        }
+        MapKind::Desert => (shared::DESERT_PLAYER_SPAWN, 0.0),
         MapKind::Arena => (random_zombie_spawn_pos(seed), 0.0),
     }
 }
@@ -721,6 +647,7 @@ fn on_set_zombie_count(
     scenario: Res<Scenario>,
     mut target: ResMut<ZombieTargetCount>,
     mut next_spawn_index: ResMut<NextZombieSpawnIndex>,
+    desert_points: Res<DesertSpawnPoints>,
     baseline_zombies: Query<Entity, (With<Zombie>, Without<DirectorSpawned>)>,
 ) {
     let kind = scenario.map_kind();
@@ -729,7 +656,7 @@ fn on_set_zombie_count(
     if current < target.0 {
         let to_spawn: Vec<(Vec3, f32)> = (0..target.0 - current)
             .map(|_| {
-                let spawn = zombie_spawn_pos_for(kind, next_spawn_index.0);
+                let spawn = zombie_spawn_pos_for(kind, next_spawn_index.0, &desert_points.0);
                 next_spawn_index.0 += 1;
                 spawn
             })
@@ -922,6 +849,54 @@ fn with_zero_yaw(positions: &[Vec3]) -> Vec<(Vec3, f32)> {
 
 fn spawn_stress_test_zombies(mut commands: Commands) {
     spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT]), true, false);
+}
+
+/// Spawn points taken from the baked navmesh, so zombies always start on a
+/// surface they can actually path from. A ring of fixed offsets drops most of
+/// them inside buildings or onto disconnected rooftops.
+#[derive(Resource, Default)]
+struct DesertSpawnPoints(Vec<Vec3>);
+
+fn collect_desert_spawn_points(scenario: Res<Scenario>, mut commands: Commands) {
+    let Some(navmesh) = server::navmesh::read_baked_navmesh(*scenario) else {
+        return;
+    };
+
+    let origin = shared::DESERT_PLAYER_SPAWN;
+    let mut points: Vec<Vec3> = navmesh
+        .detail
+        .vertices
+        .iter()
+        .copied()
+        .filter(|v| {
+            let flat = Vec3::new(v.x - origin.x, 0.0, v.z - origin.z).length();
+            (shared::DESERT_SPAWN_MIN_RADIUS..shared::DESERT_SPAWN_MAX_RADIUS).contains(&flat)
+                && (v.y - origin.y).abs() < shared::DESERT_SPAWN_MAX_RISE
+        })
+        .collect();
+    points.sort_by(|a, b| a.distance(origin).total_cmp(&b.distance(origin)));
+    points.dedup_by(|a, b| a.distance(*b) < 5.0);
+
+    info!("desert: {} navmesh spawn points near the player", points.len());
+    commands.insert_resource(DesertSpawnPoints(points));
+}
+
+fn spawn_desert_zombies(
+    points: Res<DesertSpawnPoints>,
+    target: Res<ZombieTargetCount>,
+    mut commands: Commands,
+) {
+    if points.0.is_empty() {
+        return;
+    }
+    // Nearest-first: the town's navmesh is fragmented, and points further out
+    // are far more likely to sit on an island with no route to the player.
+    let count = (target.0 as usize).min(points.0.len());
+    let spawns: Vec<(Vec3, f32)> = points.0[..count]
+        .iter()
+        .map(|p| (*p + Vec3::Y * ZOMBIE_LOD_REST_HEIGHT, 0.0))
+        .collect();
+    spawn_zombies(&mut commands, &spawns, true, false);
 }
 
 struct ServerZombieKindAnim {
@@ -1332,6 +1307,7 @@ fn tick_respawns(
     mut respawns: ResMut<PendingRespawns>,
     mut next_spawn_index: ResMut<NextZombieSpawnIndex>,
     auto_maintain: Res<AutoMaintainZombies>,
+    desert_points: Res<DesertSpawnPoints>,
 ) {
     let kind = scenario.map_kind();
     let dt = time.delta_secs();
@@ -1343,7 +1319,7 @@ fn tick_respawns(
             respawns.0.swap_remove(i);
             if auto_maintain.0 {
 
-                to_spawn.push(zombie_spawn_pos_for(kind, next_spawn_index.0));
+                to_spawn.push(zombie_spawn_pos_for(kind, next_spawn_index.0, &desert_points.0));
                 next_spawn_index.0 += 1;
             }
         } else {
@@ -1576,6 +1552,7 @@ fn on_request_restart(
     mut respawns: ResMut<PendingRespawns>,
     mut director: ResMut<Director>,
     scenario: Res<Scenario>,
+    desert_points: Res<DesertSpawnPoints>,
     zombies: Query<Entity, With<Zombie>>,
     mut players: Query<(Entity, &mut Transform, &mut Player, &mut NetTransform), With<NetPlayer>>,
 ) {
@@ -1591,6 +1568,15 @@ fn on_request_restart(
     }
 
     match *scenario {
+        Scenario::Desert => {
+            let spawns: Vec<(Vec3, f32)> = desert_points
+                .0
+                .iter()
+                .take(STRESS_TEST_ZOMBIE_COUNT)
+                .map(|p| (*p + Vec3::Y * ZOMBIE_LOD_REST_HEIGHT, 0.0))
+                .collect();
+            spawn_zombies(&mut commands, &spawns, true, false);
+        }
         Scenario::StressTest => {
             spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT]), true, false);
         }

@@ -1,0 +1,11 @@
+Model Information:
+* title:	Desert_City
+* source:	https://sketchfab.com/3d-models/desert-city-765ade489c3f4636924307b133994d37
+* author:	Mikey x pc (https://sketchfab.com/mikeyxpc)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Desert_City" (https://sketchfab.com/3d-models/desert-city-765ade489c3f4636924307b133994d37) by Mikey x pc (https://sketchfab.com/mikeyxpc) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

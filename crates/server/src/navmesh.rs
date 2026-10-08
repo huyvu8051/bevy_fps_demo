@@ -1,140 +1,105 @@
-use avian3d::prelude::Collider;
-use avian_rerecast::prelude::*;
 use bevy::prelude::*;
 use bevy_landmass::prelude::*;
 use bevy_landmass::{Agent3d, ArchipelagoOptions, PointSampleDistance3d};
 use bevy_rerecast::prelude::*;
 use bevy_rerecast::NavmeshSettings;
 use landmass_rerecast::{Island3dBundle, LandmassRerecastPlugin, NavMeshHandle3d};
-use shared::zombie::{ZOMBIE_LENGTH, ZOMBIE_RADIUS, ZOMBIE_RUN_SPEED, ZOMBIE_WALK_SPEED};
+use shared::zombie::{
+    ZOMBIE_LENGTH, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_RADIUS, ZOMBIE_RUN_SPEED, ZOMBIE_WALK_SPEED,
+};
+use shared::Scenario;
 
-/// Tallest step a zombie can walk up without it being treated as a wall; sized
-/// for Map 1's stairs and ramps.
+/// Tallest step a zombie can walk up without the bake treating it as a wall.
 const WALKABLE_CLIMB: f32 = 0.5;
 
-/// Colliders are spawned in `Startup`, but their `GlobalTransform`s are only
-/// propagated in the first `PostUpdate`, so baking any earlier reads every
-/// piece at the origin.
-const BAKE_MIN_FRAMES: u32 = 3;
+/// Cells per agent radius; cell size is `agent_radius / fraction`. A zombie's
+/// radius is small, so the default resolution both takes impractically long on
+/// a town-sized map and merges into polygons landmass rejects as concave.
+const CELL_SIZE_FRACTION: f32 = 1.0;
 
-/// Not every collider exists by `Startup`: the item gallery spawns its car
-/// obstacle boxes from `Update`. Wait for the count to stop changing rather
-/// than guess a fixed delay.
-const BAKE_STABLE_FRAMES: u32 = 30;
+pub fn agent_height() -> f32 {
+    ZOMBIE_LENGTH + ZOMBIE_RADIUS * 2.0
+}
 
-/// The archipelago every zombie agent is attached to. Absent until the bake
-/// finishes, which is what gates agent registration.
+/// Used by the `navmesh_baker` binary. Navmeshes are baked offline and shipped
+/// as `.nav` assets; nothing is generated at server startup.
+pub fn bake_settings() -> NavmeshSettings {
+    NavmeshSettings {
+        walkable_climb: WALKABLE_CLIMB,
+        cell_size_fraction: CELL_SIZE_FRACTION,
+        ..NavmeshSettings::from_agent_3d(ZOMBIE_RADIUS, agent_height())
+    }
+}
+
+pub fn archipelago() -> Archipelago3d {
+    Archipelago3d::new(ArchipelagoOptions {
+        point_sample_distance: PointSampleDistance3d {
+            distance_above: 1.0,
+            // A zombie's transform sits at the capsule's centre while the
+            // navmesh lies at its feet, so sampling has to reach a full
+            // half-height down or every agent reads as off-mesh.
+            distance_below: ZOMBIE_LOD_REST_HEIGHT + 1.0,
+            ..PointSampleDistance3d::from_agent_radius(ZOMBIE_RADIUS)
+        },
+        ..ArchipelagoOptions::from_agent_radius(ZOMBIE_RADIUS)
+    })
+}
+
+/// The archipelago every zombie agent is attached to.
 #[derive(Resource)]
-pub(crate) struct ZombieArchipelago(pub(crate) Entity);
+pub struct ZombieArchipelago(pub Entity);
 
-#[derive(Resource)]
-struct PendingNavmesh(Handle<Navmesh>);
+/// Reads the baked `.nav` straight off disk.
+///
+/// `Assets<Navmesh>` is not an option here: `landmass_rerecast` consumes the
+/// loaded asset when it converts it, so by the time anything else looks the
+/// entry is gone.
+pub fn read_baked_navmesh(scenario: Scenario) -> Option<Navmesh> {
+    let path = format!(
+        "{}/../client/assets/{}",
+        env!("CARGO_MANIFEST_DIR"),
+        scenario.baked_navmesh_path()
+    );
+    let bytes = std::fs::read(&path)
+        .inspect_err(|e| error!("could not read {path}: {e}"))
+        .ok()?;
+    bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
+        .inspect_err(|e| error!("could not decode {path}: {e}"))
+        .ok()
+        .map(|(navmesh, _)| navmesh)
+}
 
-pub(crate) struct ServerNavmeshPlugin;
+pub struct ServerNavmeshPlugin;
 
 impl Plugin for ServerNavmeshPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             NavmeshPlugins::default(),
-            AvianBackendPlugin::default(),
             Landmass3dPlugin::default(),
             LandmassRerecastPlugin::default(),
         ))
-        .add_systems(
-            Update,
-            (bake_navmesh_once, register_zombie_agents).before(LandmassSystems::SyncExistence),
-        )
-        .add_observer(on_navmesh_ready);
+        .add_systems(Startup, load_baked_navmesh)
+        .add_systems(Update, register_zombie_agents.before(LandmassSystems::SyncExistence));
     }
 }
 
-fn agent_height() -> f32 {
-    ZOMBIE_LENGTH + ZOMBIE_RADIUS * 2.0
-}
-
-fn bake_navmesh_once(
-    mut frames: Local<u32>,
-    mut last_count: Local<usize>,
-    mut stable_frames: Local<u32>,
-    mut done: Local<bool>,
-    colliders: Query<(), With<Collider>>,
-    mut generator: NavmeshGenerator,
-    mut commands: Commands,
-) {
-    if *done {
-        return;
-    }
-    *frames += 1;
-
-    let count = colliders.iter().count();
-    if count == *last_count {
-        *stable_frames += 1;
-    } else {
-        *last_count = count;
-        *stable_frames = 0;
-    }
-    if *frames < BAKE_MIN_FRAMES || *stable_frames < BAKE_STABLE_FRAMES {
-        return;
-    }
-    *done = true;
-
-    let settings = NavmeshSettings {
-        walkable_climb: WALKABLE_CLIMB,
-        ..NavmeshSettings::from_agent_3d(ZOMBIE_RADIUS, agent_height())
-    };
-    let handle = generator.generate(settings);
-    commands.insert_resource(PendingNavmesh(handle));
-    info!("navmesh bake started from {count} live Avian colliders");
-}
-
-fn on_navmesh_ready(
-    trigger: On<NavmeshReady>,
-    pending: Option<Res<PendingNavmesh>>,
-    navmeshes: Res<Assets<Navmesh>>,
-    mut commands: Commands,
-) {
-    let Some(pending) = pending else {
-        return;
-    };
-    if trigger.event().0 != pending.0.id() {
-        return;
-    }
-
-    let baked = navmeshes.get(pending.0.id());
-    let polygons = baked.map_or(0, |n| n.polygon.polygon_count());
-    if polygons == 0 {
-        error!("navmesh baked empty; zombies will fall back to straight-line chasing");
-        return;
-    }
-
-    let archipelago = commands
-        .spawn(Archipelago3d::new(ArchipelagoOptions {
-            point_sample_distance: PointSampleDistance3d {
-                distance_above: 0.75,
-                distance_below: 0.75,
-                ..PointSampleDistance3d::from_agent_radius(ZOMBIE_RADIUS)
-            },
-            ..ArchipelagoOptions::from_agent_radius(ZOMBIE_RADIUS)
-        }))
-        .id();
+fn load_baked_navmesh(scenario: Res<Scenario>, asset_server: Res<AssetServer>, mut commands: Commands) {
+    let path = scenario.baked_navmesh_path();
+    let archipelago_entity = commands.spawn(archipelago()).id();
     commands.spawn(Island3dBundle {
         island: Island,
-        archipelago_ref: ArchipelagoRef3d::new(archipelago),
-        nav_mesh: NavMeshHandle3d(pending.0.clone()),
+        archipelago_ref: ArchipelagoRef3d::new(archipelago_entity),
+        nav_mesh: NavMeshHandle3d(asset_server.load(path)),
     });
-    commands.insert_resource(ZombieArchipelago(archipelago));
-    let aabb = baked.map(|n| n.polygon.aabb);
-    info!("navmesh ready: {polygons} polygons, bounds {aabb:.1?}; zombies now path on it");
+    commands.insert_resource(ZombieArchipelago(archipelago_entity));
+    info!("loading baked navmesh {path}");
 }
 
 fn register_zombie_agents(
-    archipelago: Option<Res<ZombieArchipelago>>,
+    archipelago: Res<ZombieArchipelago>,
     zombies: Query<Entity, (With<shared::Zombie>, Without<Agent3d>)>,
     mut commands: Commands,
 ) {
-    let Some(archipelago) = archipelago else {
-        return;
-    };
     for entity in &zombies {
         commands.entity(entity).insert((
             Agent3dBundle {
