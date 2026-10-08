@@ -127,6 +127,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
 
             GlobalZIndex(STATIC_UI_Z_INDEX + 50),
             SettingsMenuRoot,
+            NativeUiRoot,
         ))
         .with_children(|menu| {
 
@@ -1652,12 +1653,14 @@ pub(crate) fn spawn_settings_toggle_button(commands: &mut Commands) {
             },
 
             BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+            TouchButtonBaseColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
             Button,
             Interaction::default(),
             GlobalZIndex(STATIC_UI_Z_INDEX),
             SettingsToggleButton,
-            TouchControlButton("=="),
+            TouchControlButton,
+            NativeUiRoot,
         ))
         .with_children(|btn| {
 

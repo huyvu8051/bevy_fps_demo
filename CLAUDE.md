@@ -8,7 +8,7 @@
 ## Architecture
 - Engine: Bevy 0.18 + Avian3D 0.6 + Bevy Replicon 0.39.
 - Crate structure:
-  - `crates/client`: Desktop, Web (wasm32), iOS game client.
+  - `crates/client`: Desktop, iOS game client.
   - `crates/server`: Dedicated game server, zombie navigation & physics authority.
   - `crates/shared`: Common components, network protocol, level definitions, and movement math.
 

@@ -6,7 +6,7 @@ is now installed, the project builds and deploys routinely (Simulator +
 physical device), and iOS no longer even uses Bevy's own render backend
 (wgpu) — see the root `README.md`'s "Build & chạy trên iOS" section for the
 current, accurate build/run steps, and
-`crates/client/src/cadisplaylink/native_metal_probe.rs`'s own doc comment
+`crates/client/src/cadisplaylink/native_metal_renderer.rs`'s own doc comment
 for why (wgpu's per-frame CPU encoding cost on iOS; replaced with a
 hand-written Rust + `metal` crate renderer, drawing the real game's own
 ECS state extracted from a headless `App` — no window, no wgpu, no

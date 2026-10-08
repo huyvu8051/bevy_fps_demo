@@ -511,20 +511,11 @@ pub fn map1_level_pieces_computed() -> (Vec<BoxPiece>, Vec<PanelPiece>) {
 }
 
 pub fn campaign_level_pieces(map_id: u8) -> (Vec<BoxPiece>, Vec<PanelPiece>) {
-    #[cfg(not(target_arch = "wasm32"))]
     use std::collections::HashMap;
-    #[cfg(not(target_arch = "wasm32"))]
     use std::sync::{Mutex, OnceLock};
     if map_id == 1 {
         return map1_level_pieces();
     }
-    #[cfg(target_arch = "wasm32")]
-    panic!(
-        "no wasm-embedded level pieces RON for campaign map_id {map_id} — \
-         only map_id 1 has one today; add a match arm here once map/<id>.ron exists \
-         (same as arena.rs's load_arena_layout does per Arena map id)"
-    );
-    #[cfg(not(target_arch = "wasm32"))]
     {
         static CACHE: OnceLock<Mutex<HashMap<u8, (Vec<BoxPiece>, Vec<PanelPiece>)>>> = OnceLock::new();
         let mut cache = CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock().expect("campaign level pieces cache poisoned");

@@ -1,27 +1,21 @@
 
 use bevy::prelude::*;
-#[cfg(not(target_arch = "wasm32"))]
 use shared::MapKind;
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::item_gallery_cars::F9SaveToast;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::{current_scenario, LevelPieceIndex, LevelPieceKind};
 
 pub(crate) struct Map1LayoutPlugin;
 
 impl Plugin for Map1LayoutPlugin {
-    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     fn build(&self, app: &mut App) {
 
-        #[cfg(not(target_arch = "wasm32"))]
         if std::env::var("EDITOR").is_ok() {
             app.add_systems(Update, save_map1_layout_on_key.run_if(crate::debug_keys_allowed));
         }
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn save_map1_layout_on_key(
     keys: Res<ButtonInput<KeyCode>>,
     boxes: Query<(&Transform, &LevelPieceIndex, &shared::LevelBox)>,

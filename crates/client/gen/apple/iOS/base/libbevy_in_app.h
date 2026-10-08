@@ -13,9 +13,9 @@
 #include <stdint.h>
 
 // Rust + `metal` crate renderer (no Bevy App/bevy_render/wgpu at all) — see
-// crates/client/src/cadisplaylink/native_metal_probe.rs. Draws the REAL
+// crates/client/src/cadisplaylink/native_metal_renderer.rs. Draws the REAL
 // game's own level (arena+gun) with the camera driven by the real
-// FpsCamera instead of touch input — see native_metal_probe.rs's
+// FpsCamera instead of touch input — see native_metal_renderer.rs's
 // `real_game_app` field.
 struct native_metal_probe;
 struct native_metal_probe *native_metal_probe_create_real_game(void *view, float scale_factor);

@@ -48,13 +48,6 @@ type ArenaLayoutRow = (ArenaShape, f32, f32, f32, f32, f32, f32, f32, f32, f32);
 
 fn load_arena_layout(map_id: u8) -> Vec<ArenaBox> {
 
-    #[cfg(target_arch = "wasm32")]
-    let text = match map_id {
-        2 => include_str!("../../client/assets/data/arena_layout_map2.ron"),
-        other => panic!("no wasm-embedded arena layout RON for map_id {other} — add a match arm in load_arena_layout"),
-    }
-    .to_string();
-
     #[cfg(target_os = "ios")]
     let text = {
         let resource_path = crate::ios_bundle_resource_path()
@@ -62,7 +55,7 @@ fn load_arena_layout(map_id: u8) -> Vec<ArenaBox> {
         let path = std::path::Path::new(&resource_path).join(format!("assets/data/arena_layout_map{map_id}.ron"));
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read arena layout data at {path:?}: {e}"))
     };
-    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+    #[cfg(not(target_os = "ios"))]
     let text = {
         let path = format!("{}/../client/assets/data/arena_layout_map{map_id}.ron", env!("CARGO_MANIFEST_DIR"));
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read arena layout data at {path}: {e}"))

@@ -4,15 +4,14 @@ use bevy::prelude::*;
 use crate::player::PLAYER_SPAWN;
 
 pub const SERVER_PORT_BASE: u16 = 5031;
-pub const WS_PORT_OFFSET: u16 = 1000;
 
 pub const PROTOCOL_ID: u64 = 0;
 
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Scenario {
-    #[default]
     Normal,
 
+    #[default]
     StressTest,
 
     ItemGallery,
@@ -21,9 +20,10 @@ pub enum Scenario {
 impl Scenario {
     pub fn from_map_id(id: u8) -> Self {
         match id {
+            1 => Scenario::Normal,
             2 => Scenario::StressTest,
             3 => Scenario::ItemGallery,
-            _ => Scenario::Normal,
+            _ => Scenario::default(),
         }
     }
 
@@ -39,15 +39,27 @@ impl Scenario {
         SERVER_PORT_BASE + self.map_id() as u16
     }
 
-    pub fn ws_port(self) -> u16 {
-        self.port() + WS_PORT_OFFSET
-    }
-
     pub fn map_kind(self) -> MapKind {
         match self {
             Scenario::ItemGallery => MapKind::ItemGallery,
             Scenario::StressTest => MapKind::Arena,
             Scenario::Normal => MapKind::Campaign(1),
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Scenario::Normal => "GAME MAP",
+            Scenario::StressTest => "ARENA",
+            Scenario::ItemGallery => "ITEM GALLERY",
+        }
+    }
+
+    pub fn subtitle(self) -> &'static str {
+        match self {
+            Scenario::Normal => "OFFICE BUILDING (B1-F3)",
+            Scenario::StressTest => "OPEN FLAT ARENA, CHASE-AI ZOMBIES",
+            Scenario::ItemGallery => "ALL STANDARD ITEM SIZES ON FLAT FLOOR",
         }
     }
 }

@@ -11,12 +11,11 @@ use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
 use bevy::asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
-use bevy::window::{CursorGrabMode, CursorOptions, MonitorSelection, PrimaryWindow, Window, WindowMode};
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window, WindowMode};
 use bevy::winit::{UpdateMode, WinitSettings};
 use bevy_replicon::prelude::*;
 use bevy_replicon::shared::backend::connected_client::NetworkId;
 
-#[cfg(not(target_arch = "wasm32"))]
 use bevy_replicon_renet2::netcode::NativeSocket;
 use bevy_replicon_renet2::{
     netcode::{ClientAuthentication, NetcodeClientTransport},
@@ -43,7 +42,6 @@ use shared::{
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT,
 };
 
-#[cfg(not(target_arch = "wasm32"))]
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
 #[cfg(target_os = "ios")]
@@ -214,8 +212,7 @@ const TOUCH_LOOK_SENSITIVITY_MULTIPLIER: f32 = 1.0;
 impl Default for TouchControlsEnabled {
     fn default() -> Self {
 
-        let mobile = cfg!(target_os = "ios") || cfg!(target_os = "android") || cfg!(target_arch = "wasm32");
-        Self(mobile || std::env::var("TOUCH_UI_PREVIEW").is_ok())
+        Self(cfg!(target_os = "ios") || std::env::var("TOUCH_UI_PREVIEW").is_ok())
     }
 }
 
@@ -379,10 +376,6 @@ const INTERP_BUFFER_MAX_AGE_SECS: f32 = 0.5;
 
 #[bevy_main]
 pub fn main() {
-
-    #[cfg(target_arch = "wasm32")]
-    network_setup::set_map_id(2);
-
     let mut app = App::new();
     app.add_plugins((
 
@@ -391,21 +384,14 @@ pub fn main() {
                     primary_window: Some(Window {
                         title: "Last Day in Saigon".to_string(),
 
-                        mode: if cfg!(target_os = "android") {
-                            WindowMode::BorderlessFullscreen(MonitorSelection::Current)
-                        } else {
-                            WindowMode::Windowed
-                        },
-
-                        canvas: if cfg!(target_arch = "wasm32") { Some("#bevy-canvas".to_string()) } else { None },
-                        fit_canvas_to_parent: cfg!(target_arch = "wasm32"),
+                        mode: WindowMode::Windowed,
                         ..default()
                     }),
                     ..default()
                 })
 
                 .set(TaskPoolPlugin {
-                    task_pool_options: if cfg!(target_os = "ios") || cfg!(target_os = "android") {
+                    task_pool_options: if cfg!(target_os = "ios") {
                         TaskPoolOptions::with_num_threads(4)
                     } else {
                         TaskPoolOptions::default()
@@ -418,7 +404,7 @@ pub fn main() {
             RepliconRenetPlugins,
         ))
 
-        .insert_resource(if cfg!(target_os = "ios") || cfg!(target_os = "android") {
+        .insert_resource(if cfg!(target_os = "ios") {
             WinitSettings {
                 focused_mode: UpdateMode::reactive(std::time::Duration::from_secs_f32(1.0 / 120.0)),
                 ..WinitSettings::game()
@@ -627,6 +613,7 @@ impl Plugin for GamePlugin {
                 touch_prone_button,
                 touch_sprint_button,
                 touch_lean_buttons,
+                update_touch_button_press_visual,
             )
                 .chain(),
             (
@@ -839,12 +826,6 @@ const RADAR_BLIP_SIZE_PX: f32 = 8.0;
 const RADAR_SWEEP_DEG_PER_SEC: f32 = 60.0;
 const RADAR_TRAIL_COUNT: u8 = 3;
 const RADAR_TRAIL_STEP_DEG: f32 = 10.0;
-
-const MAP_SELECT_ENTRIES: [(u8, &str, &str); 3] = [
-    (1, "GAME MAP", "OFFICE BUILDING (B1-F3)"),
-    (2, "ARENA", "OPEN FLAT ARENA, CHASE-AI ZOMBIES"),
-    (3, "ITEM GALLERY", "ALL STANDARD ITEM SIZES ON FLAT FLOOR"),
-];
 
 #[unsafe(no_mangle)]
 #[inline(never)]

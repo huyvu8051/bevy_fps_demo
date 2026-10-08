@@ -20,10 +20,6 @@ pub fn ios_bundle_resource_path() -> Option<String> {
 #[macro_export]
 macro_rules! read_ron_data_file {
     ($file:expr) => {{
-        #[cfg(target_arch = "wasm32")]
-        {
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../client/assets/data/", $file)).to_string()
-        }
         #[cfg(target_os = "ios")]
         {
             let resource_path = $crate::ios_bundle_resource_path()
@@ -31,7 +27,7 @@ macro_rules! read_ron_data_file {
             let path = std::path::Path::new(&resource_path).join("assets/data").join($file);
             std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read RON data file {path:?}: {e}"))
         }
-        #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+        #[cfg(not(target_os = "ios"))]
         {
             let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../client/assets/data/", $file);
             std::fs::read_to_string(path).unwrap_or_else(|e| panic!("failed to read RON data file {path}: {e}"))

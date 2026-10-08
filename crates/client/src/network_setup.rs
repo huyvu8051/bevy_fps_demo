@@ -71,15 +71,13 @@ pub(crate) fn despawn_replicated_on_disconnect(mut commands: Commands, entities:
 }
 
 pub(crate) fn current_scenario() -> Scenario {
-    let map_id: u8 = map_id_override().unwrap_or(1);
-    Scenario::from_map_id(map_id)
+    map_id_override().map(Scenario::from_map_id).unwrap_or_default()
 }
 
 pub(crate) fn autopilot_enabled_by_default(scenario: Scenario) -> bool {
     scenario != Scenario::ItemGallery
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &RepliconChannels) {
 
     let server_addr_str = std::env::var("SERVER_ADDR").unwrap_or_else(|_| {
@@ -121,47 +119,6 @@ pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &Replic
     commands.insert_resource(transport);
     commands.insert_resource(MyClientId(client_id));
     info!("connecting to server at {server_addr}");
-}
-
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &RepliconChannels) {
-    use bevy_replicon_renet2::netcode::{WebSocketClient, WebSocketClientConfig};
-
-    let ws_port = current_scenario().ws_port();
-    let host = web_sys::window()
-        .and_then(|w| w.location().hostname().ok())
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "127.0.0.1".to_string());
-    let server_url = url::Url::parse(&format!("ws://{host}:{ws_port}")).expect("ws:// URL built from page hostname should always parse");
-
-    let server_addr = WebSocketClientConfig { server_url: server_url.clone() }
-        .server_address()
-        .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
-
-    let client = RenetClient::new(
-        ConnectionConfig::from_channels(channels.server_configs(), channels.client_configs()),
-        true,
-    );
-
-    let current_time = web_time::SystemTime::now()
-        .duration_since(web_time::SystemTime::UNIX_EPOCH)
-        .expect("system clock should be after the unix epoch");
-    let client_id = current_time.as_millis() as u64;
-    let authentication = ClientAuthentication::Unsecure {
-        client_id,
-        protocol_id: PROTOCOL_ID,
-        socket_id: 1,
-        server_addr,
-        user_data: None,
-    };
-    let socket = WebSocketClient::new(WebSocketClientConfig { server_url }).expect("failed to set up ws_client_transport");
-    let transport = NetcodeClientTransport::new(current_time, authentication, socket)
-        .expect("failed to set up netcode client transport");
-
-    commands.insert_resource(client);
-    commands.insert_resource(transport);
-    commands.insert_resource(MyClientId(client_id));
-    info!("connecting to server via ws://{host}:{ws_port}");
 }
 
 #[derive(Resource)]
@@ -324,7 +281,9 @@ pub(crate) fn spawn_game_over_ui(commands: &mut Commands) {
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+            GlobalZIndex(STATIC_UI_Z_INDEX + 25),
             GameOverUi,
+            NativeUiRoot,
         ))
         .with_children(|root| {
             root.spawn((
@@ -407,6 +366,7 @@ pub(crate) fn spawn_map_select_ui(commands: &mut Commands) {
             BackgroundColor(Color::BLACK),
             GlobalZIndex(STATIC_UI_Z_INDEX + 100),
             MapSelectRoot,
+            NativeUiRoot,
         ))
         .with_children(|root| {
             root.spawn((
@@ -417,7 +377,8 @@ pub(crate) fn spawn_map_select_ui(commands: &mut Commands) {
                 },
                 TextColor(Color::WHITE),
             ));
-            for &(id, title, subtitle) in &MAP_SELECT_ENTRIES {
+            for scenario in [Scenario::Normal, Scenario::StressTest, Scenario::ItemGallery] {
+                let (id, title, subtitle) = (scenario.map_id(), scenario.title(), scenario.subtitle());
                 root.spawn(Node {
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,

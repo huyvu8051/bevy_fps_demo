@@ -71,6 +71,6 @@ path — anything else (compressed KTX2/Basis, etc.) renders untextured.
 
 A mesh that looks right on desktop can still be broken on iOS
 (`USE_REAL_GAME_NATIVE_RENDERER`) or vice versa — the two paths extract/
-draw meshes through completely separate code (`native_metal_probe.rs`
+draw meshes through completely separate code (`native_metal_renderer.rs`
 never touches `bevy_render` at all). Test both before calling a new
 character done.

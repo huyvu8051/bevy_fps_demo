@@ -37,7 +37,20 @@ pub(crate) struct TouchLeanLeftButton;
 pub(crate) struct TouchLeanRightButton;
 
 #[derive(Component)]
-pub(crate) struct TouchControlButton(#[allow(dead_code)] pub(crate) &'static str);
+pub(crate) struct TouchControlButton;
+
+/// The button's un-pressed `BackgroundColor`, so the press-brighten effect
+/// can always compute from a stable base instead of compounding onto itself.
+#[derive(Component)]
+pub(crate) struct TouchButtonBaseColor(pub(crate) Color);
+
+pub(crate) fn update_touch_button_press_visual(mut buttons: Query<(&Interaction, &TouchButtonBaseColor, &mut BackgroundColor), With<TouchControlButton>>) {
+    for (interaction, base, mut bg) in &mut buttons {
+        let c = base.0.to_srgba();
+        let alpha = if *interaction == Interaction::Pressed { (c.alpha * 1.6).min(1.0) } else { c.alpha };
+        bg.0 = Color::srgba(c.red, c.green, c.blue, alpha);
+    }
+}
 
 #[derive(Resource, Default)]
 pub(crate) struct TouchMoveState {
@@ -227,6 +240,7 @@ pub(crate) fn spawn_touch_controls(commands: &mut Commands) {
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
             GlobalZIndex(STATIC_UI_Z_INDEX),
             TouchJoystickBase,
+            NativeUiRoot,
         ))
         .with_children(|base| {
             base.spawn((
@@ -256,12 +270,14 @@ pub(crate) fn spawn_touch_controls(commands: &mut Commands) {
             ..default()
         },
         BackgroundColor(Color::srgba(1.0, 0.3, 0.3, 0.55)),
+        TouchButtonBaseColor(Color::srgba(1.0, 0.3, 0.3, 0.55)),
         BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
         Button,
         Interaction::default(),
         GlobalZIndex(STATIC_UI_Z_INDEX),
         TouchFireButton,
-        TouchControlButton(""),
+        TouchControlButton,
+        NativeUiRoot,
     ));
 
     commands
@@ -279,12 +295,14 @@ pub(crate) fn spawn_touch_controls(commands: &mut Commands) {
                 ..default()
             },
             BackgroundColor(Color::srgba(0.3, 0.5, 1.0, 0.4)),
+            TouchButtonBaseColor(Color::srgba(0.3, 0.5, 1.0, 0.4)),
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
             Button,
             Interaction::default(),
             GlobalZIndex(STATIC_UI_Z_INDEX),
             TouchAimButton,
-            TouchControlButton("ADS"),
+            TouchControlButton,
+            NativeUiRoot,
         ))
         .with_children(|btn| {
             btn.spawn((
@@ -312,12 +330,14 @@ pub(crate) fn spawn_touch_controls(commands: &mut Commands) {
                 ..default()
             },
             BackgroundColor(Color::srgba(1.0, 0.8, 0.2, 0.4)),
+            TouchButtonBaseColor(Color::srgba(1.0, 0.8, 0.2, 0.4)),
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
             Button,
             Interaction::default(),
             GlobalZIndex(STATIC_UI_Z_INDEX),
             TouchReloadButton,
-            TouchControlButton("RELOAD"),
+            TouchControlButton,
+            NativeUiRoot,
         ))
         .with_children(|btn| {
             btn.spawn((
@@ -399,6 +419,7 @@ pub(crate) fn spawn_touch_controls(commands: &mut Commands) {
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
             GlobalZIndex(STATIC_UI_Z_INDEX),
             TouchScopeZoomSliderTrack,
+            NativeUiRoot,
         ))
         .with_children(|track| {
             track.spawn((
@@ -433,12 +454,14 @@ pub(crate) fn spawn_touch_round_button(commands: &mut Commands, label: &'static 
                 ..default()
             },
             BackgroundColor(color),
+            TouchButtonBaseColor(color),
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
             Button,
             Interaction::default(),
             GlobalZIndex(STATIC_UI_Z_INDEX),
             marker,
-            TouchControlButton(label),
+            TouchControlButton,
+            NativeUiRoot,
         ))
         .with_children(|btn| {
             btn.spawn((

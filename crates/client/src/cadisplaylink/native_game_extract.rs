@@ -1,5 +1,6 @@
 
 use bevy::asset::{AssetId, Assets, Handle};
+use bevy::camera::visibility::Visibility;
 use bevy::camera::{Camera, Projection, RenderTargetInfo};
 use bevy::ecs::hierarchy::Children;
 use bevy::ecs::query::{With, Without};
@@ -14,8 +15,8 @@ use bevy::mesh::{Mesh, Mesh3d};
 use bevy::render::render_resource::TextureFormat;
 use bevy::text::{TextColor, TextFont};
 use bevy::transform::components::{GlobalTransform, Transform};
-use bevy::ui::widget::{Button, Text};
-use bevy::ui::{BackgroundColor, BorderColor, ComputedNode, Display, Interaction, Node, OverflowAxis, UiGlobalTransform};
+use bevy::ui::widget::Text;
+use bevy::ui::{BackgroundColor, BorderColor, ComputedNode, Display, Node, OverflowAxis, UiGlobalTransform};
 
 use shared::{NetPlayer, Zombie, ZombieKind};
 
@@ -121,19 +122,6 @@ pub struct RenderSnapshot {
     pub static_meshes: Vec<ExtractedMesh>,
     pub light: Option<LightSnapshot>,
     pub sun: Option<SunSnapshot>,
-    pub touch_buttons: Vec<TouchButtonSnapshot>,
-    pub touch_joystick: Option<TouchJoystickSnapshot>,
-    pub scope_zoom_slider: Option<ScopeZoomSliderSnapshot>,
-    pub settings_menu_panel: Option<SettingsMenuButtonSnapshot>,
-    pub settings_menu_buttons: Vec<SettingsMenuButtonSnapshot>,
-    pub settings_menu_texts: Vec<HudTextSnapshot>,
-    pub game_over_panel: Option<SettingsMenuButtonSnapshot>,
-    pub game_over_buttons: Vec<SettingsMenuButtonSnapshot>,
-    pub game_over_texts: Vec<HudTextSnapshot>,
-    pub map_select_panel: Option<SettingsMenuButtonSnapshot>,
-    pub map_select_buttons: Vec<SettingsMenuButtonSnapshot>,
-    pub map_select_texts: Vec<HudTextSnapshot>,
-
     pub map_msaa_on: bool,
 
     pub shadow_quality: u8,
@@ -162,6 +150,9 @@ pub struct GenericUiNode {
     pub text: Option<GenericUiText>,
     /// `[x, y, w, h]`, inherited from the nearest clipping ancestor (not self).
     pub clip_rect: Option<[f32; 4]>,
+    /// Bevy's own computed paint order (honours `GlobalZIndex`/hierarchy); nodes
+    /// are emitted sorted by it so painting follows real UI stacking, not spawn order.
+    pub stack_index: u32,
 }
 
 pub struct GenericUiText {
@@ -170,105 +161,12 @@ pub struct GenericUiText {
     pub font_size: f32,
 }
 
-pub struct TouchButtonSnapshot {
-    pub top_left: [f32; 2],
-    pub size: [f32; 2],
-    pub color: [f32; 4],
-    pub label: &'static str,
-    pub pressed: bool,
-}
-
-pub struct TouchJoystickSnapshot {
-    pub base_top_left: [f32; 2],
-    pub base_size: [f32; 2],
-    pub knob_top_left: [f32; 2],
-    pub knob_size: [f32; 2],
-}
-
-pub struct ScopeZoomSliderSnapshot {
-    pub track_top_left: [f32; 2],
-    pub track_size: [f32; 2],
-    pub handle_top_left: [f32; 2],
-    pub handle_size: [f32; 2],
-}
-
-pub struct HudTextSnapshot {
-    pub top_left: [f32; 2],
-    pub size: [f32; 2],
-    pub text: String,
-    pub color: [f32; 4],
-    pub font_size: f32,
-}
-
-pub struct SettingsMenuButtonSnapshot {
-    pub top_left: [f32; 2],
-    pub size: [f32; 2],
-    pub color: [f32; 4],
-}
-
 fn collect_descendants(root: bevy::ecs::entity::Entity, children_query: &Query<&Children>, out: &mut Vec<bevy::ecs::entity::Entity>) {
     let Ok(children) = children_query.get(root) else { return };
     for &child in children.iter() {
         out.push(child);
         collect_descendants(child, children_query, out);
     }
-}
-
-fn logical_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> ([f32; 2], [f32; 2]) {
-    let inv_scale = node.inverse_scale_factor();
-    let size = node.size() * inv_scale;
-    let center = transform.affine().translation * inv_scale;
-    let top_left = center - size / 2.0;
-    (top_left.to_array(), size.to_array())
-}
-
-fn extract_panel<Root: bevy::ecs::component::Component>(
-    world: &mut bevy::ecs::world::World,
-) -> (Option<SettingsMenuButtonSnapshot>, Vec<SettingsMenuButtonSnapshot>, Vec<HudTextSnapshot>) {
-    let mut root_state: SystemState<
-        Query<(bevy::ecs::entity::Entity, &ComputedNode, &UiGlobalTransform, &BackgroundColor, &Node), With<Root>>,
-    > = SystemState::new(world);
-    let root_query = root_state.get(world);
-    let Some((root, root_node, root_transform, root_bg, root_style)) = root_query.iter().next() else {
-        return (None, Vec::new(), Vec::new());
-    };
-    if root_style.display != Display::Flex {
-        return (None, Vec::new(), Vec::new());
-    }
-    let (top_left, size) = logical_rect(root_node, root_transform);
-    let c = root_bg.0.to_srgba();
-    let panel = Some(SettingsMenuButtonSnapshot { top_left, size, color: [c.red, c.green, c.blue, c.alpha] });
-
-    let mut children_state: SystemState<Query<&Children>> = SystemState::new(world);
-    let children_query = children_state.get(world);
-    let mut descendants = Vec::new();
-    collect_descendants(root, &children_query, &mut descendants);
-
-    let mut button_state: SystemState<Query<(&ComputedNode, &UiGlobalTransform, &BackgroundColor), With<Button>>> = SystemState::new(world);
-    let button_query = button_state.get(world);
-    let buttons = descendants
-        .iter()
-        .filter_map(|&e| button_query.get(e).ok())
-        .map(|(node, transform, bg)| {
-            let (top_left, size) = logical_rect(node, transform);
-            let c = bg.0.to_srgba();
-            SettingsMenuButtonSnapshot { top_left, size, color: [c.red, c.green, c.blue, c.alpha] }
-        })
-        .collect();
-
-    let mut text_state: SystemState<Query<(&ComputedNode, &UiGlobalTransform, &Text, &TextColor, &TextFont)>> = SystemState::new(world);
-    let text_query = text_state.get(world);
-    let texts = descendants
-        .iter()
-        .filter_map(|&e| text_query.get(e).ok())
-        .map(|(node, transform, text, color, font)| {
-            let (top_left, size) = logical_rect(node, transform);
-            let c = color.0.to_srgba();
-            HudTextSnapshot { top_left, size, text: text.0.clone(), color: [c.red, c.green, c.blue, c.alpha], font_size: font.font_size }
-        })
-        .collect();
-
-    (panel, buttons, texts)
 }
 
 pub struct SunSnapshot {
@@ -469,66 +367,6 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     let mut zombie_texture_quality_state: SystemState<Res<crate::ZombieTextureQuality>> = SystemState::new(world);
     snapshot.zombie_texture_quality = zombie_texture_quality_state.get(world).0;
 
-    let mut touch_button_state: SystemState<
-        Query<(&ComputedNode, &UiGlobalTransform, &BackgroundColor, &crate::TouchControlButton, &Interaction)>,
-    > = SystemState::new(world);
-    let touch_button_query = touch_button_state.get(world);
-    snapshot.touch_buttons = touch_button_query
-        .iter()
-        .map(|(node, transform, bg, marker, interaction)| {
-            let (top_left, size) = logical_rect(node, transform);
-            let c = bg.0.to_srgba();
-            TouchButtonSnapshot {
-                top_left,
-                size,
-                color: [c.red, c.green, c.blue, c.alpha],
-                label: marker.0,
-                pressed: *interaction == Interaction::Pressed,
-            }
-        })
-        .collect();
-
-    let mut joystick_state: SystemState<(
-        Query<(&ComputedNode, &UiGlobalTransform), With<crate::TouchJoystickBase>>,
-        Query<(&ComputedNode, &UiGlobalTransform), With<crate::TouchJoystickKnob>>,
-    )> = SystemState::new(world);
-    let (joystick_base_query, joystick_knob_query) = joystick_state.get(world);
-    snapshot.touch_joystick = joystick_base_query.iter().next().zip(joystick_knob_query.iter().next()).map(
-        |((base_node, base_transform), (knob_node, knob_transform))| {
-            let (base_top_left, base_size) = logical_rect(base_node, base_transform);
-            let (knob_top_left, knob_size) = logical_rect(knob_node, knob_transform);
-            TouchJoystickSnapshot { base_top_left, base_size, knob_top_left, knob_size }
-        },
-    );
-
-    let mut zoom_slider_state: SystemState<(
-        Query<(&ComputedNode, &UiGlobalTransform), With<crate::TouchScopeZoomSliderTrack>>,
-        Query<(&ComputedNode, &UiGlobalTransform), With<crate::TouchScopeZoomSliderHandle>>,
-    )> = SystemState::new(world);
-    let (zoom_track_query, zoom_handle_query) = zoom_slider_state.get(world);
-    snapshot.scope_zoom_slider = zoom_track_query.iter().next().zip(zoom_handle_query.iter().next()).map(
-        |((track_node, track_transform), (handle_node, handle_transform))| {
-            let (track_top_left, track_size) = logical_rect(track_node, track_transform);
-            let (handle_top_left, handle_size) = logical_rect(handle_node, handle_transform);
-            ScopeZoomSliderSnapshot { track_top_left, track_size, handle_top_left, handle_size }
-        },
-    );
-
-    let (settings_menu_panel, settings_menu_buttons, settings_menu_texts) = extract_panel::<crate::SettingsMenuRoot>(world);
-    snapshot.settings_menu_panel = settings_menu_panel;
-    snapshot.settings_menu_buttons = settings_menu_buttons;
-    snapshot.settings_menu_texts = settings_menu_texts;
-
-    let (game_over_panel, game_over_buttons, game_over_texts) = extract_panel::<crate::GameOverUi>(world);
-    snapshot.game_over_panel = game_over_panel;
-    snapshot.game_over_buttons = game_over_buttons;
-    snapshot.game_over_texts = game_over_texts;
-
-    let (map_select_panel, map_select_buttons, map_select_texts) = extract_panel::<crate::MapSelectRoot>(world);
-    snapshot.map_select_panel = map_select_panel;
-    snapshot.map_select_buttons = map_select_buttons;
-    snapshot.map_select_texts = map_select_texts;
-
     let mut gun_visible_state: SystemState<Res<crate::GunVisible>> = SystemState::new(world);
     let gun_visible = gun_visible_state.get(world).0;
 
@@ -670,6 +508,7 @@ type GenericUiQuery<'w, 's> = Query<
         Option<&'static BackgroundColor>,
         Option<&'static BorderColor>,
         Option<(&'static Text, &'static TextColor, &'static TextFont)>,
+        Option<&'static Visibility>,
     ),
 >;
 
@@ -682,11 +521,25 @@ fn intersect_clip_rect(accumulated: Option<[f32; 4]>, own: [f32; 4]) -> [f32; 4]
     [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
 }
 
-fn walk_generic_ui_node(entity: bevy::ecs::entity::Entity, inherited_clip: Option<[f32; 4]>, query: &GenericUiQuery, out: &mut Vec<GenericUiNode>) {
-    let Ok((node, computed, transform, children, background, border_color, text)) = query.get(entity) else { return };
+fn walk_generic_ui_node(
+    entity: bevy::ecs::entity::Entity,
+    inherited_clip: Option<[f32; 4]>,
+    inherited_visible: bool,
+    query: &GenericUiQuery,
+    out: &mut Vec<GenericUiNode>,
+) {
+    let Ok((node, computed, transform, children, background, border_color, text, visibility)) = query.get(entity) else { return };
+    // `Display::None` drops the whole subtree from layout, so stop here. `Visibility::Hidden`
+    // only skips painting — layout still applies and a child may force itself back visible,
+    // so that case keeps walking.
     if node.display == Display::None {
         return;
     }
+    let visible = match visibility {
+        Some(Visibility::Hidden) => false,
+        Some(Visibility::Visible) => true,
+        _ => inherited_visible,
+    };
     let inv_scale = computed.inverse_scale_factor();
     let size = computed.size() * inv_scale;
     let affine = transform.affine();
@@ -709,7 +562,7 @@ fn walk_generic_ui_node(entity: bevy::ecs::entity::Entity, inherited_clip: Optio
         GenericUiText { content: text.0.clone(), color: [c.red, c.green, c.blue, c.alpha], font_size: font.font_size }
     });
 
-    if background_color.is_some() || border_color.is_some() || text_snapshot.is_some() {
+    if visible && (background_color.is_some() || border_color.is_some() || text_snapshot.is_some()) {
         out.push(GenericUiNode {
             center: center.to_array(),
             size: size.to_array(),
@@ -720,6 +573,7 @@ fn walk_generic_ui_node(entity: bevy::ecs::entity::Entity, inherited_clip: Optio
             corner_radius,
             text: text_snapshot,
             clip_rect: inherited_clip,
+            stack_index: computed.stack_index(),
         });
     }
 
@@ -734,7 +588,7 @@ fn walk_generic_ui_node(entity: bevy::ecs::entity::Entity, inherited_clip: Optio
 
     let Some(children) = children else { return };
     for &child in children.iter() {
-        walk_generic_ui_node(child, child_clip, query, out);
+        walk_generic_ui_node(child, child_clip, visible, query, out);
     }
 }
 
@@ -748,7 +602,8 @@ pub fn extract_generic_ui_nodes(world: &mut bevy::ecs::world::World) -> Vec<Gene
 
     let mut out = Vec::new();
     for root in roots {
-        walk_generic_ui_node(root, None, &node_query, &mut out);
+        walk_generic_ui_node(root, None, true, &node_query, &mut out);
     }
+    out.sort_by_key(|node| node.stack_index);
     out
 }

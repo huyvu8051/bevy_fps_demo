@@ -24,15 +24,6 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 shared = { path = "../shared" }
 
-# Drop-in std::time::Instant/SystemTime replacement (real std under the
-# hood on native, performance.now()/Date.now() on wasm32) — needed
-# because plain std::time::Instant::now() genuinely panics at runtime on
-# wasm32-unknown-unknown ("time not implemented on this platform",
-# confirmed via a live web build: zombie_client.rs's per-frame perf-timing
-# calls crashed the whole app on first frame). Bevy's own internals
-# already handle this themselves; this crate's own direct std::time calls
-# didn't.
-web-time = "1"
 avian3d = "0.6"
 
 # Only for PlayerModelTuning (lib.rs) — parses
@@ -59,7 +50,7 @@ bevy_editor_pls = { path = "../../vendor/bevy_editor_pls/crates/bevy_editor_pls"
 # CADisplayLink probe experiment (crates/client/src/cadisplaylink/) — an
 # alternate iOS entry point bypassing WinitPlugin entirely, driven by a
 # native CADisplayLink instead. iOS-only; harmless to keep out of the
-# normal desktop/Android dependency graph.
+# normal desktop dependency graph.
 [target.'cfg(target_os = "ios")'.dependencies]
 raw-window-handle = "0.6"
 objc = "0.2"
@@ -69,28 +60,3 @@ metal = "0.33.0"
 tobj = "4.0.5"
 gltf = "1.4.1"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
-
-# wasm32 only: real UDP sockets don't exist in a browser, so the web build
-# connects via ws_client_transport (plain WebSocket) instead — see
-# network_setup.rs's wasm32 spawn_client_connection and
-# shared::Scenario::ws_port's doc comment for the matching server side.
-# A target-specific dependency table like this ADDS to (doesn't replace)
-# the base bevy_replicon_renet2 entry above — native builds never see this
-# feature, only wasm32 ones do (same pattern already used for getrandom's
-# "js" feature in shared/Cargo.toml). Placed last in the file deliberately
-# — TOML tables aren't indentation-scoped, so a `[target...]` header
-# earlier in the file would have silently swallowed every plain
-# `key = value` line after it (including bevy_editor_pls above) into
-# itself instead of the real `[dependencies]` table; confirmed the hard
-# way when that exact mistake broke the native build ("cannot find crate
-# bevy_editor_pls").
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-bevy_replicon_renet2 = { version = "0.15", features = ["ws_client_transport"] }
-# WebSocketClientConfig::server_url is a url::Url — renet2_netcode doesn't
-# re-export the url crate, so building one means depending on it directly.
-url = "2"
-# Reads the page's own origin (window.location.hostname) so the ws://
-# server URL isn't hard-coded to 127.0.0.1 — lets a phone on the same LAN
-# open http://<dev-machine-lan-ip>:8765 and have the wasm client connect
-# back to that same host instead of its own (nonexistent) localhost.
-web-sys = { version = "0.3", features = ["Window", "Location", "Storage"] }

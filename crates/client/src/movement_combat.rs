@@ -643,7 +643,6 @@ pub(crate) fn apply_player_model_travel_twist(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn nudge_player_model_tuning(keys: Res<ButtonInput<KeyCode>>, mut tuning: ResMut<PlayerModelTuning>) {
     const SCALE_STEP: f32 = 0.02;
     const Y_OFFSET_STEP: f32 = 0.02;
@@ -661,7 +660,6 @@ pub(crate) fn nudge_player_model_tuning(keys: Res<ButtonInput<KeyCode>>, mut tun
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn save_player_model_tuning(
     keys: Res<ButtonInput<KeyCode>>,
     tuning: Res<PlayerModelTuning>,

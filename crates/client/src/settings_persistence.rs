@@ -66,7 +66,6 @@ fn ios_home_directory() -> Option<String> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn settings_file_path() -> std::path::PathBuf {
 
     #[cfg(target_os = "ios")]
@@ -81,12 +80,10 @@ fn settings_file_path() -> std::path::PathBuf {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn read_settings_text() -> Option<String> {
     std::fs::read_to_string(settings_file_path()).ok()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn write_settings_text(text: &str) {
     let path = settings_file_path();
     if let Some(parent) = path.parent() {
@@ -99,36 +96,14 @@ fn write_settings_text(text: &str) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn delete_settings_text() {
     let _ = std::fs::remove_file(settings_file_path());
 }
 
-const WEB_STORAGE_KEY: &str = "bevy_fps_demo_settings";
-
-#[cfg(target_arch = "wasm32")]
-fn read_settings_text() -> Option<String> {
-    web_sys::window()?.local_storage().ok()??.get_item(WEB_STORAGE_KEY).ok()?
-}
-
-#[cfg(target_arch = "wasm32")]
-fn write_settings_text(text: &str) {
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok()).flatten() {
-        let _ = storage.set_item(WEB_STORAGE_KEY, text);
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn delete_settings_text() {
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok()).flatten() {
-        let _ = storage.remove_item(WEB_STORAGE_KEY);
-    }
-}
-
 fn load_ship_defaults() -> PersistedSettings {
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(target_os = "ios")]
     let text = shared::read_ron_data_file!("default_settings_mobile.ron");
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(target_os = "ios"))]
     let text = shared::read_ron_data_file!("default_settings_desktop.ron");
     ron::from_str(&text).unwrap_or_else(|e| {
         warn!("failed to parse bundled default settings, falling back to compiled-in Default: {e}");
@@ -198,7 +173,6 @@ pub(crate) fn apply_persisted_settings(world: &mut World) {
         delete_settings_text();
         return;
     }
-    #[cfg(not(target_arch = "wasm32"))]
     info!("[settings] looking for local custom settings at {:?}", settings_file_path());
     let Some(text) = read_settings_text() else {
         info!("[settings] no local custom settings found, staying at ship defaults");

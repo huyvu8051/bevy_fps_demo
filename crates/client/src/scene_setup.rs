@@ -188,7 +188,6 @@ pub(crate) fn setup_gameplay(
         }
         MapKind::Arena => {
             spawn_test_arena(&mut commands, &mut meshes, &mut materials, scenario.map_id());
-            #[cfg(not(target_arch = "wasm32"))]
             spawn_item_gallery_test_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
         }
     }

@@ -98,7 +98,6 @@ pub struct SkinnedModel {
     pub meshes: Vec<SkinnedMesh>,
     pub animations: Vec<AnimationClip>,
     node_count: usize,
-    node_parent: Vec<Option<usize>>,
     node_children: Vec<Vec<usize>>,
     node_rest_trs: Vec<Trs>,
     scene_roots: Vec<usize>,
@@ -184,14 +183,12 @@ pub fn load_skinned_gltf(device: &Device, path: &std::path::Path) -> Option<Skin
         .collect();
 
     let node_count = document.nodes().count();
-    let mut node_parent: Vec<Option<usize>> = vec![None; node_count];
     let mut node_children: Vec<Vec<usize>> = vec![Vec::new(); node_count];
     let mut node_rest_trs: Vec<Trs> = Vec::with_capacity(node_count);
     for node in document.nodes() {
         let (t, r, s) = node.transform().decomposed();
         node_rest_trs.push(Trs { t, r, s });
         for child in node.children() {
-            node_parent[child.index()] = Some(node.index());
             node_children[node.index()].push(child.index());
         }
     }
@@ -310,7 +307,6 @@ pub fn load_skinned_gltf(device: &Device, path: &std::path::Path) -> Option<Skin
         meshes,
         animations,
         node_count,
-        node_parent,
         node_children,
         node_rest_trs,
         scene_roots,

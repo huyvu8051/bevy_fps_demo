@@ -898,21 +898,6 @@ pub struct NativeMetalRenderer {
     ui_sampler: metal::SamplerState,
     font_atlas_texture: metal::Texture,
 
-    ui_touch_buttons: Vec<super::native_game_extract::TouchButtonSnapshot>,
-    ui_touch_joystick: Option<super::native_game_extract::TouchJoystickSnapshot>,
-    ui_scope_zoom_slider: Option<super::native_game_extract::ScopeZoomSliderSnapshot>,
-
-    ui_settings_menu_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
-    ui_settings_menu_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
-    ui_settings_menu_texts: Vec<super::native_game_extract::HudTextSnapshot>,
-
-    ui_game_over_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
-    ui_game_over_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
-    ui_game_over_texts: Vec<super::native_game_extract::HudTextSnapshot>,
-
-    ui_map_select_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
-    ui_map_select_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
-    ui_map_select_texts: Vec<super::native_game_extract::HudTextSnapshot>,
 
     ui_generic_nodes: Vec<super::native_game_extract::GenericUiNode>,
 }
@@ -1198,62 +1183,6 @@ fn draw_rect_border(
     }
 }
 
-fn draw_hud_text_list(
-    encoder: &metal::RenderCommandEncoderRef,
-    texts: &[super::native_game_extract::HudTextSnapshot],
-    view_w: f32,
-    view_h: f32,
-    font_atlas_texture: &metal::Texture,
-) {
-    for hud in texts {
-        let [left, top] = hud.top_left;
-        let [w, h] = hud.size;
-        let (right, bottom) = (left + w, top + h);
-        let scale = hud.font_size / GLYPH_H as f32;
-        let upper = hud.text.to_ascii_uppercase();
-        let text_w: f32 = upper.chars().map(|_| GLYPH_W as f32 * scale + scale).sum();
-        let text_h = GLYPH_H as f32 * scale;
-        let mut cursor_x = if left < view_w - right { left } else { right - text_w };
-        let y = if top < view_h - bottom { top } else { bottom - text_h };
-        for ch in upper.chars() {
-            let Some(index) = glyph_index(ch) else { continue };
-            let (u0, u1) = glyph_uv_rect(index);
-            let uv = [[u0, 1.0], [u1, 1.0], [u1, 0.0], [u0, 0.0]];
-            let glyph_w = GLYPH_W as f32 * scale;
-            let glyph_h = GLYPH_H as f32 * scale;
-            let quad = ndc_ui_rect(cursor_x, y, glyph_w, glyph_h, view_w, view_h, uv);
-            draw_ui_quad(encoder, &quad, hud.color, font_atlas_texture);
-            cursor_x += glyph_w + scale;
-        }
-    }
-}
-
-fn draw_panel(
-    encoder: &metal::RenderCommandEncoderRef,
-    panel: &Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
-    buttons: &[super::native_game_extract::SettingsMenuButtonSnapshot],
-    texts: &[super::native_game_extract::HudTextSnapshot],
-    view_w: f32,
-    view_h: f32,
-    white_texture: &metal::Texture,
-    font_atlas_texture: &metal::Texture,
-) {
-    const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
-    if let Some(panel) = panel {
-        let [x, y] = panel.top_left;
-        let [w, h] = panel.size;
-        let quad = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
-        draw_ui_quad(encoder, &quad, panel.color, white_texture);
-    }
-    for button in buttons {
-        let [x, y] = button.top_left;
-        let [w, h] = button.size;
-        let quad = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
-        draw_ui_quad(encoder, &quad, button.color, white_texture);
-    }
-    draw_hud_text_list(encoder, texts, view_w, view_h, font_atlas_texture);
-}
-
 /// `canvas_w`/`canvas_h` must be this pass's actual bound-texture size (e.g.
 /// `render_width`/`render_height`), not the device's native resolution — this
 /// pass may render into a `render_resolution_scale`-downscaled intermediate.
@@ -1289,7 +1218,10 @@ fn draw_generic_ui_nodes(
 
         let [cx, cy] = node.center;
         let [w, h] = node.size;
-        let is_circle = node.corner_radius > 0.0 && node.corner_radius >= w.min(h) / 2.0 - 0.5;
+        // Only a square node with a fully-rounded radius is a circle; a non-square one
+        // (Bevy clamps its radius to half the *shorter* side) is a pill, which the
+        // rounded-rect path already draws correctly.
+        let is_circle = node.corner_radius > 0.0 && node.corner_radius >= w.min(h) / 2.0 - 0.5 && (w - h).abs() <= 0.5;
         let is_rounded = !is_circle && node.corner_radius > 0.5;
 
         if is_circle {
@@ -1793,18 +1725,6 @@ impl NativeMetalRenderer {
             ui_pipeline_no_msaa,
             ui_sampler,
             font_atlas_texture,
-            ui_touch_buttons: Vec::new(),
-            ui_touch_joystick: None,
-            ui_scope_zoom_slider: None,
-            ui_settings_menu_panel: None,
-            ui_settings_menu_buttons: Vec::new(),
-            ui_settings_menu_texts: Vec::new(),
-            ui_game_over_panel: None,
-            ui_game_over_buttons: Vec::new(),
-            ui_game_over_texts: Vec::new(),
-            ui_map_select_panel: None,
-            ui_map_select_buttons: Vec::new(),
-            ui_map_select_texts: Vec::new(),
             ui_generic_nodes: Vec::new(),
         }
     }
@@ -2174,18 +2094,6 @@ impl NativeMetalRenderer {
             prime_camera_viewport(app.world_mut(), view_width_pts, view_height_pts, self.layer.contents_scale() as f32);
             app.update();
             let snapshot = extract_render_snapshot(app.world_mut());
-            self.ui_touch_buttons = snapshot.touch_buttons;
-            self.ui_touch_joystick = snapshot.touch_joystick;
-            self.ui_scope_zoom_slider = snapshot.scope_zoom_slider;
-            self.ui_settings_menu_panel = snapshot.settings_menu_panel;
-            self.ui_settings_menu_buttons = snapshot.settings_menu_buttons;
-            self.ui_settings_menu_texts = snapshot.settings_menu_texts;
-            self.ui_game_over_panel = snapshot.game_over_panel;
-            self.ui_game_over_buttons = snapshot.game_over_buttons;
-            self.ui_game_over_texts = snapshot.game_over_texts;
-            self.ui_map_select_panel = snapshot.map_select_panel;
-            self.ui_map_select_buttons = snapshot.map_select_buttons;
-            self.ui_map_select_texts = snapshot.map_select_texts;
             self.ui_generic_nodes = snapshot.generic_ui_nodes;
             self.msaa_enabled = snapshot.map_msaa_on;
             self.ensure_shadow_map_size(snapshot.shadow_quality);
@@ -2561,108 +2469,10 @@ impl NativeMetalRenderer {
         if let Some(ui_pipeline) = ui_pipeline_ref {
 
             encoder.set_depth_stencil_state(&self.ui_depth_state);
-            if !self.ui_touch_buttons.is_empty()
-                || self.ui_touch_joystick.is_some()
-                || self.ui_scope_zoom_slider.is_some()
-                || self.ui_settings_menu_panel.is_some()
-                || !self.ui_settings_menu_buttons.is_empty()
-                || !self.ui_settings_menu_texts.is_empty()
-                || self.ui_game_over_panel.is_some()
-                || !self.ui_game_over_buttons.is_empty()
-                || !self.ui_game_over_texts.is_empty()
-                || self.ui_map_select_panel.is_some()
-                || !self.ui_map_select_buttons.is_empty()
-                || !self.ui_map_select_texts.is_empty()
-                || !self.ui_generic_nodes.is_empty()
-            {
+            if !self.ui_generic_nodes.is_empty() {
                 let (view_w, view_h) = self.view_size_points();
                 encoder.set_render_pipeline_state(ui_pipeline);
                 encoder.set_fragment_sampler_state(0, Some(&self.ui_sampler));
-
-                const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
-
-                if let Some(joystick) = &self.ui_touch_joystick {
-                    let [bx, by] = joystick.base_top_left;
-                    let [bw, bh] = joystick.base_size;
-                    let base = ndc_ui_rect(bx, by, bw, bh, view_w, view_h, FULL_UV);
-                    draw_ui_quad(encoder, &base, [1.0, 1.0, 1.0, 0.3], &self.white_texture);
-                    let [kx, ky] = joystick.knob_top_left;
-                    let [kw, kh] = joystick.knob_size;
-                    let knob = ndc_ui_rect(kx, ky, kw, kh, view_w, view_h, FULL_UV);
-                    draw_ui_quad(encoder, &knob, [1.0, 1.0, 1.0, 0.55], &self.white_texture);
-                }
-
-                if let Some(slider) = &self.ui_scope_zoom_slider {
-                    let [tx, ty] = slider.track_top_left;
-                    let [tw, th] = slider.track_size;
-                    let track = ndc_ui_rect(tx, ty, tw, th, view_w, view_h, FULL_UV);
-                    draw_ui_quad(encoder, &track, [1.0, 1.0, 1.0, 0.3], &self.white_texture);
-                    let [hx, hy] = slider.handle_top_left;
-                    let [hw, hh] = slider.handle_size;
-                    let handle = ndc_ui_rect(hx, hy, hw, hh, view_w, view_h, FULL_UV);
-                    draw_ui_quad(encoder, &handle, [1.0, 1.0, 1.0, 0.55], &self.white_texture);
-                }
-
-                for button in &self.ui_touch_buttons {
-                    let [x, y] = button.top_left;
-                    let [w, h] = button.size;
-
-                    let mut color = button.color;
-                    if button.pressed {
-                        color[3] = (color[3] * 1.6).min(1.0);
-                    }
-                    let quad = ndc_ui_rect(x, y, w, h, view_w, view_h, FULL_UV);
-                    draw_ui_quad(encoder, &quad, color, &self.white_texture);
-
-                    if !button.label.is_empty() {
-                        let font_size = 10.0_f32.min(h * 0.3);
-                        let scale = font_size / GLYPH_H as f32;
-                        let text_w: f32 = button.label.chars().map(|_| GLYPH_W as f32 * scale + scale).sum();
-                        let mut cursor_x = x + (w - text_w) / 2.0;
-                        let text_y = y + (h - GLYPH_H as f32 * scale) / 2.0;
-                        for ch in button.label.chars() {
-                            let Some(index) = glyph_index(ch) else { continue };
-                            let (u0, u1) = glyph_uv_rect(index);
-                            let uv = [[u0, 1.0], [u1, 1.0], [u1, 0.0], [u0, 0.0]];
-                            let glyph_w = GLYPH_W as f32 * scale;
-                            let glyph_h = GLYPH_H as f32 * scale;
-                            let glyph_quad = ndc_ui_rect(cursor_x, text_y, glyph_w, glyph_h, view_w, view_h, uv);
-                            draw_ui_quad(encoder, &glyph_quad, [1.0, 1.0, 1.0, 1.0], &self.font_atlas_texture);
-                            cursor_x += glyph_w + scale;
-                        }
-                    }
-                }
-
-                draw_panel(
-                    encoder,
-                    &self.ui_settings_menu_panel,
-                    &self.ui_settings_menu_buttons,
-                    &self.ui_settings_menu_texts,
-                    view_w,
-                    view_h,
-                    &self.white_texture,
-                    &self.font_atlas_texture,
-                );
-                draw_panel(
-                    encoder,
-                    &self.ui_game_over_panel,
-                    &self.ui_game_over_buttons,
-                    &self.ui_game_over_texts,
-                    view_w,
-                    view_h,
-                    &self.white_texture,
-                    &self.font_atlas_texture,
-                );
-                draw_panel(
-                    encoder,
-                    &self.ui_map_select_panel,
-                    &self.ui_map_select_buttons,
-                    &self.ui_map_select_texts,
-                    view_w,
-                    view_h,
-                    &self.white_texture,
-                    &self.font_atlas_texture,
-                );
 
                 draw_generic_ui_nodes(encoder, &self.ui_generic_nodes, render_width as f32, render_height as f32, view_w, view_h, &self.white_texture, &self.font_atlas_texture);
             }

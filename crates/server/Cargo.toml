@@ -23,15 +23,4 @@ vleue_navigator = { path = "../../vendor/vleue_navigator", default-features = fa
 # already enabled.
 bevy = { version = "0.18", default-features = false, features = ["bevy_log", "bevy_render", "bevy_gltf", "bevy_animation", "gltf_animation", "png", "jpeg", "bevy_pbr", "debug"] }
 bevy_replicon = "0.39"
-# ws_server_transport: runs a plain-WebSocket listener alongside the
-# native UDP one (see start_server) so a wasm32 web client — which can't
-# open a raw UDP socket at all — has something to connect to. Same
-# dedicated server instance serves both; socket_id 0 = native, 1 = ws.
-bevy_replicon_renet2 = { version = "0.15", features = ["native_transport", "ws_server_transport"] }
-# WebSocketServer::new needs a tokio runtime Handle to spawn its
-# reader/writer tasks on — Bevy's own app loop here is a plain
-# ScheduleRunnerPlugin poll loop, not tokio-based, so start_server spins
-# up one small multi-thread runtime itself and keeps it alive for the
-# process's lifetime (leaked, not stored as a resource — nothing ever
-# needs to shut it down early; the process exiting reclaims it).
-tokio = { version = "1", features = ["rt-multi-thread"] }
+bevy_replicon_renet2 = { version = "0.15", features = ["native_transport"] }

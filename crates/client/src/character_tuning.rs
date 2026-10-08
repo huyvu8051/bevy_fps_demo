@@ -33,14 +33,6 @@ pub(crate) struct CharacterRon {
 pub(crate) const AVAILABLE_CHARACTER_DIRS: &[&str] = &["characters/soldier_meshy"];
 
 fn load_character_ron_by_dir(dir: &str) -> CharacterRon {
-    #[cfg(target_arch = "wasm32")]
-    let text: String = match dir {
-        "characters/soldier_meshy" => {
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/characters/soldier_meshy/character.ron")).to_string()
-        }
-        other => panic!("load_character_ron_by_dir: unknown character dir {other:?} — add an include_str! arm here to match a new entry in AVAILABLE_CHARACTER_DIRS"),
-    };
-
     #[cfg(target_os = "ios")]
     let text: String = {
         let resource_path = crate::cadisplaylink::native_metal_renderer::bundle_resource_path()
@@ -48,18 +40,16 @@ fn load_character_ron_by_dir(dir: &str) -> CharacterRon {
         let path = std::path::Path::new(&resource_path).join("assets").join(dir).join("character.ron");
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {dir}/character.ron at {path:?}: {e}"))
     };
-    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+    #[cfg(not(target_os = "ios"))]
     let text: String = std::fs::read_to_string(format!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/{}/character.ron"), dir))
         .unwrap_or_else(|e| panic!("failed to read {dir}/character.ron: {e}"));
     ron::de::from_str(&text).unwrap_or_else(|e| panic!("failed to parse {dir}/character.ron: {e}"))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn character_dir_from_mesh_path(mesh_path: &str) -> String {
     mesh_path.rsplit_once("/mesh/").map(|(dir, _)| dir.to_string()).unwrap_or_default()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn format_character_ron(c: &CharacterRon) -> String {
     format!(
         "// Metadata for the \"{id}\" character — see docs/CHARACTER_IMPORT_CHECKLIST.md's\n\

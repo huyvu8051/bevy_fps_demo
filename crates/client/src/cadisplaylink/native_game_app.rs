@@ -66,7 +66,6 @@ pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, sc
 
     if app.plugins_state() != bevy::app::PluginsState::Ready {
         while app.plugins_state() == bevy::app::PluginsState::Adding {
-            #[cfg(not(target_arch = "wasm32"))]
             bevy::tasks::tick_global_task_pools_on_main_thread();
         }
     }

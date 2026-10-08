@@ -66,7 +66,6 @@ impl Plugin for ItemGalleryCarsPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(shake_item_gallery_car_on_hit);
 
-        #[cfg(not(target_arch = "wasm32"))]
         if std::env::var("EDITOR").is_ok() {
             app.init_resource::<F9SaveToast>()
                 .add_systems(Startup, spawn_f9_toast_ui)
@@ -222,30 +221,25 @@ fn shake_item_gallery_car_on_hit(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 const ITEM_GALLERY_CAR_PHYSICS_RON: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/assets/data/item_gallery_car_physics.ron");
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn round4(v: f32) -> f32 {
     (v * 1.0e4).round() / 1.0e4
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn ron_f32(v: f32) -> String {
     let s = format!("{}", round4(v));
     if s.contains('.') { s } else { format!("{s}.0") }
 }
 
 #[derive(Resource, Default)]
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct F9SaveToast {
     text: String,
     ttl: f32,
     is_error: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl F9SaveToast {
     pub(crate) fn ok(&mut self, msg: impl Into<String>) {
         self.text = msg.into();
@@ -269,10 +263,8 @@ impl F9SaveToast {
 }
 
 #[derive(Component)]
-#[cfg(not(target_arch = "wasm32"))]
 struct F9ToastText;
 
-#[cfg(not(target_arch = "wasm32"))]
 fn spawn_f9_toast_ui(mut commands: Commands) {
     commands.spawn((
         Text::new(""),
@@ -294,7 +286,6 @@ fn spawn_f9_toast_ui(mut commands: Commands) {
     ));
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn tick_f9_toast(
     time: Res<Time>,
     mut toast: ResMut<F9SaveToast>,
@@ -319,7 +310,6 @@ fn tick_f9_toast(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn save_item_gallery_car_physics_on_key(
     keys: Res<ButtonInput<KeyCode>>,
     cars: Query<(&Name, &Transform), With<ItemGalleryTestProp>>,

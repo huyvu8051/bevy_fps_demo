@@ -8,8 +8,7 @@ use bevy_replicon::prelude::*;
 use bevy_replicon::shared::backend::connected_client::NetworkId;
 use bevy_replicon_renet2::{
     netcode::{
-        BoxedSocket, NativeSocket, NetcodeServerTransport, ServerAuthentication, ServerSetupConfig, WebSocketAcceptor,
-        WebSocketServer, WebSocketServerConfig,
+        BoxedSocket, NativeSocket, NetcodeServerTransport, ServerAuthentication, ServerSetupConfig,
     },
     renet2::{ConnectionConfig, RenetServer},
     RenetChannelsExt, RepliconRenetPlugins,
@@ -25,7 +24,7 @@ use shared::{
     MapKind, scenario_player_spawn,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
-    MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_COLUMN_OBSTACLES, NAVMESH_HEIGHT, PILLAR_RADIUS,
+    MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_HEIGHT, PILLAR_RADIUS,
     PLAYER_LENGTH, PLAYER_RADIUS, Scenario,
     STRESS_TEST_ZOMBIE_COUNT,
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
@@ -50,8 +49,11 @@ use bevy::pbr::StandardMaterial;
 const MAX_CLIENTS: usize = 256;
 
 fn scenario_from_env() -> Scenario {
-    let map_id: u8 = std::env::var("MAP_ID").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
-    Scenario::from_map_id(map_id)
+    std::env::var("MAP_ID")
+        .ok()
+        .and_then(|s| s.parse::<u8>().ok())
+        .map(Scenario::from_map_id)
+        .unwrap_or_default()
 }
 
 const SERVER_TICK_HZ: f64 = 32.0;
@@ -213,29 +215,20 @@ fn start_server(mut commands: Commands, channels: Res<RepliconChannels>, scenari
     let udp_socket = UdpSocket::bind(public_addr).expect("failed to bind server UDP socket");
     let native_socket = LaggedSocket::new(NativeSocket::new(udp_socket).unwrap(), sim_latency_from_env());
 
-    let tokio_rt = Box::leak(Box::new(tokio::runtime::Runtime::new().expect("failed to start tokio runtime for ws_server_transport")));
-    let ws_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), scenario.ws_port());
-    let ws_config = WebSocketServerConfig {
-        acceptor: WebSocketAcceptor::Plain { has_tls_proxy: false },
-        listen: ws_addr,
-        max_clients: MAX_CLIENTS,
-    };
-    let ws_socket = WebSocketServer::new(ws_config, tokio_rt.handle().clone()).expect("failed to set up ws_server_transport");
-
     let server_config = ServerSetupConfig {
         current_time,
         max_clients: MAX_CLIENTS,
         protocol_id: PROTOCOL_ID,
         authentication: ServerAuthentication::Unsecure,
 
-        socket_addresses: vec![vec![public_addr], vec![ws_addr]],
+        socket_addresses: vec![vec![public_addr]],
     };
-    let transport = NetcodeServerTransport::new_with_sockets(server_config, vec![BoxedSocket::new(native_socket), BoxedSocket::new(ws_socket)])
+    let transport = NetcodeServerTransport::new_with_sockets(server_config, vec![BoxedSocket::new(native_socket)])
         .expect("failed to set up netcode server transport");
 
     commands.insert_resource(server);
     commands.insert_resource(transport);
-    info!("dedicated server listening on {public_addr} (native) / ws://{ws_addr} (web)");
+    info!("dedicated server listening on {public_addr}");
 }
 
 fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_server: Res<AssetServer>) {

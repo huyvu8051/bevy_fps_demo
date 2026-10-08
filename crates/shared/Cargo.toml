@@ -10,16 +10,6 @@ ron = "0.8"
 renet2_netcode = { version = "0.14", features = ["native_transport"] }
 avian3d = "0.6"
 
-# Web port (docs/CHARACTER_ANIMATION_PLAN.md's networking caveat aside):
-# some dependency (rand, most likely, transitively via avian3d/renet2)
-# pulls in getrandom 0.2, which refuses to compile for wasm32-unknown-
-# unknown unless told which randomness source to use — "js" makes it call
-# the browser's Web Crypto API instead of a syscall that doesn't exist in
-# that sandbox. Declaring it here (even though nothing in this crate uses
-# getrandom directly) is enough: cargo's feature unification turns "js" on
-# for every crate in the build graph that resolves to the same 0.2.x.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.2", features = ["js"] }
 
 # Needed for ios_bundle_resource_path() (lib.rs) — real iOS devices need
 # NSBundle.main.resourcePath to find bundled RON data files;

@@ -15,7 +15,7 @@ pub(crate) struct FpsCap(pub(crate) u32);
 impl Default for FpsCap {
     fn default() -> Self {
         let env_cap = std::env::var("FPS_CAP").ok().and_then(|s| s.parse::<u32>().ok()).filter(|c| *c > 0);
-        Self(env_cap.unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) { 120 } else { 60 }))
+        Self(env_cap.unwrap_or(if cfg!(target_os = "ios") { 120 } else { 60 }))
     }
 }
 
@@ -126,7 +126,7 @@ pub(crate) struct MapMsaaOn(pub(crate) bool);
 pub(crate) struct ShadowQuality(pub(crate) u8);
 impl Default for ShadowQuality {
     fn default() -> Self {
-        if cfg!(any(target_os = "ios", target_os = "android")) {
+        if cfg!(target_os = "ios") {
             Self(1)
         } else {
             Self(if light_shadows_enabled() { 5 } else { 0 })
@@ -158,7 +158,7 @@ pub(crate) fn texture_quality_default() -> u8 {
         .ok()
         .and_then(|s| s.trim().parse::<u8>().ok())
         .map(|q| q.clamp(0, 5))
-        .unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) { 2 } else { 5 })
+        .unwrap_or(if cfg!(target_os = "ios") { 2 } else { 5 })
 }
 
 #[derive(Resource)]
@@ -174,7 +174,7 @@ pub(crate) fn zombie_texture_quality_default() -> u8 {
         .ok()
         .and_then(|s| s.trim().parse::<u8>().ok())
         .map(|q| q.clamp(0, 5))
-        .unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) { 2 } else { 5 })
+        .unwrap_or(if cfg!(target_os = "ios") { 2 } else { 5 })
 }
 
 #[derive(Resource)]
@@ -190,7 +190,7 @@ pub(crate) fn poly_quality_default() -> u8 {
         .ok()
         .and_then(|s| s.trim().parse::<u8>().ok())
         .map(|q| q.clamp(1, 5))
-        .unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) { 2 } else { 5 })
+        .unwrap_or(if cfg!(target_os = "ios") { 2 } else { 5 })
 }
 
 #[derive(Resource)]
@@ -256,7 +256,7 @@ pub(crate) fn gun_poly_quality_default() -> u8 {
         .ok()
         .and_then(|s| s.trim().parse::<u8>().ok())
         .map(|q| q.clamp(1, 5))
-        .unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) { 2 } else { 5 })
+        .unwrap_or(if cfg!(target_os = "ios") { 2 } else { 5 })
 }
 
 #[derive(Resource)]
@@ -272,7 +272,7 @@ pub(crate) fn gun_texture_quality_default() -> u8 {
         .ok()
         .and_then(|s| s.trim().parse::<u8>().ok())
         .map(|q| q.clamp(0, 5))
-        .unwrap_or(if cfg!(any(target_os = "ios", target_os = "android")) { 2 } else { 5 })
+        .unwrap_or(if cfg!(target_os = "ios") { 2 } else { 5 })
 }
 
 #[derive(Resource)]
@@ -362,10 +362,10 @@ pub(crate) fn respawn_gun_mesh_parts_on_quality_change(
 }
 
 pub(crate) fn dynamic_lights_enabled() -> bool {
-    cfg!(any(target_os = "ios", target_os = "android")) || std::env::var("LIGHTS").map(|v| v != "0").unwrap_or(true)
+    cfg!(target_os = "ios") || std::env::var("LIGHTS").map(|v| v != "0").unwrap_or(true)
 }
 pub(crate) fn light_shadows_enabled() -> bool {
-    cfg!(any(target_os = "ios", target_os = "android")) || std::env::var("SHADOWS").map(|v| v != "0").unwrap_or(true)
+    cfg!(target_os = "ios") || std::env::var("SHADOWS").map(|v| v != "0").unwrap_or(true)
 }
 
 pub(crate) fn ambient_brightness() -> f32 {

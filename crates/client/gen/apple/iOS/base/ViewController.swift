@@ -37,7 +37,7 @@ private extension Comparable {
 // controls have been REMOVED — they're now real bevy_ui nodes
 // (TouchJoystickBase/Knob, TouchFireButton, ... — crates/client/src/lib.rs)
 // drawn directly by the cadisplaylink Metal renderer (see
-// native_metal_probe.rs's touch-control draw loop) and driven by Bevy's
+// native_metal_renderer.rs's touch-control draw loop) and driven by Bevy's
 // own touch-handling systems, reading the exact same forwarded
 // `native_metal_probe_touch_*` events ViewController already sends every
 // frame (see touchesBegan/Moved/Ended/Cancelled below) — no native
@@ -49,11 +49,11 @@ private extension Comparable {
 // desktop and iOS, not just a second copy of the same buttons.
 //
 // HP/ammo/ping text readouts + crosshair used to stay native here (no
-// bevy_ui/Metal-renderer equivalent yet) — now that native_metal_probe.rs
-// draws HealthUi/AmmoUi/PingUi/CrosshairLine directly (same real ECS state
-// the desktop/wgpu path renders, see HudTextSnapshot/CrosshairLineSnapshot
-// in native_game_extract.rs), the `TouchHUD` class that used to hold this
-// is gone entirely — nothing native-only is left in this file.
+// bevy_ui/Metal-renderer equivalent yet) — now that native_metal_renderer.rs
+// draws them from the same real ECS state the desktop/wgpu path renders
+// (see extract_generic_ui_nodes in native_game_extract.rs), the `TouchHUD`
+// class that used to hold this is gone entirely — nothing native-only is
+// left in this file.
 class ViewController: UIViewController {
     @IBOutlet var metalV: MetalView!
 
@@ -101,7 +101,7 @@ class ViewController: UIViewController {
     }
 
     // Polled once per frame (see enterFrame) — HP/ammo/ping/crosshair are
-    // now drawn straight off real ECS state by native_metal_probe.rs (see
+    // now drawn straight off real ECS state by native_metal_renderer.rs (see
     // ViewController's own class-level doc comment), so this only still
     // exists for the Apple Watch companion sync below.
     private func syncHud() {
@@ -152,9 +152,8 @@ class ViewController: UIViewController {
         // it) immediately, whether or not MAP_ID is set yet —
         // MapSelectionPending (crate::lib) holds off connect_to_server and
         // shows a real bevy_ui map-select screen, drawn right here by
-        // native_metal_probe.rs's own draw_panel, until map_select_button
-        // picks one. No native map-select view left to gate this on
-        // anymore.
+        // native_metal_renderer.rs, until map_select_button picks one.
+        // No native map-select view left to gate this on anymore.
         createGameProbeIfNeeded()
         self.displayLink.isPaused = false
     }
@@ -228,7 +227,7 @@ class ViewController: UIViewController {
         // drive movement/look — alongside (not instead of) the existing
         // moveTouch/lookTouch tracking below, which render_frame's camera
         // pose gets overwritten from the real FpsCamera anyway once one
-        // exists (see native_metal_probe.rs's render_frame).
+        // exists (see native_metal_renderer.rs's render_frame).
         if let probe = self.rustMetalProbe {
             for touch in touches {
                 let location = touch.location(in: self.metalV)
