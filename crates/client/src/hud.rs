@@ -2,6 +2,14 @@
 use bevy::prelude::*;
 use crate::*;
 
+/// Opts a UI entity (and its whole `Children` subtree) into the generic,
+/// data-driven iOS extraction path (`native_game_extract::extract_generic_ui_nodes`)
+/// instead of requiring hand-written per-widget extraction + Metal draw code.
+/// Mark a widget's root entity (and any standalone entity outside that
+/// hierarchy, e.g. a sibling text label) with this to make it show up on iOS.
+#[derive(Component)]
+pub(crate) struct NativeUiRoot;
+
 #[derive(Resource, Default)]
 pub(crate) struct InspectMode(pub(crate) bool);
 
@@ -280,6 +288,7 @@ pub(crate) fn spawn_compass_ui(commands: &mut Commands) {
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
             BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.25)),
             GlobalZIndex(STATIC_UI_Z_INDEX),
+            NativeUiRoot,
         ))
         .with_children(|root| {
             for &(heading, label) in &COMPASS_MARKS {
@@ -328,6 +337,7 @@ pub(crate) fn spawn_compass_ui(commands: &mut Commands) {
         },
         GlobalZIndex(STATIC_UI_Z_INDEX),
         CompassHeadingText,
+        NativeUiRoot,
     ));
 }
 
@@ -408,6 +418,7 @@ pub(crate) fn spawn_radar_ui(commands: &mut Commands) {
             BackgroundColor(Color::srgba(0.0, 0.05, 0.02, 0.55)),
             BorderColor::all(Color::srgba(0.3, 1.0, 0.45, 0.6)),
             GlobalZIndex(STATIC_UI_Z_INDEX),
+            NativeUiRoot,
         ))
         .with_children(|root| {
             for ring_fraction in [0.34, 0.68] {
@@ -484,6 +495,7 @@ pub(crate) fn spawn_radar_blip(commands: &mut Commands, zombie: Entity) {
         BackgroundColor(Color::srgb(1.0, 0.25, 0.2)),
         GlobalZIndex(STATIC_UI_Z_INDEX),
         RadarBlip { zombie },
+        NativeUiRoot,
     ));
 }
 

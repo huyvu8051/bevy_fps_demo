@@ -15,7 +15,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::text::{TextColor, TextFont};
 use bevy::transform::components::{GlobalTransform, Transform};
 use bevy::ui::widget::{Button, Text};
-use bevy::ui::{BackgroundColor, ComputedNode, Display, Interaction, Node, UiGlobalTransform, Val};
+use bevy::ui::{BackgroundColor, BorderColor, ComputedNode, Display, Interaction, Node, OverflowAxis, UiGlobalTransform, Val};
 
 use shared::{NetPlayer, Zombie, ZombieKind};
 
@@ -149,6 +149,38 @@ pub struct RenderSnapshot {
     pub render_resolution_scale: f32,
 
     pub zombie_texture_quality: u8,
+
+    pub generic_ui_nodes: Vec<GenericUiNode>,
+}
+
+/// A screen-space rect (filled, optionally rotated) and/or text label extracted
+/// generically from any UI subtree rooted at a `NativeUiRoot`-marked entity.
+/// No knowledge of which feature (radar, compass, ...) the entity belongs to —
+/// a feature opts in just by tagging its root entity/entities with `NativeUiRoot`.
+pub struct GenericUiNode {
+    pub center: [f32; 2],
+    pub size: [f32; 2],
+    /// Clockwise rotation in radians, matching Bevy's `UiTransform::rotation` convention.
+    pub rotation: f32,
+    pub background_color: Option<[f32; 4]>,
+    pub border_color: Option<[f32; 4]>,
+    pub border_width: f32,
+    /// `BorderRadius` (all corners assumed equal — every current caller uses
+    /// `BorderRadius::all`). When >= half the shorter side, the renderer
+    /// treats the whole node as a circle instead of a rounded rect.
+    pub corner_radius: f32,
+    pub text: Option<GenericUiText>,
+    /// Inherited from the nearest ancestor (within the same `NativeUiRoot`
+    /// subtree) with `overflow` set to clip on either axis — `[x, y, w, h]`
+    /// in the same logical/point space as `center`/`size`. Does not include
+    /// this node's own `overflow` setting, which only affects its children.
+    pub clip_rect: Option<[f32; 4]>,
+}
+
+pub struct GenericUiText {
+    pub content: String,
+    pub color: [f32; 4],
+    pub font_size: f32,
 }
 
 pub struct FloatingDamageSnapshot {
@@ -720,5 +752,108 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     }
     texture_cache.0.retain(|id, _| used_texture_ids.contains(id));
 
+    snapshot.generic_ui_nodes = extract_generic_ui_nodes(world);
+
     snapshot
+}
+
+/// Walks every UI subtree rooted at a `NativeUiRoot`-marked entity and reads
+/// its generic layout/paint data (position, size, rotation, fill color,
+/// text) — no per-feature knowledge required. A feature becomes visible on
+/// iOS just by tagging its root entity/entities with `NativeUiRoot`; nothing
+/// here needs to change. Known gaps vs. the full Bevy UI renderer: no
+/// border/border-radius rendering, no `overflow: clip`, and child paint
+/// order follows spawn order rather than `UiStack` z-index.
+type GenericUiQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Node,
+        &'static ComputedNode,
+        &'static UiGlobalTransform,
+        Option<&'static Children>,
+        Option<&'static BackgroundColor>,
+        Option<&'static BorderColor>,
+        Option<(&'static Text, &'static TextColor, &'static TextFont)>,
+    ),
+>;
+
+fn intersect_clip_rect(accumulated: Option<[f32; 4]>, own: [f32; 4]) -> [f32; 4] {
+    let Some(a) = accumulated else { return own };
+    let x0 = a[0].max(own[0]);
+    let y0 = a[1].max(own[1]);
+    let x1 = (a[0] + a[2]).min(own[0] + own[2]);
+    let y1 = (a[1] + a[3]).min(own[1] + own[3]);
+    [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
+}
+
+fn walk_generic_ui_node(entity: bevy::ecs::entity::Entity, inherited_clip: Option<[f32; 4]>, query: &GenericUiQuery, out: &mut Vec<GenericUiNode>) {
+    let Ok((node, computed, transform, children, background, border_color, text)) = query.get(entity) else { return };
+    if node.display == Display::None {
+        return;
+    }
+    let inv_scale = computed.inverse_scale_factor();
+    let size = computed.size() * inv_scale;
+    let affine = transform.affine();
+    let (_, rotation, _) = affine.to_scale_angle_translation();
+    let center = affine.translation * inv_scale;
+
+    let background_color = background.map(|bg| {
+        let c = bg.0.to_srgba();
+        [c.red, c.green, c.blue, c.alpha]
+    });
+    let border = computed.border;
+    let border_width = ((border.min_inset.x + border.min_inset.y + border.max_inset.x + border.max_inset.y) / 4.0) * inv_scale;
+    let border_color = border_color.filter(|_| border_width > 0.0).map(|bc| {
+        let c = bc.top.to_srgba();
+        [c.red, c.green, c.blue, c.alpha]
+    });
+    let corner_radius = computed.border_radius.top_left * inv_scale;
+    let text_snapshot = text.map(|(text, color, font)| {
+        let c = color.0.to_srgba();
+        GenericUiText { content: text.0.clone(), color: [c.red, c.green, c.blue, c.alpha], font_size: font.font_size }
+    });
+
+    if background_color.is_some() || border_color.is_some() || text_snapshot.is_some() {
+        out.push(GenericUiNode {
+            center: center.to_array(),
+            size: size.to_array(),
+            rotation,
+            background_color,
+            border_color,
+            border_width,
+            corner_radius,
+            text: text_snapshot,
+            clip_rect: inherited_clip,
+        });
+    }
+
+    let clips_children = matches!(node.overflow.x, OverflowAxis::Clip | OverflowAxis::Hidden | OverflowAxis::Scroll)
+        || matches!(node.overflow.y, OverflowAxis::Clip | OverflowAxis::Hidden | OverflowAxis::Scroll);
+    let child_clip = if clips_children {
+        let own_rect = [center.x - size.x / 2.0, center.y - size.y / 2.0, size.x, size.y];
+        Some(intersect_clip_rect(inherited_clip, own_rect))
+    } else {
+        inherited_clip
+    };
+
+    let Some(children) = children else { return };
+    for &child in children.iter() {
+        walk_generic_ui_node(child, child_clip, query, out);
+    }
+}
+
+pub fn extract_generic_ui_nodes(world: &mut bevy::ecs::world::World) -> Vec<GenericUiNode> {
+    let mut roots_state: SystemState<Query<bevy::ecs::entity::Entity, With<crate::NativeUiRoot>>> = SystemState::new(world);
+    let roots_query = roots_state.get(world);
+    let roots: Vec<_> = roots_query.iter().collect();
+
+    let mut node_state: SystemState<GenericUiQuery> = SystemState::new(world);
+    let node_query = node_state.get(world);
+
+    let mut out = Vec::new();
+    for root in roots {
+        walk_generic_ui_node(root, None, &node_query, &mut out);
+    }
+    out
 }

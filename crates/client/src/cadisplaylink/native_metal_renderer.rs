@@ -6,8 +6,8 @@ use core_graphics::geometry::{CGRect, CGSize};
 use metal::foreign_types::ForeignType;
 use metal::{
     CAMetalLayer, CommandQueue, CompileOptions, Device, MTLClearColor, MTLIndexType, MTLLoadAction, MTLPixelFormat,
-    MTLPrimitiveType, MTLResourceOptions, MTLStoreAction, MetalLayer, RenderPassDescriptor, RenderPipelineDescriptor,
-    RenderPipelineState,
+    MTLPrimitiveType, MTLResourceOptions, MTLScissorRect, MTLStoreAction, MetalLayer, RenderPassDescriptor,
+    RenderPipelineDescriptor, RenderPipelineState,
 };
 use objc::{runtime::Object, *};
 
@@ -921,6 +921,8 @@ pub struct NativeMetalRenderer {
     ui_map_select_panel: Option<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_map_select_buttons: Vec<super::native_game_extract::SettingsMenuButtonSnapshot>,
     ui_map_select_texts: Vec<super::native_game_extract::HudTextSnapshot>,
+
+    ui_generic_nodes: Vec<super::native_game_extract::GenericUiNode>,
 }
 
 fn bake_static_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::GltfVertex> {
@@ -1022,6 +1024,32 @@ fn ndc_ui_rect(x: f32, y: f32, w: f32, h: f32, view_w: f32, view_h: f32, uv: [[f
     ]
 }
 
+/// Like `ndc_ui_rect` but rotates the quad (clockwise radians, matching
+/// `UiTransform::rotation`) around its own center before NDC projection.
+/// Needed by the generic UI path — `ndc_ui_rect` has no rotation support.
+fn ndc_ui_rect_rotated(center_x: f32, center_y: f32, w: f32, h: f32, rotation: f32, view_w: f32, view_h: f32, uv: [[f32; 2]; 4]) -> [UiVertex; 6] {
+    let (sin, cos) = rotation.sin_cos();
+    let hw = w / 2.0;
+    let hh = h / 2.0;
+    let to_ndc = |lx: f32, ly: f32| -> [f32; 2] {
+        let px = center_x + lx * cos - ly * sin;
+        let py = center_y + lx * sin + ly * cos;
+        [(px / view_w) * 2.0 - 1.0, 1.0 - (py / view_h) * 2.0]
+    };
+    let bottom_left = to_ndc(-hw, hh);
+    let bottom_right = to_ndc(hw, hh);
+    let top_right = to_ndc(hw, -hh);
+    let top_left = to_ndc(-hw, -hh);
+    [
+        UiVertex { position: bottom_left, uv: uv[0] },
+        UiVertex { position: bottom_right, uv: uv[1] },
+        UiVertex { position: top_right, uv: uv[2] },
+        UiVertex { position: bottom_left, uv: uv[0] },
+        UiVertex { position: top_right, uv: uv[2] },
+        UiVertex { position: top_left, uv: uv[3] },
+    ]
+}
+
 fn load_splash_texture(device: &metal::Device) -> Option<metal::Texture> {
     let resource_path = bundle_resource_path().unwrap_or_default();
     let path = std::path::Path::new(&resource_path).join("assets").join("branding/open_diy_splash.png");
@@ -1049,6 +1077,154 @@ fn draw_ui_quad(encoder: &metal::RenderCommandEncoderRef, verts: &[UiVertex; 6],
     encoder.set_fragment_bytes(1, std::mem::size_of::<UiUniforms>() as u64, &uniforms as *const _ as *const _);
     encoder.set_fragment_texture(0, Some(texture));
     encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+}
+
+/// Like `draw_ui_quad` but for an arbitrary vertex count/primitive type —
+/// needed for the generic UI path's circles/rings, which `draw_ui_quad`'s
+/// fixed 6-vertex quad can't express.
+fn draw_ui_verts(encoder: &metal::RenderCommandEncoderRef, verts: &[UiVertex], primitive: MTLPrimitiveType, tint: [f32; 4], texture: &metal::Texture) {
+    if verts.is_empty() {
+        return;
+    }
+    encoder.set_vertex_bytes(0, std::mem::size_of_val(verts) as u64, verts.as_ptr() as *const _);
+    let uniforms = UiUniforms { tint };
+    encoder.set_fragment_bytes(1, std::mem::size_of::<UiUniforms>() as u64, &uniforms as *const _ as *const _);
+    encoder.set_fragment_texture(0, Some(texture));
+    encoder.draw_primitives(primitive, 0, verts.len() as u64);
+}
+
+/// Builds a filled circular-arc fan (as a triangle list) centered at `center`,
+/// sweeping `sweep` radians clockwise from `start_angle` (angle 0 = +X/right,
+/// increasing clockwise since +Y is down — matches the renderer's screen
+/// space throughout). `start_angle: 0.0, sweep: TAU` draws a full circle.
+fn arc_fill_verts(center: [f32; 2], radius: f32, start_angle: f32, sweep: f32, view_w: f32, view_h: f32, segments: u32) -> Vec<UiVertex> {
+    let to_ndc = |x: f32, y: f32| -> [f32; 2] { [(x / view_w) * 2.0 - 1.0, 1.0 - (y / view_h) * 2.0] };
+    let center_ndc = to_ndc(center[0], center[1]);
+    let point_at = |theta: f32| {
+        let (sin, cos) = theta.sin_cos();
+        to_ndc(center[0] + cos * radius, center[1] + sin * radius)
+    };
+    let mut verts = Vec::with_capacity(segments as usize * 3);
+    let mut prev = point_at(start_angle);
+    for i in 1..=segments {
+        let edge = point_at(start_angle + sweep * (i as f32 / segments as f32));
+        verts.push(UiVertex { position: center_ndc, uv: [0.5, 0.5] });
+        verts.push(UiVertex { position: prev, uv: [0.5, 0.5] });
+        verts.push(UiVertex { position: edge, uv: [0.5, 0.5] });
+        prev = edge;
+    }
+    verts
+}
+
+/// Builds a ring (annulus) arc outline as a triangle strip centered at `center`.
+/// Same angle convention as `arc_fill_verts`.
+fn arc_stroke_verts(center: [f32; 2], outer_radius: f32, inner_radius: f32, start_angle: f32, sweep: f32, view_w: f32, view_h: f32, segments: u32) -> Vec<UiVertex> {
+    let to_ndc = |x: f32, y: f32| -> [f32; 2] { [(x / view_w) * 2.0 - 1.0, 1.0 - (y / view_h) * 2.0] };
+    let mut verts = Vec::with_capacity((segments as usize + 1) * 2);
+    for i in 0..=segments {
+        let theta = start_angle + sweep * (i as f32 / segments as f32);
+        let (sin, cos) = theta.sin_cos();
+        let outer = to_ndc(center[0] + cos * outer_radius, center[1] + sin * outer_radius);
+        let inner = to_ndc(center[0] + cos * inner_radius, center[1] + sin * inner_radius);
+        verts.push(UiVertex { position: outer, uv: [0.5, 0.5] });
+        verts.push(UiVertex { position: inner, uv: [0.5, 0.5] });
+    }
+    verts
+}
+
+/// The 4 rounded-rect corners as (arc-center, start-angle) pairs, each
+/// sweeping a quarter turn (`PI / 2`) — top-left, top-right, bottom-right,
+/// bottom-left, matching the angle convention above (0 = right, clockwise).
+fn rounded_rect_corners(x: f32, y: f32, w: f32, h: f32, r: f32) -> [([f32; 2], f32); 4] {
+    use std::f32::consts::PI;
+    [
+        ([x + r, y + r], PI),
+        ([x + w - r, y + r], -PI / 2.0),
+        ([x + w - r, y + h - r], 0.0),
+        ([x + r, y + h - r], PI / 2.0),
+    ]
+}
+
+/// Draws a filled rounded rect as a center cross (3 quads, reusing the plain
+/// `ndc_ui_rect`/`draw_ui_quad` primitives) plus 4 corner arc fans. Ignores
+/// rotation — no current node both rotates and has `corner_radius > 0`.
+fn draw_rounded_rect_fill(encoder: &metal::RenderCommandEncoderRef, center: [f32; 2], size: [f32; 2], radius: f32, color: [f32; 4], view_w: f32, view_h: f32, white_texture: &metal::Texture) {
+    const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+    const CORNER_SEGMENTS: u32 = 10;
+    let [cx, cy] = center;
+    let [w, h] = size;
+    let r = radius.min(w / 2.0).min(h / 2.0);
+    let x = cx - w / 2.0;
+    let y = cy - h / 2.0;
+
+    let middle = ndc_ui_rect(x + r, y, w - 2.0 * r, h, view_w, view_h, FULL_UV);
+    draw_ui_quad(encoder, &middle, color, white_texture);
+    let left = ndc_ui_rect(x, y + r, r, h - 2.0 * r, view_w, view_h, FULL_UV);
+    draw_ui_quad(encoder, &left, color, white_texture);
+    let right = ndc_ui_rect(x + w - r, y + r, r, h - 2.0 * r, view_w, view_h, FULL_UV);
+    draw_ui_quad(encoder, &right, color, white_texture);
+
+    for (corner_center, start_angle) in rounded_rect_corners(x, y, w, h, r) {
+        let verts = arc_fill_verts(corner_center, r, start_angle, std::f32::consts::FRAC_PI_2, view_w, view_h, CORNER_SEGMENTS);
+        draw_ui_verts(encoder, &verts, MTLPrimitiveType::Triangle, color, white_texture);
+    }
+}
+
+/// Draws a rounded rect's border as 4 straight edge quads (trimmed to the
+/// corners) plus 4 corner ring arcs. Same rotation caveat as the fill above.
+fn draw_rounded_rect_border(
+    encoder: &metal::RenderCommandEncoderRef,
+    center: [f32; 2],
+    size: [f32; 2],
+    radius: f32,
+    border_width: f32,
+    color: [f32; 4],
+    view_w: f32,
+    view_h: f32,
+    white_texture: &metal::Texture,
+) {
+    const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+    const CORNER_SEGMENTS: u32 = 10;
+    let [cx, cy] = center;
+    let [w, h] = size;
+    let r = radius.min(w / 2.0).min(h / 2.0);
+    let bw = border_width.min(r).max(0.0);
+    let x = cx - w / 2.0;
+    let y = cy - h / 2.0;
+
+    for (ex, ey, ew, eh) in [(x + r, y, w - 2.0 * r, bw), (x + r, y + h - bw, w - 2.0 * r, bw), (x, y + r, bw, h - 2.0 * r), (x + w - bw, y + r, bw, h - 2.0 * r)] {
+        let quad = ndc_ui_rect(ex, ey, ew.max(0.0), eh.max(0.0), view_w, view_h, FULL_UV);
+        draw_ui_quad(encoder, &quad, color, white_texture);
+    }
+    for (corner_center, start_angle) in rounded_rect_corners(x, y, w, h, r) {
+        let verts = arc_stroke_verts(corner_center, r, (r - bw).max(0.0), start_angle, std::f32::consts::FRAC_PI_2, view_w, view_h, CORNER_SEGMENTS);
+        draw_ui_verts(encoder, &verts, MTLPrimitiveType::TriangleStrip, color, white_texture);
+    }
+}
+
+/// Draws an axis-aligned rect's border as 4 thin edge quads (top/bottom/left/right).
+/// Unlike `ndc_ui_rect_rotated`, this ignores rotation — no current generic-path
+/// node both rotates and has a border, so that combination is left unhandled.
+fn draw_rect_border(
+    encoder: &metal::RenderCommandEncoderRef,
+    center: [f32; 2],
+    size: [f32; 2],
+    border_width: f32,
+    color: [f32; 4],
+    view_w: f32,
+    view_h: f32,
+    white_texture: &metal::Texture,
+) {
+    const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+    let [cx, cy] = center;
+    let [w, h] = size;
+    let x = cx - w / 2.0;
+    let y = cy - h / 2.0;
+    let bw = border_width.min(w / 2.0).min(h / 2.0);
+    for (ex, ey, ew, eh) in [(x, y, w, bw), (x, y + h - bw, w, bw), (x, y, bw, h), (x + w - bw, y, bw, h)] {
+        let quad = ndc_ui_rect(ex, ey, ew, eh, view_w, view_h, FULL_UV);
+        draw_ui_quad(encoder, &quad, color, white_texture);
+    }
 }
 
 fn draw_hud_text_list(
@@ -1105,6 +1281,96 @@ fn draw_panel(
         draw_ui_quad(encoder, &quad, button.color, white_texture);
     }
     draw_hud_text_list(encoder, texts, view_w, view_h, font_atlas_texture);
+}
+
+/// Draws nodes produced by the generic, data-driven UI extraction path
+/// (`native_game_extract::extract_generic_ui_nodes`) — a fill rect (if any),
+/// then a centered single-line text label (if any). This is how new widgets
+/// (radar, compass) reach the iOS screen without their own hand-written
+/// extract+draw code; see `NativeUiRoot`.
+/// Converts a `GenericUiNode::clip_rect` (logical/point space, or `None` for
+/// unclipped) into a Metal scissor rect in physical pixels, clamped to the
+/// drawable's bounds.
+fn generic_ui_scissor_rect(clip: Option<[f32; 4]>, scale: f32, view_w: f32, view_h: f32) -> MTLScissorRect {
+    let phys_w = (view_w * scale).max(1.0);
+    let phys_h = (view_h * scale).max(1.0);
+    let Some([cx, cy, cw, ch]) = clip else {
+        return MTLScissorRect { x: 0, y: 0, width: phys_w as u64, height: phys_h as u64 };
+    };
+    let x = (cx * scale).clamp(0.0, phys_w - 1.0);
+    let y = (cy * scale).clamp(0.0, phys_h - 1.0);
+    let width = (cw * scale).clamp(1.0, phys_w - x);
+    let height = (ch * scale).clamp(1.0, phys_h - y);
+    MTLScissorRect { x: x as u64, y: y as u64, width: width as u64, height: height as u64 }
+}
+
+fn draw_generic_ui_nodes(
+    encoder: &metal::RenderCommandEncoderRef,
+    nodes: &[super::native_game_extract::GenericUiNode],
+    scale: f32,
+    view_w: f32,
+    view_h: f32,
+    white_texture: &metal::Texture,
+    font_atlas_texture: &metal::Texture,
+) {
+    const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+    const CIRCLE_SEGMENTS: u32 = 40;
+    for node in nodes {
+        encoder.set_scissor_rect(generic_ui_scissor_rect(node.clip_rect, scale, view_w, view_h));
+
+        let [cx, cy] = node.center;
+        let [w, h] = node.size;
+        let is_circle = node.corner_radius > 0.0 && node.corner_radius >= w.min(h) / 2.0 - 0.5;
+        let is_rounded = !is_circle && node.corner_radius > 0.5;
+
+        if is_circle {
+            let radius = w.min(h) / 2.0;
+            if let Some(color) = node.background_color {
+                let verts = arc_fill_verts([cx, cy], radius, 0.0, std::f32::consts::TAU, view_w, view_h, CIRCLE_SEGMENTS);
+                draw_ui_verts(encoder, &verts, MTLPrimitiveType::Triangle, color, white_texture);
+            }
+            if let Some(border_color) = node.border_color {
+                let inner = (radius - node.border_width).max(0.0);
+                let verts = arc_stroke_verts([cx, cy], radius, inner, 0.0, std::f32::consts::TAU, view_w, view_h, CIRCLE_SEGMENTS);
+                draw_ui_verts(encoder, &verts, MTLPrimitiveType::TriangleStrip, border_color, white_texture);
+            }
+        } else if is_rounded {
+            if let Some(color) = node.background_color {
+                draw_rounded_rect_fill(encoder, [cx, cy], [w, h], node.corner_radius, color, view_w, view_h, white_texture);
+            }
+            if let Some(border_color) = node.border_color {
+                draw_rounded_rect_border(encoder, [cx, cy], [w, h], node.corner_radius, node.border_width, border_color, view_w, view_h, white_texture);
+            }
+        } else {
+            if let Some(color) = node.background_color {
+                let quad = ndc_ui_rect_rotated(cx, cy, w, h, node.rotation, view_w, view_h, FULL_UV);
+                draw_ui_quad(encoder, &quad, color, white_texture);
+            }
+            if let Some(border_color) = node.border_color {
+                draw_rect_border(encoder, [cx, cy], [w, h], node.border_width, border_color, view_w, view_h, white_texture);
+            }
+        }
+
+        if let Some(text) = &node.text {
+            let scale = text.font_size / GLYPH_H as f32;
+            let upper = text.content.to_ascii_uppercase();
+            let text_w: f32 = upper.chars().map(|_| GLYPH_W as f32 * scale + scale).sum();
+            let mut cursor_x = cx - text_w / 2.0;
+            let y = cy - (GLYPH_H as f32 * scale) / 2.0;
+            for ch in upper.chars() {
+                let Some(index) = glyph_index(ch) else { continue };
+                let (u0, u1) = glyph_uv_rect(index);
+                let uv = [[u0, 1.0], [u1, 1.0], [u1, 0.0], [u0, 0.0]];
+                let glyph_w = GLYPH_W as f32 * scale;
+                let glyph_h = GLYPH_H as f32 * scale;
+                let quad = ndc_ui_rect(cursor_x, y, glyph_w, glyph_h, view_w, view_h, uv);
+                draw_ui_quad(encoder, &quad, text.color, font_atlas_texture);
+                cursor_x += glyph_w + scale;
+            }
+        }
+    }
+
+    encoder.set_scissor_rect(generic_ui_scissor_rect(None, scale, view_w, view_h));
 }
 
 struct RealGameMeshDraw<'a> {
@@ -1575,6 +1841,7 @@ impl NativeMetalRenderer {
             ui_map_select_panel: None,
             ui_map_select_buttons: Vec::new(),
             ui_map_select_texts: Vec::new(),
+            ui_generic_nodes: Vec::new(),
         }
     }
 
@@ -1959,6 +2226,7 @@ impl NativeMetalRenderer {
             self.ui_map_select_panel = snapshot.map_select_panel;
             self.ui_map_select_buttons = snapshot.map_select_buttons;
             self.ui_map_select_texts = snapshot.map_select_texts;
+            self.ui_generic_nodes = snapshot.generic_ui_nodes;
             self.msaa_enabled = snapshot.map_msaa_on;
             self.ensure_shadow_map_size(snapshot.shadow_quality);
             self.render_resolution_scale = snapshot.render_resolution_scale.clamp(0.1, 1.0);
@@ -2349,6 +2617,7 @@ impl NativeMetalRenderer {
                 || self.ui_map_select_panel.is_some()
                 || !self.ui_map_select_buttons.is_empty()
                 || !self.ui_map_select_texts.is_empty()
+                || !self.ui_generic_nodes.is_empty()
             {
                 let (view_w, view_h) = self.view_size_points();
                 encoder.set_render_pipeline_state(ui_pipeline);
@@ -2474,6 +2743,9 @@ impl NativeMetalRenderer {
                     &self.white_texture,
                     &self.font_atlas_texture,
                 );
+
+                let scale = self.layer.contents_scale() as f32;
+                draw_generic_ui_nodes(encoder, &self.ui_generic_nodes, scale, view_w, view_h, &self.white_texture, &self.font_atlas_texture);
             }
         }
 
