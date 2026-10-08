@@ -2,38 +2,40 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use shared::Scenario;
 
-/// The physics bodies the server simulates against and the navmesh baker
-/// voxelizes. Both must see the same geometry, so both call this.
 pub fn spawn_map_colliders(commands: &mut Commands, scenario: Scenario, asset_server: &AssetServer) {
     match scenario {
-        Scenario::Desert => spawn_desert_colliders(commands, asset_server, scenario),
+        Scenario::Desert => spawn_gltf_scene_colliders(commands, asset_server, scenario),
         Scenario::StressTest => {
-            spawn_flat_arena_colliders(commands, scenario.map_id());
+            spawn_arena_colliders(commands, scenario.map_id());
             spawn_arena_car_colliders(commands, asset_server);
         }
     }
 }
 
-fn spawn_desert_colliders(commands: &mut Commands, asset_server: &AssetServer, scenario: Scenario) {
+fn spawn_gltf_scene_colliders(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    scenario: Scenario,
+) {
+    let scene = scenario.require_gltf_scene_path();
     commands.spawn((
-        Name::new("DesertCity"),
-        WorldAssetRoot(asset_server.load(
-            GltfAssetLabel::Scene(0)
-                .from_asset(scenario.scene_path().expect("the desert is a glTF map")),
-        )),
+        Name::new(scenario.title()),
+        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene))),
         Transform::IDENTITY,
-        shared::scene_colliders(),
+        shared::gltf_scene_colliders(),
     ));
 }
 
-fn spawn_flat_arena_colliders(commands: &mut Commands, map_id: u8) {
-    for b in shared::arena_layout(map_id) {
-        let collider = match b.shape {
-            shared::ArenaShape::Cuboid => Collider::cuboid(b.size.x, b.size.y, b.size.z),
-            shared::ArenaShape::Cylinder => Collider::cylinder(b.size.x * 0.5, b.size.y),
+fn spawn_arena_colliders(commands: &mut Commands, map_id: u8) {
+    for piece in shared::arena_layout(map_id) {
+        let collider = match piece.shape {
+            shared::ArenaShape::Cuboid => {
+                Collider::cuboid(piece.size.x, piece.size.y, piece.size.z)
+            }
+            shared::ArenaShape::Cylinder => Collider::cylinder(piece.size.x * 0.5, piece.size.y),
         };
         commands.spawn((
-            Transform::from_translation(b.translation).with_rotation(b.rotation),
+            Transform::from_translation(piece.translation).with_rotation(piece.rotation),
             RigidBody::Static,
             collider,
         ));

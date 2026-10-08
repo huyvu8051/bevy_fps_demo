@@ -3,146 +3,20 @@ use bevy_landmass::prelude::*;
 use bevy_landmass::{Agent3d, ArchipelagoOptions, PointSampleDistance3d};
 use bevy_rerecast::prelude::*;
 use bevy_rerecast::NavmeshSettings;
-use rerecast::PolygonNavmesh;
 use landmass_rerecast::{Island3dBundle, LandmassRerecastPlugin, NavMeshHandle3d};
+use rerecast::PolygonNavmesh;
 use shared::zombie::{
     ZOMBIE_LENGTH, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_RADIUS, ZOMBIE_RUN_SPEED, ZOMBIE_WALK_SPEED,
 };
 use shared::Scenario;
 
-/// Tallest step a zombie can walk up without the bake treating it as a wall.
 const WALKABLE_CLIMB: f32 = 0.5;
-
-/// Cells per agent radius; cell size is `agent_radius / fraction`. A zombie's
-/// radius is small, so the default resolution both takes impractically long on
-/// a town-sized map and merges into polygons landmass rejects as concave.
 const CELL_SIZE_FRACTION: f32 = 1.0;
+const NAVMESH_SAMPLE_DISTANCE_ABOVE: f32 = 1.0;
+const NAVMESH_SAMPLE_SLACK_BELOW_FEET: f32 = 1.0;
 
-pub fn agent_height() -> f32 {
-    ZOMBIE_LENGTH + ZOMBIE_RADIUS * 2.0
-}
-
-/// Used by the `navmesh_baker` binary. Navmeshes are baked offline and shipped
-/// as `.nav` assets; nothing is generated at server startup.
-pub fn bake_settings() -> NavmeshSettings {
-    NavmeshSettings {
-        walkable_climb: WALKABLE_CLIMB,
-        cell_size_fraction: CELL_SIZE_FRACTION,
-        ..NavmeshSettings::from_agent_3d(ZOMBIE_RADIUS, agent_height())
-    }
-}
-
-pub fn archipelago() -> Archipelago3d {
-    Archipelago3d::new(ArchipelagoOptions {
-        point_sample_distance: PointSampleDistance3d {
-            distance_above: 1.0,
-            // A zombie's transform sits at the capsule's centre while the
-            // navmesh lies at its feet, so sampling has to reach a full
-            // half-height down or every agent reads as off-mesh.
-            distance_below: ZOMBIE_LOD_REST_HEIGHT + 1.0,
-            ..PointSampleDistance3d::from_agent_radius(ZOMBIE_RADIUS)
-        },
-        ..ArchipelagoOptions::from_agent_radius(ZOMBIE_RADIUS)
-    })
-}
-
-/// The archipelago every zombie agent is attached to.
 #[derive(Resource)]
 pub struct ZombieArchipelago(pub Entity);
-
-/// World-space navmesh points reachable on foot from `origin`.
-///
-/// Points are detail-triangle centroids rather than vertices: a vertex sits on
-/// a polygon boundary, so anything spawned there reads as off-mesh the moment
-/// it is nudged.
-///
-/// The desert is scanned geometry, and its navmesh breaks into disconnected
-/// islands: building interiors, rooftops, terrain shelves. Picking spawn points
-/// by distance alone hands zombies ground they can never path off, so walk the
-/// polygon adjacency graph from the player's own polygon and keep only that
-/// component.
-pub fn reachable_navmesh_points(navmesh: &Navmesh, origin: Vec3) -> Vec<Vec3> {
-    let polys = &navmesh.polygon;
-    let nvp = polys.max_vertices_per_polygon as usize;
-    let count = polys.polygon_count();
-    if nvp == 0 || count == 0 || navmesh.detail.meshes.len() < count {
-        return Vec::new();
-    }
-
-    let vertex = |index: u16| {
-        let v = polys.vertices[index as usize];
-        Vec3::new(
-            polys.aabb.min.x + v.x as f32 * polys.cell_size,
-            polys.aabb.min.y + v.y as f32 * polys.cell_height,
-            polys.aabb.min.z + v.z as f32 * polys.cell_size,
-        )
-    };
-    let centroid = |poly: usize| {
-        let indices = &polys.polygons[poly * nvp..poly * nvp + nvp];
-        let used: Vec<u16> = indices.iter().copied().take_while(|i| *i != PolygonNavmesh::NO_INDEX).collect();
-        (!used.is_empty())
-            .then(|| used.iter().map(|i| vertex(*i)).sum::<Vec3>() / used.len() as f32)
-    };
-
-    let Some(start) = (0..count)
-        .filter_map(|poly| centroid(poly).map(|c| (poly, c.distance_squared(origin))))
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(poly, _)| poly)
-    else {
-        return Vec::new();
-    };
-
-    let mut seen = vec![false; count];
-    let mut queue = std::collections::VecDeque::from([start]);
-    seen[start] = true;
-    let mut points = Vec::new();
-    while let Some(poly) = queue.pop_front() {
-        let submesh = &navmesh.detail.meshes[poly];
-        let base_vertex = submesh.base_vertex_index as usize;
-        let base_triangle = submesh.base_triangle_index as usize;
-        for triangle in 0..submesh.triangle_count as usize {
-            let Some(corners) = navmesh.detail.triangles.get(base_triangle + triangle) else {
-                continue;
-            };
-            let centroid = corners
-                .iter()
-                .filter_map(|c| navmesh.detail.vertices.get(base_vertex + *c as usize))
-                .copied()
-                .sum::<Vec3>()
-                / 3.0;
-            points.push(centroid);
-        }
-
-        for &neighbour in &polys.polygon_neighbors[poly * nvp..poly * nvp + nvp] {
-            let neighbour = neighbour as usize;
-            if neighbour < count && !seen[neighbour] {
-                seen[neighbour] = true;
-                queue.push_back(neighbour);
-            }
-        }
-    }
-    points
-}
-
-/// Reads the baked `.nav` straight off disk.
-///
-/// `Assets<Navmesh>` is not an option here: `landmass_rerecast` consumes the
-/// loaded asset when it converts it, so by the time anything else looks the
-/// entry is gone.
-pub fn read_baked_navmesh(scenario: Scenario) -> Option<Navmesh> {
-    let path = format!(
-        "{}/../client/assets/{}",
-        env!("CARGO_MANIFEST_DIR"),
-        scenario.baked_navmesh_path()
-    );
-    let bytes = std::fs::read(&path)
-        .inspect_err(|e| error!("could not read {path}: {e}"))
-        .ok()?;
-    bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
-        .inspect_err(|e| error!("could not decode {path}: {e}"))
-        .ok()
-        .map(|(navmesh, _)| navmesh)
-}
 
 pub struct ServerNavmeshPlugin;
 
@@ -158,15 +32,42 @@ impl Plugin for ServerNavmeshPlugin {
     }
 }
 
-fn load_baked_navmesh(scenario: Res<Scenario>, asset_server: Res<AssetServer>, mut commands: Commands) {
+pub fn agent_height() -> f32 {
+    ZOMBIE_LENGTH + ZOMBIE_RADIUS * 2.0
+}
+
+pub fn bake_settings() -> NavmeshSettings {
+    NavmeshSettings {
+        walkable_climb: WALKABLE_CLIMB,
+        cell_size_fraction: CELL_SIZE_FRACTION,
+        ..NavmeshSettings::from_agent_3d(ZOMBIE_RADIUS, agent_height())
+    }
+}
+
+fn zombie_archipelago() -> Archipelago3d {
+    Archipelago3d::new(ArchipelagoOptions {
+        point_sample_distance: PointSampleDistance3d {
+            distance_above: NAVMESH_SAMPLE_DISTANCE_ABOVE,
+            distance_below: ZOMBIE_LOD_REST_HEIGHT + NAVMESH_SAMPLE_SLACK_BELOW_FEET,
+            ..PointSampleDistance3d::from_agent_radius(ZOMBIE_RADIUS)
+        },
+        ..ArchipelagoOptions::from_agent_radius(ZOMBIE_RADIUS)
+    })
+}
+
+fn load_baked_navmesh(
+    scenario: Res<Scenario>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+) {
     let path = scenario.baked_navmesh_path();
-    let archipelago_entity = commands.spawn(archipelago()).id();
+    let archipelago = commands.spawn(zombie_archipelago()).id();
     commands.spawn(Island3dBundle {
         island: Island,
-        archipelago_ref: ArchipelagoRef3d::new(archipelago_entity),
+        archipelago_ref: ArchipelagoRef3d::new(archipelago),
         nav_mesh: NavMeshHandle3d(asset_server.load(path)),
     });
-    commands.insert_resource(ZombieArchipelago(archipelago_entity));
+    commands.insert_resource(ZombieArchipelago(archipelago));
     info!("loading baked navmesh {path}");
 }
 
@@ -189,4 +90,104 @@ fn register_zombie_agents(
             AgentTarget3d::None,
         ));
     }
+}
+
+pub fn baked_navmesh_file(scenario: Scenario) -> String {
+    format!(
+        "{}/../client/assets/{}",
+        env!("CARGO_MANIFEST_DIR"),
+        scenario.baked_navmesh_path()
+    )
+}
+
+pub fn read_baked_navmesh(scenario: Scenario) -> Option<Navmesh> {
+    let path = baked_navmesh_file(scenario);
+    let bytes = std::fs::read(&path)
+        .inspect_err(|e| error!("could not read {path}: {e}"))
+        .ok()?;
+    bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
+        .inspect_err(|e| error!("could not decode {path}: {e}"))
+        .ok()
+        .map(|(navmesh, _)| navmesh)
+}
+
+pub fn points_reachable_from(navmesh: &Navmesh, origin: Vec3) -> Vec<Vec3> {
+    let polygons = &navmesh.polygon;
+    let vertices_per_polygon = polygons.max_vertices_per_polygon as usize;
+    let polygon_count = polygons.polygon_count();
+    if vertices_per_polygon == 0 || polygon_count == 0 || navmesh.detail.meshes.len() < polygon_count
+    {
+        return Vec::new();
+    }
+
+    let Some(start) = polygon_nearest_to(navmesh, origin) else {
+        return Vec::new();
+    };
+
+    let mut visited = vec![false; polygon_count];
+    let mut queue = std::collections::VecDeque::from([start]);
+    visited[start] = true;
+    let mut points = Vec::new();
+    while let Some(polygon) = queue.pop_front() {
+        points.extend(detail_triangle_centroids(navmesh, polygon));
+
+        let edges = polygon * vertices_per_polygon..(polygon + 1) * vertices_per_polygon;
+        for &neighbour in &polygons.polygon_neighbors[edges] {
+            let neighbour = neighbour as usize;
+            if neighbour < polygon_count && !visited[neighbour] {
+                visited[neighbour] = true;
+                queue.push_back(neighbour);
+            }
+        }
+    }
+    points
+}
+
+fn polygon_nearest_to(navmesh: &Navmesh, origin: Vec3) -> Option<usize> {
+    (0..navmesh.polygon.polygon_count())
+        .filter_map(|polygon| {
+            polygon_centroid(navmesh, polygon).map(|c| (polygon, c.distance_squared(origin)))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(polygon, _)| polygon)
+}
+
+fn polygon_centroid(navmesh: &Navmesh, polygon: usize) -> Option<Vec3> {
+    let polygons = &navmesh.polygon;
+    let vertices_per_polygon = polygons.max_vertices_per_polygon as usize;
+    let corners: Vec<Vec3> = polygons.polygons
+        [polygon * vertices_per_polygon..(polygon + 1) * vertices_per_polygon]
+        .iter()
+        .copied()
+        .take_while(|index| *index != PolygonNavmesh::NO_INDEX)
+        .map(|index| polygon_vertex(navmesh, index))
+        .collect();
+    (!corners.is_empty()).then(|| corners.iter().sum::<Vec3>() / corners.len() as f32)
+}
+
+fn polygon_vertex(navmesh: &Navmesh, index: u16) -> Vec3 {
+    let polygons = &navmesh.polygon;
+    let vertex = polygons.vertices[index as usize];
+    Vec3::new(
+        polygons.aabb.min.x + vertex.x as f32 * polygons.cell_size,
+        polygons.aabb.min.y + vertex.y as f32 * polygons.cell_height,
+        polygons.aabb.min.z + vertex.z as f32 * polygons.cell_size,
+    )
+}
+
+fn detail_triangle_centroids(navmesh: &Navmesh, polygon: usize) -> Vec<Vec3> {
+    let submesh = &navmesh.detail.meshes[polygon];
+    let base_vertex = submesh.base_vertex_index as usize;
+    let base_triangle = submesh.base_triangle_index as usize;
+    (0..submesh.triangle_count as usize)
+        .filter_map(|triangle| navmesh.detail.triangles.get(base_triangle + triangle))
+        .map(|corners| {
+            corners
+                .iter()
+                .filter_map(|corner| navmesh.detail.vertices.get(base_vertex + *corner as usize))
+                .copied()
+                .sum::<Vec3>()
+                / 3.0
+        })
+        .collect()
 }

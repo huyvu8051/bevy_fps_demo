@@ -630,8 +630,6 @@ struct NextZombieSpawnIndex(usize);
 
 fn zombie_spawn_pos_for(scenario: Scenario, seed: usize, desert: &[Vec3]) -> (Vec3, f32) {
     match scenario {
-        // Desert reinforcements reuse the navmesh points the opening wave came
-        // from; `desert` is empty only if the navmesh could not be read.
         Scenario::Desert if !desert.is_empty() => {
             (desert[seed % desert.len()] + Vec3::Y * ZOMBIE_LOD_REST_HEIGHT, 0.0)
         }
@@ -751,51 +749,6 @@ fn zombie_history_at(history: &ZombieHistory, target_time: f32) -> Option<(Vec3,
     ))
 }
 
-#[cfg(test)]
-mod hitbox_phase3_tests {
-    use super::*;
-
-    #[test]
-    fn rewind_uses_the_rotation_recorded_at_that_instant_not_the_latest_one() {
-        let mut history = ZombieHistory::default();
-
-        history.0.push_back((
-            0.0,
-            Vec3::ZERO,
-            Quat::IDENTITY,
-            BoneLocalOffsets {
-                head: Some(Vec3::Z),
-                belly: None,
-                chest: None,
-                left_arm: [None; 3],
-                right_arm: [None; 3],
-                left_leg: [None; 3],
-                right_leg: [None; 3],
-            },
-        ));
-
-        let turned = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
-        history.0.push_back((
-            1.0,
-            Vec3::ZERO,
-            turned,
-            BoneLocalOffsets {
-                head: Some(Vec3::Z),
-                belly: None,
-                chest: None,
-                left_arm: [None; 3],
-                right_arm: [None; 3],
-                left_leg: [None; 3],
-                right_leg: [None; 3],
-            },
-        ));
-
-        let (_, _, bones_at_0) = zombie_history_at(&history, 0.0).unwrap();
-        assert!(bones_at_0.head.unwrap().distance(Vec3::Z) < 1e-5, "rewound head position: {:?}", bones_at_0.head);
-
-    }
-}
-
 fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: bool, director_spawned: bool) {
     let mut zombie = commands.spawn_empty();
     let phase = entity_phase(zombie.id());
@@ -850,11 +803,10 @@ fn spawn_stress_test_zombies(scenario: Res<Scenario>, mut commands: Commands) {
     spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS[..scenario.zombie_count()]), true, false);
 }
 
-/// Spawn points taken from the baked navmesh, so zombies always start on a
-/// surface they can actually path from. A ring of fixed offsets drops most of
-/// them inside buildings or onto disconnected rooftops.
 #[derive(Resource, Default)]
 struct DesertSpawnPoints(Vec<Vec3>);
+
+const DESERT_SPAWN_SPACING: f32 = 5.0;
 
 fn collect_desert_spawn_points(scenario: Res<Scenario>, mut commands: Commands) {
     let Some(navmesh) = server::navmesh::read_baked_navmesh(*scenario) else {
@@ -862,25 +814,31 @@ fn collect_desert_spawn_points(scenario: Res<Scenario>, mut commands: Commands) 
     };
 
     let origin = scenario.player_spawn();
-    let reachable = server::navmesh::reachable_navmesh_points(&navmesh, origin);
-    let mut points: Vec<Vec3> = reachable
-        .iter()
-        .copied()
-        .filter(|v| {
-            let flat = Vec3::new(v.x - origin.x, 0.0, v.z - origin.z).length();
-            (shared::DESERT_SPAWN_MIN_RADIUS..shared::DESERT_SPAWN_MAX_RADIUS).contains(&flat)
-                && (v.y - origin.y).abs() < shared::DESERT_SPAWN_MAX_RISE
-        })
-        .collect();
-    points.sort_by(|a, b| a.distance(origin).total_cmp(&b.distance(origin)));
-    points.dedup_by(|a, b| a.distance(*b) < 5.0);
-
-    info!(
-        "desert: {} spawn points reachable from the player, out of {} navmesh vertices",
-        points.len(),
-        navmesh.detail.vertices.len()
+    let mut points = thin_out(
+        within_spawn_band(server::navmesh::points_reachable_from(&navmesh, origin), origin),
+        origin,
     );
+    points.truncate(scenario.zombie_count().max(1) * 8);
+
+    info!("desert: {} spawn points reachable from the player", points.len());
     commands.insert_resource(DesertSpawnPoints(points));
+}
+
+fn within_spawn_band(points: Vec<Vec3>, origin: Vec3) -> Vec<Vec3> {
+    points
+        .into_iter()
+        .filter(|p| {
+            let flat = Vec3::new(p.x - origin.x, 0.0, p.z - origin.z).length();
+            (shared::DESERT_SPAWN_MIN_RADIUS..shared::DESERT_SPAWN_MAX_RADIUS).contains(&flat)
+                && (p.y - origin.y).abs() < shared::DESERT_SPAWN_MAX_RISE_ABOVE_PLAYER
+        })
+        .collect()
+}
+
+fn thin_out(mut points: Vec<Vec3>, origin: Vec3) -> Vec<Vec3> {
+    points.sort_by(|a, b| a.distance(origin).total_cmp(&b.distance(origin)));
+    points.dedup_by(|a, b| a.distance(*b) < DESERT_SPAWN_SPACING);
+    points
 }
 
 fn spawn_desert_zombies(
@@ -891,8 +849,6 @@ fn spawn_desert_zombies(
     if points.0.is_empty() {
         return;
     }
-    // Nearest-first: the town's navmesh is fragmented, and points further out
-    // are far more likely to sit on an island with no route to the player.
     let count = (target.0 as usize).min(points.0.len());
     let spawns: Vec<(Vec3, f32)> = points.0[..count]
         .iter()

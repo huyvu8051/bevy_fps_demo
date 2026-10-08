@@ -1,11 +1,3 @@
-//! Bakes a map's navmesh offline and writes it next to the map's assets.
-//!
-//! `MAP_ID=1 cargo run -p server --bin navmesh_baker`
-//!
-//! Baking is never done at server startup: voxelizing a town-sized map takes
-//! far too long to sit in the boot path, so the `.nav` files are built here and
-//! shipped as assets.
-
 use avian3d::prelude::*;
 use avian_rerecast::prelude::*;
 use bevy::ecs::system::SystemState;
@@ -17,16 +9,7 @@ use server::map_colliders::spawn_map_colliders;
 use server::navmesh::bake_settings;
 use shared::Scenario;
 
-/// Colliders trickle in as their glTF scenes load, so bake once the count has
-/// held steady for this long. This is wall-clock rather than a frame count
-/// because the baker runs its schedule as fast as it can, which would burn
-/// through any frame budget long before the first asset lands.
 const STABLE_SECS: f32 = 2.0;
-
-/// The desert model carries shells and stray geometry hundreds of units above
-/// and below the town, which would bake into navmesh layers no zombie can
-/// reach. The geometry's own bounds are intersected with these limits rather
-/// than replaced by them, so a small map still bakes at full resolution.
 const MAX_HALF_EXTENT_XZ: f32 = 200.0;
 const MIN_Y: f32 = -2.0;
 const MAX_Y: f32 = 40.0;
@@ -82,12 +65,12 @@ fn spawn_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_server
 }
 
 fn start_bake(world: &mut World) {
-    if !colliders_settled(world) {
+    if !scene_has_finished_loading(world) {
         return;
     }
 
     let mut settings = bake_settings();
-    settings.aabb = Some(clamped_aabb(world, &settings));
+    settings.aabb = Some(bake_volume(world, &settings));
 
     let mut state: SystemState<NavmeshGenerator> = SystemState::new(world);
     let handle = {
@@ -98,7 +81,7 @@ fn start_bake(world: &mut World) {
     world.insert_resource(Baking(handle));
 }
 
-fn colliders_settled(world: &mut World) -> bool {
+fn scene_has_finished_loading(world: &mut World) -> bool {
     let delta = world.resource::<Time>().delta_secs();
     let count = world.query_filtered::<(), With<Collider>>().iter(world).count();
 
@@ -112,7 +95,6 @@ fn colliders_settled(world: &mut World) -> bool {
         progress.last_count = count;
         progress.stable_secs = 0.0;
     }
-    // Zero means the scene has not loaded yet, not that the level has settled.
     if count == 0 || progress.stable_secs < STABLE_SECS {
         return false;
     }
@@ -121,7 +103,7 @@ fn colliders_settled(world: &mut World) -> bool {
     true
 }
 
-fn clamped_aabb(world: &mut World, settings: &bevy_rerecast::NavmeshSettings) -> Aabb3d {
+fn bake_volume(world: &mut World, settings: &bevy_rerecast::NavmeshSettings) -> Aabb3d {
     let backend = world.resource::<NavmeshBackend>().0;
     let trimesh = world
         .run_system_with(backend, settings.clone())

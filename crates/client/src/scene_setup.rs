@@ -163,12 +163,12 @@ pub(crate) fn setup_gameplay(
 
     match scenario {
         Scenario::Desert => {
-            let scene = scenario.scene_path().expect("the desert is a glTF map");
+            let scene = scenario.require_gltf_scene_path();
             commands.spawn((
                 Name::new("DesertCity"),
                 WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene))),
                 Transform::IDENTITY,
-                shared::scene_colliders(),
+                shared::gltf_scene_colliders(),
             ));
         }
         Scenario::StressTest => {
