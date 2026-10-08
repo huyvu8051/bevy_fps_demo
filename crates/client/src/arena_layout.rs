@@ -2,7 +2,7 @@
 use bevy::prelude::*;
 use shared::{ArenaShape, MapKind};
 
-use crate::item_gallery_cars::{ron_f32, F9SaveToast};
+use crate::arena_cars::{ron_f32, F9SaveToast};
 use crate::{current_scenario, ArenaBoxDims};
 
 pub(crate) struct ArenaLayoutPlugin;

@@ -39,25 +39,23 @@ pub mod movement;
 pub mod sim_latency;
 
 pub mod arena;
+pub mod arena_cars;
 pub mod combat;
 pub mod debug_bot;
 pub mod game_state;
 pub mod hitbox;
-pub mod item_gallery;
 pub mod level_piece;
-pub mod map1;
 pub mod network;
 pub mod player;
 pub mod zombie;
 
 pub use arena::*;
+pub use arena_cars::*;
 pub use combat::*;
 pub use debug_bot::*;
 pub use game_state::*;
 pub use hitbox::*;
-pub use item_gallery::*;
 pub use level_piece::*;
-pub use map1::*;
 pub use network::*;
 pub use player::*;
 pub use zombie::*;

@@ -136,11 +136,7 @@ pub(crate) fn setup_common(
 }
 
 fn review_yaw_pitch() -> (f32, f32) {
-    if current_scenario() != Scenario::ItemGallery {
-        return (0.0, 0.0);
-    }
-    let deg = |var: &str| std::env::var(var).ok().and_then(|s| s.trim().parse::<f32>().ok()).unwrap_or(0.0);
-    (deg("REVIEW_YAW").to_radians(), deg("REVIEW_PITCH").to_radians())
+    (0.0, 0.0)
 }
 
 pub(crate) fn setup_gameplay(
@@ -166,28 +162,9 @@ pub(crate) fn setup_gameplay(
     let player_spawn = scenario_player_spawn(scenario);
 
     match scenario.map_kind() {
-        MapKind::ItemGallery => {
-            let floor_color = [0.5, 0.5, 0.52];
-            let panels = vec![shared::floor_panel(
-                Vec3::ZERO,
-                shared::ITEM_GALLERY_HALF_SIZE_X * 2.0,
-                shared::ITEM_GALLERY_HALF_SIZE_Z * 2.0,
-                shared::ARENA_WALL_THICKNESS,
-                floor_color,
-                0.9,
-            )];
-            spawn_level_pieces(&mut commands, Vec::new(), panels, false);
-        }
-        MapKind::Campaign(map_id) => {
-            let (pieces, panels) = shared::campaign_level_pieces(map_id);
-            spawn_level_pieces(&mut commands, pieces, panels, true);
-            if map_id == 1 && dynamic_lights_enabled() {
-                spawn_map1_lights(&mut commands);
-            }
-        }
         MapKind::Arena => {
             spawn_test_arena(&mut commands, &mut meshes, &mut materials, scenario.map_id());
-            spawn_item_gallery_test_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
+            spawn_arena_car_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
         }
     }
 
@@ -392,18 +369,6 @@ pub(crate) struct ArenaBoxDims {
     pub(crate) index: usize,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LevelPieceKind {
-    Box,
-    Panel,
-}
-
-#[derive(Component)]
-pub(crate) struct LevelPieceIndex {
-    pub(crate) kind: LevelPieceKind,
-    pub(crate) index: usize,
-}
-
 fn spawn_test_arena(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -465,23 +430,6 @@ fn spawn_test_arena(
     }
 }
 
-fn spawn_map1_lights(commands: &mut Commands) {
-
-    for level in [shared::MAP1_B1, shared::MAP1_G, shared::MAP1_F2, shared::MAP1_F3] {
-        commands.spawn((
-            PointLight {
-                color: Color::srgb(0.9, 0.9, 0.88),
-                intensity: 4_000_000.0,
-                range: (level.half_size_x + level.half_size_z) * 1.2,
-                shadow_maps_enabled: light_shadows_enabled(),
-                ..default()
-            },
-            PointLightBaseIntensity(4_000_000.0),
-            Transform::from_xyz(0.0, level.elevation + level.wall_height - 0.3, level.center_z()),
-        ));
-    }
-}
-
 pub(crate) fn spawn_level_box_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -531,23 +479,3 @@ pub(crate) fn spawn_level_panel_visuals(
     }
 }
 
-fn spawn_level_pieces(commands: &mut Commands, pieces: Vec<shared::BoxPiece>, panels: Vec<shared::PanelPiece>, is_map1: bool) {
-    for (index, (translation, rotation, size, color, roughness)) in pieces.into_iter().enumerate() {
-        let mut piece = commands.spawn((shared::LevelBox::new(size, color, roughness), shared::LevelTransform::new(translation, rotation)));
-        if is_map1 {
-
-            piece.insert((ClientNavObstacle, LevelPieceIndex { kind: LevelPieceKind::Box, index }));
-        }
-    }
-    for (index, (translation, rotation, width, height, color, roughness, collider_thickness, collider_offset)) in panels.into_iter().enumerate() {
-        let panel = match collider_thickness {
-            Some(thickness) if collider_offset => shared::LevelPanel::solid_surface(width, height, color, roughness, thickness),
-            Some(thickness) => shared::LevelPanel::solid(width, height, color, roughness, thickness),
-            None => shared::LevelPanel::new(width, height, color, roughness),
-        };
-        let mut piece = commands.spawn((panel, shared::LevelTransform::new(translation, rotation)));
-        if is_map1 {
-            piece.insert(LevelPieceIndex { kind: LevelPieceKind::Panel, index });
-        }
-    }
-}

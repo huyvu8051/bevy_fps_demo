@@ -260,27 +260,6 @@ pub(crate) fn spawn_local_zombie(commands: &mut Commands, asset_server: &AssetSe
     spawn_radar_blip(commands, zombie_entity);
 }
 
-pub(crate) fn spawn_item_gallery_zombie_showcase(commands: &mut Commands, asset_server: &AssetServer) {
-    for (row, kind) in [ZombieKind::Classic, ZombieKind::Meshy, ZombieKind::Soldier].into_iter().enumerate() {
-        let count = zombie_kind_clip_count(kind);
-        let row_z = shared::ITEM_GALLERY_ZOMBIE_ROW_Z[row];
-        for (i, (x, z)) in shared::item_gallery_zombie_row(count, row_z).into_iter().enumerate() {
-            commands
-
-                .spawn((
-                    Name::new(format!("zombie_{kind}_clip{i}")),
-                    Transform::from_xyz(x, 0.0, z),
-                    Zombie,
-                    kind,
-                    ZombieShowcaseClip(i),
-                    Health(ZOMBIE_MAX_HEALTH),
-                    zombie_cosmetic_bundle(),
-                ))
-                .with_child(zombie_mesh_bundle(asset_server, kind));
-        }
-    }
-}
-
 pub(crate) fn zombie_cosmetic_bundle() -> impl Bundle {
     (
         Visibility::default(),

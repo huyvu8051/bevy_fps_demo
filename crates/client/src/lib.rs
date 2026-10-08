@@ -80,14 +80,12 @@ use scene_setup::*;
 mod network_setup;
 use network_setup::*;
 
-mod item_gallery_cars;
-use item_gallery_cars::*;
+mod arena_cars;
+use arena_cars::*;
 
 mod arena_layout;
 use arena_layout::*;
 
-mod map1_layout;
-use map1_layout::*;
 
 mod navigation;
 use navigation::*;
@@ -490,9 +488,8 @@ impl Plugin for GamePlugin {
         .add_observer(on_player_fired_fx)
         .add_observer(on_player_died_fx)
         .add_observer(on_game_state_event)
-        .add_plugins(ItemGalleryCarsPlugin)
+        .add_plugins(ArenaCarsPlugin)
         .add_plugins(ArenaLayoutPlugin)
-        .add_plugins(Map1LayoutPlugin)
 
 
         .insert_resource(Noclip(false))
@@ -610,7 +607,7 @@ impl Plugin for GamePlugin {
                 update_texture_quality_button_colors,
                 poly_quality_buttons,
                 update_poly_quality_button_colors,
-                respawn_item_gallery_cars_on_quality_change,
+                respawn_arena_cars_on_quality_change,
                 respawn_gun_mesh_parts_on_quality_change,
                     resize_scene_render_target,
                     scroll_settings_menu,
@@ -744,7 +741,7 @@ impl Plugin for GamePlugin {
                     update_distance_lod_button_color,
                     lod_stepper_buttons,
                     update_lod_stepper_texts,
-                    apply_item_gallery_car_distance_lod,
+                    apply_arena_car_distance_lod,
                     apply_zombie_distance_lod_texture,
                 )
                     .chain(),

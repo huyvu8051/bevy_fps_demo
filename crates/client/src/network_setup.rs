@@ -74,8 +74,8 @@ pub(crate) fn current_scenario() -> Scenario {
     map_id_override().map(Scenario::from_map_id).unwrap_or_default()
 }
 
-pub(crate) fn autopilot_enabled_by_default(scenario: Scenario) -> bool {
-    scenario != Scenario::ItemGallery
+pub(crate) fn autopilot_enabled_by_default(_scenario: Scenario) -> bool {
+    true
 }
 
 pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &RepliconChannels) {
@@ -377,7 +377,7 @@ pub(crate) fn spawn_map_select_ui(commands: &mut Commands) {
                 },
                 TextColor(Color::WHITE),
             ));
-            for scenario in [Scenario::Normal, Scenario::StressTest, Scenario::ItemGallery] {
+            for scenario in [Scenario::StressTest] {
                 let (id, title, subtitle) = (scenario.map_id(), scenario.title(), scenario.subtitle());
                 root.spawn(Node {
                     flex_direction: FlexDirection::Column,

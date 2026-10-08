@@ -4,13 +4,13 @@ use bevy::render::render_resource::Face;
 use crate::*;
 
 #[derive(Component)]
-pub(crate) struct ItemGalleryTestProp;
+pub(crate) struct ArenaCarProp;
 
 #[derive(Component)]
-pub(crate) struct ItemGalleryCarIndex(pub(crate) usize);
+pub(crate) struct ArenaCarIndex(pub(crate) usize);
 
 #[derive(Component)]
-pub(crate) struct ItemGalleryCarLodTier {
+pub(crate) struct ArenaCarLodTier {
 
     active_band: Option<usize>,
 
@@ -21,7 +21,7 @@ pub(crate) struct ItemGalleryCarLodTier {
     texture_pool: [(Handle<Image>, Handle<Image>, Handle<Image>); 3],
 }
 
-impl ItemGalleryCarLodTier {
+impl ArenaCarLodTier {
 
     const UNBUILT: [u8; 3] = [u8::MAX; 3];
 
@@ -47,7 +47,7 @@ impl Default for CarsVisible {
 
 pub(crate) fn apply_cars_visible(
     visible: Res<CarsVisible>,
-    mut cars: Query<&mut Visibility, With<ItemGalleryTestProp>>,
+    mut cars: Query<&mut Visibility, With<ArenaCarProp>>,
 ) {
     if !visible.is_changed() {
         return;
@@ -60,11 +60,11 @@ pub(crate) fn apply_cars_visible(
     }
 }
 
-pub(crate) struct ItemGalleryCarsPlugin;
+pub(crate) struct ArenaCarsPlugin;
 
-impl Plugin for ItemGalleryCarsPlugin {
+impl Plugin for ArenaCarsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(shake_item_gallery_car_on_hit);
+        app.add_observer(shake_arena_car_on_hit);
 
         if std::env::var("EDITOR").is_ok() {
             app.init_resource::<F9SaveToast>()
@@ -73,7 +73,7 @@ impl Plugin for ItemGalleryCarsPlugin {
                     Update,
                     (
 
-                        save_item_gallery_car_physics_on_key.run_if(debug_keys_allowed),
+                        save_arena_car_physics_on_key.run_if(debug_keys_allowed),
 
                         nudge_player_model_tuning.run_if(debug_keys_allowed),
                         save_player_model_tuning.run_if(debug_keys_allowed),
@@ -84,9 +84,9 @@ impl Plugin for ItemGalleryCarsPlugin {
     }
 }
 
-const ITEM_GALLERY_CAR_DROP_MARGIN: f32 = 0.15;
+const ARENA_CAR_DROP_MARGIN: f32 = 0.15;
 
-const ITEM_GALLERY_CAR_HIT_IMPULSE: f32 = 1.0;
+const ARENA_CAR_HIT_IMPULSE: f32 = 1.0;
 
 fn load_linear_car_texture(asset_server: &AssetServer, path: String) -> Handle<Image> {
     asset_server.load_with_settings(path, |settings: &mut bevy::image::ImageLoaderSettings| {
@@ -94,18 +94,18 @@ fn load_linear_car_texture(asset_server: &AssetServer, path: String) -> Handle<I
     })
 }
 
-pub(crate) fn spawn_item_gallery_test_props(
+pub(crate) fn spawn_arena_car_props(
     commands: &mut Commands,
     asset_server: &AssetServer,
     materials: &mut Assets<StandardMaterial>,
     poly_quality: u8,
     texture_quality: u8,
 ) {
-    for (i, (path, physics)) in shared::ITEM_GALLERY_CAR_PATHS.iter().zip(shared::item_gallery_car_physics()).enumerate() {
+    for (i, (path, physics)) in shared::ARENA_CAR_PATHS.iter().zip(shared::arena_car_physics()).enumerate() {
 
         let name = path.split('/').nth(1).unwrap_or(path);
-        let mesh_path = shared::item_gallery_car_mesh_path(i, poly_quality);
-        let (base_color_path, normal_path, metallic_roughness_path) = shared::item_gallery_car_texture_paths(i, texture_quality);
+        let mesh_path = shared::arena_car_mesh_path(i, poly_quality);
+        let (base_color_path, normal_path, metallic_roughness_path) = shared::arena_car_texture_paths(i, texture_quality);
         let material = materials.add(StandardMaterial {
             base_color_texture: Some(asset_server.load(base_color_path)),
             normal_map_texture: Some(load_linear_car_texture(asset_server, normal_path)),
@@ -118,7 +118,7 @@ pub(crate) fn spawn_item_gallery_test_props(
             Name::new(name.to_string()),
             Mesh3d(asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset(mesh_path))),
             MeshMaterial3d(material),
-            Transform::from_xyz(physics.x, physics.y + ITEM_GALLERY_CAR_DROP_MARGIN, physics.z)
+            Transform::from_xyz(physics.x, physics.y + ARENA_CAR_DROP_MARGIN, physics.z)
                 .with_rotation(physics.rotation)
                 .with_scale(Vec3::splat(physics.scale)),
             RigidBody::Dynamic,
@@ -126,14 +126,14 @@ pub(crate) fn spawn_item_gallery_test_props(
             LockedAxes::new().lock_rotation_x().lock_rotation_z(),
             LinearDamping(8.0),
             AngularDamping(8.0),
-            ItemGalleryTestProp,
-            ItemGalleryCarIndex(i),
-            ItemGalleryCarLodTier::new(),
+            ArenaCarProp,
+            ArenaCarIndex(i),
+            ArenaCarLodTier::new(),
         ));
     }
 }
 
-pub(crate) fn apply_item_gallery_car_distance_lod(
+pub(crate) fn apply_arena_car_distance_lod(
     enabled: Res<DistanceLodEnabled>,
     bands: Res<LodBandDistance>,
     texture_levels: Res<LodCarTextureLevel>,
@@ -141,7 +141,7 @@ pub(crate) fn apply_item_gallery_car_distance_lod(
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     player: Query<&Transform, With<Player>>,
-    mut cars: Query<(&Transform, &ItemGalleryCarIndex, &mut ItemGalleryCarLodTier, &mut Mesh3d, &MeshMaterial3d<StandardMaterial>), With<ItemGalleryTestProp>>,
+    mut cars: Query<(&Transform, &ArenaCarIndex, &mut ArenaCarLodTier, &mut Mesh3d, &MeshMaterial3d<StandardMaterial>), With<ArenaCarProp>>,
 ) {
     if !enabled.0 {
         return;
@@ -154,10 +154,10 @@ pub(crate) fn apply_item_gallery_car_distance_lod(
         if tier.pool_poly_levels != poly_levels.0 || tier.pool_texture_levels != texture_levels.0 {
 
             tier.mesh_pool = std::array::from_fn(|band| {
-                asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset(shared::item_gallery_car_mesh_path(index.0, poly_levels.0[band])))
+                asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset(shared::arena_car_mesh_path(index.0, poly_levels.0[band])))
             });
             tier.texture_pool = std::array::from_fn(|band| {
-                let (base_color_path, normal_path, metallic_roughness_path) = shared::item_gallery_car_texture_paths(index.0, texture_levels.0[band]);
+                let (base_color_path, normal_path, metallic_roughness_path) = shared::arena_car_texture_paths(index.0, texture_levels.0[band]);
                 (
                     asset_server.load(base_color_path),
                     load_linear_car_texture(&asset_server, normal_path),
@@ -197,11 +197,11 @@ pub(crate) fn apply_item_gallery_car_distance_lod(
     }
 }
 
-fn shake_item_gallery_car_on_hit(
+fn shake_arena_car_on_hit(
     trigger: On<ShotFx>,
     spatial_query: SpatialQuery,
     collider_of: Query<&ColliderOf>,
-    mut item_gallery_cars: Query<Forces, With<ItemGalleryTestProp>>,
+    mut arena_cars: Query<Forces, With<ArenaCarProp>>,
 ) {
     let ShotFx::SurfaceHit { point, normal, .. } = *trigger.event() else {
         return;
@@ -214,15 +214,15 @@ fn shake_item_gallery_car_on_hit(
         .filter_map(|collider_entity| collider_of.get(collider_entity).ok().map(|c| c.body))
         .collect();
     for body in hit_bodies {
-        if let Ok(mut forces) = item_gallery_cars.get_mut(body) {
-            forces.apply_linear_impulse_at_point(-normal.normalize_or_zero() * ITEM_GALLERY_CAR_HIT_IMPULSE, point);
+        if let Ok(mut forces) = arena_cars.get_mut(body) {
+            forces.apply_linear_impulse_at_point(-normal.normalize_or_zero() * ARENA_CAR_HIT_IMPULSE, point);
             break;
         }
     }
 }
 
-const ITEM_GALLERY_CAR_PHYSICS_RON: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/data/item_gallery_car_physics.ron");
+const ARENA_CAR_PHYSICS_RON: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/data/arena_car_physics.ron");
 
 pub(crate) fn round4(v: f32) -> f32 {
     (v * 1.0e4).round() / 1.0e4
@@ -310,9 +310,9 @@ fn tick_f9_toast(
     }
 }
 
-fn save_item_gallery_car_physics_on_key(
+fn save_arena_car_physics_on_key(
     keys: Res<ButtonInput<KeyCode>>,
-    cars: Query<(&Name, &Transform), With<ItemGalleryTestProp>>,
+    cars: Query<(&Name, &Transform), With<ArenaCarProp>>,
     mut toast: ResMut<F9SaveToast>,
 ) {
     if !keys.just_pressed(KeyCode::F9) {
@@ -322,13 +322,13 @@ fn save_item_gallery_car_physics_on_key(
     let live: std::collections::HashMap<&str, &Transform> =
         cars.iter().map(|(name, t)| (name.as_str(), t)).collect();
 
-    let mut rows: Vec<(String, String)> = Vec::with_capacity(shared::ITEM_GALLERY_CAR_PATHS.len());
-    for &path in &shared::ITEM_GALLERY_CAR_PATHS {
+    let mut rows: Vec<(String, String)> = Vec::with_capacity(shared::ARENA_CAR_PATHS.len());
+    for &path in &shared::ARENA_CAR_PATHS {
         let name = path.split('/').nth(1).unwrap_or(path);
         let Some(t) = live.get(name).copied() else {
             error!(
                 "F9 save aborted: car '{name}' not in the scene \
-                 (are you on Scenario::ItemGallery / MAP_ID=3?) — nothing written"
+                 — nothing written"
             );
             toast.err(format!("F9: car '{name}' not in scene — nothing saved"));
             return;
@@ -341,7 +341,7 @@ fn save_item_gallery_car_physics_on_key(
 
         let (ry, rx, rz) = t.rotation.to_euler(EulerRot::YXZ);
 
-        let y = t.translation.y - ITEM_GALLERY_CAR_DROP_MARGIN;
+        let y = t.translation.y - ARENA_CAR_DROP_MARGIN;
         let short = name.strip_prefix("car_").unwrap_or(name);
         rows.push((
             format!(
@@ -358,10 +358,10 @@ fn save_item_gallery_car_physics_on_key(
         ));
     }
 
-    let existing = match std::fs::read_to_string(ITEM_GALLERY_CAR_PHYSICS_RON) {
+    let existing = match std::fs::read_to_string(ARENA_CAR_PHYSICS_RON) {
         Ok(s) => s,
         Err(e) => {
-            error!("F9 save aborted: can't read {ITEM_GALLERY_CAR_PHYSICS_RON}: {e}");
+            error!("F9 save aborted: can't read {ARENA_CAR_PHYSICS_RON}: {e}");
             toast.err(format!("F9: can't read car RON — {e}"));
             return;
         }
@@ -380,13 +380,13 @@ fn save_item_gallery_car_physics_on_key(
     }
     out.push_str("]\n");
 
-    match std::fs::write(ITEM_GALLERY_CAR_PHYSICS_RON, out) {
+    match std::fs::write(ARENA_CAR_PHYSICS_RON, out) {
         Ok(()) => {
-            info!("saved {} cars -> {ITEM_GALLERY_CAR_PHYSICS_RON}", rows.len());
+            info!("saved {} cars -> {ARENA_CAR_PHYSICS_RON}", rows.len());
             toast.ok(format!("F9: saved {} cars", rows.len()));
         }
         Err(e) => {
-            error!("F9 save failed writing {ITEM_GALLERY_CAR_PHYSICS_RON}: {e}");
+            error!("F9 save failed writing {ARENA_CAR_PHYSICS_RON}: {e}");
             toast.err(format!("F9: car save FAILED — {e}"));
         }
     }

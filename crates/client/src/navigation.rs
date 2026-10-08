@@ -11,4 +11,4 @@ pub(crate) struct NavDebugVisible(pub(crate) bool);
 pub(crate) struct ClientNavObstacle;
 
 #[derive(Component)]
-pub(crate) struct ItemGalleryCarNavObstacle;
+pub(crate) struct ArenaCarNavObstacle;

@@ -372,7 +372,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
 
     let mut cars_visible_state: SystemState<Res<crate::CarsVisible>> = SystemState::new(world);
     let cars_visible = cars_visible_state.get(world).expect("system param validation failed").0;
-    let mut car_entities_state: SystemState<Query<bevy::ecs::entity::Entity, With<crate::ItemGalleryTestProp>>> = SystemState::new(world);
+    let mut car_entities_state: SystemState<Query<bevy::ecs::entity::Entity, With<crate::ArenaCarProp>>> = SystemState::new(world);
     let car_entities: std::collections::HashSet<bevy::ecs::entity::Entity> = car_entities_state.get(world).expect("system param validation failed").iter().collect();
     let gun_mesh_entities: std::collections::HashSet<bevy::ecs::entity::Entity> = {
         let mut gun_state: SystemState<(Query<bevy::ecs::entity::Entity, With<crate::Gun>>, Query<&Children>)> = SystemState::new(world);

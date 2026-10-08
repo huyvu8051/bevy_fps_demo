@@ -8,7 +8,7 @@
 // Cylinder uses size_x as its full DIAMETER and size_y as its height
 // (size_z is ignored — kept equal to size_x here for tidiness).
 // translation in meters; rotation as X/Y/Z euler degrees (EulerRot::YXZ,
-// same as item_gallery_car_physics.ron).
+// same as arena_car_physics.ron).
 //
 // Row 0 is the floor by convention (client paints it with the floor
 // material); every other row uses the wall material.

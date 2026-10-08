@@ -23,3 +23,8 @@ opt-level = 3
 inherits = "dev"
 debug = "line-tables-only"
 strip = "debuginfo"
+
+[patch.crates-io]
+# Upstream aborts the whole bake when one contour fails to triangulate; this
+# fork skips the bad contour instead.
+rerecast = { git = "https://github.com/huyvu8051/rerecast-vendor.git", branch = "main" }

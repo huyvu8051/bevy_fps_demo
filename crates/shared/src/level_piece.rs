@@ -155,20 +155,3 @@ impl LevelTransform {
         Self { translation, rotation }
     }
 }
-
-#[cfg(test)]
-mod regenerate {
-    use super::*;
-
-    fn write_ron(relative_path: &str, pieces: &(Vec<BoxPiece>, Vec<PanelPiece>)) {
-        let path = format!("{}/../client/assets/data/{relative_path}", env!("CARGO_MANIFEST_DIR"));
-        std::fs::write(&path, level_pieces_to_ron(pieces)).unwrap_or_else(|e| panic!("failed to write {path}: {e}"));
-        println!("wrote {path} ({} boxes, {} panels)", pieces.0.len(), pieces.1.len());
-    }
-
-    #[test]
-    #[ignore]
-    fn regenerate_level_piece_ron() {
-        write_ron("map/3.ron", &crate::item_gallery::item_gallery_level_pieces_computed());
-    }
-}

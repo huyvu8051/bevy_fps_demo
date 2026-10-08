@@ -1,7 +1,10 @@
+mod navmesh;
+
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::SystemTime;
 
 use avian3d::prelude::*;
+use bevy_landmass::prelude::*;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use bevy_replicon::prelude::*;
@@ -20,7 +23,7 @@ use shared::{
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount,
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
-    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, campaign_zombie_spawn_pos,
+    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, 
     MapKind, scenario_player_spawn,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
@@ -86,6 +89,7 @@ fn main() {
             BigBrainPlugin::new(PreUpdate),
             RepliconPlugins,
             RepliconRenetPlugins,
+            navmesh::ServerNavmeshPlugin,
         ))
         .init_asset::<StandardMaterial>()
 
@@ -152,7 +156,6 @@ fn main() {
                 start_server,
                 spawn_arena_colliders,
 
-                spawn_initial_zombies.run_if(resource_equals(Scenario::Normal)),
                 spawn_stress_test_zombies.run_if(resource_equals(Scenario::StressTest)),
                 setup_server_zombie_anim,
             ),
@@ -168,7 +171,9 @@ fn main() {
             Update,
             (
                 move_players,
-                (move_zombies, update_server_zombie_pose, record_zombie_history).chain(),
+                (move_zombies, update_server_zombie_pose, record_zombie_history)
+                    .chain()
+                    .after(LandmassSystems::Output),
                 (bot_pick_target, move_debug_bots, debug_bot_fire).chain(),
                 tick_respawns,
                 decay_player_threat,
@@ -229,20 +234,9 @@ fn start_server(mut commands: Commands, channels: Res<RepliconChannels>, scenari
 
 fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_server: Res<AssetServer>) {
     match scenario.map_kind() {
-
-        MapKind::ItemGallery => {
-
-            commands.spawn((
-                Transform::from_xyz(0.0, -shared::ARENA_WALL_THICKNESS / 2.0, 0.0),
-                RigidBody::Static,
-                Collider::cuboid(shared::ITEM_GALLERY_HALF_SIZE_X * 2.0, shared::ARENA_WALL_THICKNESS, shared::ITEM_GALLERY_HALF_SIZE_Z * 2.0),
-            ));
-        }
-        MapKind::Campaign(map_id) => spawn_campaign_level_pieces(&mut commands, map_id),
         MapKind::Arena => {
             spawn_flat_arena_colliders(&mut commands, scenario.map_id());
-
-            spawn_item_gallery_car_colliders(&mut commands, &asset_server);
+            spawn_arena_car_colliders(&mut commands, &asset_server);
         }
     }
 }
@@ -268,19 +262,8 @@ fn spawn_flat_arena_colliders(commands: &mut Commands, map_id: u8) {
     }
 }
 
-fn spawn_campaign_level_pieces(commands: &mut Commands, map_id: u8) {
-    let (pieces, panels) = shared::campaign_level_pieces(map_id);
-    spawn_collider_pieces(commands, pieces, panels, map_id == 1);
-}
-
-fn spawn_item_gallery_level_pieces(commands: &mut Commands, asset_server: &AssetServer) {
-    let (pieces, panels) = shared::item_gallery_level_pieces();
-    spawn_collider_pieces(commands, pieces, panels, false);
-    spawn_item_gallery_car_colliders(commands, asset_server);
-}
-
-fn spawn_item_gallery_car_colliders(commands: &mut Commands, asset_server: &AssetServer) {
-    for (path, physics) in shared::ITEM_GALLERY_CAR_PATHS.iter().zip(shared::item_gallery_car_physics()) {
+fn spawn_arena_car_colliders(commands: &mut Commands, asset_server: &AssetServer) {
+    for (path, physics) in shared::ARENA_CAR_PATHS.iter().zip(shared::arena_car_physics()) {
         commands.spawn((
             WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(*path))),
             Transform::from_xyz(physics.x, physics.y, physics.z)
@@ -331,31 +314,6 @@ fn spawn_car_nav_obstacle_boxes(
             ArenaObstacle,
         ));
         commands.entity(car).insert(CarNavBoxDone);
-    }
-}
-
-fn spawn_collider_pieces(commands: &mut Commands, pieces: Vec<shared::BoxPiece>, panels: Vec<shared::PanelPiece>, tag_boxes_as_nav_obstacle: bool) {
-    for (translation, rotation, size, _color, _roughness) in pieces {
-        let mut piece = commands.spawn((
-            Transform::from_translation(translation).with_rotation(rotation),
-            RigidBody::Static,
-            Collider::cuboid(size.x, size.y, size.z),
-        ));
-
-        if tag_boxes_as_nav_obstacle {
-            piece.insert(ArenaObstacle);
-        }
-    }
-    for (translation, rotation, width, height, _color, _roughness, collider_thickness, collider_offset) in panels {
-        let Some(thickness) = collider_thickness else { continue };
-        let offset = if collider_offset { -thickness / 2.0 } else { 0.0 };
-        let rotation_applied = Transform::from_translation(translation).with_rotation(rotation);
-        let local_offset = rotation_applied.rotation * Vec3::new(0.0, 0.0, offset);
-        commands.spawn((
-            Transform::from_translation(translation + local_offset).with_rotation(rotation),
-            RigidBody::Static,
-            Collider::cuboid(width, height, thickness),
-        ));
     }
 }
 
@@ -753,23 +711,8 @@ struct NextZombieSpawnIndex(usize);
 
 fn zombie_spawn_pos_for(kind: MapKind, seed: usize) -> (Vec3, f32) {
     match kind {
-        MapKind::Campaign(map_id) => campaign_zombie_spawn_pos(map_id, seed),
-
-        MapKind::Arena | MapKind::ItemGallery => (random_zombie_spawn_pos(seed), 0.0),
+        MapKind::Arena => (random_zombie_spawn_pos(seed), 0.0),
     }
-}
-
-fn spawn_initial_zombies(
-    mut commands: Commands,
-    scenario: Res<Scenario>,
-    target: Res<ZombieTargetCount>,
-    mut next_spawn_index: ResMut<NextZombieSpawnIndex>,
-) {
-    let kind = scenario.map_kind();
-    let count = (target.0 as usize).min(ZOMBIE_SPAWNS.len());
-    let spawns: Vec<(Vec3, f32)> = (0..count).map(|seed| zombie_spawn_pos_for(kind, seed)).collect();
-    spawn_zombies(&mut commands, &spawns, ZOMBIE_AI_ENABLED, false);
-    next_spawn_index.0 = count;
 }
 
 fn on_set_zombie_count(
@@ -1192,7 +1135,16 @@ fn move_zombies(
     time: Res<Time>,
     freeze: Res<FreezeZombiesServer>,
     mut zombies: Query<
-        (Entity, &mut Transform, &mut ZombieMotion, &mut ChaseTarget, &mut KnockbackVelocity, &mut NetTransform),
+        (
+            Entity,
+            &mut Transform,
+            &mut ZombieMotion,
+            &mut ChaseTarget,
+            &mut KnockbackVelocity,
+            &mut NetTransform,
+            Option<&mut AgentTarget3d>,
+            Option<&AgentDesiredVelocity3d>,
+        ),
         (With<Zombie>, With<Chase>),
     >,
     players: Query<(Entity, &Transform, &PlayerThreat), (With<NetPlayer>, Without<Zombie>)>,
@@ -1200,7 +1152,7 @@ fn move_zombies(
 ) {
 
     if freeze.0 {
-        for (_, _, _, _, _, mut net_transform) in &mut zombies {
+        for (.., mut net_transform, _, _) in &mut zombies {
             net_transform.moving = false;
         }
         return;
@@ -1211,13 +1163,15 @@ fn move_zombies(
     let candidates: Vec<(Entity, Vec3, f32)> = players.iter().map(|(e, t, threat)| (e, t.translation, threat.0)).collect();
 
     let mut chase_load: std::collections::HashMap<Entity, u32> = std::collections::HashMap::new();
-    for (.., chase_target, _, _) in &zombies {
+    for (.., chase_target, _, _, _, _) in &zombies {
         if let Some(target) = chase_target.entity {
             *chase_load.entry(target).or_insert(0) += 1;
         }
     }
 
-    for (entity, mut transform, mut motion, mut chase_target, mut knockback, mut net_transform) in &mut zombies {
+    for (entity, mut transform, mut motion, mut chase_target, mut knockback, mut net_transform, mut agent_target, desired_velocity) in
+        &mut zombies
+    {
 
         chase_target.reevaluate_timer -= time.delta_secs();
         let target_still_connected = chase_target.entity.is_some_and(|target| candidates.iter().any(|&(e, ..)| e == target));
@@ -1249,6 +1203,9 @@ fn move_zombies(
         let distance = horizontal.length();
 
         if distance > ZOMBIE_LOD_DISTANCE {
+            if let Some(agent_target) = agent_target.as_deref_mut() {
+                *agent_target = AgentTarget3d::None;
+            }
             if distance > ZOMBIE_STOP_DISTANCE {
                 let direction = horizontal / distance;
                 transform.translation += direction * zombie_speed_for(distance) * time.delta_secs();
@@ -1265,6 +1222,9 @@ fn move_zombies(
             continue;
         }
         motion.far = false;
+        if let Some(agent_target) = agent_target.as_deref_mut() {
+            *agent_target = AgentTarget3d::Point(target_translation);
+        }
 
         let filter = SpatialQueryFilter::default();
         let horizontal_velocity = if distance > ZOMBIE_STOP_DISTANCE {
@@ -1272,15 +1232,22 @@ fn move_zombies(
             if motion.path_recalc_timer <= 0.0 {
                 motion.path_recalc_timer = ZOMBIE_PATH_RECALC_INTERVAL;
 
-                let desired_direction = Some(
-                    Vec3::new(
-                        target_translation.x - transform.translation.x,
-                        0.0,
-                        target_translation.z - transform.translation.z,
+                let path_direction = desired_velocity
+                    .map(|v| v.velocity())
+                    .map(|v| Vec3::new(v.x, 0.0, v.z).normalize_or_zero())
+                    .filter(|direction| *direction != Vec3::ZERO);
+
+                let desired_direction = path_direction.or_else(|| {
+                    Some(
+                        Vec3::new(
+                            target_translation.x - transform.translation.x,
+                            0.0,
+                            target_translation.z - transform.translation.z,
+                        )
+                        .normalize_or_zero(),
                     )
-                    .normalize_or_zero(),
-                )
-                .filter(|direction| *direction != Vec3::ZERO);
+                    .filter(|direction| *direction != Vec3::ZERO)
+                });
 
                 let mut separation = Vec3::ZERO;
                 for (other_entity, other_pos) in &positions {
@@ -1624,14 +1591,9 @@ fn on_request_restart(
     }
 
     match *scenario {
-        Scenario::Normal => {
-            spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS), ZOMBIE_AI_ENABLED, false);
-        }
         Scenario::StressTest => {
             spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS[..STRESS_TEST_ZOMBIE_COUNT]), true, false);
         }
-
-        Scenario::ItemGallery => {}
     }
     let player_spawn = scenario_player_spawn(*scenario);
 

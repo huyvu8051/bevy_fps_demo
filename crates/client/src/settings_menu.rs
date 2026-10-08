@@ -2017,15 +2017,15 @@ pub(crate) fn update_point_light_quality_button_colors(
     }
 }
 
-pub(crate) fn respawn_item_gallery_cars_on_quality_change(
+pub(crate) fn respawn_arena_cars_on_quality_change(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     texture_quality: Res<TextureQuality>,
     poly_quality: Res<PolyQuality>,
-    existing: Query<Entity, With<ItemGalleryTestProp>>,
+    existing: Query<Entity, With<ArenaCarProp>>,
 
-    existing_nav_obstacles: Query<Entity, With<ItemGalleryCarNavObstacle>>,
+    existing_nav_obstacles: Query<Entity, With<ArenaCarNavObstacle>>,
 ) {
     let texture_changed = texture_quality.is_changed() && !texture_quality.is_added();
     let poly_changed = poly_quality.is_changed() && !poly_quality.is_added();
@@ -2041,5 +2041,5 @@ pub(crate) fn respawn_item_gallery_cars_on_quality_change(
     for entity in &existing_nav_obstacles {
         commands.entity(entity).despawn();
     }
-    spawn_item_gallery_test_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
+    spawn_arena_car_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
 }

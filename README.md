@@ -38,7 +38,7 @@ Có thể chạy nhiều client cùng lúc (nhiều terminal) để test multipl
 |---|---|---|
 | `LOCAL=1` | client | Nối tới `127.0.0.1` (port theo scenario) thay vì IP Tailscale mặc định. Thay cho `SERVER_ADDR=127.0.0.1:<port>`. |
 | `SERVER_ADDR=host:port` | client | Override toàn bộ host **và** port. Ưu tiên cao nhất. |
-| `MAP_ID=1..3` | server + client | Chọn scenario (1 = game thật; 2 = arena + zombie; 3 = ItemGallery). Port server = `5031 + MAP_ID`; client tự tính khớp. Không set ở client → hiện menu chọn map. |
+| `MAP_ID=2` | server + client | Chọn scenario (2 = arena + zombie). Port server = `5031 + MAP_ID`; client tự tính khớp. Không set ở client → hiện menu chọn map. |
 | `RENDER_SCALE=0.1..1.0` | client | Scale render 3D (mặc định 0.4). Chỉnh live được trong Settings menu. |
 | `EDITOR=1` | client | Bật `bevy_editor_pls` (F2). Desktop-only. |
 | `ZOMBIE_COUNT=0..` | server | Số zombie baseline lúc start (mặc định 10). `ZOMBIE_COUNT=0` để mở map thuần xem/edit hình học, không có zombie/combat gì cả — dùng cùng `EDITOR=1` khi edit map. |

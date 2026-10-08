@@ -1,7 +1,7 @@
 // Per-car entity Transform placement:
 //   (scale, y, x, z, rot_x_deg, rot_y_deg, rot_z_deg)
 // uniform scale, translation in meters, rotation as X/Y/Z euler degrees
-// (applied EulerRot::YXZ). Same order/count as shared::ITEM_GALLERY_CAR_PATHS
+// (applied EulerRot::YXZ). Same order/count as shared::ARENA_CAR_PATHS
 // (index i here is car i there).
 //
 // That's all this file drives now: the car collider is built from the real
@@ -18,10 +18,10 @@
 // now just seed values you can nudge.
 //
 // Tune by eyeballing each car in the dev editor (F2) and dragging /
-// rotating / scaling it; with EDITOR=1 in Scenario::ItemGallery, F9 writes
+// rotating / scaling it; with EDITOR=1, F9 writes
 // every car's live scale + x/y/z + rotation back here
-// (save_item_gallery_car_physics_on_key in
-// crates/client/src/item_gallery_cars.rs). Hand-editing works fine too.
+// (save_arena_car_physics_on_key in
+// crates/client/src/arena_cars.rs). Hand-editing works fine too.
 [
     (1.0, 0.0, -21.0008, -5.9952, -0.0, 0.2021, -0.0001),       // sedan
     (1.0, 0.0, -15.1528, -5.9934, -0.0, -1.8896, -0.0015),   // van
