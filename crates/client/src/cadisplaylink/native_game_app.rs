@@ -29,6 +29,7 @@ pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, sc
     app.init_asset::<bevy::image::TextureAtlasLayout>();
     app.add_plugins(bevy::ui::UiPlugin::default());
     app.add_plugins(bevy::scene::ScenePlugin);
+    app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
     app.add_plugins(bevy::gltf::GltfPlugin::default());
 
     app.init_asset::<bevy::pbr::StandardMaterial>();
