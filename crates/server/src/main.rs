@@ -24,7 +24,7 @@ use shared::{
     MapKind, scenario_player_spawn,
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
-    MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_BOUNDS, NAVMESH_HEIGHT, PILLAR_RADIUS,
+    MAX_SHOT_DISTANCE, MOVE_SPEED, NAVMESH_HEIGHT, PILLAR_RADIUS,
     PLAYER_LENGTH, PLAYER_RADIUS, Scenario,
     STRESS_TEST_ZOMBIE_COUNT,
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
@@ -39,7 +39,6 @@ use shared::{
     ZOMBIE_TURN_RATE_DEG,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
-use vleue_navigator::prelude::*;
 
 use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex};
 use bevy::animation::AnimationPlayer;
@@ -84,9 +83,6 @@ fn main() {
             StatesPlugin,
             PhysicsPlugins::default(),
             BigBrainPlugin::new(PreUpdate),
-            VleueNavigatorPlugin,
-
-            NavmeshUpdaterPlugin::<Collider, ArenaObstacle>::default(),
             RepliconPlugins,
             RepliconRenetPlugins,
         ))
@@ -154,7 +150,6 @@ fn main() {
             (
                 start_server,
                 spawn_arena_colliders,
-                spawn_zombie_navmesh,
 
                 spawn_initial_zombies.run_if(resource_equals(Scenario::Normal)),
                 spawn_stress_test_zombies.run_if(resource_equals(Scenario::StressTest)),
@@ -723,70 +718,6 @@ fn debug_bot_fire(
     }
 }
 
-fn spawn_zombie_navmesh(mut commands: Commands, mut navmeshes: ResMut<Assets<NavMesh>>, scenario: Res<Scenario>) {
-    let plane = Transform::from_xyz(0.0, NAVMESH_HEIGHT, 0.0)
-        .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
-
-    if scenario.map_kind() == MapKind::Arena {
-
-        commands.spawn((
-            ManagedNavMesh::single(),
-            NavMeshSettings {
-                fixed: Triangulation::from_outer_edges(&shared::arena_navmesh_outer_edges(scenario.map_id())),
-
-                simplify: shared::ARENA_NAVMESH_SIMPLIFY,
-                build_timeout: Some(shared::ARENA_NAVMESH_BUILD_TIMEOUT_SECS),
-                agent_radius: shared::ARENA_NAVMESH_AGENT_RADIUS,
-                ..default()
-            },
-            NavMeshUpdateMode::Direct,
-            NavMeshUpdateModeBlocking,
-            plane,
-        ));
-        return;
-    }
-
-    if scenario.map_kind() == MapKind::Campaign(1) {
-
-        let (layers, stitches) = shared::map1_navmesh_layers();
-        for (index, layer) in layers.iter().enumerate() {
-            let index = index as u8;
-            let to_local = |p: Vec3| shared::map1_world_to_layer_local(layer.translation, layer.rotation, p);
-            let mut fixed = Triangulation::from_outer_edges(&layer.outer_world.iter().map(|&p| to_local(p)).collect::<Vec<_>>());
-            if !layer.holes_world.is_empty() {
-                fixed.add_obstacles(layer.holes_world.iter().map(|hole| hole.iter().map(|&p| to_local(p)).collect::<Vec<_>>()));
-            }
-            let layer_stitches: Vec<((u8, u8), [Vec2; 2])> = stitches
-                .iter()
-                .filter(|s| s.from == index || s.to == index)
-                .map(|s| ((s.from, s.to), [to_local(s.points_world[0]), to_local(s.points_world[1])]))
-                .collect();
-            commands.spawn((
-                ManagedNavMesh::single(),
-                NavMeshSettings {
-                    fixed,
-                    layer: Some(index),
-                    stitches: layer_stitches,
-                    build_timeout: Some(shared::ARENA_NAVMESH_BUILD_TIMEOUT_SECS),
-                    agent_radius: shared::ARENA_NAVMESH_AGENT_RADIUS,
-                    ..default()
-                },
-                NavMeshUpdateMode::Direct,
-                NavMeshUpdateModeBlocking,
-                Transform::from_translation(layer.translation).with_rotation(layer.rotation),
-            ));
-        }
-        return;
-    }
-
-    let mut navmesh = NavMesh::from_edge_and_obstacles(NAVMESH_BOUNDS.to_vec(), Vec::new());
-    navmesh.set_transform(plane);
-    navmeshes
-        .insert(ManagedNavMesh::get_single().id(), navmesh)
-        .expect("inserting under a Uuid asset id never fails");
-    commands.spawn(ManagedNavMesh::single());
-}
-
 fn column_footprint(x: f32, z: f32) -> Vec<Vec2> {
 
     vec![
@@ -1264,8 +1195,6 @@ fn move_zombies(
         (With<Zombie>, With<Chase>),
     >,
     players: Query<(Entity, &Transform, &PlayerThreat), (With<NetPlayer>, Without<Zombie>)>,
-    navmesh: Query<&ManagedNavMesh>,
-    navmeshes: Res<Assets<NavMesh>>,
     mover: MoveAndSlide,
 ) {
 
@@ -1275,8 +1204,6 @@ fn move_zombies(
         }
         return;
     }
-
-    let navmesh = navmesh.iter().next().and_then(|handle| navmeshes.get(handle));
 
     let positions: Vec<(Entity, Vec3)> = zombies.iter().map(|(e, t, ..)| (e, t.translation)).collect();
 
@@ -1344,14 +1271,15 @@ fn move_zombies(
             if motion.path_recalc_timer <= 0.0 {
                 motion.path_recalc_timer = ZOMBIE_PATH_RECALC_INTERVAL;
 
-                let desired_direction = navmesh
-                    .and_then(|navmesh| navmesh.transformed_path(transform.translation, target_translation))
-                    .and_then(|path| path.path.first().copied())
-                    .map(|waypoint| {
-                        Vec3::new(waypoint.x - transform.translation.x, 0.0, waypoint.z - transform.translation.z)
-                            .normalize_or_zero()
-                    })
-                    .filter(|direction| *direction != Vec3::ZERO);
+                let desired_direction = Some(
+                    Vec3::new(
+                        target_translation.x - transform.translation.x,
+                        0.0,
+                        target_translation.z - transform.translation.z,
+                    )
+                    .normalize_or_zero(),
+                )
+                .filter(|direction| *direction != Vec3::ZERO);
 
                 let mut separation = Vec3::ZERO;
                 for (other_entity, other_pos) in &positions {

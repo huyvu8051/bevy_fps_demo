@@ -89,8 +89,8 @@ use arena_layout::*;
 mod map1_layout;
 use map1_layout::*;
 
-mod nav_debug;
-use nav_debug::*;
+mod navigation;
+use navigation::*;
 
 mod settings_persistence;
 use settings_persistence::*;
@@ -423,31 +423,12 @@ pub fn main() {
             }
         });
 
-    if std::env::var("EDITOR").is_ok() {
-        app.add_plugins(bevy_editor_pls::EditorPlugin::default());
-
-        app.add_systems(Update, fill_ambient_on_editor_cameras);
-
-    }
     app.add_plugins(GamePlugin);
     app.run();
 }
 
-fn fill_ambient_on_editor_cameras(
-    mut commands: Commands,
-    cams: Query<Entity, (With<Camera3d>, Without<AmbientLight>)>,
-) {
-    for cam in &cams {
-        commands.entity(cam).insert(AmbientLight {
-            color: Color::WHITE,
-            brightness: ambient_brightness(),
-            ..default()
-        });
-    }
-}
-
-pub(crate) fn debug_keys_allowed(editor: Option<Res<bevy_editor_pls::editor::Editor>>) -> bool {
-    !editor.is_some_and(|e| e.active())
+pub(crate) fn debug_keys_allowed() -> bool {
+    true
 }
 
 pub(crate) struct GamePlugin;
@@ -513,7 +494,6 @@ impl Plugin for GamePlugin {
         .add_plugins(ArenaLayoutPlugin)
         .add_plugins(Map1LayoutPlugin)
 
-        .add_plugins(NavDebugPlugin)
 
         .insert_resource(Noclip(false))
         .init_resource::<InspectMode>()

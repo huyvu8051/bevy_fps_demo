@@ -7,7 +7,6 @@ edition = "2024"
 shared = { path = "../shared" }
 avian3d = "0.6"
 big-brain = { path = "../../vendor/big-brain" }
-vleue_navigator = { path = "../../vendor/vleue_navigator", default-features = false, features = ["avian3d"] }
 # "png" / "jpeg": zombie.glb embeds PNG textures, the item-gallery car
 # .glb files (also loaded here for their convex-hull colliders — see
 # spawn_item_gallery_car_colliders) embed JPEG ones. The server never

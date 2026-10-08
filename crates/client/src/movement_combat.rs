@@ -167,8 +167,6 @@ pub(crate) fn grab_cursor(
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     pending: Res<MapSelectionPending>,
     menu: Res<SettingsMenuVisible>,
-
-    editor: Option<Res<bevy_editor_pls::editor::Editor>>,
 ) {
     let Ok(mut cursor) = cursor.single_mut() else {
         return;
@@ -184,18 +182,10 @@ pub(crate) fn grab_cursor(
         }
     }
 
-    let editor_active = editor.is_some_and(|e| e.active());
-
-    if editor_active && cursor.grab_mode != CursorGrabMode::None {
-        cursor.grab_mode = CursorGrabMode::None;
-        cursor.visible = true;
-    }
-
     if mouse.just_pressed(MouseButton::Left)
         && cursor.grab_mode == CursorGrabMode::None
         && !pending.0
         && !menu.0
-        && !editor_active
     {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
@@ -457,14 +447,12 @@ pub(crate) fn send_player_input(
     noclip: Res<Noclip>,
     touch_move_axis: Res<TouchMoveAxis>,
 
-    (mut local_moving, mut local_sprinting, mut local_move_axis, autopilot, intent, editor): (
+    (mut local_moving, mut local_sprinting, mut local_move_axis, autopilot, intent): (
         ResMut<LocalPlayerMoving>,
         ResMut<LocalPlayerSprinting>,
         ResMut<LocalPlayerMoveAxis>,
         Res<Autopilot>,
         Res<AutopilotIntent>,
-
-        Option<Res<bevy_editor_pls::editor::Editor>>,
     ),
     mover: MoveAndSlide,
 
@@ -483,12 +471,8 @@ pub(crate) fn send_player_input(
 
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch.aiming.0));
 
-    let editor_active = editor.is_some_and(|e| e.active());
-
     let (move_axis, sprinting) = if autopilot.0 {
         (intent.move_axis, intent.sprint)
-    } else if editor_active {
-        (Vec2::ZERO, false)
     } else {
         let sprinting = (keys.pressed(KeyCode::ShiftLeft) || touch.sprint.0) && stance == PlayerStance::Standing;
         let mut move_axis = Vec2::ZERO;

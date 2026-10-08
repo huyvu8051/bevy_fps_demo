@@ -37,15 +37,10 @@ serde = { version = "1.0", features = ["derive"] }
 # crate the server pathfinds with, plus its gizmo debug feature so the
 # client can draw the reconstructed navmesh. Only wired up in debug builds
 # (the "NavDbg" settings toggle).
-vleue_navigator = { path = "../../vendor/vleue_navigator", default-features = false, features = ["avian3d", "debug-with-gizmos"] }
 bevy = { version = "0.18", features = ["jpeg", "bevy_dev_tools", "wav"] }
 bevy_replicon = "0.39"
 bevy_replicon_renet2 = { version = "0.15", features = ["native_transport"] }
 
-# Dev-only level editor, vendored + patched for Bevy 0.18 under
-# vendor/ (upstream crates.io release still targets 0.15) — see
-# main()'s own EDITOR=1 gate. path dep, not published anywhere.
-bevy_editor_pls = { path = "../../vendor/bevy_editor_pls/crates/bevy_editor_pls" }
 
 # CADisplayLink probe experiment (crates/client/src/cadisplaylink/) — an
 # alternate iOS entry point bypassing WinitPlugin entirely, driven by a

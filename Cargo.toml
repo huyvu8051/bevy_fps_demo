@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/client", "crates/shared", "crates/server"]
-exclude = ["vendor/big-brain", "vendor/vleue_navigator", "vendor/bevy_editor_pls"]
+exclude = ["vendor/big-brain"]
 
 # Build faster during dev
 [profile.dev]
