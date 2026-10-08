@@ -5912,6 +5912,7 @@ dependencies = [
  "big-brain",
  "bincode",
  "landmass_rerecast",
+ "rerecast",
  "shared",
 ]
 

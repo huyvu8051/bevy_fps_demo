@@ -863,9 +863,8 @@ fn collect_desert_spawn_points(scenario: Res<Scenario>, mut commands: Commands) 
     };
 
     let origin = shared::DESERT_PLAYER_SPAWN;
-    let mut points: Vec<Vec3> = navmesh
-        .detail
-        .vertices
+    let reachable = server::navmesh::reachable_navmesh_points(&navmesh, origin);
+    let mut points: Vec<Vec3> = reachable
         .iter()
         .copied()
         .filter(|v| {
@@ -877,7 +876,11 @@ fn collect_desert_spawn_points(scenario: Res<Scenario>, mut commands: Commands) 
     points.sort_by(|a, b| a.distance(origin).total_cmp(&b.distance(origin)));
     points.dedup_by(|a, b| a.distance(*b) < 5.0);
 
-    info!("desert: {} navmesh spawn points near the player", points.len());
+    info!(
+        "desert: {} spawn points reachable from the player, out of {} navmesh vertices",
+        points.len(),
+        navmesh.detail.vertices.len()
+    );
     commands.insert_resource(DesertSpawnPoints(points));
 }
 
