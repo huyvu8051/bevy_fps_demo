@@ -781,7 +781,7 @@ pub(crate) fn shoot(
             intensity: MUZZLE_LIGHT_INTENSITY,
             range: MUZZLE_LIGHT_RANGE,
             color: Color::srgb(1.0, 0.7, 0.3),
-            shadows_enabled: false,
+            shadow_maps_enabled: false,
             ..default()
         },
         MuzzleFlash {

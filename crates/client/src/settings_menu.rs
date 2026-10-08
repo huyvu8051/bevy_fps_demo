@@ -95,7 +95,7 @@ pub(crate) fn resize_scene_render_target(
             if streak + 1 >= RESIZE_DEBOUNCE_FRAMES {
                 *applied = current;
                 *pending = None;
-                if let Some(image) = images.get_mut(&target.0) {
+                if let Some(mut image) = images.get_mut(&target.0) {
                     image.resize(scaled_scene_extent(current.0, current.1, current.2));
                 }
             } else {
@@ -142,7 +142,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 row.spawn((
                     Text::new("1/2"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -163,7 +163,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 page.spawn((
                     Text::new("Resolution scale"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -193,7 +193,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                             btn.spawn((
                                 Text::new(format!("{:.0}%", scale * 100.0)),
                                 TextFont {
-                                    font_size: 14.0,
+                                    font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
                                 TextColor(Color::WHITE),
@@ -205,7 +205,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 page.spawn((
                     Text::new("FPS cap"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -237,7 +237,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                             btn.spawn((
                                 Text::new(format!("{cap}")),
                                 TextFont {
-                                    font_size: 14.0,
+                                    font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
                                 TextColor(Color::WHITE),
@@ -249,7 +249,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 page.spawn((
                     Text::new("Texture quality"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -279,7 +279,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                             btn.spawn((
                                 Text::new(tier.to_string()),
                                 TextFont {
-                                    font_size: 14.0,
+                                    font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
                                 TextColor(Color::WHITE),
@@ -291,7 +291,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 page.spawn((
                     Text::new("Polygon quality"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -321,7 +321,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                             btn.spawn((
                                 Text::new(tier.to_string()),
                                 TextFont {
-                                    font_size: 14.0,
+                                    font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
                                 TextColor(Color::WHITE),
@@ -333,7 +333,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 page.spawn((
                     Text::new("Gun texture quality"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -363,7 +363,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                             btn.spawn((
                                 Text::new(tier.to_string()),
                                 TextFont {
-                                    font_size: 14.0,
+                                    font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
                                 TextColor(Color::WHITE),
@@ -375,7 +375,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 page.spawn((
                     Text::new("Gun polygon quality"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -405,7 +405,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                             btn.spawn((
                                 Text::new(tier.to_string()),
                                 TextFont {
-                                    font_size: 14.0,
+                                    font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
                                 TextColor(Color::WHITE),
@@ -417,7 +417,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 page.spawn((
                     Text::new("Zombie texture quality"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -447,7 +447,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                             btn.spawn((
                                 Text::new(tier.to_string()),
                                 TextFont {
-                                    font_size: 14.0,
+                                    font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
                                 TextColor(Color::WHITE),
@@ -459,7 +459,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 page.spawn((
                     Text::new("Shadow quality"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -489,7 +489,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                             btn.spawn((
                                 Text::new(tier.to_string()),
                                 TextFont {
-                                    font_size: 14.0,
+                                    font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
                                 TextColor(Color::WHITE),
@@ -501,7 +501,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 page.spawn((
                     Text::new("Light quality"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -531,7 +531,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                             btn.spawn((
                                 Text::new(tier.to_string()),
                                 TextFont {
-                                    font_size: 14.0,
+                                    font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
                                 TextColor(Color::WHITE),
@@ -543,7 +543,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 page.spawn((
                     Text::new("Point light quality"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -573,7 +573,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                             btn.spawn((
                                 Text::new(tier.to_string()),
                                 TextFont {
-                                    font_size: 14.0,
+                                    font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
                                 TextColor(Color::WHITE),
@@ -608,7 +608,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     page.spawn((
                         Text::new("Cheats"),
                         TextFont {
-                            font_size: 16.0,
+                            font_size: FontSize::Px(16.0),
                             ..default()
                         },
                         TextColor(Color::WHITE),
@@ -715,7 +715,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     row.spawn((
                         Text::new("10"),
                         TextFont {
-                            font_size: 16.0,
+                            font_size: FontSize::Px(16.0),
                             ..default()
                         },
                         TextColor(Color::WHITE),
@@ -728,7 +728,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 page.spawn((
                     Text::new("Sensitivity"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -744,7 +744,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     row.spawn((
                         Text::new("1.00x"),
                         TextFont {
-                            font_size: 16.0,
+                            font_size: FontSize::Px(16.0),
                             ..default()
                         },
                         TextColor(Color::WHITE),
@@ -755,7 +755,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                 page.spawn((
                     Text::new("Damage"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -771,7 +771,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     row.spawn((
                         Text::new("1.00x"),
                         TextFont {
-                            font_size: 16.0,
+                            font_size: FontSize::Px(16.0),
                             ..default()
                         },
                         TextColor(Color::WHITE),
@@ -848,7 +848,7 @@ pub(crate) fn spawn_cheat_button_node(parent: &mut ChildSpawnerCommands, label: 
             btn.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: 13.0,
+                    font_size: FontSize::Px(13.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -867,7 +867,7 @@ pub(crate) fn spawn_cheat_action_button(parent: &mut ChildSpawnerCommands, label
 pub(crate) fn spawn_lod_stepper_row(parent: &mut ChildSpawnerCommands, label: &str, param_of_band: impl Fn(usize) -> LodParam, initial: [String; 3]) {
     parent.spawn((
         Text::new(label),
-        TextFont { font_size: 14.0, ..default() },
+        TextFont { font_size: FontSize::Px(14.0), ..default() },
         TextColor(Color::WHITE),
     ));
     parent
@@ -881,7 +881,7 @@ pub(crate) fn spawn_lod_stepper_row(parent: &mut ChildSpawnerCommands, label: &s
             for (band, text) in initial.into_iter().enumerate() {
                 let param = param_of_band(band);
                 spawn_cheat_action_button(row, "-", LodDecButton(param));
-                row.spawn((Text::new(text), TextFont { font_size: 14.0, ..default() }, TextColor(Color::WHITE), LodValueText(param)));
+                row.spawn((Text::new(text), TextFont { font_size: FontSize::Px(14.0), ..default() }, TextColor(Color::WHITE), LodValueText(param)));
                 spawn_cheat_action_button(row, "+", LodIncButton(param));
             }
         });
@@ -1079,8 +1079,8 @@ pub(crate) fn apply_map_render_toggles(
     }
     if let Ok(mut light) = sun.single_mut() {
         let shadows_on = shadow_quality.0 > 0;
-        if light.shadows_enabled != shadows_on {
-            light.shadows_enabled = shadows_on;
+        if light.shadow_maps_enabled != shadows_on {
+            light.shadow_maps_enabled = shadows_on;
         }
         let target_illuminance = MAIN_SUN_ILLUMINANCE * (light_quality.0.min(5) as f32 / 5.0);
         if light.illuminance != target_illuminance {
@@ -1667,7 +1667,7 @@ pub(crate) fn spawn_settings_toggle_button(commands: &mut Commands) {
             btn.spawn((
                 Text::new("=="),
                 TextFont {
-                    font_size: 20.0,
+                    font_size: FontSize::Px(20.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -1731,7 +1731,7 @@ pub(crate) fn spawn_mouse_ui_lock_indicator(commands: &mut Commands) {
     commands.spawn((
         Text::new("UI LOCKED (Tab to unlock)"),
         TextFont {
-            font_size: 16.0,
+            font_size: FontSize::Px(16.0),
             ..default()
         },
         TextColor(Color::srgb(1.0, 0.6, 0.2)),

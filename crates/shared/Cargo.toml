@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = { version = "0.18", default-features = false }
+bevy = { version = "0.19", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 ron = "0.8"
-renet2_netcode = { version = "0.14", features = ["native_transport"] }
-avian3d = "0.6"
+renet2_netcode = { version = "0.16", features = ["native_transport"] }
+avian3d = "0.7"
 
 
 # Needed for ios_bundle_resource_path() (lib.rs) — real iOS devices need

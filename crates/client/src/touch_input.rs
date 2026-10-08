@@ -308,7 +308,7 @@ pub(crate) fn spawn_touch_controls(commands: &mut Commands) {
             btn.spawn((
                 Text::new("ADS"),
                 TextFont {
-                    font_size: 12.0,
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -343,7 +343,7 @@ pub(crate) fn spawn_touch_controls(commands: &mut Commands) {
             btn.spawn((
                 Text::new("RELOAD"),
                 TextFont {
-                    font_size: 10.0,
+                    font_size: FontSize::Px(10.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -467,7 +467,7 @@ pub(crate) fn spawn_touch_round_button(commands: &mut Commands, label: &'static 
             btn.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: 10.0,
+                    font_size: FontSize::Px(10.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),

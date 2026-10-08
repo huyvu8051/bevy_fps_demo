@@ -164,7 +164,7 @@ pub(crate) fn on_net_player_replicated(
 pub(crate) fn spawn_remote_player_model(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer, tuning: &PlayerModelTuning) {
     parent.spawn((
         Name::new("PlayerModel (remote NetPlayer)"),
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(tuning.mesh.clone()))),
+        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(tuning.mesh.clone()))),
 
         Transform::from_xyz(0.0, tuning.y_offset, 0.0)
             .with_rotation(Quat::from_rotation_y(tuning.facing_deg.to_radians()))
@@ -289,7 +289,7 @@ pub(crate) fn spawn_game_over_ui(commands: &mut Commands) {
             root.spawn((
                 Text::new("GAME OVER"),
                 TextFont {
-                    font_size: 64.0,
+                    font_size: FontSize::Px(64.0),
                     ..default()
                 },
                 TextColor(Color::srgb(1.0, 0.2, 0.2)),
@@ -297,7 +297,7 @@ pub(crate) fn spawn_game_over_ui(commands: &mut Commands) {
             root.spawn((
                 Text::new("Press R to Restart"),
                 TextFont {
-                    font_size: 24.0,
+                    font_size: FontSize::Px(24.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -324,7 +324,7 @@ pub(crate) fn spawn_game_over_ui(commands: &mut Commands) {
                 btn.spawn((
                     Text::new("RESTART"),
                     TextFont {
-                        font_size: 20.0,
+                        font_size: FontSize::Px(20.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -372,7 +372,7 @@ pub(crate) fn spawn_map_select_ui(commands: &mut Commands) {
             root.spawn((
                 Text::new("SELECT MAP"),
                 TextFont {
-                    font_size: 40.0,
+                    font_size: FontSize::Px(40.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -408,7 +408,7 @@ pub(crate) fn spawn_map_select_ui(commands: &mut Commands) {
                             btn.spawn((
                                 Text::new(title),
                                 TextFont {
-                                    font_size: 20.0,
+                                    font_size: FontSize::Px(20.0),
                                     ..default()
                                 },
                                 TextColor(Color::WHITE),
@@ -417,7 +417,7 @@ pub(crate) fn spawn_map_select_ui(commands: &mut Commands) {
                     group.spawn((
                         Text::new(subtitle),
                         TextFont {
-                            font_size: 13.0,
+                            font_size: FontSize::Px(13.0),
                             ..default()
                         },
                         TextColor(Color::srgba(0.8, 0.8, 0.8, 1.0)),
@@ -445,7 +445,7 @@ pub(crate) fn spawn_map_select_ui(commands: &mut Commands) {
                 btn.spawn((
                     Text::new("Reset Config"),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(Color::WHITE),

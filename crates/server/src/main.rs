@@ -75,6 +75,7 @@ fn main() {
             },
             bevy::mesh::MeshPlugin,
             bevy::scene::ScenePlugin,
+            bevy::world_serialization::WorldSerializationPlugin,
 
             bevy::image::ImagePlugin::default(),
 
@@ -281,7 +282,7 @@ fn spawn_item_gallery_level_pieces(commands: &mut Commands, asset_server: &Asset
 fn spawn_item_gallery_car_colliders(commands: &mut Commands, asset_server: &AssetServer) {
     for (path, physics) in shared::ITEM_GALLERY_CAR_PATHS.iter().zip(shared::item_gallery_car_physics()) {
         commands.spawn((
-            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(*path))),
+            WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(*path))),
             Transform::from_xyz(physics.x, physics.y, physics.z)
                 .with_rotation(physics.rotation)
                 .with_scale(Vec3::splat(physics.scale)),
@@ -712,7 +713,7 @@ fn debug_bot_fire(
         }
 
         commands.server_trigger(ToClients {
-            mode: SendMode::Broadcast,
+            targets: SendTargets::All,
             message: ShotFx::ZombieHit { origin, point: hit_point, normal, damage, killed },
         });
     }
@@ -1057,7 +1058,7 @@ fn on_zombie_spawned(
 
         Transform::IDENTITY,
         Visibility::default(),
-        SceneRoot(scene),
+        WorldAssetRoot(scene),
     ));
 }
 
@@ -1408,7 +1409,7 @@ fn handle_fire_shot(
 
         if let Ok(network_id) = network_ids.get(shooter) {
             commands.server_trigger(ToClients {
-                mode: SendMode::Broadcast,
+                targets: SendTargets::All,
                 message: PlayerFiredFx { shooter_network_id: network_id.get() },
             });
         }
@@ -1495,12 +1496,12 @@ fn handle_fire_shot(
             }
 
             commands.server_trigger(ToClients {
-                mode: SendMode::BroadcastExcept(trigger.client_id),
+                targets: SendTargets::AllExcept(trigger.client_id),
                 message: ShotFx::ZombieHit { origin: shot.origin, point: hit_point, normal, damage, killed },
             });
 
             commands.server_trigger(ToClients {
-                mode: SendMode::Direct(trigger.client_id),
+                targets: SendTargets::Single(trigger.client_id),
                 message: ShotConfirmed { point: hit_point, normal, damage, killed },
             });
         }
@@ -1547,11 +1548,11 @@ fn handle_fire_shot(
             knockback.0 += push;
         }
         commands.server_trigger(ToClients {
-            mode: SendMode::BroadcastExcept(trigger.client_id),
+            targets: SendTargets::AllExcept(trigger.client_id),
             message: ShotFx::ZombieHit { origin: shot.origin, point: hit_point, normal, damage, killed },
         });
         commands.server_trigger(ToClients {
-            mode: SendMode::Direct(trigger.client_id),
+            targets: SendTargets::Single(trigger.client_id),
             message: ShotConfirmed { point: hit_point, normal, damage, killed },
         });
         return;
@@ -1559,7 +1560,7 @@ fn handle_fire_shot(
 
     info!("[shot] hit a surface, no zombie: point={:.2?}", outer_hit_point);
     commands.server_trigger(ToClients {
-        mode: SendMode::Broadcast,
+        targets: SendTargets::All,
         message: ShotFx::SurfaceHit { origin: shot.origin, point: outer_hit_point, normal: hit.normal },
     });
 }
@@ -1583,7 +1584,7 @@ fn on_player_died(
 
     if let Ok(network_id) = network_ids.get(entity) {
         commands.server_trigger(ToClients {
-            mode: SendMode::Broadcast,
+            targets: SendTargets::All,
             message: PlayerDiedFx { who_network_id: network_id.get() },
         });
     }
@@ -1595,7 +1596,7 @@ fn on_player_died(
     if all_dead {
         game_over.0 = true;
         commands.server_trigger(ToClients {
-            mode: SendMode::Broadcast,
+            targets: SendTargets::All,
             message: GameStateEvent::GameOver,
         });
     }
@@ -1644,7 +1645,7 @@ fn on_request_restart(
     }
 
     commands.server_trigger(ToClients {
-        mode: SendMode::Broadcast,
+        targets: SendTargets::All,
         message: GameStateEvent::Restarted,
     });
 }

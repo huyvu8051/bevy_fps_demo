@@ -187,7 +187,7 @@ pub(crate) fn apply_item_gallery_car_distance_lod(
         }
 
         mesh.0 = tier.mesh_pool[band].clone();
-        if let Some(material) = materials.get_mut(&material_handle.0) {
+        if let Some(mut material) = materials.get_mut(&material_handle.0) {
             let (base_color, normal, metallic_roughness) = &tier.texture_pool[band];
             material.base_color_texture = Some(base_color.clone());
             material.normal_map_texture = Some(normal.clone());
@@ -268,7 +268,7 @@ struct F9ToastText;
 fn spawn_f9_toast_ui(mut commands: Commands) {
     commands.spawn((
         Text::new(""),
-        TextFont { font_size: 18.0, ..default() },
+        TextFont { font_size: FontSize::Px(18.0), ..default() },
         TextColor(Color::srgb(0.6, 1.0, 0.6)),
         Node {
             position_type: PositionType::Absolute,

@@ -55,11 +55,11 @@ pub(crate) fn spawn_floating_damage(commands: &mut Commands, world_pos: Vec3, da
     commands.spawn((
         Text::new(format!("{damage:.1}")),
         TextFont {
-            font_size: if critical {
+            font_size: FontSize::Px(if critical {
                 FLOATING_DAMAGE_CRIT_FONT_SIZE
             } else {
                 FLOATING_DAMAGE_FONT_SIZE
-            },
+            }),
             ..default()
         },
         TextColor(if critical {
@@ -113,7 +113,7 @@ pub(crate) fn spawn_health_ui(commands: &mut Commands) {
     commands.spawn((
         Text::new("HP: 100"),
         TextFont {
-            font_size: 24.0,
+            font_size: FontSize::Px(24.0),
             ..default()
         },
         TextColor(Color::srgb(1.0, 0.3, 0.3)),
@@ -146,7 +146,7 @@ pub(crate) fn spawn_inspect_ui(commands: &mut Commands) {
     commands.spawn((
         Text::new(""),
         TextFont {
-            font_size: 18.0,
+            font_size: FontSize::Px(18.0),
             ..default()
         },
         TextColor(Color::srgb(0.4, 1.0, 0.6)),
@@ -193,7 +193,7 @@ pub(crate) fn spawn_ammo_ui(commands: &mut Commands) {
     commands.spawn((
         Text::new(format!("{MAGAZINE_SIZE} / {MAGAZINE_SIZE}")),
         TextFont {
-            font_size: 24.0,
+            font_size: FontSize::Px(24.0),
             ..default()
         },
         TextColor(Color::WHITE),
@@ -216,7 +216,7 @@ pub(crate) fn spawn_ping_ui(commands: &mut Commands) {
     commands.spawn((
         Text::new("Ping: -- ms   Loss: --"),
         TextFont {
-            font_size: 16.0,
+            font_size: FontSize::Px(16.0),
             ..default()
         },
         TextColor(Color::srgb(0.7, 0.85, 1.0)),
@@ -295,7 +295,7 @@ pub(crate) fn spawn_compass_ui(commands: &mut Commands) {
                 root.spawn((
                     Text::new(label),
                     TextFont {
-                        font_size: 16.0,
+                        font_size: FontSize::Px(16.0),
                         ..default()
                     },
                     TextColor(if heading == 0.0 { Color::srgb(1.0, 0.35, 0.3) } else { Color::srgb(0.85, 0.85, 0.85) }),
@@ -324,7 +324,7 @@ pub(crate) fn spawn_compass_ui(commands: &mut Commands) {
     commands.spawn((
         Text::new("000°"),
         TextFont {
-            font_size: 14.0,
+            font_size: FontSize::Px(14.0),
             ..default()
         },
         TextColor(Color::srgb(1.0, 0.85, 0.2)),

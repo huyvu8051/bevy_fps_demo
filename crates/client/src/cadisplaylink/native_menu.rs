@@ -42,7 +42,7 @@ pub fn set_sensitivity(app: &mut App, value: f32) {
 pub fn player_hp(app: &mut App) -> f32 {
     let mut state: SystemState<Query<&Health, bevy::ecs::query::With<crate::Player>>> =
         SystemState::from_world(app.world_mut());
-    let query = state.get(app.world());
+    let query = state.get(app.world()).expect("system param validation failed");
     query.single().map(|h| h.0).unwrap_or(-1.0)
 }
 
@@ -53,7 +53,7 @@ pub fn game_over(app: &mut App) -> bool {
 pub fn trigger_restart(app: &mut App) {
     use bevy_replicon::prelude::ClientTriggerExt;
     let mut state: SystemState<Commands> = SystemState::from_world(app.world_mut());
-    state.get_mut(app.world_mut()).client_trigger(shared::RequestRestart);
+    state.get_mut(app.world_mut()).expect("system param validation failed").client_trigger(shared::RequestRestart);
     state.apply(app.world_mut());
 }
 
@@ -137,7 +137,7 @@ pub fn zombie_target_count(app: &mut App) -> u32 {
 
 pub fn live_zombie_count(app: &mut App) -> u32 {
     let mut state: SystemState<Query<(), bevy::ecs::query::With<shared::Zombie>>> = SystemState::from_world(app.world_mut());
-    state.get(app.world()).iter().count() as u32
+    state.get(app.world()).expect("system param validation failed").iter().count() as u32
 }
 
 pub fn kill_count(app: &mut App) -> u32 {
@@ -151,7 +151,7 @@ fn set_zombie_count_and_trigger(app: &mut App, new_count: u32) {
         count.0 = new_count;
     }
     let mut state: SystemState<Commands> = SystemState::from_world(app.world_mut());
-    state.get_mut(app.world_mut()).client_trigger(shared::SetZombieCount(new_count));
+    state.get_mut(app.world_mut()).expect("system param validation failed").client_trigger(shared::SetZombieCount(new_count));
     state.apply(app.world_mut());
 }
 
@@ -174,7 +174,7 @@ pub fn zombie_count_inc(app: &mut App) {
 fn set_nearest_zombie_health(app: &mut App, value: f32) {
     let mut state: SystemState<(Query<&Transform, bevy::ecs::query::With<crate::Player>>, Query<(&Transform, &mut Health), bevy::ecs::query::With<Zombie>>)> =
         SystemState::from_world(app.world_mut());
-    let (player, mut zombies) = state.get_mut(app.world_mut());
+    let (player, mut zombies) = state.get_mut(app.world_mut()).expect("system param validation failed");
     let Ok(player_transform) = player.single() else {
         return;
     };
@@ -201,7 +201,7 @@ pub fn near_death_nearest_zombie(app: &mut App) {
 pub fn trigger_kill_all_zombies(app: &mut App) {
     use bevy_replicon::prelude::ClientTriggerExt;
     let mut state: SystemState<Commands> = SystemState::from_world(app.world_mut());
-    state.get_mut(app.world_mut()).client_trigger(shared::ClearAllZombies);
+    state.get_mut(app.world_mut()).expect("system param validation failed").client_trigger(shared::ClearAllZombies);
     state.apply(app.world_mut());
 }
 
@@ -209,6 +209,6 @@ pub fn trigger_kill_all_zombies(app: &mut App) {
 pub fn trigger_spawn_more_zombies(app: &mut App) {
     use bevy_replicon::prelude::ClientTriggerExt;
     let mut state: SystemState<Commands> = SystemState::from_world(app.world_mut());
-    state.get_mut(app.world_mut()).client_trigger(shared::SpawnMoreZombies);
+    state.get_mut(app.world_mut()).expect("system param validation failed").client_trigger(shared::SpawnMoreZombies);
     state.apply(app.world_mut());
 }

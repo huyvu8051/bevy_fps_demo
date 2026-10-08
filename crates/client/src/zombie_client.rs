@@ -293,7 +293,7 @@ pub(crate) fn zombie_cosmetic_bundle() -> impl Bundle {
 
 pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer, kind: ZombieKind) -> impl Bundle {
     (
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(zombie_kind_mesh_path(kind)))),
+        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(zombie_kind_mesh_path(kind)))),
         Transform::IDENTITY,
     )
 }
@@ -320,7 +320,7 @@ pub(crate) fn apply_zombie_texture_quality(
     }
     for (&kind, handle) in cached.iter() {
         let texture: Handle<Image> = asset_server.load(shared::zombie_kind_texture_path(kind, texture_quality.0));
-        if let Some(material) = materials.get_mut(handle) {
+        if let Some(mut material) = materials.get_mut(handle) {
             material.base_color_texture = Some(texture);
         }
     }
@@ -368,7 +368,7 @@ pub(crate) fn apply_zombie_distance_lod_texture(
             continue;
         }
         let texture: Handle<Image> = asset_server.load(shared::zombie_kind_texture_path(kind, target_tier));
-        if let Some(material) = materials.get_mut(handle) {
+        if let Some(mut material) = materials.get_mut(handle) {
             material.base_color_texture = Some(texture);
         }
         last_tier.insert(kind, target_tier);
@@ -419,7 +419,7 @@ pub(crate) fn spawn_zombie_health_bar(commands: &mut Commands, zombie: Entity) {
             bar.spawn((
                 Text::new(format!("{ZOMBIE_MAX_HEALTH}/{ZOMBIE_MAX_HEALTH}")),
                 TextFont {
-                    font_size: 12.0,
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),

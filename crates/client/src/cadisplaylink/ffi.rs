@@ -46,7 +46,7 @@ pub extern "C" fn native_metal_probe_release(obj: *mut std::ffi::c_void) {
 pub(super) fn touched(app: &mut App, touch_id: u64, phase: TouchPhase, position: Vec2) {
     let mut windows_state: bevy::ecs::system::SystemState<Query<Entity, bevy::ecs::query::With<Window>>> =
         bevy::ecs::system::SystemState::from_world(app.world_mut());
-    let windows = windows_state.get(app.world_mut());
+    let windows = windows_state.get(app.world_mut()).expect("system param validation failed");
     let Ok(entity) = windows.single() else {
         return;
     };
@@ -65,7 +65,7 @@ pub(super) fn touched(app: &mut App, touch_id: u64, phase: TouchPhase, position:
 fn primary_window_entity(app: &mut App) -> Option<Entity> {
     let mut windows_state: bevy::ecs::system::SystemState<Query<Entity, bevy::ecs::query::With<Window>>> =
         bevy::ecs::system::SystemState::from_world(app.world_mut());
-    windows_state.get(app.world_mut()).single().ok()
+    windows_state.get(app.world_mut()).expect("system param validation failed").single().ok()
 }
 
 fn map_key_id(id: u16) -> Option<KeyCode> {
@@ -153,7 +153,7 @@ pub(super) fn key_changed(app: &mut App, key_id: u16, pressed: bool) {
 pub(super) fn mouse_connected(app: &mut App, connected: bool) {
     let mut cursor_state: bevy::ecs::system::SystemState<Query<&mut CursorOptions, bevy::ecs::query::With<PrimaryWindow>>> =
         bevy::ecs::system::SystemState::from_world(app.world_mut());
-    let mut cursor = cursor_state.get_mut(app.world_mut());
+    let mut cursor = cursor_state.get_mut(app.world_mut()).expect("system param validation failed");
     let Ok(mut cursor) = cursor.single_mut() else {
         return;
     };

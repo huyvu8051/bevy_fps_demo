@@ -2,7 +2,6 @@
 use bevy::animation::graph::AnimationGraph;
 use bevy::prelude::*;
 use bevy::render::view::Msaa;
-use bevy::scene::SceneRoot;
 use crate::*;
 
 #[derive(Resource)]
@@ -195,7 +194,7 @@ pub(crate) fn setup_gameplay(
     commands.spawn((
         DirectionalLight {
             illuminance: if dynamic_lights_enabled() { MAIN_SUN_ILLUMINANCE } else { 0.0 },
-            shadows_enabled: light_shadows_enabled(),
+            shadow_maps_enabled: light_shadows_enabled(),
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
@@ -215,7 +214,7 @@ pub(crate) fn setup_gameplay(
 
     commands.spawn((
         Name::new("PlayerModel (local, debug — KeyT/CameraMode)"),
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(player_model_tuning.mesh.clone()))),
+        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(player_model_tuning.mesh.clone()))),
         Transform::from_translation(player_spawn).with_scale(Vec3::splat(player_model_tuning.scale)),
         Visibility::Hidden,
         PlayerModel,
@@ -456,7 +455,7 @@ fn spawn_test_arena(
                 color: Color::srgb(1.0, 0.98, 0.92),
                 intensity: 4_000_000.0,
                 range: ARENA_HALF_SIZE * 3.0,
-                shadows_enabled: light_shadows_enabled(),
+                shadow_maps_enabled: light_shadows_enabled(),
                 ..default()
             },
             PointLightBaseIntensity(4_000_000.0),
@@ -474,7 +473,7 @@ fn spawn_map1_lights(commands: &mut Commands) {
                 color: Color::srgb(0.9, 0.9, 0.88),
                 intensity: 4_000_000.0,
                 range: (level.half_size_x + level.half_size_z) * 1.2,
-                shadows_enabled: light_shadows_enabled(),
+                shadow_maps_enabled: light_shadows_enabled(),
                 ..default()
             },
             PointLightBaseIntensity(4_000_000.0),
