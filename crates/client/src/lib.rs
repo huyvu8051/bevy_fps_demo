@@ -488,6 +488,7 @@ impl Plugin for GamePlugin {
         .add_observer(on_player_died_fx)
         .add_observer(on_game_state_event)
         .add_plugins(ArenaCarsPlugin)
+        .add_plugins(navigation::ClientNavigationPlugin)
         .add_plugins(ArenaLayoutPlugin)
 
 
@@ -664,7 +665,7 @@ impl Plugin for GamePlugin {
                     toggle_player_stance,
                     toggle_debug_flags.run_if(debug_keys_allowed),
                     autopilot_pick_target,
-                    autopilot_think,
+                    autopilot_think.after(bevy_landmass::prelude::LandmassSystems::Output),
                     mouse_look,
                     shoot,
                     reload_gun,

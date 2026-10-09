@@ -159,6 +159,14 @@ pub(crate) fn autopilot_think(
     spatial_query: SpatialQuery,
     mut decision_timer: Local<f32>,
     mut touch_aiming: ResMut<TouchAiming>,
+    archipelagos: Query<&bevy_landmass::prelude::Archipelago3d>,
+    mut pathing: Query<
+        (
+            &mut bevy_landmass::prelude::AgentTarget3d,
+            &bevy_landmass::prelude::AgentDesiredVelocity3d,
+        ),
+        (With<Player>, Without<NetPlayer>),
+    >,
 ) {
     if !autopilot.0 {
 
@@ -303,7 +311,19 @@ pub(crate) fn autopilot_think(
 
         let toward = target_transform.translation - player_transform.translation;
         let toward = Vec3::new(toward.x, 0.0, toward.z).normalize_or_zero();
-        yaw_relative_axis(cam.yaw, steer_toward(&spatial_query, camera_position, toward, &occ_filter))
+        // Raycast steering only sees as far as its probe, so it walks into
+        // dead ends. Prefer the navmesh route when landmass has one.
+        // Aim at the zombie's feet: its transform sits at the capsule centre,
+        // which is too high above the navmesh to sample onto it.
+        let routed = path_direction(
+            &archipelagos,
+            &mut pathing,
+            target_transform.translation - Vec3::Y * shared::ZOMBIE_LOD_REST_HEIGHT,
+        );
+        yaw_relative_axis(
+            cam.yaw,
+            routed.unwrap_or_else(|| steer_toward(&spatial_query, camera_position, toward, &occ_filter)),
+        )
     } else if !straight_los {
 
         Vec2::ZERO
@@ -324,6 +344,37 @@ pub(crate) fn autopilot_think(
     intent.sprint = nearby.is_empty()
         && (horizontal_distance > AUTOPILOT_SPRINT_APPROACH_DISTANCE
             || (!straight_los && peek_dir == 0.0 && horizontal_distance > AUTOPILOT_RETREAT_RANGE));
+}
+
+/// Sets the navmesh target and returns the route's heading, if landmass has
+/// one. `None` while the navmesh is still loading or the player is off-mesh.
+fn path_direction(
+    archipelagos: &Query<&bevy_landmass::prelude::Archipelago3d>,
+    pathing: &mut Query<
+        (
+            &mut bevy_landmass::prelude::AgentTarget3d,
+            &bevy_landmass::prelude::AgentDesiredVelocity3d,
+        ),
+        (With<Player>, Without<NetPlayer>),
+    >,
+    target: Vec3,
+) -> Option<Vec3> {
+    let snapped = archipelagos
+        .single()
+        .ok()
+        .and_then(|archipelago| {
+            archipelago
+                .sample_point(target, &crate::navigation::target_sample_distance())
+                .ok()
+                .map(|sampled| sampled.point())
+        })
+        .unwrap_or(target);
+    let (mut agent_target, desired) = pathing.single_mut().ok()?;
+    *agent_target = bevy_landmass::prelude::AgentTarget3d::Point(snapped);
+    let velocity = desired.velocity();
+    Some(Vec3::new(velocity.x, 0.0, velocity.z))
+        .map(|v| v.normalize_or_zero())
+        .filter(|v| *v != Vec3::ZERO)
 }
 
 fn steer_toward(spatial_query: &SpatialQuery, origin: Vec3, desired: Vec3, filter: &SpatialQueryFilter) -> Vec3 {
