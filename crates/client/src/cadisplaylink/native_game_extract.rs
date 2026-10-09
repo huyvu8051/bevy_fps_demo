@@ -53,12 +53,6 @@ type MeshExtractParams<'w, 's, F> = (
     ResMut<'w, DecodedTextureCache>,
 );
 
-/// Every `SystemState` the two per-frame extraction passes need, built once.
-///
-/// `SystemState::new` rebuilds query state and rematches archetypes on every
-/// call; measured at roughly 7us each, which is real money eighteen times a
-/// frame. Taken out of the world and put back so nothing else can borrow it
-/// mid-pass.
 #[derive(Resource)]
 pub struct ExtractQueries {
     fps_camera: SystemState<Q<'static, 'static, (&'static mut Camera, &'static mut Projection), With<crate::FpsCamera>>>,
@@ -254,9 +248,6 @@ pub struct RenderSnapshot {
     pub debug_lines: Vec<DebugLine>,
 }
 
-/// A world-space line segment for the Metal renderer to draw. Hitboxes are
-/// the only user today; on desktop they are bevy gizmos, which iOS has no
-/// renderer for.
 pub struct DebugLine {
     pub a: [f32; 3],
     pub b: [f32; 3],
@@ -357,10 +348,6 @@ impl Default for CameraSnapshot {
     }
 }
 
-/// `geometry_already_uploaded` lets the renderer say which meshes it still
-/// holds a vertex buffer for. Their geometry is left out of the snapshot: it
-/// never changes, and cloning a whole map's vertices each frame only to throw
-/// the copy away is the single most expensive thing extraction can do.
 pub fn extract_render_snapshot(
     world: &mut bevy::ecs::world::World,
     geometry_already_uploaded: impl Fn(AssetId<Mesh>) -> bool,
@@ -528,8 +515,6 @@ pub fn extract_render_snapshot(
 }
 
 
-/// Static map geometry never moves, so the extracted list is kept across
-/// frames and only entries whose entity actually changed are rebuilt.
 #[derive(Resource, Default)]
 pub struct StaticMeshCache {
     entries: Vec<ExtractedMesh>,
@@ -610,8 +595,6 @@ fn extract_one_mesh(
         (positions, normals, uvs, tangents, indices)
     };
 
-    // Tangents only arrive on the frame the geometry is uploaded, so afterwards
-    // whether this mesh is normal-mapped has to come from the cached entry.
     let has_tangents = if positions.is_empty() {
         previous.is_some_and(|p| p.normal_texture.is_some())
     } else {
@@ -677,7 +660,6 @@ fn push_sphere(out: &mut Vec<DebugLine>, centre: Vec3, radius: f32, color: [f32;
     push_circle(out, centre, Vec3::Y, Vec3::Z, radius, color);
 }
 
-/// Perpendicular axes for a ring facing along `direction`.
 fn ring_axes(direction: Vec3) -> (Vec3, Vec3) {
     let reference = if direction.y.abs() > 0.9 { Vec3::X } else { Vec3::Y };
     let u = direction.cross(reference).normalize_or_zero();

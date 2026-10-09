@@ -6,11 +6,6 @@ use bevy::gltf::extensions::{
 };
 use bevy::gltf::{gltf, GltfAssetLabel, GltfLoaderSettings, GltfMaterial};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
-
-/// glTF scenes arrive with `Mesh3d` but no material; `PbrPlugin` is what
-/// normally turns each `GltfMaterial` into a `StandardMaterial` and attaches
-/// it. The iOS app has no `PbrPlugin`, so without this every glTF map loads
-/// invisible.
 pub(crate) fn register_gltf_standard_materials(app: &mut App) {
     app.world_mut()
         .resource_mut::<GltfExtensionHandlers>()
@@ -25,9 +20,6 @@ struct StandardMaterialFromGltf;
 fn standard_material_label(material_label: &str) -> String {
     format!("{material_label}/std")
 }
-
-/// Only the fields the Metal renderer reads. `bevy_pbr` has a complete
-/// conversion but keeps it private, and the renderer ignores everything else.
 fn standard_material_from(material: &GltfMaterial) -> StandardMaterial {
     StandardMaterial {
         base_color: material.base_color,

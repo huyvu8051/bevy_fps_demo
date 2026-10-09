@@ -7,26 +7,21 @@ use crate::{
     PRONE_LENGTH, PRONE_SPEED_MULTIPLIER, SPRINT_MULTIPLIER,
 };
 
-/// Whether a move made so little horizontal headway that something is in the
-/// way, rather than the mover simply walking slowly.
+const PROGRESS_MEANING_UNOBSTRUCTED: f32 = 0.7;
+const MIN_HEADROOM_FRACTION: f32 = 0.5;
+const LANDING_PROBE_OVERSHOOT: f32 = 0.05;
+
+pub const STEP_HEIGHT: f32 = 0.45;
+
 pub fn blocked_horizontally(start: Vec3, end: Vec3, horizontal_velocity: Vec3, dt: f32) -> bool {
     let wanted = horizontal_velocity.length() * dt;
     if wanted <= 1e-4 {
         return false;
     }
     let moved = Vec3::new(end.x - start.x, 0.0, end.z - start.z).length();
-    moved < wanted * 0.7
+    moved < wanted * PROGRESS_MEANING_UNOBSTRUCTED
 }
 
-/// Tallest ledge a mover can walk straight up without jumping.
-pub const STEP_HEIGHT: f32 = 0.45;
-
-/// Retries a blocked horizontal move from one step higher, then settles back
-/// down onto whatever it lands on.
-///
-/// `move_and_slide` alone cannot climb a ledge: its face is vertical, so
-/// sliding along it only ever redirects motion sideways, never up. Jumping is
-/// the only way over a kerb otherwise.
 pub fn try_step_up(
     mover: &MoveAndSlide,
     shape: &Collider,
@@ -41,7 +36,7 @@ pub fn try_step_up(
         .spatial_query
         .cast_shape(shape, start, rotation, Dir3::Y, &ShapeCastConfig::from_max_distance(STEP_HEIGHT), filter)
         .map_or(STEP_HEIGHT, |hit| hit.distance);
-    if headroom < STEP_HEIGHT * 0.5 {
+    if headroom < STEP_HEIGHT * MIN_HEADROOM_FRACTION {
         return None;
     }
 
@@ -62,7 +57,7 @@ pub fn try_step_up(
         stepped.position,
         rotation,
         Dir3::NEG_Y,
-        &ShapeCastConfig::from_max_distance(headroom + 0.05),
+        &ShapeCastConfig::from_max_distance(headroom + LANDING_PROBE_OVERSHOOT),
         filter,
     )?;
     if landing.normal1.y <= ground_normal_min_y() {
@@ -71,18 +66,10 @@ pub fn try_step_up(
     Some(stepped.position - Vec3::Y * landing.distance)
 }
 
-/// Uphill direction along a surface with this normal.
 fn slope_tangent(normal: Vec3) -> Vec3 {
     (Vec3::Y - normal * normal.dot(Vec3::Y)).normalize_or_zero()
 }
 
-/// Handles one `move_and_slide` contact and reports whether it counts as
-/// ground.
-///
-/// Sliding alone bleeds velocity downhill every frame, which is what makes a
-/// walkable ramp feel unclimbable, and lets a steep face shove a falling body
-/// upwards. Cancelling the along-slope component in those two cases is what
-/// keeps both from happening.
 pub fn resolve_slope_hit(hit: &mut MoveAndSlideHitData, input_velocity: Vec3, grounded: bool) -> bool {
     let normal = hit.normal.as_vec3();
     let walkable = normal.y > ground_normal_min_y();

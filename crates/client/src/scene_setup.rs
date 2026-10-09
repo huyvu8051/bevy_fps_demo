@@ -418,9 +418,6 @@ fn spawn_test_arena(
             ArenaBoxDims { shape: b.shape, size: b.size, index: i },
         ));
 
-        if b.shape == shared::ArenaShape::Cylinder {
-            piece.insert(ClientNavObstacle);
-        }
     }
 
     if dynamic_lights_enabled() {

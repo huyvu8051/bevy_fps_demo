@@ -311,10 +311,6 @@ pub(crate) fn autopilot_think(
 
         let toward = target_transform.translation - player_transform.translation;
         let toward = Vec3::new(toward.x, 0.0, toward.z).normalize_or_zero();
-        // Raycast steering only sees as far as its probe, so it walks into
-        // dead ends. Prefer the navmesh route when landmass has one.
-        // Aim at the zombie's feet: its transform sits at the capsule centre,
-        // which is too high above the navmesh to sample onto it.
         let routed = path_direction(
             &archipelagos,
             &mut pathing,
@@ -345,9 +341,6 @@ pub(crate) fn autopilot_think(
         && (horizontal_distance > AUTOPILOT_SPRINT_APPROACH_DISTANCE
             || (!straight_los && peek_dir == 0.0 && horizontal_distance > AUTOPILOT_RETREAT_RANGE));
 }
-
-/// Sets the navmesh target and returns the route's heading, if landmass has
-/// one. `None` while the navmesh is still loading or the player is off-mesh.
 fn path_direction(
     archipelagos: &Query<&bevy_landmass::prelude::Archipelago3d>,
     pathing: &mut Query<
@@ -364,7 +357,7 @@ fn path_direction(
         .ok()
         .and_then(|archipelago| {
             archipelago
-                .sample_point(target, &crate::navigation::target_sample_distance())
+                .sample_point(target, &crate::navigation::off_mesh_target_tolerance())
                 .ok()
                 .map(|sampled| sampled.point())
         })

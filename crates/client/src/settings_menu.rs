@@ -2024,8 +2024,6 @@ pub(crate) fn respawn_arena_cars_on_quality_change(
     texture_quality: Res<TextureQuality>,
     poly_quality: Res<PolyQuality>,
     existing: Query<Entity, With<ArenaCarProp>>,
-
-    existing_nav_obstacles: Query<Entity, With<ArenaCarNavObstacle>>,
 ) {
     let texture_changed = texture_quality.is_changed() && !texture_quality.is_added();
     let poly_changed = poly_quality.is_changed() && !poly_quality.is_added();
@@ -2036,9 +2034,6 @@ pub(crate) fn respawn_arena_cars_on_quality_change(
         return;
     }
     for entity in &existing {
-        commands.entity(entity).despawn();
-    }
-    for entity in &existing_nav_obstacles {
         commands.entity(entity).despawn();
     }
     spawn_arena_car_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);

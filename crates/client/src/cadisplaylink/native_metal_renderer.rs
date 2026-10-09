@@ -108,11 +108,7 @@ struct Uniforms {
     float4x4 pointLightViewProjection;
     packed_float3 cameraPos;
     float _cameraPad;
-    // Every mesh caches its vertex buffer in LOCAL space, so this places the
-    // instance in the world each draw.
     float4x4 modelMatrix;
-    // Inverse transpose of modelMatrix: normals skew under non-uniform scale,
-    // which 140 of the desert's nodes carry.
     float4x4 normalMatrix;
 };
 

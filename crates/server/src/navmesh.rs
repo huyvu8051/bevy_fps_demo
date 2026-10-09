@@ -12,16 +12,6 @@ use shared::Scenario;
 
 const WALKABLE_CLIMB: f32 = 0.5;
 const CELL_SIZE_FRACTION: f32 = 1.0;
-
-/// Isolated patches smaller than the square of this are dropped, and those
-/// under `MERGE_REGION_SIZE` are folded into a neighbour where they touch one.
-///
-/// The defaults leave the desert in 280 islands holding 18% of the mesh in the
-/// biggest, which routes badly: an agent or its target lands on a rooftop or
-/// ledge with no way off. Raising them does not connect anything — the main
-/// walkable region stays about 750 polygons at every setting — but it deletes
-/// the scraps, so sampling can no longer strand anyone on one. At these values
-/// the desert keeps 2450 polygons in 55 islands.
 const MIN_REGION_SIZE: u16 = 32;
 const MERGE_REGION_SIZE: u16 = 80;
 const NAVMESH_SAMPLE_DISTANCE_ABOVE: f32 = 1.0;
@@ -125,10 +115,6 @@ pub fn read_baked_navmesh(scenario: Scenario) -> Option<Navmesh> {
         .ok()
         .map(|(navmesh, _)| navmesh)
 }
-
-/// How many separate islands the navmesh fell into, and what share of its
-/// polygons the biggest one holds. A bake that scores poorly here routes
-/// badly no matter what the pathfinder does: there is simply no way across.
 pub fn connectivity(navmesh: &Navmesh) -> (usize, f32) {
     let polygons = &navmesh.polygon;
     let vertices_per_polygon = polygons.max_vertices_per_polygon as usize;
