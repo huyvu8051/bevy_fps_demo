@@ -2125,16 +2125,12 @@ impl NativeMetalRenderer {
                 snapshot.point_light_quality.min(5) as f32 / 5.0,
             );
             real_game_static_meshes = snapshot.static_meshes;
-            real_game_extracted.extend(snapshot.zombies.into_iter().map(|z| super::skinned_actor::SkinnedActorDraw {
-                transform: z.transform,
-                model: shared::zombie_kind_metal_model_name(z.kind),
-                pose: super::skinned_actor::SkinnedActorPose::JointMatrices(z.joint_matrices),
-            }));
-
-            real_game_extracted.extend(snapshot.remote_players.into_iter().map(|p| super::skinned_actor::SkinnedActorDraw {
-                transform: p.transform,
-                model: "soldier",
-                pose: super::skinned_actor::SkinnedActorPose::JointMatrices(p.joint_matrices),
+            real_game_extracted.extend(snapshot.skinned_actors.into_iter().map(|actor| {
+                super::skinned_actor::SkinnedActorDraw {
+                    transform: actor.transform,
+                    model: actor.model,
+                    pose: super::skinned_actor::SkinnedActorPose::JointMatrices(actor.joint_matrices),
+                }
             }));
         }
 

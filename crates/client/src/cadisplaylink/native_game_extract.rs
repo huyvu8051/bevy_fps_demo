@@ -1,9 +1,9 @@
 
 use bevy::asset::{AssetId, Assets, Handle};
-use bevy::camera::visibility::Visibility;
+use bevy::camera::visibility::{InheritedVisibility, Visibility};
 use bevy::camera::{Camera, Projection, RenderTargetInfo};
 use bevy::ecs::hierarchy::Children;
-use bevy::ecs::query::{With, Without};
+use bevy::ecs::query::{Has, With, Without};
 use bevy::ecs::resource::Resource;
 use bevy::ecs::system::{Query, Res, ResMut, SystemState};
 use bevy::image::Image;
@@ -14,6 +14,7 @@ use bevy::material::AlphaMode;
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::render::render_resource::TextureFormat;
 use bevy::text::{FontSize, TextColor, TextFont};
+use bevy::math::Vec3;
 use bevy::transform::components::{GlobalTransform, Transform};
 use bevy::ui::widget::Text;
 use bevy::ui::{BackgroundColor, BorderColor, ComputedNode, ComputedStackIndex, Display, Node, OverflowAxis, UiGlobalTransform};
@@ -117,8 +118,7 @@ pub struct ScopeCameraSnapshot {
 pub struct RenderSnapshot {
     pub camera: Option<CameraSnapshot>,
     pub scope_camera: Option<ScopeCameraSnapshot>,
-    pub zombies: Vec<SkinnedRenderState>,
-    pub remote_players: Vec<SkinnedRenderState>,
+    pub skinned_actors: Vec<SkinnedRenderState>,
     pub static_meshes: Vec<ExtractedMesh>,
     pub light: Option<LightSnapshot>,
     pub sun: Option<SunSnapshot>,
@@ -185,8 +185,7 @@ pub struct LightSnapshot {
 pub struct SkinnedRenderState {
     pub transform: Transform,
     pub joint_matrices: Vec<[[f32; 4]; 4]>,
-
-    pub kind: ZombieKind,
+    pub model: &'static str,
 }
 
 fn find_first_skinned_mesh(
@@ -293,14 +292,18 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         Res<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
     )> = SystemState::new(world);
     let (zombie_query, children_query, skinned_mesh_query, joint_globals, inverse_bindposes_assets) = zombie_state.get(world).expect("system param validation failed");
-    snapshot.zombies = zombie_query
+    snapshot.skinned_actors = zombie_query
         .iter()
         .map(|(entity, transform, kind)| {
             let joint_matrices = find_first_skinned_mesh(entity, &children_query, &skinned_mesh_query)
                 .and_then(|mesh_entity| skinned_mesh_query.get(mesh_entity).ok())
                 .map(|skinned| joint_matrices_for(skinned, &joint_globals, &inverse_bindposes_assets))
                 .unwrap_or_default();
-            SkinnedRenderState { transform: transform.compute_transform(), joint_matrices, kind: kind.copied().unwrap_or_default() }
+            SkinnedRenderState {
+                transform: transform.compute_transform(),
+                joint_matrices,
+                model: shared::zombie_kind_metal_model_name(kind.copied().unwrap_or_default()),
+            }
         })
         .collect();
 
@@ -315,7 +318,8 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     )> = SystemState::new(world);
     let (remote_query, remote_children_query, remote_skinned_query, remote_joint_globals, remote_inverse_bindposes_assets) =
         remote_state.get(world).expect("system param validation failed");
-    snapshot.remote_players = remote_query
+    snapshot.skinned_actors.extend(
+        remote_query
         .iter()
         .map(|(entity, t)| (entity, t.compute_transform()))
         .filter(|(_, t)| match camera_eye_xz {
@@ -331,12 +335,20 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
                 .map(|skinned| joint_matrices_for(skinned, &remote_joint_globals, &remote_inverse_bindposes_assets))
                 .unwrap_or_default();
 
-            SkinnedRenderState { transform, joint_matrices, kind: ZombieKind::default() }
-        })
-        .collect();
+            SkinnedRenderState { transform, joint_matrices, model: "soldier" }
+        }),
+    );
 
+    let eye = snapshot.camera.as_ref().map(|c| Vec3::from_array(c.eye)).unwrap_or(Vec3::ZERO);
     let mut light_state: SystemState<Query<(&PointLight, &GlobalTransform)>> = SystemState::new(world);
-    snapshot.light = light_state.get(world).expect("system param validation failed").iter().next().map(|(light, transform)| {
+    snapshot.light = light_state
+        .get(world)
+        .expect("system param validation failed")
+        .iter()
+        .min_by(|(_, a), (_, b)| {
+            a.translation().distance_squared(eye).total_cmp(&b.translation().distance_squared(eye))
+        })
+        .map(|(light, transform)| {
         let c = light.color.to_srgba();
         LightSnapshot {
             position: transform.translation().to_array(),
@@ -367,27 +379,18 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
     let mut zombie_texture_quality_state: SystemState<Res<crate::ZombieTextureQuality>> = SystemState::new(world);
     snapshot.zombie_texture_quality = zombie_texture_quality_state.get(world).expect("system param validation failed").0;
 
-    let mut gun_visible_state: SystemState<Res<crate::GunVisible>> = SystemState::new(world);
-    let gun_visible = gun_visible_state.get(world).expect("system param validation failed").0;
-
-    let mut cars_visible_state: SystemState<Res<crate::CarsVisible>> = SystemState::new(world);
-    let cars_visible = cars_visible_state.get(world).expect("system param validation failed").0;
-    let mut car_entities_state: SystemState<Query<bevy::ecs::entity::Entity, With<crate::ArenaCarProp>>> = SystemState::new(world);
-    let car_entities: std::collections::HashSet<bevy::ecs::entity::Entity> = car_entities_state.get(world).expect("system param validation failed").iter().collect();
-    let gun_mesh_entities: std::collections::HashSet<bevy::ecs::entity::Entity> = {
-        let mut gun_state: SystemState<(Query<bevy::ecs::entity::Entity, With<crate::Gun>>, Query<&Children>)> = SystemState::new(world);
-        let (gun_query, children_query) = gun_state.get(world).expect("system param validation failed");
-        let mut out = Vec::new();
-        if let Some(gun_entity) = gun_query.iter().next() {
-            out.push(gun_entity);
-            collect_descendants(gun_entity, &children_query, &mut out);
-        }
-        out.into_iter().collect()
-    };
-
     world.init_resource::<DecodedTextureCache>();
     let mut mesh_state: SystemState<(
-        Query<(bevy::ecs::entity::Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>, &GlobalTransform), Without<SkinnedMesh>>,
+        Query<
+            (
+                &Mesh3d,
+                &MeshMaterial3d<StandardMaterial>,
+                &GlobalTransform,
+                &InheritedVisibility,
+                Has<crate::ArenaCarProp>,
+            ),
+            Without<SkinnedMesh>,
+        >,
         Res<Assets<Mesh>>,
         Res<Assets<StandardMaterial>>,
         Res<Assets<Image>>,
@@ -403,27 +406,30 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         }
         let image = images.get(handle)?;
         let data = image.data.as_ref()?;
-        match image.texture_descriptor.format {
+        let rgba: std::sync::Arc<[u8]> = match image.texture_descriptor.format {
             TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => {
-                let extracted = ExtractedTexture {
-                    id: handle.id(),
-                    width: image.texture_descriptor.size.width,
-                    height: image.texture_descriptor.size.height,
-                    rgba: std::sync::Arc::from(data.as_slice()),
-                };
-                texture_cache.0.insert(handle.id(), extracted.clone());
-                Some(extracted)
+                std::sync::Arc::from(data.as_slice())
             }
-            _ => None,
-        }
+            TextureFormat::Bgra8UnormSrgb | TextureFormat::Bgra8Unorm => {
+                let mut swapped = data.clone();
+                for pixel in swapped.chunks_exact_mut(4) {
+                    pixel.swap(0, 2);
+                }
+                std::sync::Arc::from(swapped.as_slice())
+            }
+            _ => return None,
+        };
+        let extracted = ExtractedTexture {
+            id: handle.id(),
+            width: image.texture_descriptor.size.width,
+            height: image.texture_descriptor.size.height,
+            rgba,
+        };
+        texture_cache.0.insert(handle.id(), extracted.clone());
+        Some(extracted)
     };
-    for (entity, mesh3d, material3d, transform) in mesh_query.iter() {
-        let is_gun = gun_mesh_entities.contains(&entity);
-        if is_gun && !gun_visible {
-            continue;
-        }
-        let is_car = car_entities.contains(&entity);
-        if is_car && !cars_visible {
+    for (mesh3d, material3d, transform, visibility, is_car) in mesh_query.iter() {
+        if !visibility.get() {
             continue;
         }
         let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
@@ -450,12 +456,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
             .map(|i| i.iter().map(|v| v as u32).collect())
             .unwrap_or_default();
 
-        let has_texture_handle = material.base_color_texture.is_some();
         let texture = material.base_color_texture.as_ref().and_then(|handle| decode_texture(handle, &images));
-
-        if has_texture_handle && texture.is_none() {
-            continue;
-        }
 
         let normal_texture = if tangents.is_empty() {
             None
