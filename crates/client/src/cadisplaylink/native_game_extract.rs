@@ -21,9 +21,86 @@ use bevy::ui::{BackgroundColor, BorderColor, ComputedNode, ComputedStackIndex, D
 
 use shared::{NetPlayer, Zombie, ZombieKind};
 
+
+type Q<'w, 's, D, F = ()> = Query<'w, 's, D, F>;
+
+/// Every `SystemState` the two per-frame extraction passes need, built once.
+///
+/// `SystemState::new` rebuilds query state and rematches archetypes on every
+/// call; measured at roughly 7us each, which is real money eighteen times a
+/// frame. Taken out of the world and put back so nothing else can borrow it
+/// mid-pass.
+#[derive(Resource)]
+pub struct ExtractQueries {
+    fps_camera: SystemState<Q<'static, 'static, (&'static mut Camera, &'static mut Projection), With<crate::FpsCamera>>>,
+    ui_camera: SystemState<Q<'static, 'static, &'static mut Camera, With<bevy::ui::IsDefaultUiCamera>>>,
+    window: SystemState<Q<'static, 'static, &'static mut bevy::window::Window, With<bevy::window::PrimaryWindow>>>,
+    camera: SystemState<(
+        Q<'static, 'static, (&'static GlobalTransform, &'static crate::FpsCamera)>,
+        Q<'static, 'static, &'static crate::Gun>,
+        Res<'static, crate::ScopeZoom>,
+    )>,
+    scope: SystemState<(
+        Q<'static, 'static, (&'static GlobalTransform, &'static bevy::camera::Camera, &'static bevy::camera::Projection), With<crate::ScopeCamera>>,
+        Q<'static, 'static, (&'static GlobalTransform, &'static Transform), With<crate::ScopeLens>>,
+    )>,
+    zombies: SystemState<(
+        Q<'static, 'static, (bevy::ecs::entity::Entity, &'static GlobalTransform, Option<&'static ZombieKind>), With<Zombie>>,
+        Q<'static, 'static, &'static Children>,
+        Q<'static, 'static, &'static SkinnedMesh>,
+        Q<'static, 'static, &'static GlobalTransform>,
+        Res<'static, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
+    )>,
+    remote_players: SystemState<(
+        Q<'static, 'static, (bevy::ecs::entity::Entity, &'static GlobalTransform), (With<NetPlayer>, Without<crate::LocalPlayer>)>,
+        Q<'static, 'static, &'static Children>,
+        Q<'static, 'static, &'static SkinnedMesh>,
+        Q<'static, 'static, &'static GlobalTransform>,
+        Res<'static, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
+    )>,
+    point_lights: SystemState<Q<'static, 'static, (&'static PointLight, &'static GlobalTransform)>>,
+    sun: SystemState<Q<'static, 'static, (&'static DirectionalLight, &'static GlobalTransform)>>,
+    meshes: SystemState<(
+        Q<'static, 'static, (&'static Mesh3d, &'static MeshMaterial3d<StandardMaterial>, &'static GlobalTransform, &'static InheritedVisibility), Without<SkinnedMesh>>,
+        Res<'static, Assets<Mesh>>,
+        Res<'static, Assets<StandardMaterial>>,
+        Res<'static, Assets<Image>>,
+        ResMut<'static, DecodedTextureCache>,
+    )>,
+    ui_roots: SystemState<Q<'static, 'static, bevy::ecs::entity::Entity, With<crate::NativeUiRoot>>>,
+    ui_nodes: SystemState<GenericUiQuery<'static, 'static>>,
+}
+
+impl ExtractQueries {
+    fn new(world: &mut bevy::ecs::world::World) -> Self {
+        world.init_resource::<DecodedTextureCache>();
+        Self {
+            fps_camera: SystemState::new(world),
+            ui_camera: SystemState::new(world),
+            window: SystemState::new(world),
+            camera: SystemState::new(world),
+            scope: SystemState::new(world),
+            zombies: SystemState::new(world),
+            remote_players: SystemState::new(world),
+            point_lights: SystemState::new(world),
+            sun: SystemState::new(world),
+            meshes: SystemState::new(world),
+            ui_roots: SystemState::new(world),
+            ui_nodes: SystemState::new(world),
+        }
+    }
+}
+
+fn take_queries(world: &mut bevy::ecs::world::World) -> ExtractQueries {
+    match world.remove_resource::<ExtractQueries>() {
+        Some(queries) => queries,
+        None => ExtractQueries::new(world),
+    }
+}
+
 pub fn prime_camera_viewport(world: &mut bevy::ecs::world::World, width_pts: f32, height_pts: f32, scale_factor: f32) {
-    let mut state: SystemState<Query<(&mut Camera, &mut Projection), With<crate::FpsCamera>>> = SystemState::new(world);
-    let mut query = state.get_mut(world).expect("system param validation failed");
+    let mut queries = take_queries(world);
+    let mut query = queries.fps_camera.get_mut(world).expect("system param validation failed");
     let (w, h) = (width_pts.max(1.0), height_pts.max(1.0));
 
     let target_info = || {
@@ -39,15 +116,14 @@ pub fn prime_camera_viewport(world: &mut bevy::ecs::world::World, width_pts: f32
         camera.computed.clip_from_view = projection.get_clip_from_view();
     }
 
-    let mut ui_camera_state: SystemState<Query<&mut Camera, With<bevy::ui::IsDefaultUiCamera>>> = SystemState::new(world);
-    for mut ui_camera in ui_camera_state.get_mut(world).expect("system param validation failed").iter_mut() {
+    for mut ui_camera in queries.ui_camera.get_mut(world).expect("system param validation failed").iter_mut() {
         ui_camera.computed.target_info = target_info();
     }
 
-    let mut window_state: SystemState<Query<&mut bevy::window::Window, With<bevy::window::PrimaryWindow>>> = SystemState::new(world);
-    if let Ok(mut window) = window_state.get_mut(world).expect("system param validation failed").single_mut() {
+    if let Ok(mut window) = queries.window.get_mut(world).expect("system param validation failed").single_mut() {
         window.resolution.set(w, h);
     }
+    world.insert_resource(queries);
 }
 
 #[derive(Resource, Default)]
@@ -238,12 +314,8 @@ pub fn extract_render_snapshot(
 ) -> RenderSnapshot {
     let mut snapshot = RenderSnapshot::default();
 
-    let mut camera_state: SystemState<(
-        Query<(&GlobalTransform, &crate::FpsCamera)>,
-        Query<&crate::Gun>,
-        bevy::ecs::system::Res<crate::ScopeZoom>,
-    )> = SystemState::new(world);
-    let (camera_query, gun_query, scope_zoom) = camera_state.get(world).expect("system param validation failed");
+    let mut queries = take_queries(world);
+    let (camera_query, gun_query, scope_zoom) = queries.camera.get(world).expect("system param validation failed");
     if let Some((transform, cam)) = camera_query.iter().next() {
         snapshot.camera = Some(CameraSnapshot {
             eye: transform.translation().to_array(),
@@ -256,11 +328,7 @@ pub fn extract_render_snapshot(
         });
     }
 
-    let mut scope_state: SystemState<(
-        Query<(&GlobalTransform, &bevy::camera::Camera, &bevy::camera::Projection), With<crate::ScopeCamera>>,
-        Query<(&GlobalTransform, &Transform), With<crate::ScopeLens>>,
-    )> = SystemState::new(world);
-    let (scope_camera_query, scope_lens_query) = scope_state.get(world).expect("system param validation failed");
+    let (scope_camera_query, scope_lens_query) = queries.scope.get(world).expect("system param validation failed");
     if let Some((transform, camera, projection)) = scope_camera_query.iter().next() {
         let fov = match projection {
             bevy::camera::Projection::Perspective(p) => p.fov,
@@ -281,14 +349,8 @@ pub fn extract_render_snapshot(
         });
     }
 
-    let mut zombie_state: SystemState<(
-        Query<(bevy::ecs::entity::Entity, &GlobalTransform, Option<&ZombieKind>), With<Zombie>>,
-        Query<&Children>,
-        Query<&SkinnedMesh>,
-        Query<&GlobalTransform>,
-        Res<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
-    )> = SystemState::new(world);
-    let (zombie_query, children_query, skinned_mesh_query, joint_globals, inverse_bindposes_assets) = zombie_state.get(world).expect("system param validation failed");
+    let (zombie_query, children_query, skinned_mesh_query, joint_globals, inverse_bindposes_assets) =
+        queries.zombies.get(world).expect("system param validation failed");
     snapshot.skinned_actors = zombie_query
         .iter()
         .map(|(entity, transform, kind)| {
@@ -306,15 +368,8 @@ pub fn extract_render_snapshot(
 
     const LOCAL_PLAYER_EXCLUSION_RADIUS_XZ: f32 = 1.0;
     let camera_eye_xz = snapshot.camera.as_ref().map(|c| bevy::math::Vec2::new(c.eye[0], c.eye[2]));
-    let mut remote_state: SystemState<(
-        Query<(bevy::ecs::entity::Entity, &GlobalTransform), (With<NetPlayer>, bevy::ecs::query::Without<crate::LocalPlayer>)>,
-        Query<&Children>,
-        Query<&SkinnedMesh>,
-        Query<&GlobalTransform>,
-        Res<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
-    )> = SystemState::new(world);
     let (remote_query, remote_children_query, remote_skinned_query, remote_joint_globals, remote_inverse_bindposes_assets) =
-        remote_state.get(world).expect("system param validation failed");
+        queries.remote_players.get(world).expect("system param validation failed");
     snapshot.skinned_actors.extend(
         remote_query
         .iter()
@@ -337,8 +392,8 @@ pub fn extract_render_snapshot(
     );
 
     let eye = snapshot.camera.as_ref().map(|c| Vec3::from_array(c.eye)).unwrap_or(Vec3::ZERO);
-    let mut light_state: SystemState<Query<(&PointLight, &GlobalTransform)>> = SystemState::new(world);
-    snapshot.light = light_state
+    snapshot.light = queries
+        .point_lights
         .get(world)
         .expect("system param validation failed")
         .iter()
@@ -354,45 +409,20 @@ pub fn extract_render_snapshot(
         }
     });
 
-    let mut sun_state: SystemState<Query<(&DirectionalLight, &GlobalTransform)>> = SystemState::new(world);
-    snapshot.sun = sun_state.get(world).expect("system param validation failed").iter().next().map(|(sun, transform)| {
+    snapshot.sun = queries.sun.get(world).expect("system param validation failed").iter().next().map(|(sun, transform)| {
         let c = sun.color.to_srgba();
         SunSnapshot { direction: transform.forward().to_array(), color: [c.red, c.green, c.blue] }
     });
 
-    let mut msaa_toggle_state: SystemState<Res<crate::MapMsaaOn>> = SystemState::new(world);
-    snapshot.map_msaa_on = msaa_toggle_state.get(world).expect("system param validation failed").0;
+    snapshot.map_msaa_on = world.resource::<crate::MapMsaaOn>().0;
+    snapshot.shadow_quality = world.resource::<crate::ShadowQuality>().0;
+    snapshot.light_quality = world.resource::<crate::LightQuality>().0;
+    snapshot.point_light_quality = world.resource::<crate::PointLightQuality>().0;
+    snapshot.render_resolution_scale = world.resource::<crate::RenderResolutionScale>().0;
+    snapshot.zombie_texture_quality = world.resource::<crate::ZombieTextureQuality>().0;
 
-    let mut shadow_quality_state: SystemState<Res<crate::ShadowQuality>> = SystemState::new(world);
-    snapshot.shadow_quality = shadow_quality_state.get(world).expect("system param validation failed").0;
-    let mut light_quality_state: SystemState<Res<crate::LightQuality>> = SystemState::new(world);
-    snapshot.light_quality = light_quality_state.get(world).expect("system param validation failed").0;
-    let mut point_light_quality_state: SystemState<Res<crate::PointLightQuality>> = SystemState::new(world);
-    snapshot.point_light_quality = point_light_quality_state.get(world).expect("system param validation failed").0;
-
-    let mut resolution_scale_state: SystemState<Res<crate::RenderResolutionScale>> = SystemState::new(world);
-    snapshot.render_resolution_scale = resolution_scale_state.get(world).expect("system param validation failed").0;
-
-    let mut zombie_texture_quality_state: SystemState<Res<crate::ZombieTextureQuality>> = SystemState::new(world);
-    snapshot.zombie_texture_quality = zombie_texture_quality_state.get(world).expect("system param validation failed").0;
-
-    world.init_resource::<DecodedTextureCache>();
-    let mut mesh_state: SystemState<(
-        Query<
-            (
-                &Mesh3d,
-                &MeshMaterial3d<StandardMaterial>,
-                &GlobalTransform,
-                &InheritedVisibility,
-            ),
-            Without<SkinnedMesh>,
-        >,
-        Res<Assets<Mesh>>,
-        Res<Assets<StandardMaterial>>,
-        Res<Assets<Image>>,
-        ResMut<DecodedTextureCache>,
-    )> = SystemState::new(world);
-    let (mesh_query, meshes, materials, images, mut texture_cache) = mesh_state.get_mut(world).expect("system param validation failed");
+    let (mesh_query, meshes, materials, images, mut texture_cache) =
+        queries.meshes.get_mut(world).expect("system param validation failed");
 
     let mut used_texture_ids: std::collections::HashSet<AssetId<Image>> = std::collections::HashSet::new();
     let mut decode_texture = |handle: &Handle<Image>, images: &Assets<Image>| -> Option<ExtractedTexture> {
@@ -428,13 +458,13 @@ pub fn extract_render_snapshot(
         if !visibility.get() {
             continue;
         }
-        let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
         let Some(material) = materials.get(&material3d.0) else { continue };
 
         let mesh_id = mesh3d.id();
         let (positions, normals, uvs, tangents, indices) = if geometry_already_uploaded(mesh_id) {
             (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
         } else {
+            let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
             let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
                 Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) => p.clone(),
                 _ => continue,
@@ -494,8 +524,9 @@ pub fn extract_render_snapshot(
     }
     texture_cache.0.retain(|id, _| used_texture_ids.contains(id));
 
-    snapshot.generic_ui_nodes = extract_generic_ui_nodes(world);
+    snapshot.generic_ui_nodes = extract_generic_ui_nodes(world, &mut queries);
 
+    world.insert_resource(queries);
     snapshot
 }
 
@@ -604,13 +635,18 @@ fn walk_generic_ui_node(
     }
 }
 
-pub fn extract_generic_ui_nodes(world: &mut bevy::ecs::world::World) -> Vec<GenericUiNode> {
-    let mut roots_state: SystemState<Query<bevy::ecs::entity::Entity, With<crate::NativeUiRoot>>> = SystemState::new(world);
-    let roots_query = roots_state.get(world).expect("system param validation failed");
-    let roots: Vec<_> = roots_query.iter().collect();
+fn extract_generic_ui_nodes(
+    world: &mut bevy::ecs::world::World,
+    queries: &mut ExtractQueries,
+) -> Vec<GenericUiNode> {
+    let roots: Vec<_> = queries
+        .ui_roots
+        .get(world)
+        .expect("system param validation failed")
+        .iter()
+        .collect();
 
-    let mut node_state: SystemState<GenericUiQuery> = SystemState::new(world);
-    let node_query = node_state.get(world).expect("system param validation failed");
+    let node_query = queries.ui_nodes.get(world).expect("system param validation failed");
 
     let mut out = Vec::new();
     for root in roots {
