@@ -7,6 +7,34 @@ use crate::{
     PRONE_LENGTH, PRONE_SPEED_MULTIPLIER, SPRINT_MULTIPLIER,
 };
 
+/// Uphill direction along a surface with this normal.
+fn slope_tangent(normal: Vec3) -> Vec3 {
+    (Vec3::Y - normal * normal.dot(Vec3::Y)).normalize_or_zero()
+}
+
+/// Handles one `move_and_slide` contact and reports whether it counts as
+/// ground.
+///
+/// Sliding alone bleeds velocity downhill every frame, which is what makes a
+/// walkable ramp feel unclimbable, and lets a steep face shove a falling body
+/// upwards. Cancelling the along-slope component in those two cases is what
+/// keeps both from happening.
+pub fn resolve_slope_hit(hit: &mut MoveAndSlideHitData, input_velocity: Vec3, grounded: bool) -> bool {
+    let normal = hit.normal.as_vec3();
+    let walkable = normal.y > ground_normal_min_y();
+    let tangent = slope_tangent(normal);
+    let intent = input_velocity.dot(tangent);
+    let along_slope = hit.velocity.dot(tangent);
+
+    let pushed_up_a_cliff = !walkable && along_slope > 0.0 && intent <= 0.0;
+    let dragged_down_a_ramp = walkable && grounded && along_slope < 0.0 && intent >= 0.0;
+    if pushed_up_a_cliff || dragged_down_a_ramp {
+        *hit.velocity -= tangent * along_slope;
+    }
+
+    walkable
+}
+
 pub fn simulate_player_step(mover: &MoveAndSlide, transform: &mut Transform, player: &mut Player, stance: PlayerStance, input: &ClientInput, dt: f32) {
     if input.noclip {
         simulate_noclip_step(transform, input, dt);
@@ -54,6 +82,7 @@ pub fn simulate_player_step(mover: &MoveAndSlide, transform: &mut Transform, pla
     let config = MoveAndSlideConfig::default();
     let filter = SpatialQueryFilter::default();
 
+    let was_grounded = player.grounded;
     let mut grounded_this_frame = false;
     let output = mover.move_and_slide(
         &shape,
@@ -63,8 +92,8 @@ pub fn simulate_player_step(mover: &MoveAndSlide, transform: &mut Transform, pla
         std::time::Duration::from_secs_f32(dt.max(0.0)),
         &config,
         &filter,
-        |hit| {
-            if hit.normal.y > ground_normal_min_y() {
+        |mut hit| {
+            if resolve_slope_hit(&mut hit, velocity, was_grounded) {
                 grounded_this_frame = true;
             }
             MoveAndSlideHitResponse::Accept

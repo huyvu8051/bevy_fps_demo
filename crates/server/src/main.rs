@@ -15,6 +15,7 @@ use bevy_replicon_renet2::{
     RenetChannelsExt, RepliconRenetPlugins,
 };
 use big_brain::prelude::*;
+use shared::movement::resolve_slope_hit;
 use shared::{
     entity_phase, resolve_bone_world_positions, zombie_hit_damage_bones, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
@@ -23,7 +24,7 @@ use shared::{
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
     ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, 
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
-    DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, ground_normal_min_y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
+    DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     MAX_SHOT_DISTANCE, MOVE_SPEED, PILLAR_RADIUS,
     PLAYER_LENGTH, PLAYER_RADIUS, Scenario,
     
@@ -496,6 +497,7 @@ fn move_debug_bots(
         let velocity = horizontal_velocity + Vec3::Y * motion.vertical_velocity;
         let shape = Collider::capsule(PLAYER_RADIUS, PLAYER_LENGTH);
         let config = MoveAndSlideConfig::default();
+        let was_grounded = motion.grounded;
         let mut grounded_this_frame = false;
         let output = mover.move_and_slide(
             &shape,
@@ -505,8 +507,8 @@ fn move_debug_bots(
             time.delta(),
             &config,
             &filter,
-            |hit| {
-                if hit.normal.y > ground_normal_min_y() {
+            |mut hit| {
+                if resolve_slope_hit(&mut hit, velocity, was_grounded) {
                     grounded_this_frame = true;
                 }
                 MoveAndSlideHitResponse::Accept
@@ -1219,6 +1221,7 @@ fn move_zombies(
         let shape = Collider::cylinder(ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT);
         let config = MoveAndSlideConfig::default();
 
+        let was_grounded = motion.grounded;
         let mut grounded_this_frame = false;
         let output = mover.move_and_slide(
             &shape,
@@ -1228,8 +1231,8 @@ fn move_zombies(
             time.delta(),
             &config,
             &filter,
-            |hit| {
-                if hit.normal.y > ground_normal_min_y() {
+            |mut hit| {
+                if resolve_slope_hit(&mut hit, velocity, was_grounded) {
                     grounded_this_frame = true;
                 }
                 MoveAndSlideHitResponse::Accept
