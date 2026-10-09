@@ -83,9 +83,8 @@ pub struct ExtractQueries {
     )>,
     point_lights: SystemState<Q<'static, 'static, (&'static PointLight, &'static GlobalTransform)>>,
     sun: SystemState<Q<'static, 'static, (&'static DirectionalLight, &'static GlobalTransform)>>,
-    meshes: SystemState<MeshExtractParams<'static, 'static, ()>>,
     meshes_changed: SystemState<MeshExtractParams<'static, 'static, MeshChanged>>,
-    meshes_added: SystemState<Q<'static, 'static, (), (With<Mesh3d>, bevy::ecs::query::Added<Mesh3d>, Without<SkinnedMesh>)>>,
+    meshes_any: SystemState<MeshExtractParams<'static, 'static, Without<SkinnedMesh>>>,
     meshes_removed: SystemState<bevy::ecs::lifecycle::RemovedComponents<'static, 'static, Mesh3d>>,
     ui_roots: SystemState<Q<'static, 'static, bevy::ecs::entity::Entity, With<crate::NativeUiRoot>>>,
     hitboxes: SystemState<(
@@ -113,9 +112,8 @@ impl ExtractQueries {
             remote_players: SystemState::new(world),
             point_lights: SystemState::new(world),
             sun: SystemState::new(world),
-            meshes: SystemState::new(world),
             meshes_changed: SystemState::new(world),
-            meshes_added: SystemState::new(world),
+            meshes_any: SystemState::new(world),
             meshes_removed: SystemState::new(world),
             ui_roots: SystemState::new(world),
             hitboxes: SystemState::new(world),
@@ -461,47 +459,63 @@ pub fn extract_render_snapshot(
     snapshot.render_resolution_scale = world.resource::<crate::RenderResolutionScale>().0;
     snapshot.zombie_texture_quality = world.resource::<crate::ZombieTextureQuality>().0;
 
-    let mut cache = world
-        .remove_resource::<StaticMeshCache>()
-        .unwrap_or_default();
-
-    let rebuild = cache.entries.is_empty() || {
-        let spawned = !queries.meshes_added.get(world).expect("system param validation failed").is_empty();
-        let despawned = !queries.meshes_removed.get_mut(world).expect("system param validation failed").read().next().is_none();
-        spawned || despawned
-    };
-
+    let mut cache = world.remove_resource::<StaticMeshCache>().unwrap_or_default();
     let mut used_texture_ids: std::collections::HashSet<AssetId<Image>> = std::collections::HashSet::new();
+    let mut freed_any = false;
 
-    if rebuild {
-        cache.entries.clear();
-        cache.slot_of.clear();
-        let (mesh_query, meshes, materials, images, mut texture_cache) =
-            queries.meshes.get_mut(world).expect("system param validation failed");
-        for (entity, mesh3d, material3d, transform, visibility) in mesh_query.iter() {
-            let Some(extracted) = extract_one_mesh(
-                mesh3d, material3d, transform, visibility, &meshes, &materials, &images,
-                &mut texture_cache, &mut used_texture_ids, &geometry_already_uploaded, None,
-            ) else {
-                continue;
-            };
-            cache.slot_of.insert(entity, cache.entries.len());
-            cache.entries.push(extracted);
+    for entity in queries
+        .meshes_removed
+        .get_mut(world)
+        .expect("system param validation failed")
+        .read()
+        .collect::<Vec<_>>()
+    {
+        if let Some(slot) = cache.slot_of.remove(&entity) {
+            cache.entries[slot].visible = false;
+            cache.free_slots.push(slot);
+            freed_any = true;
         }
-        texture_cache.0.retain(|id, _| used_texture_ids.contains(id));
-    } else {
+        cache.awaiting_textures.remove(&entity);
+    }
+
+    {
         let (mesh_query, meshes, materials, images, mut texture_cache) =
             queries.meshes_changed.get_mut(world).expect("system param validation failed");
         for (entity, mesh3d, material3d, transform, visibility) in mesh_query.iter() {
-            let Some(&slot) = cache.slot_of.get(&entity) else { continue };
-            let previous = cache.entries.get(slot);
-            if let Some(extracted) = extract_one_mesh(
-                mesh3d, material3d, transform, visibility, &meshes, &materials, &images,
-                &mut texture_cache, &mut used_texture_ids, &geometry_already_uploaded, previous,
-            ) {
-                cache.entries[slot] = extracted;
-            }
+            store_extracted_mesh(
+                &mut cache, entity, mesh3d, material3d, transform, visibility,
+                &meshes, &materials, &images, &mut texture_cache, &mut used_texture_ids,
+                &geometry_already_uploaded,
+            );
         }
+    }
+
+    let retry: Vec<bevy::ecs::entity::Entity> = cache.awaiting_textures.iter().copied().collect();
+    if !retry.is_empty() {
+        let (mesh_query, meshes, materials, images, mut texture_cache) =
+            queries.meshes_any.get_mut(world).expect("system param validation failed");
+        for entity in retry {
+            let Ok((_, mesh3d, material3d, transform, visibility)) = mesh_query.get(entity) else {
+                cache.awaiting_textures.remove(&entity);
+                continue;
+            };
+            store_extracted_mesh(
+                &mut cache, entity, mesh3d, material3d, transform, visibility,
+                &meshes, &materials, &images, &mut texture_cache, &mut used_texture_ids,
+                &geometry_already_uploaded,
+            );
+        }
+    }
+
+    if freed_any {
+        let live: std::collections::HashSet<AssetId<Image>> = cache
+            .entries
+            .iter()
+            .flat_map(|entry| [entry.texture.as_ref(), entry.normal_texture.as_ref()])
+            .flatten()
+            .map(|texture| texture.id)
+            .collect();
+        world.resource_mut::<DecodedTextureCache>().0.retain(|id, _| live.contains(id));
     }
 
     snapshot.static_meshes = cache.entries.clone();
@@ -519,6 +533,8 @@ pub fn extract_render_snapshot(
 pub struct StaticMeshCache {
     entries: Vec<ExtractedMesh>,
     slot_of: std::collections::HashMap<bevy::ecs::entity::Entity, usize>,
+    free_slots: Vec<usize>,
+    awaiting_textures: std::collections::HashSet<bevy::ecs::entity::Entity>,
 }
 
 fn decode_texture(
@@ -555,6 +571,49 @@ fn decode_texture(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
+fn store_extracted_mesh(
+    cache: &mut StaticMeshCache,
+    entity: bevy::ecs::entity::Entity,
+    mesh3d: &Mesh3d,
+    material3d: &MeshMaterial3d<StandardMaterial>,
+    transform: &GlobalTransform,
+    visibility: &InheritedVisibility,
+    meshes: &Assets<Mesh>,
+    materials: &Assets<StandardMaterial>,
+    images: &Assets<Image>,
+    texture_cache: &mut DecodedTextureCache,
+    used_texture_ids: &mut std::collections::HashSet<AssetId<Image>>,
+    geometry_already_uploaded: &impl Fn(AssetId<Mesh>) -> bool,
+) {
+    let slot = cache.slot_of.get(&entity).copied();
+    let previous = slot.and_then(|slot| cache.entries.get(slot));
+    let Some((extracted, textures_pending)) = extract_one_mesh(
+        mesh3d, material3d, transform, visibility, meshes, materials, images,
+        texture_cache, used_texture_ids, geometry_already_uploaded, previous,
+    ) else {
+        return;
+    };
+    if textures_pending {
+        cache.awaiting_textures.insert(entity);
+    } else {
+        cache.awaiting_textures.remove(&entity);
+    }
+    match slot {
+        Some(slot) => cache.entries[slot] = extracted,
+        None => match cache.free_slots.pop() {
+            Some(slot) => {
+                cache.slot_of.insert(entity, slot);
+                cache.entries[slot] = extracted;
+            }
+            None => {
+                cache.slot_of.insert(entity, cache.entries.len());
+                cache.entries.push(extracted);
+            }
+        },
+    }
+}
+
 fn extract_one_mesh(
     mesh3d: &Mesh3d,
     material3d: &MeshMaterial3d<StandardMaterial>,
@@ -567,7 +626,7 @@ fn extract_one_mesh(
     used_texture_ids: &mut std::collections::HashSet<AssetId<Image>>,
     geometry_already_uploaded: &impl Fn(AssetId<Mesh>) -> bool,
     previous: Option<&ExtractedMesh>,
-) -> Option<ExtractedMesh> {
+) -> Option<(ExtractedMesh, bool)> {
     let material = materials.get(&material3d.0)?;
     let mesh_id = mesh3d.id();
 
@@ -613,7 +672,10 @@ fn extract_one_mesh(
         })
         .flatten();
 
-    Some(ExtractedMesh {
+    let textures_pending = material.base_color_texture.is_some() && texture.is_none()
+        || has_tangents && material.normal_map_texture.is_some() && normal_texture.is_none();
+
+    Some((ExtractedMesh {
         positions,
         normals,
         uvs,
@@ -638,7 +700,7 @@ fn extract_one_mesh(
             AlphaMode::Blend | AlphaMode::Premultiplied | AlphaMode::Add | AlphaMode::Multiply
         ),
         mesh_id,
-    })
+    }, textures_pending))
 }
 
 
