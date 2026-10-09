@@ -1,5 +1,5 @@
 
-use super::native_metal_renderer::NativeMetalRenderer;
+use metal_renderer::native_metal_renderer::{NativeMetalRenderer, SkinnedModelSpec};
 use bevy::app::App;
 use bevy::ecs::{entity::Entity, system::Query, world::FromWorld};
 use bevy::input::ButtonState;
@@ -9,18 +9,83 @@ use bevy::input::touch::{TouchInput, TouchPhase};
 use bevy::math::Vec2;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window};
 
+/// Owns both halves of the iOS entry point: the game's headless ECS app and
+/// the generic Metal renderer that draws whatever the app extracts.
+pub struct GameHost {
+    app: App,
+    renderer: NativeMetalRenderer,
+}
+
+fn zombie_model_specs() -> Vec<SkinnedModelSpec> {
+    let mut specs = vec![SkinnedModelSpec {
+        name: "soldier",
+        asset_path: "characters/soldier_meshy/mesh/soldier_meshy.glb",
+        scale: 1.04,
+        y_offset: -0.76,
+        facing_radians: 0.0,
+        texture_for_tier: None,
+    }];
+    for kind in [shared::ZombieKind::Classic, shared::ZombieKind::Meshy, shared::ZombieKind::Soldier] {
+        specs.push(SkinnedModelSpec {
+            name: shared::zombie_kind_metal_model_name(kind),
+            asset_path: shared::zombie_kind_mesh_path(kind),
+            scale: 1.0,
+            y_offset: 0.0,
+            facing_radians: 0.0,
+            texture_for_tier: Some(match kind {
+                shared::ZombieKind::Classic => |tier| shared::zombie_kind_texture_path(shared::ZombieKind::Classic, tier),
+                shared::ZombieKind::Meshy => |tier| shared::zombie_kind_texture_path(shared::ZombieKind::Meshy, tier),
+                shared::ZombieKind::Soldier => |tier| shared::zombie_kind_texture_path(shared::ZombieKind::Soldier, tier),
+            }),
+        });
+    }
+    specs
+}
+
+impl GameHost {
+    fn real_game_app_mut(&mut self) -> Option<&mut App> {
+        Some(&mut self.app)
+    }
+
+    fn update_camera(&mut self, forward: f32, strafe: f32, look_dx: f32, look_dy: f32, dt: f32) {
+        self.renderer.update_camera(forward, strafe, look_dx, look_dy, dt);
+    }
+
+    fn render_frame(&mut self) {
+        let (width_pts, height_pts) = self.renderer.view_size();
+        super::native_game_extract::prime_camera_viewport(
+            self.app.world_mut(),
+            width_pts,
+            height_pts,
+            self.renderer.contents_scale(),
+        );
+        self.app.update();
+        let snapshot = super::native_game_extract::extract_render_snapshot(self.app.world_mut(), |id| {
+            self.renderer.has_uploaded_mesh(id)
+        });
+        self.renderer.render_frame(snapshot);
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_create_real_game(
     view: *mut objc::runtime::Object,
-    _scale_factor: f32,
+    scale_factor: f32,
 ) -> *mut std::ffi::c_void {
-    let probe = unsafe { NativeMetalRenderer::new(view) };
-    Box::into_raw(Box::new(probe)) as *mut std::ffi::c_void
+    let renderer = unsafe { NativeMetalRenderer::new(view, &zombie_model_specs(), Default::default()) };
+    let (width_pts, height_pts) = renderer.view_size();
+    let scale = if scale_factor > 0.0 { scale_factor } else { renderer.contents_scale() };
+    let app = super::native_game_app::build_headless_game_ecs_app(
+        (width_pts * scale) as u32,
+        (height_pts * scale) as u32,
+        scale,
+    );
+    Box::into_raw(Box::new(GameHost { app, renderer })) as *mut std::ffi::c_void
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_render_frame(obj: *mut std::ffi::c_void) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     probe.render_frame();
 }
 
@@ -33,13 +98,13 @@ pub extern "C" fn native_metal_probe_update_camera(
     look_dy: f32,
     delta_time: f32,
 ) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     probe.update_camera(forward, strafe, look_dx, look_dy, delta_time);
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_release(obj: *mut std::ffi::c_void) {
-    let probe: Box<NativeMetalRenderer> = unsafe { Box::from_raw(obj as *mut NativeMetalRenderer) };
+    let probe: Box<GameHost> = unsafe { Box::from_raw(obj as *mut GameHost) };
     drop(probe);
 }
 
@@ -185,7 +250,7 @@ pub(super) fn mouse_button_changed(app: &mut App, button: u8, pressed: bool) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_touch_started(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         touched(app, touch_id, TouchPhase::Started, Vec2::new(x, y));
     }
@@ -193,7 +258,7 @@ pub extern "C" fn native_metal_probe_touch_started(obj: *mut std::ffi::c_void, t
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_touch_moved(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         touched(app, touch_id, TouchPhase::Moved, Vec2::new(x, y));
     }
@@ -201,7 +266,7 @@ pub extern "C" fn native_metal_probe_touch_moved(obj: *mut std::ffi::c_void, tou
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_touch_ended(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         touched(app, touch_id, TouchPhase::Ended, Vec2::new(x, y));
     }
@@ -209,7 +274,7 @@ pub extern "C" fn native_metal_probe_touch_ended(obj: *mut std::ffi::c_void, tou
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_touch_cancelled(obj: *mut std::ffi::c_void, touch_id: u64, x: f32, y: f32) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         touched(app, touch_id, TouchPhase::Canceled, Vec2::new(x, y));
     }
@@ -217,7 +282,7 @@ pub extern "C" fn native_metal_probe_touch_cancelled(obj: *mut std::ffi::c_void,
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_key_changed(obj: *mut std::ffi::c_void, key_id: u16, pressed: bool) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         key_changed(app, key_id, pressed);
     }
@@ -225,7 +290,7 @@ pub extern "C" fn native_metal_probe_key_changed(obj: *mut std::ffi::c_void, key
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_mouse_connected(obj: *mut std::ffi::c_void, connected: bool) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         mouse_connected(app, connected);
     }
@@ -233,7 +298,7 @@ pub extern "C" fn native_metal_probe_mouse_connected(obj: *mut std::ffi::c_void,
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_mouse_moved(obj: *mut std::ffi::c_void, delta_x: f32, delta_y: f32) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         mouse_moved(app, delta_x, delta_y);
     }
@@ -241,7 +306,7 @@ pub extern "C" fn native_metal_probe_mouse_moved(obj: *mut std::ffi::c_void, del
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_mouse_button_changed(obj: *mut std::ffi::c_void, button: u8, pressed: bool) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         mouse_button_changed(app, button, pressed);
     }
@@ -249,13 +314,13 @@ pub extern "C" fn native_metal_probe_mouse_button_changed(obj: *mut std::ffi::c_
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_menu_visible(obj: *mut std::ffi::c_void) -> bool {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     probe.real_game_app_mut().map(super::native_menu::menu_visible).unwrap_or(false)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_set_menu_visible(obj: *mut std::ffi::c_void, visible: bool) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::set_menu_visible(app, visible);
     }
@@ -263,13 +328,13 @@ pub extern "C" fn native_metal_probe_set_menu_visible(obj: *mut std::ffi::c_void
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_game_over(obj: *mut std::ffi::c_void) -> bool {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     probe.real_game_app_mut().map(super::native_menu::game_over).unwrap_or(false)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_trigger_restart(obj: *mut std::ffi::c_void) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::trigger_restart(app);
     }
@@ -277,13 +342,13 @@ pub extern "C" fn native_metal_probe_trigger_restart(obj: *mut std::ffi::c_void)
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_get_sensitivity(obj: *mut std::ffi::c_void) -> f32 {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     probe.real_game_app_mut().map(super::native_menu::sensitivity).unwrap_or(1.0)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_set_sensitivity(obj: *mut std::ffi::c_void, value: f32) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::set_sensitivity(app, value);
     }
@@ -291,25 +356,25 @@ pub extern "C" fn native_metal_probe_set_sensitivity(obj: *mut std::ffi::c_void,
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_get_fps_cap(obj: *mut std::ffi::c_void) -> f32 {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     probe.real_game_app_mut().map(super::native_menu::fps_cap).unwrap_or(120.0)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_get_player_hp(obj: *mut std::ffi::c_void) -> f32 {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     probe.real_game_app_mut().map(super::native_menu::player_hp).unwrap_or(-1.0)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_get_ping_ms(obj: *mut std::ffi::c_void) -> f32 {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     probe.real_game_app_mut().map(super::native_menu::ping_ms).unwrap_or(-1.0)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_get_god_mode(obj: *mut std::ffi::c_void) -> bool {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     return probe.real_game_app_mut().map(super::native_menu::god_mode).unwrap_or(false);
     #[cfg(not(debug_assertions))]
@@ -318,7 +383,7 @@ pub extern "C" fn native_metal_probe_get_god_mode(obj: *mut std::ffi::c_void) ->
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_set_god_mode(obj: *mut std::ffi::c_void, on: bool) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::set_god_mode(app, on);
@@ -329,7 +394,7 @@ pub extern "C" fn native_metal_probe_set_god_mode(obj: *mut std::ffi::c_void, on
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_get_noclip(obj: *mut std::ffi::c_void) -> bool {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     return probe.real_game_app_mut().map(super::native_menu::noclip).unwrap_or(false);
     #[cfg(not(debug_assertions))]
@@ -338,7 +403,7 @@ pub extern "C" fn native_metal_probe_get_noclip(obj: *mut std::ffi::c_void) -> b
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_set_noclip(obj: *mut std::ffi::c_void, on: bool) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::set_noclip(app, on);
@@ -349,7 +414,7 @@ pub extern "C" fn native_metal_probe_set_noclip(obj: *mut std::ffi::c_void, on: 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_get_freeze_zombies(obj: *mut std::ffi::c_void) -> bool {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     return probe.real_game_app_mut().map(super::native_menu::freeze_zombies).unwrap_or(false);
     #[cfg(not(debug_assertions))]
@@ -358,7 +423,7 @@ pub extern "C" fn native_metal_probe_get_freeze_zombies(obj: *mut std::ffi::c_vo
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_set_freeze_zombies(obj: *mut std::ffi::c_void, on: bool) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::set_freeze_zombies(app, on);
@@ -369,13 +434,13 @@ pub extern "C" fn native_metal_probe_set_freeze_zombies(obj: *mut std::ffi::c_vo
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_get_autopilot(obj: *mut std::ffi::c_void) -> bool {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     probe.real_game_app_mut().map(super::native_menu::autopilot).unwrap_or(true)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_set_autopilot(obj: *mut std::ffi::c_void, on: bool) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::set_autopilot(app, on);
     }
@@ -383,7 +448,7 @@ pub extern "C" fn native_metal_probe_set_autopilot(obj: *mut std::ffi::c_void, o
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_trigger_kill_all_zombies(obj: *mut std::ffi::c_void) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::trigger_kill_all_zombies(app);
@@ -394,7 +459,7 @@ pub extern "C" fn native_metal_probe_trigger_kill_all_zombies(obj: *mut std::ffi
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_trigger_spawn_more_zombies(obj: *mut std::ffi::c_void) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::trigger_spawn_more_zombies(app);
@@ -407,7 +472,7 @@ macro_rules! bool_toggle_ffi {
     ($get_ffi:ident, $set_ffi:ident, $get:path, $set:path) => {
         #[unsafe(no_mangle)]
         pub extern "C" fn $get_ffi(obj: *mut std::ffi::c_void) -> bool {
-            let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+            let probe = unsafe { &mut *(obj as *mut GameHost) };
             #[cfg(debug_assertions)]
             return probe.real_game_app_mut().map($get).unwrap_or(false);
             #[cfg(not(debug_assertions))]
@@ -419,7 +484,7 @@ macro_rules! bool_toggle_ffi {
 
         #[unsafe(no_mangle)]
         pub extern "C" fn $set_ffi(obj: *mut std::ffi::c_void, on: bool) {
-            let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+            let probe = unsafe { &mut *(obj as *mut GameHost) };
             #[cfg(debug_assertions)]
             if let Some(app) = probe.real_game_app_mut() {
                 $set(app, on);
@@ -495,7 +560,7 @@ bool_toggle_ffi!(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_get_zombie_target_count(obj: *mut std::ffi::c_void) -> u32 {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     return probe.real_game_app_mut().map(super::native_menu::zombie_target_count).unwrap_or(10);
     #[cfg(not(debug_assertions))]
@@ -507,19 +572,19 @@ pub extern "C" fn native_metal_probe_get_zombie_target_count(obj: *mut std::ffi:
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_get_live_zombie_count(obj: *mut std::ffi::c_void) -> u32 {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     probe.real_game_app_mut().map(super::native_menu::live_zombie_count).unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_get_kill_count(obj: *mut std::ffi::c_void) -> u32 {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     probe.real_game_app_mut().map(super::native_menu::kill_count).unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_zombie_count_dec(obj: *mut std::ffi::c_void) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::zombie_count_dec(app);
@@ -532,7 +597,7 @@ pub extern "C" fn native_metal_probe_zombie_count_dec(obj: *mut std::ffi::c_void
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_zombie_count_inc(obj: *mut std::ffi::c_void) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::zombie_count_inc(app);
@@ -545,7 +610,7 @@ pub extern "C" fn native_metal_probe_zombie_count_inc(obj: *mut std::ffi::c_void
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_heal_nearest_zombie(obj: *mut std::ffi::c_void) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::heal_nearest_zombie(app);
@@ -558,7 +623,7 @@ pub extern "C" fn native_metal_probe_heal_nearest_zombie(obj: *mut std::ffi::c_v
 
 #[unsafe(no_mangle)]
 pub extern "C" fn native_metal_probe_near_death_nearest_zombie(obj: *mut std::ffi::c_void) {
-    let probe = unsafe { &mut *(obj as *mut NativeMetalRenderer) };
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
     #[cfg(debug_assertions)]
     if let Some(app) = probe.real_game_app_mut() {
         super::native_menu::near_death_nearest_zombie(app);

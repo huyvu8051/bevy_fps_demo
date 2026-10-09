@@ -2381,6 +2381,7 @@ dependencies = [
  "image",
  "landmass_rerecast",
  "metal",
+ "metal_renderer",
  "objc",
  "raw-window-handle",
  "ron 0.8.1",
@@ -4286,6 +4287,18 @@ dependencies = [
  "log",
  "objc",
  "paste",
+]
+
+[[package]]
+name = "metal_renderer"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "core-graphics 0.25.0",
+ "gltf",
+ "image",
+ "metal",
+ "objc",
 ]
 
 [[package]]

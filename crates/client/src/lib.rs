@@ -44,7 +44,7 @@ use shared::{
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
 #[cfg(target_os = "ios")]
-mod cadisplaylink;
+pub mod cadisplaylink;
 
 mod autopilot;
 use autopilot::{autopilot_pick_target, autopilot_think, Autopilot, AutopilotIntent, AutopilotLookOnly, AutopilotState};

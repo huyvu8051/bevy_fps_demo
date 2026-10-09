@@ -35,7 +35,7 @@ pub(crate) const AVAILABLE_CHARACTER_DIRS: &[&str] = &["characters/soldier_meshy
 fn load_character_ron_by_dir(dir: &str) -> CharacterRon {
     #[cfg(target_os = "ios")]
     let text: String = {
-        let resource_path = crate::cadisplaylink::native_metal_renderer::bundle_resource_path()
+        let resource_path = metal_renderer::native_metal_renderer::bundle_resource_path()
             .unwrap_or_else(|| panic!("failed to read {dir}/character.ron: NSBundle.main.resourcePath was nil"));
         let path = std::path::Path::new(&resource_path).join("assets").join(dir).join("character.ron");
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {dir}/character.ron at {path:?}: {e}"))

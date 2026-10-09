@@ -31,7 +31,7 @@ pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, sc
     app.add_plugins(bevy::scene::ScenePlugin);
     app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
     app.add_plugins(bevy::gltf::GltfPlugin::default());
-    super::gltf_materials::register_gltf_standard_materials(&mut app);
+    metal_renderer::gltf_materials::register_gltf_standard_materials(&mut app);
 
     app.init_asset::<bevy::pbr::StandardMaterial>();
 
