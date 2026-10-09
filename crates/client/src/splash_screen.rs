@@ -22,6 +22,7 @@ pub(crate) fn spawn_splash_screen(commands: &mut Commands, asset_server: &AssetS
             BackgroundColor(Color::WHITE),
             GlobalZIndex(STATIC_UI_Z_INDEX + 1000),
             SplashScreen(Timer::from_seconds(SPLASH_SCREEN_DURATION_SECS, TimerMode::Once)),
+            NativeUiRoot,
         ))
         .with_children(|root| {
             root.spawn((

@@ -94,7 +94,11 @@ pub struct ExtractQueries {
     meshes_added: SystemState<Q<'static, 'static, (), (With<Mesh3d>, bevy::ecs::query::Added<Mesh3d>, Without<SkinnedMesh>)>>,
     meshes_removed: SystemState<bevy::ecs::lifecycle::RemovedComponents<'static, 'static, Mesh3d>>,
     ui_roots: SystemState<Q<'static, 'static, bevy::ecs::entity::Entity, With<crate::NativeUiRoot>>>,
-    ui_nodes: SystemState<GenericUiQuery<'static, 'static>>,
+    ui_nodes: SystemState<(
+        GenericUiQuery<'static, 'static>,
+        Res<'static, Assets<Image>>,
+        ResMut<'static, DecodedTextureCache>,
+    )>,
 }
 
 impl ExtractQueries {
@@ -254,6 +258,7 @@ pub struct GenericUiNode {
     /// Treated as a circle, not a rounded rect, when >= half the shorter side.
     pub corner_radius: f32,
     pub text: Option<GenericUiText>,
+    pub image: Option<ExtractedTexture>,
     /// `[x, y, w, h]`, inherited from the nearest clipping ancestor (not self).
     pub clip_rect: Option<[f32; 4]>,
     /// Bevy's own computed paint order (honours `GlobalZIndex`/hierarchy); nodes
@@ -499,7 +504,7 @@ pub fn extract_render_snapshot(
     snapshot.static_meshes = cache.entries.clone();
     world.insert_resource(cache);
 
-    snapshot.generic_ui_nodes = extract_generic_ui_nodes(world, &mut queries);
+    snapshot.generic_ui_nodes = extract_generic_ui_nodes(world, &mut queries, &mut used_texture_ids);
 
     world.insert_resource(queries);
     snapshot
@@ -658,6 +663,7 @@ type GenericUiQuery<'w, 's> = Query<
         Option<&'static BorderColor>,
         Option<(&'static Text, &'static TextColor, &'static TextFont)>,
         Option<&'static Visibility>,
+        Option<&'static bevy::ui::widget::ImageNode>,
     ),
 >;
 
@@ -675,9 +681,16 @@ fn walk_generic_ui_node(
     inherited_clip: Option<[f32; 4]>,
     inherited_visible: bool,
     query: &GenericUiQuery,
+    images: &Assets<Image>,
+    texture_cache: &mut DecodedTextureCache,
+    used_texture_ids: &mut std::collections::HashSet<AssetId<Image>>,
     out: &mut Vec<GenericUiNode>,
 ) {
-    let Ok((node, computed, stack_index, transform, children, background, border_color, text, visibility)) = query.get(entity) else { return };
+    let Ok((node, computed, stack_index, transform, children, background, border_color, text, visibility, image)) =
+        query.get(entity)
+    else {
+        return;
+    };
     // `Display::None` drops the whole subtree from layout, so stop here. `Visibility::Hidden`
     // only skips painting — layout still applies and a child may force itself back visible,
     // so that case keeps walking.
@@ -711,7 +724,16 @@ fn walk_generic_ui_node(
         GenericUiText { content: text.0.clone(), color: [c.red, c.green, c.blue, c.alpha], font_size: font_size_px(font.font_size) }
     });
 
-    if visible && (background_color.is_some() || border_color.is_some() || text_snapshot.is_some()) {
+    let image_snapshot = image
+        .filter(|_| visible)
+        .and_then(|image| decode_texture(&image.image, images, texture_cache, used_texture_ids));
+
+    if visible
+        && (background_color.is_some()
+            || border_color.is_some()
+            || text_snapshot.is_some()
+            || image_snapshot.is_some())
+    {
         out.push(GenericUiNode {
             center: center.to_array(),
             size: size.to_array(),
@@ -721,6 +743,7 @@ fn walk_generic_ui_node(
             border_width,
             corner_radius,
             text: text_snapshot,
+            image: image_snapshot,
             clip_rect: inherited_clip,
             stack_index: stack_index.0,
         });
@@ -737,13 +760,14 @@ fn walk_generic_ui_node(
 
     let Some(children) = children else { return };
     for &child in children.iter() {
-        walk_generic_ui_node(child, child_clip, visible, query, out);
+        walk_generic_ui_node(child, child_clip, visible, query, images, texture_cache, used_texture_ids, out);
     }
 }
 
 fn extract_generic_ui_nodes(
     world: &mut bevy::ecs::world::World,
     queries: &mut ExtractQueries,
+    used_texture_ids: &mut std::collections::HashSet<AssetId<Image>>,
 ) -> Vec<GenericUiNode> {
     let roots: Vec<_> = queries
         .ui_roots
@@ -752,11 +776,12 @@ fn extract_generic_ui_nodes(
         .iter()
         .collect();
 
-    let node_query = queries.ui_nodes.get(world).expect("system param validation failed");
+    let (node_query, images, mut texture_cache) =
+        queries.ui_nodes.get_mut(world).expect("system param validation failed");
 
     let mut out = Vec::new();
     for root in roots {
-        walk_generic_ui_node(root, None, true, &node_query, &mut out);
+        walk_generic_ui_node(root, None, true, &node_query, &images, &mut texture_cache, used_texture_ids, &mut out);
     }
     out.sort_by_key(|node| node.stack_index);
     out

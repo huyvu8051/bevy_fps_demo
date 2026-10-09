@@ -866,7 +866,6 @@ pub struct NativeMetalRenderer {
     quad_vertex_buffer: metal::Buffer,
     start_time: std::time::Instant,
 
-    splash_texture: metal::Texture,
 
     real_game_app: Option<bevy::app::App>,
 
@@ -990,27 +989,6 @@ fn ndc_ui_rect_rotated(center_x: f32, center_y: f32, w: f32, h: f32, rotation: f
         UiVertex { position: top_right, uv: uv[2] },
         UiVertex { position: top_left, uv: uv[3] },
     ]
-}
-
-fn load_splash_texture(device: &metal::Device) -> Option<metal::Texture> {
-    let resource_path = bundle_resource_path().unwrap_or_default();
-    let path = std::path::Path::new(&resource_path).join("assets").join("branding/open_diy_splash.png");
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            eprintln!("[native_metal_renderer] splash texture read failed {path:?}: {err}");
-            return None;
-        }
-    };
-    let decoded = match image::load_from_memory(&bytes) {
-        Ok(decoded) => decoded,
-        Err(err) => {
-            eprintln!("[native_metal_renderer] splash texture decode failed {path:?}: {err}");
-            return None;
-        }
-    };
-    let rgba = decoded.to_rgba8();
-    Some(super::metal_texture::upload_texture(device, rgba.width(), rgba.height(), rgba.as_raw()))
 }
 
 fn draw_ui_quad(encoder: &metal::RenderCommandEncoderRef, verts: &[UiVertex; 6], tint: [f32; 4], texture: &metal::Texture) {
@@ -1178,6 +1156,7 @@ fn draw_generic_ui_nodes(
     view_h: f32,
     white_texture: &metal::Texture,
     font_atlas_texture: &metal::Texture,
+    images: &std::collections::HashMap<AssetId<Image>, metal::Texture>,
 ) {
     const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
     const CIRCLE_SEGMENTS: u32 = 40;
@@ -1220,6 +1199,10 @@ fn draw_generic_ui_nodes(
             }
         }
 
+        if let Some(image) = node.image.as_ref().and_then(|image| images.get(&image.id)) {
+            let quad = ndc_ui_rect_rotated(cx, cy, w, h, node.rotation, view_w, view_h, FULL_UV);
+            draw_ui_quad(encoder, &quad, [1.0, 1.0, 1.0, 1.0], image);
+        }
         if let Some(text) = &node.text {
             let scale = text.font_size / GLYPH_H as f32;
             let upper = text.content.to_ascii_uppercase();
@@ -1348,7 +1331,6 @@ impl NativeMetalRenderer {
         let white_texture = device.new_texture(&white_texture_descriptor);
         white_texture.replace_region(metal::MTLRegion::new_2d(0, 0, 1, 1), 0, [255u8, 255, 255, 255].as_ptr() as *const _, 4);
 
-        let splash_texture = load_splash_texture(&device).unwrap_or_else(|| white_texture.clone());
 
         let flat_normal_descriptor = metal::TextureDescriptor::new();
         flat_normal_descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm);
@@ -1673,7 +1655,6 @@ impl NativeMetalRenderer {
             quad_pipeline_no_msaa,
             quad_vertex_buffer,
             start_time: std::time::Instant::now(),
-            splash_texture,
             real_game_app,
             real_game_textures: std::collections::HashMap::new(),
             gpu_transformed_mesh_cache: std::collections::HashMap::new(),
@@ -2123,9 +2104,17 @@ impl NativeMetalRenderer {
         let used_texture_ids: std::collections::HashSet<AssetId<Image>> = real_game_static_meshes
             .iter()
             .flat_map(|mesh| [mesh.texture.as_ref(), mesh.normal_texture.as_ref()].into_iter().flatten())
+            .chain(self.ui_generic_nodes.iter().filter_map(|node| node.image.as_ref()))
             .map(|t| t.id)
             .collect();
         self.real_game_textures.retain(|id, _| used_texture_ids.contains(id));
+        for image in self.ui_generic_nodes.iter().filter_map(|node| node.image.as_ref()) {
+            if !self.real_game_textures.contains_key(&image.id) {
+                let uploaded =
+                    super::metal_texture::upload_texture(&self.device, image.width, image.height, &image.rgba);
+                self.real_game_textures.insert(image.id, uploaded);
+            }
+        }
         let used_mesh_ids: std::collections::HashSet<AssetId<Mesh>> =
             real_game_static_meshes.iter().map(|mesh| mesh.mesh_id).collect();
         self.gpu_transformed_mesh_cache.retain(|id, _| used_mesh_ids.contains(id));
@@ -2418,25 +2407,17 @@ impl NativeMetalRenderer {
                 encoder.set_render_pipeline_state(ui_pipeline);
                 encoder.set_fragment_sampler_state(0, Some(&self.ui_sampler));
 
-                draw_generic_ui_nodes(encoder, &self.ui_generic_nodes, render_width as f32, render_height as f32, view_w, view_h, &self.white_texture, &self.font_atlas_texture);
-            }
-        }
-
-        if now < crate::splash_screen::SPLASH_SCREEN_DURATION_SECS {
-            let ui_pipeline_ref = if msaa_enabled { &self.ui_pipeline } else { &self.ui_pipeline_no_msaa };
-            if let Some(ui_pipeline) = ui_pipeline_ref {
-                let (view_w, view_h) = self.view_size_points();
-                encoder.set_render_pipeline_state(ui_pipeline);
-                encoder.set_fragment_sampler_state(0, Some(&self.ui_sampler));
-                encoder.set_depth_stencil_state(&self.ui_depth_state);
-                const FULL_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
-
-                let backdrop = ndc_ui_rect(0.0, 0.0, view_w, view_h, view_w, view_h, FULL_UV);
-                draw_ui_quad(encoder, &backdrop, [1.0, 1.0, 1.0, 1.0], &self.white_texture);
-
-                let logo_size = (view_w.min(view_h) * 0.6).min(480.0);
-                let logo = ndc_ui_rect((view_w - logo_size) * 0.5, (view_h - logo_size) * 0.5, logo_size, logo_size, view_w, view_h, FULL_UV);
-                draw_ui_quad(encoder, &logo, [1.0, 1.0, 1.0, 1.0], &self.splash_texture);
+                draw_generic_ui_nodes(
+                    encoder,
+                    &self.ui_generic_nodes,
+                    render_width as f32,
+                    render_height as f32,
+                    view_w,
+                    view_h,
+                    &self.white_texture,
+                    &self.font_atlas_texture,
+                    &self.real_game_textures,
+                );
             }
         }
 

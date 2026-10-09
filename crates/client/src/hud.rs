@@ -158,6 +158,7 @@ pub(crate) fn spawn_inspect_ui(commands: &mut Commands) {
         },
         GlobalZIndex(STATIC_UI_Z_INDEX),
         Visibility::Hidden,
+        NativeUiRoot,
         InspectUi,
     ));
 }
