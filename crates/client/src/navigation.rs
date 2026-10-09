@@ -15,10 +15,16 @@ const SAMPLE_SLACK_BELOW_FEET: f32 = 2.0;
 /// sampling uses the radius the mesh was built for rather than the player's.
 const SAMPLE_RADIUS: f32 = shared::zombie::ZOMBIE_RADIUS;
 
+/// Recast erodes the walkable area away from walls, so anyone hugging one is
+/// horizontally outside the mesh. The desert's streets are narrow enough that
+/// the autopilot is there most of the time.
+const SAMPLE_HORIZONTAL: f32 = 0.8;
+
 /// How far off the mesh a target may be and still get snapped onto it. A
 /// zombie shoved off the navmesh by physics should not make the route vanish.
 pub(crate) fn target_sample_distance() -> PointSampleDistance3d {
     PointSampleDistance3d {
+        horizontal_distance: SAMPLE_HORIZONTAL * 2.0,
         distance_above: 4.0,
         distance_below: 4.0,
         ..PointSampleDistance3d::from_agent_radius(SAMPLE_RADIUS)
@@ -37,10 +43,14 @@ pub(crate) struct ClientNavigationPlugin;
 
 impl Plugin for ClientNavigationPlugin {
     fn build(&self, app: &mut App) {
+        // Both landmass plugins default to FixedPreUpdate, and the
+        // rerecast conversion only runs on the frame the navmesh AssetEvent
+        // arrives. At the client's frame rate most frames have no fixed step,
+        // so that event is usually missed and the island never gets a mesh.
         app.add_plugins((
             NavmeshPlugins::default(),
-            Landmass3dPlugin::default(),
-            LandmassRerecastPlugin::default(),
+            Landmass3dPlugin::default().in_schedule(Update),
+            LandmassRerecastPlugin::default().in_schedule(Update),
         ))
         .add_systems(Startup, load_baked_navmesh)
         .add_systems(Update, register_player_agent.before(LandmassSystems::SyncExistence));
@@ -52,6 +62,7 @@ fn load_baked_navmesh(asset_server: Res<AssetServer>, mut commands: Commands) {
     let archipelago = commands
         .spawn(Archipelago3d::new(ArchipelagoOptions {
             point_sample_distance: PointSampleDistance3d {
+                horizontal_distance: SAMPLE_HORIZONTAL,
                 distance_above: SAMPLE_DISTANCE_ABOVE,
                 // A player's transform sits at the capsule's centre while the
                 // navmesh lies at its feet.
