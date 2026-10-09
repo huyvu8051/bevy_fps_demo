@@ -108,14 +108,12 @@ struct Uniforms {
     float4x4 pointLightViewProjection;
     packed_float3 cameraPos;
     float _cameraPad;
-    // Identity for meshes whose own vertex buffer is already baked into
-    // world space CPU-side (arena walls/the gun — see RealGameMeshDraw::
-    // model_matrix's own doc comment), so this multiply is a no-op for
-    // them. The REAL per-instance transform for GPU-transformed meshes
-    // (cars): their vertex buffer is cached once in LOCAL space, and this
-    // is what places each instance in the world every draw instead of a
-    // CPU re-bake.
+    // Every mesh caches its vertex buffer in LOCAL space, so this places the
+    // instance in the world each draw.
     float4x4 modelMatrix;
+    // Inverse transpose of modelMatrix: normals skew under non-uniform scale,
+    // which 140 of the desert's nodes carry.
+    float4x4 normalMatrix;
 };
 
 struct VertexOut {
@@ -134,7 +132,7 @@ vertex VertexOut sponza_vertex(uint vid [[vertex_id]],
     float4 worldPos4 = uniforms.modelMatrix * float4(float3(v.position), 1.0);
     out.position = uniforms.viewProjection * worldPos4;
     out.worldPos = worldPos4.xyz;
-    out.normal = (uniforms.modelMatrix * float4(float3(v.normal), 0.0)).xyz;
+    out.normal = (uniforms.normalMatrix * float4(float3(v.normal), 0.0)).xyz;
     out.uv = float2(v.uv);
     // xyz rotates like the normal above (w=0 drops translation); w itself
     // is glTF's handedness sign, not a spatial component, so it carries
@@ -282,6 +280,7 @@ struct SponzaUniforms {
     _camera_pad: f32,
 
     model_matrix: [[f32; 4]; 4],
+    normal_matrix: [[f32; 4]; 4],
 }
 
 const SKINNED_SHADER_SOURCE: &str = r#"
@@ -899,6 +898,10 @@ pub struct NativeMetalRenderer {
 
 
     ui_generic_nodes: Vec<super::native_game_extract::GenericUiNode>,
+}
+
+fn normal_matrix_for(model: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    bevy::math::Mat4::from_cols_array_2d(&model).inverse().transpose().to_cols_array_2d()
 }
 
 fn bake_local_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::GltfVertex> {
@@ -1771,6 +1774,7 @@ impl NativeMetalRenderer {
                 camera_pos,
                 _camera_pad: 0.0,
                 model_matrix: m.model_matrix,
+                normal_matrix: normal_matrix_for(m.model_matrix),
             };
             encoder.set_vertex_buffer(0, Some(&m.vertex_buffer), 0);
             encoder.set_vertex_bytes(
@@ -2057,7 +2061,9 @@ impl NativeMetalRenderer {
         if let Some(app) = &mut self.real_game_app {
             prime_camera_viewport(app.world_mut(), view_width_pts, view_height_pts, self.layer.contents_scale() as f32);
             app.update();
-            let snapshot = extract_render_snapshot(app.world_mut());
+            let uploaded = &self.gpu_transformed_mesh_cache;
+            let snapshot =
+                extract_render_snapshot(app.world_mut(), |id| uploaded.contains_key(&id));
             self.ui_generic_nodes = snapshot.generic_ui_nodes;
             self.msaa_enabled = snapshot.map_msaa_on;
             self.ensure_shadow_map_size(snapshot.shadow_quality);

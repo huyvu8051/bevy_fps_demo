@@ -228,7 +228,14 @@ impl Default for CameraSnapshot {
     }
 }
 
-pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSnapshot {
+/// `geometry_already_uploaded` lets the renderer say which meshes it still
+/// holds a vertex buffer for. Their geometry is left out of the snapshot: it
+/// never changes, and cloning a whole map's vertices each frame only to throw
+/// the copy away is the single most expensive thing extraction can do.
+pub fn extract_render_snapshot(
+    world: &mut bevy::ecs::world::World,
+    geometry_already_uploaded: impl Fn(AssetId<Mesh>) -> bool,
+) -> RenderSnapshot {
     let mut snapshot = RenderSnapshot::default();
 
     let mut camera_state: SystemState<(
@@ -424,26 +431,32 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
         let Some(material) = materials.get(&material3d.0) else { continue };
 
-        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
-            Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) => p.clone(),
-            _ => continue,
+        let mesh_id = mesh3d.id();
+        let (positions, normals, uvs, tangents, indices) = if geometry_already_uploaded(mesh_id) {
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
+        } else {
+            let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+                Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) => p.clone(),
+                _ => continue,
+            };
+            let normals = match mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
+                Some(bevy::mesh::VertexAttributeValues::Float32x3(n)) => n.clone(),
+                _ => Vec::new(),
+            };
+            let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+                Some(bevy::mesh::VertexAttributeValues::Float32x2(uv)) => uv.clone(),
+                _ => Vec::new(),
+            };
+            let tangents = match mesh.attribute(Mesh::ATTRIBUTE_TANGENT) {
+                Some(bevy::mesh::VertexAttributeValues::Float32x4(t)) => t.clone(),
+                _ => Vec::new(),
+            };
+            let indices = mesh
+                .indices()
+                .map(|i| i.iter().map(|v| v as u32).collect())
+                .unwrap_or_default();
+            (positions, normals, uvs, tangents, indices)
         };
-        let normals = match mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
-            Some(bevy::mesh::VertexAttributeValues::Float32x3(n)) => n.clone(),
-            _ => Vec::new(),
-        };
-        let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
-            Some(bevy::mesh::VertexAttributeValues::Float32x2(uv)) => uv.clone(),
-            _ => Vec::new(),
-        };
-        let tangents = match mesh.attribute(Mesh::ATTRIBUTE_TANGENT) {
-            Some(bevy::mesh::VertexAttributeValues::Float32x4(t)) => t.clone(),
-            _ => Vec::new(),
-        };
-        let indices = mesh
-            .indices()
-            .map(|i| i.iter().map(|v| v as u32).collect())
-            .unwrap_or_default();
 
         let texture = material.base_color_texture.as_ref().and_then(|handle| decode_texture(handle, &images));
 
@@ -476,7 +489,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
                 material.alpha_mode,
                 AlphaMode::Blend | AlphaMode::Premultiplied | AlphaMode::Add | AlphaMode::Multiply
             ),
-            mesh_id: mesh3d.id(),
+            mesh_id,
         });
     }
     texture_cache.0.retain(|id, _| used_texture_ids.contains(id));
