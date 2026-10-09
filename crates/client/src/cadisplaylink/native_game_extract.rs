@@ -94,6 +94,11 @@ pub struct ExtractQueries {
     meshes_added: SystemState<Q<'static, 'static, (), (With<Mesh3d>, bevy::ecs::query::Added<Mesh3d>, Without<SkinnedMesh>)>>,
     meshes_removed: SystemState<bevy::ecs::lifecycle::RemovedComponents<'static, 'static, Mesh3d>>,
     ui_roots: SystemState<Q<'static, 'static, bevy::ecs::entity::Entity, With<crate::NativeUiRoot>>>,
+    hitboxes: SystemState<(
+        Res<'static, crate::ShowHitboxes>,
+        Q<'static, 'static, (&'static Transform, &'static shared::ZombieHitboxBones), With<Zombie>>,
+        Q<'static, 'static, &'static GlobalTransform>,
+    )>,
     ui_nodes: SystemState<(
         GenericUiQuery<'static, 'static>,
         Res<'static, Assets<Image>>,
@@ -119,6 +124,7 @@ impl ExtractQueries {
             meshes_added: SystemState::new(world),
             meshes_removed: SystemState::new(world),
             ui_roots: SystemState::new(world),
+            hitboxes: SystemState::new(world),
             ui_nodes: SystemState::new(world),
         }
     }
@@ -245,6 +251,16 @@ pub struct RenderSnapshot {
     pub zombie_texture_quality: u8,
 
     pub generic_ui_nodes: Vec<GenericUiNode>,
+    pub debug_lines: Vec<DebugLine>,
+}
+
+/// A world-space line segment for the Metal renderer to draw. Hitboxes are
+/// the only user today; on desktop they are bevy gizmos, which iOS has no
+/// renderer for.
+pub struct DebugLine {
+    pub a: [f32; 3],
+    pub b: [f32; 3],
+    pub color: [f32; 4],
 }
 
 pub struct GenericUiNode {
@@ -504,6 +520,7 @@ pub fn extract_render_snapshot(
     snapshot.static_meshes = cache.entries.clone();
     world.insert_resource(cache);
 
+    snapshot.debug_lines = extract_hitbox_lines(world, &mut queries);
     snapshot.generic_ui_nodes = extract_generic_ui_nodes(world, &mut queries, &mut used_texture_ids);
 
     world.insert_resource(queries);
@@ -639,6 +656,108 @@ fn extract_one_mesh(
         ),
         mesh_id,
     })
+}
+
+
+const DEBUG_CIRCLE_SEGMENTS: usize = 24;
+
+fn push_circle(out: &mut Vec<DebugLine>, centre: Vec3, axis_u: Vec3, axis_v: Vec3, radius: f32, color: [f32; 4]) {
+    let point = |i: usize| {
+        let angle = i as f32 / DEBUG_CIRCLE_SEGMENTS as f32 * std::f32::consts::TAU;
+        centre + (axis_u * angle.cos() + axis_v * angle.sin()) * radius
+    };
+    for i in 0..DEBUG_CIRCLE_SEGMENTS {
+        out.push(DebugLine { a: point(i).to_array(), b: point(i + 1).to_array(), color });
+    }
+}
+
+fn push_sphere(out: &mut Vec<DebugLine>, centre: Vec3, radius: f32, color: [f32; 4]) {
+    push_circle(out, centre, Vec3::X, Vec3::Y, radius, color);
+    push_circle(out, centre, Vec3::X, Vec3::Z, radius, color);
+    push_circle(out, centre, Vec3::Y, Vec3::Z, radius, color);
+}
+
+/// Perpendicular axes for a ring facing along `direction`.
+fn ring_axes(direction: Vec3) -> (Vec3, Vec3) {
+    let reference = if direction.y.abs() > 0.9 { Vec3::X } else { Vec3::Y };
+    let u = direction.cross(reference).normalize_or_zero();
+    (u, direction.cross(u).normalize_or_zero())
+}
+
+fn push_capsule(out: &mut Vec<DebugLine>, a: Vec3, b: Vec3, radius: f32, color: [f32; 4]) {
+    let Some(direction) = (b - a).try_normalize() else {
+        push_sphere(out, a, radius, color);
+        return;
+    };
+    let (u, v) = ring_axes(direction);
+    push_circle(out, a, u, v, radius, color);
+    push_circle(out, b, u, v, radius, color);
+    for offset in [u, -u, v, -v] {
+        out.push(DebugLine { a: (a + offset * radius).to_array(), b: (b + offset * radius).to_array(), color });
+    }
+    push_sphere(out, a, radius, color);
+    push_sphere(out, b, radius, color);
+}
+
+fn push_cylinder(out: &mut Vec<DebugLine>, centre: Vec3, radius: f32, half_height: f32, color: [f32; 4]) {
+    let top = centre + Vec3::Y * half_height;
+    let bottom = centre - Vec3::Y * half_height;
+    push_circle(out, top, Vec3::X, Vec3::Z, radius, color);
+    push_circle(out, bottom, Vec3::X, Vec3::Z, radius, color);
+    for offset in [Vec3::X, -Vec3::X, Vec3::Z, -Vec3::Z] {
+        out.push(DebugLine { a: (top + offset * radius).to_array(), b: (bottom + offset * radius).to_array(), color });
+    }
+}
+
+fn extract_hitbox_lines(world: &mut bevy::ecs::world::World, queries: &mut ExtractQueries) -> Vec<DebugLine> {
+    let (show, zombies, globals) = queries.hitboxes.get(world).expect("system param validation failed");
+    if !show.0 {
+        return Vec::new();
+    }
+
+    const OUTER: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    const HEAD: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
+    const TORSO: [f32; 4] = [1.0, 0.8, 0.0, 1.0];
+    const LIMB: [f32; 4] = [0.2, 0.6, 1.0, 1.0];
+    const JOINT: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+
+    let mut out = Vec::new();
+    for (transform, bones) in zombies.iter() {
+        push_cylinder(
+            &mut out,
+            transform.translation,
+            shared::ZOMBIE_OUTER_RADIUS,
+            shared::ZOMBIE_OUTER_HEIGHT / 2.0,
+            OUTER,
+        );
+
+        let bone_pos = |e: bevy::ecs::entity::Entity| globals.get(e).ok().map(GlobalTransform::translation);
+        let mut joints = Vec::new();
+
+        if let Some(head) = bones.head.and_then(bone_pos) {
+            push_sphere(&mut out, head, shared::HEAD_HITBOX_RADIUS, HEAD);
+            joints.push(head);
+        }
+        if let (Some(belly), Some(chest)) = (bones.belly.and_then(bone_pos), bones.chest.and_then(bone_pos)) {
+            push_capsule(&mut out, belly, chest, shared::TORSO_HITBOX_RADIUS, TORSO);
+            joints.push(belly);
+            joints.push(chest);
+        }
+        for chain in [&bones.left_arm, &bones.right_arm, &bones.left_leg, &bones.right_leg] {
+            for joint in chain.iter().filter_map(|j| j.and_then(bone_pos)) {
+                joints.push(joint);
+            }
+            for pair in chain.windows(2) {
+                if let (Some(a), Some(b)) = (pair[0].and_then(bone_pos), pair[1].and_then(bone_pos)) {
+                    push_capsule(&mut out, a, b, shared::LIMB_HITBOX_RADIUS, LIMB);
+                }
+            }
+        }
+        for joint in joints {
+            push_sphere(&mut out, joint, 0.04, JOINT);
+        }
+    }
+    out
 }
 
 /// Every `TextFont` in this project uses `FontSize::Px`; viewport/rem-relative

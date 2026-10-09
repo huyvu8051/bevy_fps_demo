@@ -515,6 +515,50 @@ const SCOPE_TEXTURE_SIZE: u64 = 512;
 
 const MSAA_SAMPLE_COUNT: u64 = 4;
 
+const LINE_SHADER_SOURCE: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct LineVertex {
+    packed_float3 position;
+    packed_float4 color;
+};
+
+struct LineUniforms {
+    float4x4 viewProjection;
+};
+
+struct LineVertexOut {
+    float4 position [[position]];
+    float4 color;
+};
+
+vertex LineVertexOut line_vertex(uint vid [[vertex_id]],
+                                 const device LineVertex *verts [[buffer(0)]],
+                                 constant LineUniforms &uniforms [[buffer(1)]]) {
+    LineVertexOut out;
+    out.position = uniforms.viewProjection * float4(float3(verts[vid].position), 1.0);
+    out.color = float4(verts[vid].color);
+    return out;
+}
+
+fragment float4 line_fragment(LineVertexOut in [[stage_in]]) {
+    return in.color;
+}
+"#;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct LineVertex {
+    position: [f32; 3],
+    color: [f32; 4],
+}
+
+#[repr(C)]
+struct LineUniforms {
+    view_projection: [[f32; 4]; 4],
+}
+
 const QUAD_SHADER_SOURCE: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -861,6 +905,9 @@ pub struct NativeMetalRenderer {
     scope_depth_texture: metal::Texture,
 
     scope_depth_texture_no_msaa: metal::Texture,
+    debug_lines: Vec<super::native_game_extract::DebugLine>,
+    line_pipeline: Option<RenderPipelineState>,
+    line_pipeline_no_msaa: Option<RenderPipelineState>,
     quad_pipeline: Option<RenderPipelineState>,
     quad_pipeline_no_msaa: Option<RenderPipelineState>,
     quad_vertex_buffer: metal::Buffer,
@@ -1498,6 +1545,27 @@ impl NativeMetalRenderer {
             descriptor
         }
 
+        let (line_pipeline, line_pipeline_no_msaa) =
+            match device.new_library_with_source(LINE_SHADER_SOURCE, &compile_options) {
+                Ok(library) => {
+                    let vertex_fn = library.get_function("line_vertex", None).unwrap();
+                    let fragment_fn = library.get_function("line_fragment", None).unwrap();
+                    let build = |sample_count: u64| {
+                        let descriptor = build_quad_descriptor(&vertex_fn, &fragment_fn, sample_count);
+                        descriptor.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+                        descriptor
+                    };
+                    (
+                        device.new_render_pipeline_state(&build(MSAA_SAMPLE_COUNT)).ok(),
+                        device.new_render_pipeline_state(&build(1)).ok(),
+                    )
+                }
+                Err(err) => {
+                    eprintln!("[native_metal_renderer] line shader compile failed: {err}");
+                    (None, None)
+                }
+            };
+
         let (quad_pipeline, quad_pipeline_no_msaa) =
             match device.new_library_with_source(QUAD_SHADER_SOURCE, &compile_options) {
                 Ok(library) => {
@@ -1651,6 +1719,9 @@ impl NativeMetalRenderer {
             scope_color_texture_msaa,
             scope_depth_texture,
             scope_depth_texture_no_msaa,
+            debug_lines: Vec::new(),
+            line_pipeline,
+            line_pipeline_no_msaa,
             quad_pipeline,
             quad_pipeline_no_msaa,
             quad_vertex_buffer,
@@ -1881,6 +1952,44 @@ impl NativeMetalRenderer {
                 encoder.set_depth_stencil_state(&self.depth_state);
             }
         }
+
+        self.draw_debug_lines(encoder, view_projection, msaa_enabled);
+    }
+
+    fn draw_debug_lines(
+        &self,
+        encoder: &metal::RenderCommandEncoderRef,
+        view_projection: [[f32; 4]; 4],
+        msaa_enabled: bool,
+    ) {
+        if self.debug_lines.is_empty() {
+            return;
+        }
+        let pipeline = if msaa_enabled { &self.line_pipeline } else { &self.line_pipeline_no_msaa };
+        let Some(pipeline) = pipeline else { return };
+
+        let verts: Vec<LineVertex> = self
+            .debug_lines
+            .iter()
+            .flat_map(|line| {
+                [
+                    LineVertex { position: line.a, color: line.color },
+                    LineVertex { position: line.b, color: line.color },
+                ]
+            })
+            .collect();
+        let buffer = self.device.new_buffer_with_data(
+            verts.as_ptr() as *const _,
+            (verts.len() * std::mem::size_of::<LineVertex>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let uniforms = LineUniforms { view_projection };
+
+        encoder.set_render_pipeline_state(pipeline);
+        encoder.set_depth_stencil_state(&self.depth_state);
+        encoder.set_vertex_buffer(0, Some(&buffer), 0);
+        encoder.set_vertex_bytes(1, std::mem::size_of::<LineUniforms>() as u64, &uniforms as *const _ as *const _);
+        encoder.draw_primitives(MTLPrimitiveType::Line, 0, verts.len() as u64);
     }
 
     fn make_shadow_texture(device: &metal::Device, size: u64) -> metal::Texture {
@@ -2046,6 +2155,7 @@ impl NativeMetalRenderer {
             let snapshot =
                 extract_render_snapshot(app.world_mut(), |id| uploaded.contains_key(&id));
             self.ui_generic_nodes = snapshot.generic_ui_nodes;
+            self.debug_lines = snapshot.debug_lines;
             self.msaa_enabled = snapshot.map_msaa_on;
             self.ensure_shadow_map_size(snapshot.shadow_quality);
             self.render_resolution_scale = snapshot.render_resolution_scale.clamp(0.1, 1.0);
