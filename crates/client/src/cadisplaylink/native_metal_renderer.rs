@@ -2141,6 +2141,7 @@ impl NativeMetalRenderer {
         }
         let real_game_meshes: Vec<RealGameMeshDraw> = real_game_static_meshes
             .iter()
+            .filter(|mesh| mesh.visible)
             .filter_map(|mesh| {
 
                 let (vertex_buffer, vertex_count) = match self.gpu_transformed_mesh_cache.get(&mesh.mesh_id) {

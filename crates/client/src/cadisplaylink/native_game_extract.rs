@@ -24,6 +24,35 @@ use shared::{NetPlayer, Zombie, ZombieKind};
 
 type Q<'w, 's, D, F = ()> = Query<'w, 's, D, F>;
 
+type MeshChanged = (
+    Without<SkinnedMesh>,
+    bevy::ecs::query::Or<(
+        bevy::ecs::query::Changed<GlobalTransform>,
+        bevy::ecs::query::Changed<MeshMaterial3d<StandardMaterial>>,
+        bevy::ecs::query::Changed<InheritedVisibility>,
+        bevy::ecs::query::Changed<Mesh3d>,
+    )>,
+);
+
+type MeshExtractParams<'w, 's, F> = (
+    Q<
+        'w,
+        's,
+        (
+            bevy::ecs::entity::Entity,
+            &'static Mesh3d,
+            &'static MeshMaterial3d<StandardMaterial>,
+            &'static GlobalTransform,
+            &'static InheritedVisibility,
+        ),
+        F,
+    >,
+    Res<'w, Assets<Mesh>>,
+    Res<'w, Assets<StandardMaterial>>,
+    Res<'w, Assets<Image>>,
+    ResMut<'w, DecodedTextureCache>,
+);
+
 /// Every `SystemState` the two per-frame extraction passes need, built once.
 ///
 /// `SystemState::new` rebuilds query state and rematches archetypes on every
@@ -60,13 +89,10 @@ pub struct ExtractQueries {
     )>,
     point_lights: SystemState<Q<'static, 'static, (&'static PointLight, &'static GlobalTransform)>>,
     sun: SystemState<Q<'static, 'static, (&'static DirectionalLight, &'static GlobalTransform)>>,
-    meshes: SystemState<(
-        Q<'static, 'static, (&'static Mesh3d, &'static MeshMaterial3d<StandardMaterial>, &'static GlobalTransform, &'static InheritedVisibility), Without<SkinnedMesh>>,
-        Res<'static, Assets<Mesh>>,
-        Res<'static, Assets<StandardMaterial>>,
-        Res<'static, Assets<Image>>,
-        ResMut<'static, DecodedTextureCache>,
-    )>,
+    meshes: SystemState<MeshExtractParams<'static, 'static, ()>>,
+    meshes_changed: SystemState<MeshExtractParams<'static, 'static, MeshChanged>>,
+    meshes_added: SystemState<Q<'static, 'static, (), (With<Mesh3d>, bevy::ecs::query::Added<Mesh3d>, Without<SkinnedMesh>)>>,
+    meshes_removed: SystemState<bevy::ecs::lifecycle::RemovedComponents<'static, 'static, Mesh3d>>,
     ui_roots: SystemState<Q<'static, 'static, bevy::ecs::entity::Entity, With<crate::NativeUiRoot>>>,
     ui_nodes: SystemState<GenericUiQuery<'static, 'static>>,
 }
@@ -85,6 +111,9 @@ impl ExtractQueries {
             point_lights: SystemState::new(world),
             sun: SystemState::new(world),
             meshes: SystemState::new(world),
+            meshes_changed: SystemState::new(world),
+            meshes_added: SystemState::new(world),
+            meshes_removed: SystemState::new(world),
             ui_roots: SystemState::new(world),
             ui_nodes: SystemState::new(world),
         }
@@ -139,6 +168,7 @@ pub struct ExtractedTexture {
     pub rgba: std::sync::Arc<[u8]>,
 }
 
+#[derive(Clone)]
 pub struct ExtractedMesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
@@ -156,6 +186,8 @@ pub struct ExtractedMesh {
     pub normal_texture: Option<ExtractedTexture>,
 
     pub transform: Transform,
+
+    pub visible: bool,
 
     pub is_blend: bool,
 
@@ -421,113 +453,187 @@ pub fn extract_render_snapshot(
     snapshot.render_resolution_scale = world.resource::<crate::RenderResolutionScale>().0;
     snapshot.zombie_texture_quality = world.resource::<crate::ZombieTextureQuality>().0;
 
-    let (mesh_query, meshes, materials, images, mut texture_cache) =
-        queries.meshes.get_mut(world).expect("system param validation failed");
+    let mut cache = world
+        .remove_resource::<StaticMeshCache>()
+        .unwrap_or_default();
+
+    let rebuild = cache.entries.is_empty() || {
+        let spawned = !queries.meshes_added.get(world).expect("system param validation failed").is_empty();
+        let despawned = !queries.meshes_removed.get_mut(world).expect("system param validation failed").read().next().is_none();
+        spawned || despawned
+    };
 
     let mut used_texture_ids: std::collections::HashSet<AssetId<Image>> = std::collections::HashSet::new();
-    let mut decode_texture = |handle: &Handle<Image>, images: &Assets<Image>| -> Option<ExtractedTexture> {
-        used_texture_ids.insert(handle.id());
-        if let Some(cached) = texture_cache.0.get(&handle.id()) {
-            return Some(cached.clone());
+
+    if rebuild {
+        cache.entries.clear();
+        cache.slot_of.clear();
+        let (mesh_query, meshes, materials, images, mut texture_cache) =
+            queries.meshes.get_mut(world).expect("system param validation failed");
+        for (entity, mesh3d, material3d, transform, visibility) in mesh_query.iter() {
+            let Some(extracted) = extract_one_mesh(
+                mesh3d, material3d, transform, visibility, &meshes, &materials, &images,
+                &mut texture_cache, &mut used_texture_ids, &geometry_already_uploaded, None,
+            ) else {
+                continue;
+            };
+            cache.slot_of.insert(entity, cache.entries.len());
+            cache.entries.push(extracted);
         }
-        let image = images.get(handle)?;
-        let data = image.data.as_ref()?;
-        let rgba: std::sync::Arc<[u8]> = match image.texture_descriptor.format {
-            TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => {
-                std::sync::Arc::from(data.as_slice())
+        texture_cache.0.retain(|id, _| used_texture_ids.contains(id));
+    } else {
+        let (mesh_query, meshes, materials, images, mut texture_cache) =
+            queries.meshes_changed.get_mut(world).expect("system param validation failed");
+        for (entity, mesh3d, material3d, transform, visibility) in mesh_query.iter() {
+            let Some(&slot) = cache.slot_of.get(&entity) else { continue };
+            let previous = cache.entries.get(slot);
+            if let Some(extracted) = extract_one_mesh(
+                mesh3d, material3d, transform, visibility, &meshes, &materials, &images,
+                &mut texture_cache, &mut used_texture_ids, &geometry_already_uploaded, previous,
+            ) {
+                cache.entries[slot] = extracted;
             }
-            TextureFormat::Bgra8UnormSrgb | TextureFormat::Bgra8Unorm => {
-                let mut swapped = data.clone();
-                for pixel in swapped.chunks_exact_mut(4) {
-                    pixel.swap(0, 2);
-                }
-                std::sync::Arc::from(swapped.as_slice())
-            }
-            _ => return None,
-        };
-        let extracted = ExtractedTexture {
-            id: handle.id(),
-            width: image.texture_descriptor.size.width,
-            height: image.texture_descriptor.size.height,
-            rgba,
-        };
-        texture_cache.0.insert(handle.id(), extracted.clone());
-        Some(extracted)
-    };
-    for (mesh3d, material3d, transform, visibility) in mesh_query.iter() {
-        if !visibility.get() {
-            continue;
         }
-        let Some(material) = materials.get(&material3d.0) else { continue };
-
-        let mesh_id = mesh3d.id();
-        let (positions, normals, uvs, tangents, indices) = if geometry_already_uploaded(mesh_id) {
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
-        } else {
-            let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
-            let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
-                Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) => p.clone(),
-                _ => continue,
-            };
-            let normals = match mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
-                Some(bevy::mesh::VertexAttributeValues::Float32x3(n)) => n.clone(),
-                _ => Vec::new(),
-            };
-            let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
-                Some(bevy::mesh::VertexAttributeValues::Float32x2(uv)) => uv.clone(),
-                _ => Vec::new(),
-            };
-            let tangents = match mesh.attribute(Mesh::ATTRIBUTE_TANGENT) {
-                Some(bevy::mesh::VertexAttributeValues::Float32x4(t)) => t.clone(),
-                _ => Vec::new(),
-            };
-            let indices = mesh
-                .indices()
-                .map(|i| i.iter().map(|v| v as u32).collect())
-                .unwrap_or_default();
-            (positions, normals, uvs, tangents, indices)
-        };
-
-        let texture = material.base_color_texture.as_ref().and_then(|handle| decode_texture(handle, &images));
-
-        let normal_texture = if tangents.is_empty() {
-            None
-        } else {
-            material.normal_map_texture.as_ref().and_then(|handle| decode_texture(handle, &images))
-        };
-
-        snapshot.static_meshes.push(ExtractedMesh {
-            positions,
-            normals,
-            uvs,
-            indices,
-            base_color: {
-                let s = material.base_color.to_srgba();
-                [s.red, s.green, s.blue, s.alpha]
-            },
-            emissive: [
-                material.emissive.red,
-                material.emissive.green,
-                material.emissive.blue,
-                material.emissive.alpha,
-            ],
-            texture,
-            tangents,
-            normal_texture,
-            transform: transform.compute_transform(),
-            is_blend: matches!(
-                material.alpha_mode,
-                AlphaMode::Blend | AlphaMode::Premultiplied | AlphaMode::Add | AlphaMode::Multiply
-            ),
-            mesh_id,
-        });
     }
-    texture_cache.0.retain(|id, _| used_texture_ids.contains(id));
+
+    snapshot.static_meshes = cache.entries.clone();
+    world.insert_resource(cache);
 
     snapshot.generic_ui_nodes = extract_generic_ui_nodes(world, &mut queries);
 
     world.insert_resource(queries);
     snapshot
+}
+
+
+/// Static map geometry never moves, so the extracted list is kept across
+/// frames and only entries whose entity actually changed are rebuilt.
+#[derive(Resource, Default)]
+pub struct StaticMeshCache {
+    entries: Vec<ExtractedMesh>,
+    slot_of: std::collections::HashMap<bevy::ecs::entity::Entity, usize>,
+}
+
+fn decode_texture(
+    handle: &Handle<Image>,
+    images: &Assets<Image>,
+    texture_cache: &mut DecodedTextureCache,
+    used: &mut std::collections::HashSet<AssetId<Image>>,
+) -> Option<ExtractedTexture> {
+    used.insert(handle.id());
+    if let Some(cached) = texture_cache.0.get(&handle.id()) {
+        return Some(cached.clone());
+    }
+    let image = images.get(handle)?;
+    let data = image.data.as_ref()?;
+    let rgba: std::sync::Arc<[u8]> = match image.texture_descriptor.format {
+        TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => std::sync::Arc::from(data.as_slice()),
+        TextureFormat::Bgra8UnormSrgb | TextureFormat::Bgra8Unorm => {
+            let mut swapped = data.clone();
+            for pixel in swapped.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+            std::sync::Arc::from(swapped.as_slice())
+        }
+        _ => return None,
+    };
+    let extracted = ExtractedTexture {
+        id: handle.id(),
+        width: image.texture_descriptor.size.width,
+        height: image.texture_descriptor.size.height,
+        rgba,
+    };
+    texture_cache.0.insert(handle.id(), extracted.clone());
+    Some(extracted)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extract_one_mesh(
+    mesh3d: &Mesh3d,
+    material3d: &MeshMaterial3d<StandardMaterial>,
+    transform: &GlobalTransform,
+    visibility: &InheritedVisibility,
+    meshes: &Assets<Mesh>,
+    materials: &Assets<StandardMaterial>,
+    images: &Assets<Image>,
+    texture_cache: &mut DecodedTextureCache,
+    used_texture_ids: &mut std::collections::HashSet<AssetId<Image>>,
+    geometry_already_uploaded: &impl Fn(AssetId<Mesh>) -> bool,
+    previous: Option<&ExtractedMesh>,
+) -> Option<ExtractedMesh> {
+    let material = materials.get(&material3d.0)?;
+    let mesh_id = mesh3d.id();
+
+    let (positions, normals, uvs, tangents, indices) = if geometry_already_uploaded(mesh_id) {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
+    } else {
+        let mesh = meshes.get(&mesh3d.0)?;
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) => p.clone(),
+            _ => return None,
+        };
+        let normals = match mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x3(n)) => n.clone(),
+            _ => Vec::new(),
+        };
+        let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x2(uv)) => uv.clone(),
+            _ => Vec::new(),
+        };
+        let tangents = match mesh.attribute(Mesh::ATTRIBUTE_TANGENT) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x4(t)) => t.clone(),
+            _ => Vec::new(),
+        };
+        let indices = mesh.indices().map(|i| i.iter().map(|v| v as u32).collect()).unwrap_or_default();
+        (positions, normals, uvs, tangents, indices)
+    };
+
+    // Tangents only arrive on the frame the geometry is uploaded, so afterwards
+    // whether this mesh is normal-mapped has to come from the cached entry.
+    let has_tangents = if positions.is_empty() {
+        previous.is_some_and(|p| p.normal_texture.is_some())
+    } else {
+        !tangents.is_empty()
+    };
+    let texture = material
+        .base_color_texture
+        .as_ref()
+        .and_then(|handle| decode_texture(handle, images, texture_cache, used_texture_ids));
+    let normal_texture = has_tangents
+        .then(|| {
+            material
+                .normal_map_texture
+                .as_ref()
+                .and_then(|handle| decode_texture(handle, images, texture_cache, used_texture_ids))
+        })
+        .flatten();
+
+    Some(ExtractedMesh {
+        positions,
+        normals,
+        uvs,
+        indices,
+        base_color: {
+            let s = material.base_color.to_srgba();
+            [s.red, s.green, s.blue, s.alpha]
+        },
+        emissive: [
+            material.emissive.red,
+            material.emissive.green,
+            material.emissive.blue,
+            material.emissive.alpha,
+        ],
+        texture,
+        tangents,
+        normal_texture,
+        transform: transform.compute_transform(),
+        visible: visibility.get(),
+        is_blend: matches!(
+            material.alpha_mode,
+            AlphaMode::Blend | AlphaMode::Premultiplied | AlphaMode::Add | AlphaMode::Multiply
+        ),
+        mesh_id,
+    })
 }
 
 /// Every `TextFont` in this project uses `FontSize::Px`; viewport/rem-relative
