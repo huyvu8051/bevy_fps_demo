@@ -7,6 +7,70 @@ use crate::{
     PRONE_LENGTH, PRONE_SPEED_MULTIPLIER, SPRINT_MULTIPLIER,
 };
 
+/// Whether a move made so little horizontal headway that something is in the
+/// way, rather than the mover simply walking slowly.
+pub fn blocked_horizontally(start: Vec3, end: Vec3, horizontal_velocity: Vec3, dt: f32) -> bool {
+    let wanted = horizontal_velocity.length() * dt;
+    if wanted <= 1e-4 {
+        return false;
+    }
+    let moved = Vec3::new(end.x - start.x, 0.0, end.z - start.z).length();
+    moved < wanted * 0.7
+}
+
+/// Tallest ledge a mover can walk straight up without jumping.
+pub const STEP_HEIGHT: f32 = 0.45;
+
+/// Retries a blocked horizontal move from one step higher, then settles back
+/// down onto whatever it lands on.
+///
+/// `move_and_slide` alone cannot climb a ledge: its face is vertical, so
+/// sliding along it only ever redirects motion sideways, never up. Jumping is
+/// the only way over a kerb otherwise.
+pub fn try_step_up(
+    mover: &MoveAndSlide,
+    shape: &Collider,
+    rotation: Quat,
+    start: Vec3,
+    horizontal_velocity: Vec3,
+    dt: f32,
+    config: &MoveAndSlideConfig,
+    filter: &SpatialQueryFilter,
+) -> Option<Vec3> {
+    let headroom = mover
+        .spatial_query
+        .cast_shape(shape, start, rotation, Dir3::Y, &ShapeCastConfig::from_max_distance(STEP_HEIGHT), filter)
+        .map_or(STEP_HEIGHT, |hit| hit.distance);
+    if headroom < STEP_HEIGHT * 0.5 {
+        return None;
+    }
+
+    let raised = start + Vec3::Y * headroom;
+    let stepped = mover.move_and_slide(
+        shape,
+        raised,
+        rotation,
+        horizontal_velocity,
+        std::time::Duration::from_secs_f32(dt.max(0.0)),
+        config,
+        filter,
+        |_| MoveAndSlideHitResponse::Accept,
+    );
+
+    let landing = mover.spatial_query.cast_shape(
+        shape,
+        stepped.position,
+        rotation,
+        Dir3::NEG_Y,
+        &ShapeCastConfig::from_max_distance(headroom + 0.05),
+        filter,
+    )?;
+    if landing.normal1.y <= ground_normal_min_y() {
+        return None;
+    }
+    Some(stepped.position - Vec3::Y * landing.distance)
+}
+
 /// Uphill direction along a surface with this normal.
 fn slope_tangent(normal: Vec3) -> Vec3 {
     (Vec3::Y - normal * normal.dot(Vec3::Y)).normalize_or_zero()
@@ -100,9 +164,27 @@ pub fn simulate_player_step(mover: &MoveAndSlide, transform: &mut Transform, pla
         },
     );
 
-    transform.translation = output.position;
-    player.grounded = grounded_this_frame;
-    player.vertical_velocity = if grounded_this_frame { vertical_velocity.min(0.0) } else { vertical_velocity };
+    let horizontal_velocity = Vec3::new(velocity.x, 0.0, velocity.z);
+    let stepped_up = was_grounded
+        .then(|| blocked_horizontally(transform.translation, output.position, horizontal_velocity, dt))
+        .unwrap_or(false)
+        .then(|| {
+            try_step_up(
+                &mover,
+                &shape,
+                transform.rotation,
+                transform.translation,
+                horizontal_velocity,
+                dt,
+                &config,
+                &filter,
+            )
+        })
+        .flatten();
+
+    transform.translation = stepped_up.unwrap_or(output.position);
+    player.grounded = grounded_this_frame || stepped_up.is_some();
+    player.vertical_velocity = if player.grounded { vertical_velocity.min(0.0) } else { vertical_velocity };
 }
 
 fn simulate_noclip_step(transform: &mut Transform, input: &ClientInput, dt: f32) {

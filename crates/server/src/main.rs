@@ -15,7 +15,7 @@ use bevy_replicon_renet2::{
     RenetChannelsExt, RepliconRenetPlugins,
 };
 use big_brain::prelude::*;
-use shared::movement::resolve_slope_hit;
+use shared::movement::{blocked_horizontally, resolve_slope_hit, try_step_up};
 use shared::{
     entity_phase, resolve_bone_world_positions, zombie_hit_damage_bones, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
@@ -514,9 +514,26 @@ fn move_debug_bots(
                 MoveAndSlideHitResponse::Accept
             },
         );
-        transform.translation = output.position;
-        motion.grounded = grounded_this_frame;
-        motion.vertical_velocity = if grounded_this_frame { motion.vertical_velocity.min(0.0) } else { motion.vertical_velocity };
+        let dt = time.delta_secs();
+        let stepped_up = (was_grounded
+            && blocked_horizontally(transform.translation, output.position, horizontal_velocity, dt))
+        .then(|| {
+            try_step_up(
+                &mover,
+                &shape,
+                transform.rotation,
+                transform.translation,
+                horizontal_velocity,
+                dt,
+                &config,
+                &filter,
+            )
+        })
+        .flatten();
+
+        transform.translation = stepped_up.unwrap_or(output.position);
+        motion.grounded = grounded_this_frame || stepped_up.is_some();
+        motion.vertical_velocity = if motion.grounded { motion.vertical_velocity.min(0.0) } else { motion.vertical_velocity };
 
         if horizontal_velocity != Vec3::ZERO {
             let target_rotation = Transform::default().looking_to(-horizontal_velocity, Vec3::Y).rotation;
