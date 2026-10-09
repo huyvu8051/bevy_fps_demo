@@ -36,7 +36,6 @@
     aim_blur_enabled: Some(true),
     zombie_anim_disabled: Some(false),
     zombie_health_bars_hidden: Some(false),
-    zombie_lod_disabled: Some(false),
     player_model_visible: Some(false),
     gun_visible: Some(true),
     cars_visible: Some(true),
@@ -49,10 +48,4 @@
     autopilot: None,
     inspect_mode: Some(false),
     nav_debug_visible: Some(false),
-    show_distance_rings: Some(false),
-    distance_lod_enabled: Some(false),
-    lod_band_distance: Some((15.0, 30.0, 50.0)),
-    lod_car_texture_level: Some((5, 3, 1)),
-    lod_car_poly_level: Some((5, 3, 1)),
-    lod_zombie_texture_level: Some((5, 3, 1)),
 )

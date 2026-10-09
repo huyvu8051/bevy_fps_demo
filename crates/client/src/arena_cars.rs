@@ -6,37 +6,6 @@ use crate::*;
 #[derive(Component)]
 pub(crate) struct ArenaCarProp;
 
-#[derive(Component)]
-pub(crate) struct ArenaCarIndex(pub(crate) usize);
-
-#[derive(Component)]
-pub(crate) struct ArenaCarLodTier {
-
-    active_band: Option<usize>,
-
-    pool_poly_levels: [u8; 3],
-    pool_texture_levels: [u8; 3],
-    pool_ready: bool,
-    mesh_pool: [Handle<Mesh>; 3],
-    texture_pool: [(Handle<Image>, Handle<Image>, Handle<Image>); 3],
-}
-
-impl ArenaCarLodTier {
-
-    const UNBUILT: [u8; 3] = [u8::MAX; 3];
-
-    fn new() -> Self {
-        Self {
-            active_band: None,
-            pool_poly_levels: Self::UNBUILT,
-            pool_texture_levels: Self::UNBUILT,
-            pool_ready: false,
-            mesh_pool: std::array::from_fn(|_| Handle::default()),
-            texture_pool: std::array::from_fn(|_| (Handle::default(), Handle::default(), Handle::default())),
-        }
-    }
-}
-
 #[derive(Resource)]
 pub(crate) struct CarsVisible(pub(crate) bool);
 impl Default for CarsVisible {
@@ -127,73 +96,7 @@ pub(crate) fn spawn_arena_car_props(
             LinearDamping(8.0),
             AngularDamping(8.0),
             ArenaCarProp,
-            ArenaCarIndex(i),
-            ArenaCarLodTier::new(),
         ));
-    }
-}
-
-pub(crate) fn apply_arena_car_distance_lod(
-    enabled: Res<DistanceLodEnabled>,
-    bands: Res<LodBandDistance>,
-    texture_levels: Res<LodCarTextureLevel>,
-    poly_levels: Res<LodCarPolyLevel>,
-    asset_server: Res<AssetServer>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    player: Query<&Transform, With<Player>>,
-    mut cars: Query<(&Transform, &ArenaCarIndex, &mut ArenaCarLodTier, &mut Mesh3d, &MeshMaterial3d<StandardMaterial>), With<ArenaCarProp>>,
-) {
-    if !enabled.0 {
-        return;
-    }
-    let Ok(player_transform) = player.single() else {
-        return;
-    };
-    let player_pos = player_transform.translation.xz();
-    for (transform, index, mut tier, mut mesh, material_handle) in &mut cars {
-        if tier.pool_poly_levels != poly_levels.0 || tier.pool_texture_levels != texture_levels.0 {
-
-            tier.mesh_pool = std::array::from_fn(|band| {
-                asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset(shared::arena_car_mesh_path(index.0, poly_levels.0[band])))
-            });
-            tier.texture_pool = std::array::from_fn(|band| {
-                let (base_color_path, normal_path, metallic_roughness_path) = shared::arena_car_texture_paths(index.0, texture_levels.0[band]);
-                (
-                    asset_server.load(base_color_path),
-                    load_linear_car_texture(&asset_server, normal_path),
-                    load_linear_car_texture(&asset_server, metallic_roughness_path),
-                )
-            });
-            tier.pool_poly_levels = poly_levels.0;
-            tier.pool_texture_levels = texture_levels.0;
-            tier.pool_ready = false;
-            tier.active_band = None;
-        }
-        if !tier.pool_ready {
-            tier.pool_ready = tier.mesh_pool.iter().all(|h| asset_server.is_loaded_with_dependencies(h.id()))
-                && tier.texture_pool.iter().all(|(base_color, normal, metallic_roughness)| {
-                    asset_server.is_loaded_with_dependencies(base_color.id())
-                        && asset_server.is_loaded_with_dependencies(normal.id())
-                        && asset_server.is_loaded_with_dependencies(metallic_roughness.id())
-                });
-            if !tier.pool_ready {
-                continue;
-            }
-        }
-        let distance = (transform.translation.xz() - player_pos).length();
-        let band = bands.band_of(distance);
-        if tier.active_band == Some(band) {
-            continue;
-        }
-
-        mesh.0 = tier.mesh_pool[band].clone();
-        if let Some(mut material) = materials.get_mut(&material_handle.0) {
-            let (base_color, normal, metallic_roughness) = &tier.texture_pool[band];
-            material.base_color_texture = Some(base_color.clone());
-            material.normal_map_texture = Some(normal.clone());
-            material.metallic_roughness_texture = Some(metallic_roughness.clone());
-        }
-        tier.active_band = Some(band);
     }
 }
 

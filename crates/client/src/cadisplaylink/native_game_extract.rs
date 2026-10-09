@@ -279,7 +279,6 @@ pub fn extract_render_snapshot(
     snapshot.light_quality = world.resource::<crate::LightQuality>().0;
     snapshot.point_light_quality = world.resource::<crate::PointLightQuality>().0;
     snapshot.render_resolution_scale = world.resource::<crate::RenderResolutionScale>().0;
-    snapshot.zombie_texture_quality = world.resource::<crate::ZombieTextureQuality>().0;
 
     let mut cache = world.remove_resource::<StaticMeshCache>().unwrap_or_default();
     let mut used_texture_ids: std::collections::HashSet<AssetId<Image>> = std::collections::HashSet::new();

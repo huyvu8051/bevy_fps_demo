@@ -26,7 +26,6 @@ pub(crate) struct PersistedSettings {
     pub(crate) aim_blur_enabled: Option<bool>,
     pub(crate) zombie_anim_disabled: Option<bool>,
     pub(crate) zombie_health_bars_hidden: Option<bool>,
-    pub(crate) zombie_lod_disabled: Option<bool>,
     pub(crate) player_model_visible: Option<bool>,
     pub(crate) gun_visible: Option<bool>,
     pub(crate) cars_visible: Option<bool>,
@@ -39,12 +38,6 @@ pub(crate) struct PersistedSettings {
     pub(crate) autopilot: Option<bool>,
     pub(crate) inspect_mode: Option<bool>,
     pub(crate) nav_debug_visible: Option<bool>,
-    pub(crate) show_distance_rings: Option<bool>,
-    pub(crate) distance_lod_enabled: Option<bool>,
-    pub(crate) lod_band_distance: Option<[f32; 3]>,
-    pub(crate) lod_car_texture_level: Option<[u8; 3]>,
-    pub(crate) lod_car_poly_level: Option<[u8; 3]>,
-    pub(crate) lod_zombie_texture_level: Option<[u8; 3]>,
 }
 
 #[cfg(target_os = "ios")]
@@ -146,7 +139,6 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(aim_blur_enabled, AimBlurEnabled);
     apply!(zombie_anim_disabled, ZombieAnimDisabled);
     apply!(zombie_health_bars_hidden, ZombieHealthBarsHidden);
-    apply!(zombie_lod_disabled, ZombieLodDisabled);
     apply!(player_model_visible, PlayerModelVisible);
     apply!(gun_visible, GunVisible);
     apply!(cars_visible, CarsVisible);
@@ -159,12 +151,6 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(autopilot, Autopilot);
     apply!(inspect_mode, InspectMode);
     apply!(nav_debug_visible, NavDebugVisible);
-    apply!(show_distance_rings, ShowDistanceRings);
-    apply!(distance_lod_enabled, DistanceLodEnabled);
-    apply!(lod_band_distance, LodBandDistance);
-    apply!(lod_car_texture_level, LodCarTextureLevel);
-    apply!(lod_car_poly_level, LodCarPolyLevel);
-    apply!(lod_zombie_texture_level, LodZombieTextureLevel);
 }
 
 pub(crate) fn apply_persisted_settings(world: &mut World) {
@@ -215,7 +201,6 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(AimBlurEnabled)
         || changed!(ZombieAnimDisabled)
         || changed!(ZombieHealthBarsHidden)
-        || changed!(ZombieLodDisabled)
         || changed!(PlayerModelVisible)
         || changed!(GunVisible)
         || changed!(CarsVisible)
@@ -227,13 +212,7 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(ShowBulletTracers)
         || changed!(Autopilot)
         || changed!(InspectMode)
-        || changed!(NavDebugVisible)
-        || changed!(ShowDistanceRings)
-        || changed!(DistanceLodEnabled)
-        || changed!(LodBandDistance)
-        || changed!(LodCarTextureLevel)
-        || changed!(LodCarPolyLevel)
-        || changed!(LodZombieTextureLevel);
+        || changed!(NavDebugVisible);
     if !any_changed {
         return;
     }
@@ -265,7 +244,6 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         aim_blur_enabled: world.get_resource::<AimBlurEnabled>().map(|r| r.0),
         zombie_anim_disabled: world.get_resource::<ZombieAnimDisabled>().map(|r| r.0),
         zombie_health_bars_hidden: world.get_resource::<ZombieHealthBarsHidden>().map(|r| r.0),
-        zombie_lod_disabled: world.get_resource::<ZombieLodDisabled>().map(|r| r.0),
         player_model_visible: world.get_resource::<PlayerModelVisible>().map(|r| r.0),
         gun_visible: world.get_resource::<GunVisible>().map(|r| r.0),
         cars_visible: world.get_resource::<CarsVisible>().map(|r| r.0),
@@ -278,12 +256,6 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         autopilot: world.get_resource::<Autopilot>().map(|r| r.0),
         inspect_mode: world.get_resource::<InspectMode>().map(|r| r.0),
         nav_debug_visible: world.get_resource::<NavDebugVisible>().map(|r| r.0),
-        show_distance_rings: world.get_resource::<ShowDistanceRings>().map(|r| r.0),
-        distance_lod_enabled: world.get_resource::<DistanceLodEnabled>().map(|r| r.0),
-        lod_band_distance: world.get_resource::<LodBandDistance>().map(|r| r.0),
-        lod_car_texture_level: world.get_resource::<LodCarTextureLevel>().map(|r| r.0),
-        lod_car_poly_level: world.get_resource::<LodCarPolyLevel>().map(|r| r.0),
-        lod_zombie_texture_level: world.get_resource::<LodZombieTextureLevel>().map(|r| r.0),
     }
 }
 

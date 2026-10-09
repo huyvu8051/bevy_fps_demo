@@ -23,7 +23,6 @@ fn zombie_model_specs() -> Vec<SkinnedModelSpec> {
         scale: 1.04,
         y_offset: -0.76,
         facing_radians: 0.0,
-        texture_for_tier: None,
     }];
     for kind in [shared::ZombieKind::Classic, shared::ZombieKind::Meshy, shared::ZombieKind::Soldier] {
         specs.push(SkinnedModelSpec {
@@ -32,11 +31,6 @@ fn zombie_model_specs() -> Vec<SkinnedModelSpec> {
             scale: 1.0,
             y_offset: 0.0,
             facing_radians: 0.0,
-            texture_for_tier: Some(match kind {
-                shared::ZombieKind::Classic => |tier| shared::zombie_kind_texture_path(shared::ZombieKind::Classic, tier),
-                shared::ZombieKind::Meshy => |tier| shared::zombie_kind_texture_path(shared::ZombieKind::Meshy, tier),
-                shared::ZombieKind::Soldier => |tier| shared::zombie_kind_texture_path(shared::ZombieKind::Soldier, tier),
-            }),
         });
     }
     specs
@@ -544,12 +538,6 @@ bool_toggle_ffi!(
     native_metal_probe_set_zombie_health_bars_hidden,
     super::native_menu::zombie_health_bars_hidden,
     super::native_menu::set_zombie_health_bars_hidden
-);
-bool_toggle_ffi!(
-    native_metal_probe_get_zombie_lod_disabled,
-    native_metal_probe_set_zombie_lod_disabled,
-    super::native_menu::zombie_lod_disabled,
-    super::native_menu::set_zombie_lod_disabled
 );
 bool_toggle_ffi!(
     native_metal_probe_get_player_model_visible,

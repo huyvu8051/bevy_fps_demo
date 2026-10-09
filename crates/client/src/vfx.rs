@@ -483,39 +483,6 @@ pub(crate) fn draw_zombie_hitboxes(
     }
 }
 
-pub(crate) fn distance_rings_toggle_button(mut show: ResMut<ShowDistanceRings>, btn: Query<&Interaction, (With<CheatDistanceRingsButton>, Changed<Interaction>)>) {
-    if tapped(&btn) {
-        show.0 = !show.0;
-    }
-}
-
-pub(crate) fn update_distance_rings_button_color(show: Res<ShowDistanceRings>, mut btn: Query<&mut BackgroundColor, With<CheatDistanceRingsButton>>) {
-    if !show.is_changed() {
-        return;
-    }
-    let color = if show.0 { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for mut bg in &mut btn {
-        *bg = BackgroundColor(color);
-    }
-}
-
-pub(crate) fn draw_distance_rings(show: Res<ShowDistanceRings>, bands: Res<LodBandDistance>, player: Query<&Transform, With<Player>>, mut gizmos: Gizmos) {
-    if !show.0 {
-        return;
-    }
-    let Ok(player_transform) = player.single() else {
-        return;
-    };
-    let center = player_transform.translation;
-    let ring_rotation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
-    let max_radius = bands.0.iter().copied().fold(0.0, f32::max).max(1.0);
-    for &radius in &bands.0 {
-        let t = radius / max_radius;
-        let color = Color::srgb(t, 1.0 - t, 0.0);
-        gizmos.circle(Isometry3d::new(center, ring_rotation), radius, color);
-    }
-}
-
 pub(crate) fn nearest_zombie_bone(bones: &ZombieHitboxBones, point: Vec3, globals: &Query<&GlobalTransform>) -> Option<(Entity, GlobalTransform)> {
     bones
         .head

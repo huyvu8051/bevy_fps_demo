@@ -651,7 +651,6 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     .with_children(|row| {
                         spawn_cheat_toggle_button(row, "NoZAnim", CheatZombieAnimButton);
                         spawn_cheat_toggle_button(row, "NoHPBar", CheatZombieHealthBarsButton);
-                        spawn_cheat_toggle_button(row, "FullLOD", CheatZombieLodButton);
                     });
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
@@ -675,22 +674,8 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
 
                         spawn_cheat_toggle_button(row, "NavDbg", CheatNavDebugButton);
 
-                        spawn_cheat_toggle_button(row, "DistRings", CheatDistanceRingsButton);
                     });
                 }
-                page.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    ..default()
-                })
-                .with_children(|row| {
-
-                    spawn_cheat_toggle_button(row, "DistLOD", CheatDistanceLodButton);
-                });
-                spawn_lod_stepper_row(page, "LOD Dist(m)", LodParam::Distance, ["15".into(), "30".into(), "50".into()]);
-                spawn_lod_stepper_row(page, "Car Tex", LodParam::CarTexture, ["5".into(), "3".into(), "1".into()]);
-                spawn_lod_stepper_row(page, "Car Poly", LodParam::CarPoly, ["5".into(), "3".into(), "1".into()]);
-                spawn_lod_stepper_row(page, "Zmb Tex", LodParam::ZombieTexture, ["5".into(), "3".into(), "1".into()]);
             });
 
             menu.spawn((
@@ -864,28 +849,6 @@ pub(crate) fn spawn_cheat_action_button(parent: &mut ChildSpawnerCommands, label
     spawn_cheat_button_node(parent, label, marker);
 }
 
-pub(crate) fn spawn_lod_stepper_row(parent: &mut ChildSpawnerCommands, label: &str, param_of_band: impl Fn(usize) -> LodParam, initial: [String; 3]) {
-    parent.spawn((
-        Text::new(label),
-        TextFont { font_size: FontSize::Px(14.0), ..default() },
-        TextColor(Color::WHITE),
-    ));
-    parent
-        .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(10.0),
-            align_items: AlignItems::Center,
-            ..default()
-        })
-        .with_children(|row| {
-            for (band, text) in initial.into_iter().enumerate() {
-                let param = param_of_band(band);
-                spawn_cheat_action_button(row, "-", LodDecButton(param));
-                row.spawn((Text::new(text), TextFont { font_size: FontSize::Px(14.0), ..default() }, TextColor(Color::WHITE), LodValueText(param)));
-                spawn_cheat_action_button(row, "+", LodIncButton(param));
-            }
-        });
-}
 
 #[derive(Component)]
 pub(crate) struct CheatNoclipButton;
@@ -957,8 +920,6 @@ pub(crate) struct CheatZombieAnimButton;
 #[derive(Component)]
 pub(crate) struct CheatZombieHealthBarsButton;
 #[derive(Component)]
-pub(crate) struct CheatZombieLodButton;
-#[derive(Component)]
 pub(crate) struct CheatPlayerModelButton;
 #[derive(Component)]
 pub(crate) struct CheatDofAltButton;
@@ -991,28 +952,6 @@ pub(crate) struct CheatShowTracersButton;
 
 #[derive(Component)]
 pub(crate) struct CheatNavDebugButton;
-
-#[derive(Component)]
-pub(crate) struct CheatDistanceRingsButton;
-
-#[derive(Component)]
-pub(crate) struct CheatDistanceLodButton;
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum LodParam {
-    Distance(usize),
-    CarTexture(usize),
-    CarPoly(usize),
-    ZombieTexture(usize),
-}
-
-#[derive(Component)]
-pub(crate) struct LodDecButton(pub(crate) LodParam);
-#[derive(Component)]
-pub(crate) struct LodIncButton(pub(crate) LodParam);
-#[derive(Component)]
-pub(crate) struct LodValueText(pub(crate) LodParam);
-
 pub(crate) fn cheat_toggle_buttons(
     mut commands: Commands,
     mut noclip: ResMut<Noclip>,
@@ -1110,13 +1049,11 @@ pub(crate) fn cheat_toggle_buttons_2(
     mut aim_blur: ResMut<AimBlurEnabled>,
     mut zombie_anim: ResMut<ZombieAnimDisabled>,
     mut zombie_health_bars: ResMut<ZombieHealthBarsHidden>,
-    mut zombie_lod: ResMut<ZombieLodDisabled>,
     mut player_model: ResMut<PlayerModelVisible>,
     hitboxes_btn: Query<&Interaction, (With<CheatHitboxesButton>, Changed<Interaction>)>,
     aim_blur_btn: Query<&Interaction, (With<CheatAimBlurButton>, Changed<Interaction>)>,
     zombie_anim_btn: Query<&Interaction, (With<CheatZombieAnimButton>, Changed<Interaction>)>,
     zombie_health_bars_btn: Query<&Interaction, (With<CheatZombieHealthBarsButton>, Changed<Interaction>)>,
-    zombie_lod_btn: Query<&Interaction, (With<CheatZombieLodButton>, Changed<Interaction>)>,
     player_model_btn: Query<&Interaction, (With<CheatPlayerModelButton>, Changed<Interaction>)>,
 ) {
     if tapped(&hitboxes_btn) {
@@ -1130,9 +1067,6 @@ pub(crate) fn cheat_toggle_buttons_2(
     }
     if tapped(&zombie_health_bars_btn) {
         zombie_health_bars.0 = !zombie_health_bars.0;
-    }
-    if tapped(&zombie_lod_btn) {
-        zombie_lod.0 = !zombie_lod.0;
     }
     if tapped(&player_model_btn) {
         player_model.0 = !player_model.0;
@@ -1193,7 +1127,6 @@ pub(crate) fn update_cheat_toggle_colors(
     aim_blur: Res<AimBlurEnabled>,
     zombie_anim: Res<ZombieAnimDisabled>,
     zombie_health_bars: Res<ZombieHealthBarsHidden>,
-    zombie_lod: Res<ZombieLodDisabled>,
     player_model: Res<PlayerModelVisible>,
     gun_visible: Res<GunVisible>,
     cars_visible: Res<CarsVisible>,
@@ -1208,7 +1141,6 @@ pub(crate) fn update_cheat_toggle_colors(
             Option<&CheatAimBlurButton>,
             Option<&CheatZombieAnimButton>,
             Option<&CheatZombieHealthBarsButton>,
-            Option<&CheatZombieLodButton>,
             Option<&CheatPlayerModelButton>,
             Option<&CheatGunButton>,
             Option<&CheatCarsButton>,
@@ -1222,7 +1154,6 @@ pub(crate) fn update_cheat_toggle_colors(
             With<CheatAimBlurButton>,
             With<CheatZombieAnimButton>,
             With<CheatZombieHealthBarsButton>,
-            With<CheatZombieLodButton>,
             With<CheatPlayerModelButton>,
             With<CheatGunButton>,
             With<CheatCarsButton>,
@@ -1231,7 +1162,7 @@ pub(crate) fn update_cheat_toggle_colors(
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, zombie_lod_m, player_model_m, gun_m, cars_m, msaa_m) in
+    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, player_model_m, gun_m, cars_m, msaa_m) in
         &mut buttons
     {
         let on = if noclip_m.is_some() {
@@ -1248,8 +1179,6 @@ pub(crate) fn update_cheat_toggle_colors(
             zombie_anim.0
         } else if zombie_hp_m.is_some() {
             zombie_health_bars.0
-        } else if zombie_lod_m.is_some() {
-            zombie_lod.0
         } else if player_model_m.is_some() {
             player_model.0
         } else if gun_m.is_some() {
@@ -1503,80 +1432,6 @@ pub(crate) fn update_sensitivity_text(scale: Res<SensitivityScale>, mut text: Qu
     }
     for mut text in &mut text {
         text.0 = format!("{:.2}x", scale.0);
-    }
-}
-
-pub(crate) fn distance_lod_toggle_button(mut enabled: ResMut<DistanceLodEnabled>, btn: Query<&Interaction, (With<CheatDistanceLodButton>, Changed<Interaction>)>) {
-    if tapped(&btn) {
-        enabled.0 = !enabled.0;
-    }
-}
-
-pub(crate) fn update_distance_lod_button_color(enabled: Res<DistanceLodEnabled>, mut btn: Query<&mut BackgroundColor, With<CheatDistanceLodButton>>) {
-    if !enabled.is_changed() {
-        return;
-    }
-    let color = if enabled.0 { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for mut bg in &mut btn {
-        *bg = BackgroundColor(color);
-    }
-}
-
-pub(crate) fn lod_stepper_buttons(
-    mut distance: ResMut<LodBandDistance>,
-    mut car_texture: ResMut<LodCarTextureLevel>,
-    mut car_poly: ResMut<LodCarPolyLevel>,
-    mut zombie_texture: ResMut<LodZombieTextureLevel>,
-    dec_btn: Query<(&Interaction, &LodDecButton), Changed<Interaction>>,
-    inc_btn: Query<(&Interaction, &LodIncButton), Changed<Interaction>>,
-) {
-    let mut apply = |param: LodParam, delta: i32| match param {
-        LodParam::Distance(band) => {
-            let v = &mut distance.0[band];
-            *v = (*v + delta as f32 * LOD_DISTANCE_STEP).clamp(LOD_DISTANCE_MIN, LOD_DISTANCE_MAX);
-        }
-        LodParam::CarTexture(band) => {
-            let v = &mut car_texture.0[band];
-            *v = (*v as i32 + delta).clamp(0, 5) as u8;
-        }
-        LodParam::CarPoly(band) => {
-            let v = &mut car_poly.0[band];
-            *v = (*v as i32 + delta).clamp(1, 5) as u8;
-        }
-        LodParam::ZombieTexture(band) => {
-            let v = &mut zombie_texture.0[band];
-            *v = (*v as i32 + delta).clamp(0, 5) as u8;
-        }
-    };
-    for (interaction, btn) in &dec_btn {
-        if *interaction == Interaction::Pressed {
-            apply(btn.0, -1);
-        }
-    }
-    for (interaction, btn) in &inc_btn {
-        if *interaction == Interaction::Pressed {
-            apply(btn.0, 1);
-        }
-    }
-}
-
-pub(crate) fn update_lod_stepper_texts(
-    distance: Res<LodBandDistance>,
-    car_texture: Res<LodCarTextureLevel>,
-    car_poly: Res<LodCarPolyLevel>,
-    zombie_texture: Res<LodZombieTextureLevel>,
-    mut texts: Query<(&mut Text, &LodValueText)>,
-) {
-    if !distance.is_changed() && !car_texture.is_changed() && !car_poly.is_changed() && !zombie_texture.is_changed() {
-        return;
-    }
-    for (mut text, marker) in &mut texts {
-        text.0 = match marker.0 {
-            LodParam::Distance(band) => format!("{:.0}", distance.0[band]),
-            LodParam::CarTexture(band) => format!("{}", car_texture.0[band]),
-            LodParam::CarPoly(band) => format!("{}", car_poly.0[band]),
-            LodParam::ZombieTexture(band) => format!("{}", zombie_texture.0[band]),
-        };
     }
 }
 

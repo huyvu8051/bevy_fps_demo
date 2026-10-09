@@ -684,7 +684,6 @@ pub(crate) fn toggle_debug_flags(
     mut dof_focal_alt: ResMut<AimDofFocalDistanceAlt>,
     mut zombie_anim_disabled: ResMut<ZombieAnimDisabled>,
     mut zombie_health_bars_hidden: ResMut<ZombieHealthBarsHidden>,
-    mut zombie_lod_disabled: ResMut<ZombieLodDisabled>,
     mut player_model_visible: ResMut<PlayerModelVisible>,
     mut autopilot: ResMut<Autopilot>,
 ) {
@@ -710,9 +709,6 @@ pub(crate) fn toggle_debug_flags(
     }
     if keys.just_pressed(KeyCode::KeyJ) {
         zombie_health_bars_hidden.0 = !zombie_health_bars_hidden.0;
-    }
-    if keys.just_pressed(KeyCode::KeyK) {
-        zombie_lod_disabled.0 = !zombie_lod_disabled.0;
     }
     if keys.just_pressed(KeyCode::KeyT) {
         player_model_visible.0 = !player_model_visible.0;

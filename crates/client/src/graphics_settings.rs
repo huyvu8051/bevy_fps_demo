@@ -44,9 +44,6 @@ pub(crate) struct FreezeZombies(pub(crate) bool);
 #[derive(Resource, Default)]
 pub(crate) struct ShowHitboxes(pub(crate) bool);
 
-#[derive(Resource, Default)]
-pub(crate) struct ShowDistanceRings(pub(crate) bool);
-
 #[derive(Resource)]
 pub(crate) struct ShowAutopilotTarget(pub(crate) bool);
 
@@ -201,55 +198,6 @@ impl Default for PolyQuality {
     }
 }
 
-#[derive(Resource, Default)]
-pub(crate) struct DistanceLodEnabled(pub(crate) bool);
-
-#[derive(Resource)]
-pub(crate) struct LodBandDistance(pub(crate) [f32; 3]);
-impl Default for LodBandDistance {
-    fn default() -> Self {
-        Self([ZOMBIE_LOD_DISTANCE, 30.0, 50.0])
-    }
-}
-impl LodBandDistance {
-
-    pub(crate) fn band_of(&self, distance: f32) -> usize {
-        if distance <= self.0[0] {
-            0
-        } else if distance <= self.0[1] {
-            1
-        } else {
-            2
-        }
-    }
-}
-pub(crate) const LOD_DISTANCE_STEP: f32 = 1.0;
-pub(crate) const LOD_DISTANCE_MIN: f32 = 1.0;
-pub(crate) const LOD_DISTANCE_MAX: f32 = 200.0;
-
-#[derive(Resource)]
-pub(crate) struct LodCarTextureLevel(pub(crate) [u8; 3]);
-impl Default for LodCarTextureLevel {
-    fn default() -> Self {
-        Self([5, 3, 1])
-    }
-}
-
-#[derive(Resource)]
-pub(crate) struct LodCarPolyLevel(pub(crate) [u8; 3]);
-impl Default for LodCarPolyLevel {
-    fn default() -> Self {
-        Self([5, 3, 1])
-    }
-}
-
-#[derive(Resource)]
-pub(crate) struct LodZombieTextureLevel(pub(crate) [u8; 3]);
-impl Default for LodZombieTextureLevel {
-    fn default() -> Self {
-        Self([5, 3, 1])
-    }
-}
 
 pub(crate) fn gun_poly_quality_default() -> u8 {
     std::env::var("GUN_POLY_QUALITY")

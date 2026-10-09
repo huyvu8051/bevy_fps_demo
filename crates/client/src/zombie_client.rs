@@ -10,9 +10,6 @@ pub(crate) struct ZombieAnimDisabled(pub(crate) bool);
 pub(crate) struct ZombieHealthBarsHidden(pub(crate) bool);
 
 #[derive(Resource, Default)]
-pub(crate) struct ZombieLodDisabled(pub(crate) bool);
-
-#[derive(Resource, Default)]
 pub(crate) struct PlayerModelVisible(pub(crate) bool);
 
 #[derive(Component)]
@@ -305,54 +302,6 @@ pub(crate) fn apply_zombie_texture_quality(
     }
 }
 
-pub(crate) fn apply_zombie_distance_lod_texture(
-    enabled: Res<DistanceLodEnabled>,
-    bands: Res<LodBandDistance>,
-    texture_levels: Res<LodZombieTextureLevel>,
-    asset_server: Res<AssetServer>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    player: Query<&Transform, With<Player>>,
-    zombies: Query<(Entity, &Transform, &ZombieKind)>,
-    children: Query<&Children>,
-    mesh_materials: Query<&MeshMaterial3d<StandardMaterial>>,
-    mut cached: Local<std::collections::HashMap<ZombieKind, Handle<StandardMaterial>>>,
-    mut last_tier: Local<std::collections::HashMap<ZombieKind, u8>>,
-) {
-    if !enabled.0 {
-        return;
-    }
-    let Ok(player_transform) = player.single() else {
-        return;
-    };
-    let player_pos = player_transform.translation.xz();
-
-    let mut nearest: std::collections::HashMap<ZombieKind, f32> = std::collections::HashMap::new();
-    for (entity, transform, &kind) in &zombies {
-        if !cached.contains_key(&kind)
-            && let Some(handle) = find_material_in_descendants(entity, &children, &mesh_materials)
-        {
-            cached.insert(kind, handle);
-        }
-        let distance = (transform.translation.xz() - player_pos).length();
-        nearest.entry(kind).and_modify(|d| *d = d.min(distance)).or_insert(distance);
-    }
-
-    for (&kind, &distance) in &nearest {
-        let Some(handle) = cached.get(&kind) else {
-            continue;
-        };
-        let band = bands.band_of(distance);
-        let target_tier = texture_levels.0[band];
-        if last_tier.get(&kind) == Some(&target_tier) {
-            continue;
-        }
-        let texture: Handle<Image> = asset_server.load(shared::zombie_kind_texture_path(kind, target_tier));
-        if let Some(mut material) = materials.get_mut(handle) {
-            material.base_color_texture = Some(texture);
-        }
-        last_tier.insert(kind, target_tier);
-    }
-}
 
 pub(crate) fn find_material_in_descendants(
     entity: Entity,
@@ -444,7 +393,7 @@ pub(crate) fn update_zombie_health_bars(
 
     let mut candidates: Vec<(Entity, f32)> = zombies
         .iter()
-        .filter(|(_, _, _, motion)| !motion.far)
+        
         .map(|(entity, transform, ..)| (entity, transform.translation.distance(player_transform.translation)))
         .collect();
     candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -491,14 +440,14 @@ pub(crate) fn freeze_zombie_animations(
     freeze: Res<FreezeZombies>,
     anim_disabled: Res<ZombieAnimDisabled>,
     player: Query<&Transform, With<Player>>,
-    zombies: Query<(&Transform, &ZombieAnimationPlayer, &ZombieMotion), (With<Zombie>, Without<Player>)>,
+    zombies: Query<(&Transform, &ZombieAnimationPlayer), (With<Zombie>, Without<Player>)>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
     let Ok(player_transform) = player.single() else {
         return;
     };
     if anim_disabled.0 {
-        for (_, link, _) in &zombies {
+        for (_, link) in &zombies {
             if let Ok(mut player) = players.get_mut(link.0) {
                 for (_, active) in player.playing_animations_mut() {
                     active.pause();
@@ -519,7 +468,7 @@ pub(crate) fn freeze_zombie_animations(
         f32::INFINITY
     };
 
-    for (zombie_transform, link, motion) in &zombies {
+    for (zombie_transform, link) in &zombies {
         let Ok(mut player) = players.get_mut(link.0) else {
             continue;
         };
@@ -534,7 +483,7 @@ pub(crate) fn freeze_zombie_animations(
         let phase = ops::sin(zombie_transform.translation.x * 12.9898).abs();
         let throttle_cycle = (time.elapsed_secs() * hz + phase * 2.0) % 2.0;
         let throttled_paused_this_tick = hz.is_finite() && throttle_cycle < 1.0;
-        let should_pause = freeze.0 || motion.far || throttled_paused_this_tick;
+        let should_pause = freeze.0 || throttled_paused_this_tick;
         for (_, active) in player.playing_animations_mut() {
             if should_pause {
                 active.pause();
@@ -543,39 +492,6 @@ pub(crate) fn freeze_zombie_animations(
             }
         }
     }
-}
-
-pub(crate) fn update_zombie_lod(
-    mut timings: ResMut<PerfTimings>,
-    lod_disabled: Res<ZombieLodDisabled>,
-    player: Query<&Transform, With<Player>>,
-    mut zombies: Query<(&Transform, &mut ZombieMotion), (With<Zombie>, Without<Player>)>,
-    time: Res<Time>,
-    mut elapsed: Local<f32>,
-) {
-
-    *elapsed += time.delta_secs();
-    if *elapsed < 1.0 / INPUT_SEND_HZ {
-        return;
-    }
-    *elapsed = 0.0;
-    let perf_start = std::time::Instant::now();
-    let Ok(player_transform) = player.single() else {
-        return;
-    };
-    let mut near_count = 0usize;
-    let mut total = 0usize;
-    for (zombie_transform, mut motion) in &mut zombies {
-        total += 1;
-        let distance = zombie_transform.translation.distance(player_transform.translation);
-        motion.far = !lod_disabled.0 && distance > ZOMBIE_LOD_DISTANCE;
-        if !motion.far {
-            near_count += 1;
-        }
-    }
-    timings.move_zombies_ms = perf_start.elapsed().as_secs_f32() * 1000.0;
-    timings.zombie_count = total;
-    timings.near_zombie_count = near_count;
 }
 
 const ZOMBIE_SPLIT_SCENE_ROOT_NAME: &str = "target_character";

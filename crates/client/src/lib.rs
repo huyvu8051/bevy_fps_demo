@@ -36,7 +36,7 @@ use shared::{
     HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
     resolve_bone_world_positions, zombie_hit_damage_ray,
     PROTOCOL_ID,
-    ZOMBIE_ATTACK_INTERVAL, ZOMBIE_LOD_DISTANCE, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS,
+    ZOMBIE_ATTACK_INTERVAL, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS,
     zombie_pose_for, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
     ARENA_HALF_SIZE, ARENA_WALL_HEIGHT,
 };
@@ -357,11 +357,8 @@ struct SelectedDebugBot(Option<u32>);
 
 #[derive(Resource, Default)]
 struct PerfTimings {
-    move_zombies_ms: f32,
     health_bars_ms: f32,
-    zombie_count: usize,
 
-    near_zombie_count: usize,
 }
 
 #[derive(Resource, Default)]
@@ -502,12 +499,6 @@ impl Plugin for GamePlugin {
         .init_resource::<ShowHitboxes>()
         .init_resource::<RenderResolutionScale>()
         .init_resource::<FpsCap>()
-        .init_resource::<ShowDistanceRings>()
-        .init_resource::<DistanceLodEnabled>()
-        .init_resource::<LodBandDistance>()
-        .init_resource::<LodCarTextureLevel>()
-        .init_resource::<LodCarPolyLevel>()
-        .init_resource::<LodZombieTextureLevel>()
         .init_resource::<GodMode>()
         .init_resource::<ShowAutopilotTarget>()
         .init_resource::<ShowHitMarkers>()
@@ -524,7 +515,6 @@ impl Plugin for GamePlugin {
         .init_resource::<PerfTimings>()
         .init_resource::<ZombieAnimDisabled>()
         .init_resource::<ZombieHealthBarsHidden>()
-        .init_resource::<ZombieLodDisabled>()
         .init_resource::<PredictedInputs>()
         .init_resource::<PredictionSmooth>()
         .init_resource::<PlayerModelVisible>()
@@ -677,7 +667,6 @@ impl Plugin for GamePlugin {
                     predict_player_movement,
                     sync_camera_to_player,
                     sync_player_model,
-                    update_zombie_lod,
                     zombies_damage_player,
                 )
                     .chain(),
@@ -735,16 +724,7 @@ impl Plugin for GamePlugin {
                 update_crosshair,
                 set_hitbox_gizmo_depth_bias,
                 draw_zombie_hitboxes,
-                (update_splash_screen, distance_rings_toggle_button, update_distance_rings_button_color, draw_distance_rings).chain(),
-                (
-                    distance_lod_toggle_button,
-                    update_distance_lod_button_color,
-                    lod_stepper_buttons,
-                    update_lod_stepper_texts,
-                    apply_arena_car_distance_lod,
-                    apply_zombie_distance_lod_texture,
-                )
-                    .chain(),
+                update_splash_screen,
                 despawn_hit_markers,
                 despawn_muzzle_flashes,
                 despawn_bullet_tracers,
