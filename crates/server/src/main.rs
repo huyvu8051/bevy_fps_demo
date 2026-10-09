@@ -25,7 +25,7 @@ use shared::{
     ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, 
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
-    MAX_SHOT_DISTANCE, MOVE_SPEED, PILLAR_RADIUS,
+    MAX_SHOT_DISTANCE, MOVE_SPEED,
     PLAYER_LENGTH, PLAYER_RADIUS, Scenario,
     
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
@@ -613,16 +613,6 @@ fn debug_bot_fire(
             message: ShotFx::ZombieHit { origin, point: hit_point, normal, damage, killed },
         });
     }
-}
-
-fn column_footprint(x: f32, z: f32) -> Vec<Vec2> {
-
-    vec![
-        Vec2::new(x - PILLAR_RADIUS, z - PILLAR_RADIUS),
-        Vec2::new(x - PILLAR_RADIUS, z + PILLAR_RADIUS),
-        Vec2::new(x + PILLAR_RADIUS, z + PILLAR_RADIUS),
-        Vec2::new(x + PILLAR_RADIUS, z - PILLAR_RADIUS),
-    ]
 }
 
 #[derive(Resource)]

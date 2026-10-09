@@ -408,7 +408,7 @@ fn spawn_test_arena(
                 Collider::cylinder(b.size.x * 0.5, b.size.y),
             ),
         };
-        let mut piece = commands.spawn((
+        commands.spawn((
             Mesh3d(mesh),
             MeshMaterial3d(material),
             Transform::from_translation(b.translation).with_rotation(b.rotation),
