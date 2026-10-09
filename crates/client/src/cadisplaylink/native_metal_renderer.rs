@@ -434,7 +434,6 @@ struct SponzaVertex {
     packed_float2 uv;
     // Unused here (this pass only needs position) but MUST stay present —
     // this struct's buffer(0) is the exact same GltfVertex-laid-out buffer
-    // SPONZA_SHADER_SOURCE's own Vertex reads (bake_static_mesh_vertices
     // builds one buffer per mesh, shared by both the shadow and main
     // passes — see draw_shadow_casters/draw_scene). Metal computes this
     // struct's own stride from ITS OWN size to index verts[vid], so
@@ -902,40 +901,6 @@ pub struct NativeMetalRenderer {
     ui_generic_nodes: Vec<super::native_game_extract::GenericUiNode>,
 }
 
-fn bake_static_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::GltfVertex> {
-    let mut verts = Vec::new();
-    let vertex_at = |idx: usize| -> super::gltf_scene::GltfVertex {
-        let local_pos = bevy::math::Vec3::from_array(mesh.positions[idx]);
-        let local_normal = if mesh.normals.is_empty() {
-            bevy::math::Vec3::Y
-        } else {
-            bevy::math::Vec3::from_array(mesh.normals[idx])
-        };
-        let uv = if mesh.uvs.is_empty() { [0.0, 0.0] } else { mesh.uvs[idx] };
-        let world_pos = mesh.transform.transform_point(local_pos);
-        let world_normal = (mesh.transform.rotation * local_normal).normalize_or_zero();
-
-        let tangent = if mesh.tangents.is_empty() {
-            [1.0, 0.0, 0.0, 1.0]
-        } else {
-            let [tx, ty, tz, tw] = mesh.tangents[idx];
-            let world_tangent = (mesh.transform.rotation * bevy::math::Vec3::new(tx, ty, tz)).normalize_or_zero();
-            [world_tangent.x, world_tangent.y, world_tangent.z, tw]
-        };
-        super::gltf_scene::GltfVertex { position: world_pos.to_array(), normal: world_normal.to_array(), uv, tangent }
-    };
-    if mesh.indices.is_empty() {
-        for idx in 0..mesh.positions.len() {
-            verts.push(vertex_at(idx));
-        }
-    } else {
-        for &idx in &mesh.indices {
-            verts.push(vertex_at(idx as usize));
-        }
-    }
-    verts
-}
-
 fn bake_local_mesh_vertices(mesh: &ExtractedMesh) -> Vec<super::gltf_scene::GltfVertex> {
     let mut verts = Vec::new();
     let vertex_at = |idx: usize| -> super::gltf_scene::GltfVertex {
@@ -1288,7 +1253,6 @@ struct RealGameMeshDraw<'a> {
     model_matrix: [[f32; 4]; 4],
 }
 
-const MAT4_IDENTITY: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
 
 impl NativeMetalRenderer {
 
@@ -2157,7 +2121,7 @@ impl NativeMetalRenderer {
             .collect();
         self.real_game_textures.retain(|id, _| used_texture_ids.contains(id));
         let used_mesh_ids: std::collections::HashSet<AssetId<Mesh>> =
-            real_game_static_meshes.iter().filter_map(|mesh| mesh.mesh_id).collect();
+            real_game_static_meshes.iter().map(|mesh| mesh.mesh_id).collect();
         self.gpu_transformed_mesh_cache.retain(|id, _| used_mesh_ids.contains(id));
 
         for mesh in &real_game_static_meshes {
@@ -2173,54 +2137,31 @@ impl NativeMetalRenderer {
             .iter()
             .filter_map(|mesh| {
 
-                let (vertex_buffer, vertex_count, model_matrix) = if mesh.is_gpu_transformed {
-
-                    let mesh_id = mesh.mesh_id?;
-                    let (buffer, count) = match self.gpu_transformed_mesh_cache.get(&mesh_id) {
-                        Some(cached) => cached.clone(),
-                        None => {
-                            let verts = bake_local_mesh_vertices(mesh);
-                            if verts.is_empty() {
-                                bevy::log::warn!(
-                                    "empty GPU-transformed mesh skipped: positions={} normals={} uvs={} indices={}",
-                                    mesh.positions.len(),
-                                    mesh.normals.len(),
-                                    mesh.uvs.len(),
-                                    mesh.indices.len()
-                                );
-                                return None;
-                            }
-                            let buffer = self.device.new_buffer_with_data(
-                                verts.as_ptr() as *const _,
-                                (verts.len() * std::mem::size_of::<super::gltf_scene::GltfVertex>()) as u64,
-                                MTLResourceOptions::StorageModeShared,
+                let (vertex_buffer, vertex_count) = match self.gpu_transformed_mesh_cache.get(&mesh.mesh_id) {
+                    Some(cached) => cached.clone(),
+                    None => {
+                        let verts = bake_local_mesh_vertices(mesh);
+                        if verts.is_empty() {
+                            bevy::log::warn!(
+                                "empty mesh skipped: positions={} normals={} uvs={} indices={}",
+                                mesh.positions.len(),
+                                mesh.normals.len(),
+                                mesh.uvs.len(),
+                                mesh.indices.len()
                             );
-                            let entry = (buffer, verts.len());
-                            self.gpu_transformed_mesh_cache.insert(mesh_id, entry.clone());
-                            entry
+                            return None;
                         }
-                    };
-                    (buffer, count, mesh.transform.to_matrix().to_cols_array_2d())
-                } else {
-
-                    let verts = bake_static_mesh_vertices(mesh);
-                    if verts.is_empty() {
-                        bevy::log::warn!(
-                            "empty static mesh skipped: positions={} normals={} uvs={} indices={}",
-                            mesh.positions.len(),
-                            mesh.normals.len(),
-                            mesh.uvs.len(),
-                            mesh.indices.len()
+                        let buffer = self.device.new_buffer_with_data(
+                            verts.as_ptr() as *const _,
+                            (verts.len() * std::mem::size_of::<super::gltf_scene::GltfVertex>()) as u64,
+                            MTLResourceOptions::StorageModeShared,
                         );
-                        return None;
+                        let entry = (buffer, verts.len());
+                        self.gpu_transformed_mesh_cache.insert(mesh.mesh_id, entry.clone());
+                        entry
                     }
-                    let buffer = self.device.new_buffer_with_data(
-                        verts.as_ptr() as *const _,
-                        (verts.len() * std::mem::size_of::<super::gltf_scene::GltfVertex>()) as u64,
-                        MTLResourceOptions::StorageModeShared,
-                    );
-                    (buffer, verts.len(), MAT4_IDENTITY)
                 };
+                let model_matrix = mesh.transform.to_matrix().to_cols_array_2d();
                 let texture = mesh.texture.as_ref().and_then(|t| self.real_game_textures.get(&t.id));
                 let normal_texture = mesh.normal_texture.as_ref().and_then(|t| self.real_game_textures.get(&t.id));
                 let d = [

@@ -3,7 +3,7 @@ use bevy::asset::{AssetId, Assets, Handle};
 use bevy::camera::visibility::{InheritedVisibility, Visibility};
 use bevy::camera::{Camera, Projection, RenderTargetInfo};
 use bevy::ecs::hierarchy::Children;
-use bevy::ecs::query::{Has, With, Without};
+use bevy::ecs::query::{With, Without};
 use bevy::ecs::resource::Resource;
 use bevy::ecs::system::{Query, Res, ResMut, SystemState};
 use bevy::image::Image;
@@ -83,9 +83,7 @@ pub struct ExtractedMesh {
 
     pub is_blend: bool,
 
-    pub mesh_id: Option<AssetId<Mesh>>,
-
-    pub is_gpu_transformed: bool,
+    pub mesh_id: AssetId<Mesh>,
 }
 
 pub struct CameraSnapshot {
@@ -159,14 +157,6 @@ pub struct GenericUiText {
     pub content: String,
     pub color: [f32; 4],
     pub font_size: f32,
-}
-
-fn collect_descendants(root: bevy::ecs::entity::Entity, children_query: &Query<&Children>, out: &mut Vec<bevy::ecs::entity::Entity>) {
-    let Ok(children) = children_query.get(root) else { return };
-    for &child in children.iter() {
-        out.push(child);
-        collect_descendants(child, children_query, out);
-    }
 }
 
 pub struct SunSnapshot {
@@ -387,7 +377,6 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
                 &MeshMaterial3d<StandardMaterial>,
                 &GlobalTransform,
                 &InheritedVisibility,
-                Has<crate::ArenaCarProp>,
             ),
             Without<SkinnedMesh>,
         >,
@@ -428,7 +417,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
         texture_cache.0.insert(handle.id(), extracted.clone());
         Some(extracted)
     };
-    for (mesh3d, material3d, transform, visibility, is_car) in mesh_query.iter() {
+    for (mesh3d, material3d, transform, visibility) in mesh_query.iter() {
         if !visibility.get() {
             continue;
         }
@@ -487,8 +476,7 @@ pub fn extract_render_snapshot(world: &mut bevy::ecs::world::World) -> RenderSna
                 material.alpha_mode,
                 AlphaMode::Blend | AlphaMode::Premultiplied | AlphaMode::Add | AlphaMode::Multiply
             ),
-            mesh_id: is_car.then(|| mesh3d.id()),
-            is_gpu_transformed: is_car,
+            mesh_id: mesh3d.id(),
         });
     }
     texture_cache.0.retain(|id, _| used_texture_ids.contains(id));
