@@ -22,7 +22,6 @@
 		AD6712AF2A6211F300CAA248 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = AD6712AE2A6211F300CAA248 /* assets */; };
 		AD6C6A82295400160079516D /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AD6C6A81295400160079516D /* CoreMotion.framework */; };
 		AD6C6A84295401050079516D /* ViewController+CoreMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD6C6A83295401050079516D /* ViewController+CoreMotion.swift */; };
-		AD9EA281293B0CAF0079F1B4 /* libs in Resources */ = {isa = PBXBuildFile; fileRef = AD9EA280293B0CAF0079F1B4 /* libs */; };
 		ADC0D0F0295161DA00388970 /* libbevy_in_app.a in Frameworks */ = {isa = PBXBuildFile; fileRef = ADC0D0EF295161DA00388970 /* libbevy_in_app.a */; };
 		ADC0D0F2295172CA00388970 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ADC0D0F1295172CA00388970 /* AudioToolbox.framework */; };
 		C00BEAA0420C572A4F4C40B4 /* GameControllerInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0201D3F45F1DFD3C0056C58C /* GameControllerInput.swift */; };
@@ -276,7 +275,6 @@
 				AD6712AF2A6211F300CAA248 /* assets in Resources */,
 				AD4B1FF926EB1B91008A6AEE /* LaunchScreen.storyboard in Resources */,
 				AD4B1FF626EB1B91008A6AEE /* Assets.xcassets in Resources */,
-				AD9EA281293B0CAF0079F1B4 /* libs in Resources */,
 				AD4B1FF426EB1B90008A6AEE /* Main.storyboard in Resources */,
 				B9B242B6E8526CFA59A8A7D8 /* PrivacyInfo.xcprivacy in Resources */,
 			);

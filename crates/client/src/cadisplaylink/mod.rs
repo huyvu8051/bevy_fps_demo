@@ -1,4 +1,5 @@
 
+mod gltf_materials;
 mod ffi;
 pub mod gltf_scene;
 pub mod metal_math;
