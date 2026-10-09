@@ -150,6 +150,11 @@ fn write_navmesh(
         std::fs::create_dir_all(parent).expect("failed to create navmesh directory");
     }
     std::fs::write(&path, bytes).expect("failed to write navmesh");
-    info!("wrote {path}: {polygons} polygons, bounds {:.1?}", navmesh.polygon.aabb);
+    let (components, largest_share) = server::navmesh::connectivity(navmesh);
+    info!(
+        "wrote {path}: {polygons} polygons in {components} islands, biggest holds {:.0}%, bounds {:.1?}",
+        largest_share * 100.0,
+        navmesh.polygon.aabb
+    );
     std::process::exit(0);
 }

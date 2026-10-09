@@ -12,6 +12,18 @@ use shared::Scenario;
 
 const WALKABLE_CLIMB: f32 = 0.5;
 const CELL_SIZE_FRACTION: f32 = 1.0;
+
+/// Isolated patches smaller than the square of this are dropped, and those
+/// under `MERGE_REGION_SIZE` are folded into a neighbour where they touch one.
+///
+/// The defaults leave the desert in 280 islands holding 18% of the mesh in the
+/// biggest, which routes badly: an agent or its target lands on a rooftop or
+/// ledge with no way off. Raising them does not connect anything — the main
+/// walkable region stays about 750 polygons at every setting — but it deletes
+/// the scraps, so sampling can no longer strand anyone on one. At these values
+/// the desert keeps 2450 polygons in 55 islands.
+const MIN_REGION_SIZE: u16 = 32;
+const MERGE_REGION_SIZE: u16 = 80;
 const NAVMESH_SAMPLE_DISTANCE_ABOVE: f32 = 1.0;
 const NAVMESH_SAMPLE_SLACK_BELOW_FEET: f32 = 1.0;
 
@@ -40,6 +52,8 @@ pub fn bake_settings() -> NavmeshSettings {
     NavmeshSettings {
         walkable_climb: WALKABLE_CLIMB,
         walkable_slope_angle: shared::MAX_WALKABLE_SLOPE_DEGREES.to_radians(),
+        min_region_size: MIN_REGION_SIZE,
+        merge_region_size: MERGE_REGION_SIZE,
         cell_size_fraction: CELL_SIZE_FRACTION,
         ..NavmeshSettings::from_agent_3d(ZOMBIE_RADIUS, agent_height())
     }
@@ -110,6 +124,44 @@ pub fn read_baked_navmesh(scenario: Scenario) -> Option<Navmesh> {
         .inspect_err(|e| error!("could not decode {path}: {e}"))
         .ok()
         .map(|(navmesh, _)| navmesh)
+}
+
+/// How many separate islands the navmesh fell into, and what share of its
+/// polygons the biggest one holds. A bake that scores poorly here routes
+/// badly no matter what the pathfinder does: there is simply no way across.
+pub fn connectivity(navmesh: &Navmesh) -> (usize, f32) {
+    let polygons = &navmesh.polygon;
+    let vertices_per_polygon = polygons.max_vertices_per_polygon as usize;
+    let polygon_count = polygons.polygon_count();
+    if vertices_per_polygon == 0 || polygon_count == 0 {
+        return (0, 0.0);
+    }
+
+    let mut component_of = vec![usize::MAX; polygon_count];
+    let mut components = 0;
+    let mut largest = 0;
+    for seed in 0..polygon_count {
+        if component_of[seed] != usize::MAX {
+            continue;
+        }
+        let mut size = 0;
+        let mut queue = std::collections::VecDeque::from([seed]);
+        component_of[seed] = components;
+        while let Some(polygon) = queue.pop_front() {
+            size += 1;
+            let edges = polygon * vertices_per_polygon..(polygon + 1) * vertices_per_polygon;
+            for &neighbour in &polygons.polygon_neighbors[edges] {
+                let neighbour = neighbour as usize;
+                if neighbour < polygon_count && component_of[neighbour] == usize::MAX {
+                    component_of[neighbour] = components;
+                    queue.push_back(neighbour);
+                }
+            }
+        }
+        largest = largest.max(size);
+        components += 1;
+    }
+    (components, largest as f32 / polygon_count as f32)
 }
 
 pub fn points_reachable_from(navmesh: &Navmesh, origin: Vec3) -> Vec<Vec3> {
