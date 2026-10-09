@@ -39,6 +39,7 @@ pub fn agent_height() -> f32 {
 pub fn bake_settings() -> NavmeshSettings {
     NavmeshSettings {
         walkable_climb: WALKABLE_CLIMB,
+        walkable_slope_angle: shared::MAX_WALKABLE_SLOPE_DEGREES.to_radians(),
         cell_size_fraction: CELL_SIZE_FRACTION,
         ..NavmeshSettings::from_agent_3d(ZOMBIE_RADIUS, agent_height())
     }

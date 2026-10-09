@@ -38,7 +38,11 @@ pub const PRONE_LENGTH: f32 = PLAYER_RADIUS * 0.3;
 
 pub const GRAVITY: f32 = -20.0;
 pub const JUMP_SPEED: f32 = 6.5;
-pub const GROUND_NORMAL_MIN_Y: f32 = 0.6;
+pub const MAX_WALKABLE_SLOPE_DEGREES: f32 = 60.0;
+
+pub fn ground_normal_min_y() -> f32 {
+    MAX_WALKABLE_SLOPE_DEGREES.to_radians().cos()
+}
 
 pub const NOCLIP_SPEED: f32 = MOVE_SPEED * 3.0;
 

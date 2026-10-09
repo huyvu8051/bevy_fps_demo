@@ -3,7 +3,7 @@ use bevy::prelude::*;
 
 use crate::{
     ClientInput, Player, PlayerStance, AIM_MOVE_SPEED_MULTIPLIER, CROUCH_LENGTH, CROUCH_SPEED_MULTIPLIER,
-    GRAVITY, GROUND_NORMAL_MIN_Y, JUMP_SPEED, MOVE_SPEED, NOCLIP_SPEED, PLAYER_LENGTH, PLAYER_RADIUS,
+    GRAVITY, ground_normal_min_y, JUMP_SPEED, MOVE_SPEED, NOCLIP_SPEED, PLAYER_LENGTH, PLAYER_RADIUS,
     PRONE_LENGTH, PRONE_SPEED_MULTIPLIER, SPRINT_MULTIPLIER,
 };
 
@@ -64,7 +64,7 @@ pub fn simulate_player_step(mover: &MoveAndSlide, transform: &mut Transform, pla
         &config,
         &filter,
         |hit| {
-            if hit.normal.y > GROUND_NORMAL_MIN_Y {
+            if hit.normal.y > ground_normal_min_y() {
                 grounded_this_frame = true;
             }
             MoveAndSlideHitResponse::Accept

@@ -23,7 +23,7 @@ use shared::{
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
     ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, 
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
-    DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, GROUND_NORMAL_MIN_Y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
+    DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, ground_normal_min_y, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     MAX_SHOT_DISTANCE, MOVE_SPEED, PILLAR_RADIUS,
     PLAYER_LENGTH, PLAYER_RADIUS, Scenario,
     
@@ -506,7 +506,7 @@ fn move_debug_bots(
             &config,
             &filter,
             |hit| {
-                if hit.normal.y > GROUND_NORMAL_MIN_Y {
+                if hit.normal.y > ground_normal_min_y() {
                     grounded_this_frame = true;
                 }
                 MoveAndSlideHitResponse::Accept
@@ -1229,7 +1229,7 @@ fn move_zombies(
             &config,
             &filter,
             |hit| {
-                if hit.normal.y > GROUND_NORMAL_MIN_Y {
+                if hit.normal.y > ground_normal_min_y() {
                     grounded_this_frame = true;
                 }
                 MoveAndSlideHitResponse::Accept
