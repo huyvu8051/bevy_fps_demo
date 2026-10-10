@@ -150,104 +150,21 @@ impl Default for PointLightQuality {
 #[derive(Component)]
 pub(crate) struct PointLightBaseIntensity(pub(crate) f32);
 
-pub(crate) fn texture_quality_default() -> u8 {
-    std::env::var("TEXTURE_QUALITY")
-        .ok()
-        .and_then(|s| s.trim().parse::<u8>().ok())
-        .map(|q| q.clamp(0, 5))
-        .unwrap_or(if cfg!(target_os = "ios") { 2 } else { 5 })
+/// Which variant of the zombie base-colour textures ships: mobile takes a
+/// reduced one, desktop the original. The gun and the arena cars no longer
+/// have tiers — only their sharpest meshes and textures are left on disk.
+pub(crate) const ASSET_QUALITY_TIER: u8 = if cfg!(target_os = "ios") { 2 } else { 5 };
+
+pub(crate) fn gun_mesh_path() -> &'static str {
+    "models/ak47_scope/mesh/ak47_scope_light.glb"
 }
 
-#[derive(Resource)]
-pub(crate) struct TextureQuality(pub(crate) u8);
-impl Default for TextureQuality {
-    fn default() -> Self {
-        Self(texture_quality_default())
-    }
-}
-
-pub(crate) fn zombie_texture_quality_default() -> u8 {
-    std::env::var("ZOMBIE_TEXTURE_QUALITY")
-        .ok()
-        .and_then(|s| s.trim().parse::<u8>().ok())
-        .map(|q| q.clamp(0, 5))
-        .unwrap_or(if cfg!(target_os = "ios") { 2 } else { 5 })
-}
-
-#[derive(Resource)]
-pub(crate) struct ZombieTextureQuality(pub(crate) u8);
-impl Default for ZombieTextureQuality {
-    fn default() -> Self {
-        Self(zombie_texture_quality_default())
-    }
-}
-
-pub(crate) fn poly_quality_default() -> u8 {
-    std::env::var("POLY_QUALITY")
-        .ok()
-        .and_then(|s| s.trim().parse::<u8>().ok())
-        .map(|q| q.clamp(1, 5))
-        .unwrap_or(if cfg!(target_os = "ios") { 2 } else { 5 })
-}
-
-#[derive(Resource)]
-pub(crate) struct PolyQuality(pub(crate) u8);
-impl Default for PolyQuality {
-    fn default() -> Self {
-        Self(poly_quality_default())
-    }
-}
-
-
-pub(crate) fn gun_poly_quality_default() -> u8 {
-    std::env::var("GUN_POLY_QUALITY")
-        .ok()
-        .and_then(|s| s.trim().parse::<u8>().ok())
-        .map(|q| q.clamp(1, 5))
-        .unwrap_or(if cfg!(target_os = "ios") { 2 } else { 5 })
-}
-
-#[derive(Resource)]
-pub(crate) struct GunPolyQuality(pub(crate) u8);
-impl Default for GunPolyQuality {
-    fn default() -> Self {
-        Self(gun_poly_quality_default())
-    }
-}
-
-pub(crate) fn gun_texture_quality_default() -> u8 {
-    std::env::var("GUN_TEXTURE_QUALITY")
-        .ok()
-        .and_then(|s| s.trim().parse::<u8>().ok())
-        .map(|q| q.clamp(0, 5))
-        .unwrap_or(if cfg!(target_os = "ios") { 2 } else { 5 })
-}
-
-#[derive(Resource)]
-pub(crate) struct GunTextureQuality(pub(crate) u8);
-impl Default for GunTextureQuality {
-    fn default() -> Self {
-        Self(gun_texture_quality_default())
-    }
-}
-
-pub(crate) fn gun_mesh_path(poly_quality: u8) -> &'static str {
-    match poly_quality {
-        1 => "models/ak47_scope/mesh/ak47_scope_light_p1.glb",
-        2 => "models/ak47_scope/mesh/ak47_scope_light_p2.glb",
-        3 => "models/ak47_scope/mesh/ak47_scope_light_p3.glb",
-        4 => "models/ak47_scope/mesh/ak47_scope_light_p4.glb",
-        _ => "models/ak47_scope/mesh/ak47_scope_light.glb",
-    }
-}
-
-pub(crate) fn gun_texture_paths(mat_index: usize, texture_quality: u8) -> (String, String, String) {
-    let q = texture_quality.min(5);
+pub(crate) fn gun_texture_paths(mat_index: usize) -> (String, String, String) {
     let base_ext = if mat_index == 1 { "png" } else { "jpg" };
     (
-        format!("models/ak47_scope/mesh/textures/mat{mat_index}_base_color_q{q}.{base_ext}"),
-        format!("models/ak47_scope/mesh/textures/mat{mat_index}_normal_q{q}.jpg"),
-        format!("models/ak47_scope/mesh/textures/mat{mat_index}_metallic_roughness_q{q}.jpg"),
+        format!("models/ak47_scope/mesh/textures/mat{mat_index}_base_color_q5.{base_ext}"),
+        format!("models/ak47_scope/mesh/textures/mat{mat_index}_normal_q5.jpg"),
+        format!("models/ak47_scope/mesh/textures/mat{mat_index}_metallic_roughness_q5.jpg"),
     )
 }
 
@@ -256,17 +173,15 @@ pub(crate) fn spawn_gun_mesh_parts(
     asset_server: &AssetServer,
     materials: &mut Assets<StandardMaterial>,
     gun_entity: Entity,
-    poly_quality: u8,
-    texture_quality: u8,
 ) {
-    let mesh_path = gun_mesh_path(poly_quality);
+    let mesh_path = gun_mesh_path();
     let linear = |path: String| {
         asset_server.load_with_settings(path, |settings: &mut bevy::image::ImageLoaderSettings| {
             settings.is_srgb = false;
         })
     };
     for mat_index in 0..2usize {
-        let (base_color_path, normal_path, metallic_roughness_path) = gun_texture_paths(mat_index, texture_quality);
+        let (base_color_path, normal_path, metallic_roughness_path) = gun_texture_paths(mat_index);
         let metallic_roughness_handle = linear(metallic_roughness_path);
         let material = materials.add(StandardMaterial {
             base_color_texture: Some(asset_server.load(base_color_path)),
@@ -286,27 +201,6 @@ pub(crate) fn spawn_gun_mesh_parts(
             ChildOf(gun_entity),
         ));
     }
-}
-
-pub(crate) fn respawn_gun_mesh_parts_on_quality_change(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    poly_quality: Res<GunPolyQuality>,
-    texture_quality: Res<GunTextureQuality>,
-    gun: Query<Entity, With<Gun>>,
-    existing_parts: Query<Entity, With<GunMeshPart>>,
-) {
-    let poly_changed = poly_quality.is_changed() && !poly_quality.is_added();
-    let texture_changed = texture_quality.is_changed() && !texture_quality.is_added();
-    if !poly_changed && !texture_changed {
-        return;
-    }
-    let Ok(gun_entity) = gun.single() else { return };
-    for entity in &existing_parts {
-        commands.entity(entity).despawn();
-    }
-    spawn_gun_mesh_parts(&mut commands, &asset_server, &mut materials, gun_entity, poly_quality.0, texture_quality.0);
 }
 
 pub(crate) fn dynamic_lights_enabled() -> bool {

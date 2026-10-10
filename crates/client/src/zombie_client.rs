@@ -276,28 +276,23 @@ pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer, kind: ZombieKind) -
 
 pub(crate) fn apply_zombie_texture_quality(
     asset_server: Res<AssetServer>,
-    texture_quality: Res<ZombieTextureQuality>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     zombies: Query<(Entity, &ZombieKind)>,
     children: Query<&Children>,
     mesh_materials: Query<&MeshMaterial3d<StandardMaterial>>,
-    mut cached: Local<std::collections::HashMap<ZombieKind, Handle<StandardMaterial>>>,
+    mut applied: Local<std::collections::HashSet<ZombieKind>>,
 ) {
     for (entity, &kind) in &zombies {
-        if cached.contains_key(&kind) {
+        if applied.contains(&kind) {
             continue;
         }
-        if let Some(handle) = find_material_in_descendants(entity, &children, &mesh_materials) {
-            cached.insert(kind, handle);
-        }
-    }
-    if !texture_quality.is_changed() {
-        return;
-    }
-    for (&kind, handle) in cached.iter() {
-        let texture: Handle<Image> = asset_server.load(shared::zombie_kind_texture_path(kind, texture_quality.0));
-        if let Some(mut material) = materials.get_mut(handle) {
+        let Some(handle) = find_material_in_descendants(entity, &children, &mesh_materials) else {
+            continue;
+        };
+        let texture: Handle<Image> = asset_server.load(shared::zombie_kind_texture_path(kind, ASSET_QUALITY_TIER));
+        if let Some(mut material) = materials.get_mut(&handle) {
             material.base_color_texture = Some(texture);
+            applied.insert(kind);
         }
     }
 }

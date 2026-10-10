@@ -526,11 +526,6 @@ impl Plugin for GamePlugin {
         .init_resource::<ShadowQuality>()
         .init_resource::<LightQuality>()
         .init_resource::<PointLightQuality>()
-        .init_resource::<TextureQuality>()
-        .init_resource::<ZombieTextureQuality>()
-        .init_resource::<PolyQuality>()
-        .init_resource::<GunTextureQuality>()
-        .init_resource::<GunPolyQuality>()
         .init_resource::<ScopeCameraEnabled>()
         .init_resource::<SelectedDebugBot>()
         .init_resource::<LocalPlayerMoving>()
@@ -593,12 +588,6 @@ impl Plugin for GamePlugin {
                     resolution_scale_buttons,
                 update_resolution_scale_button_colors,
                 (fps_cap_buttons, update_fps_cap_button_colors, apply_fps_cap_desktop).chain(),
-                texture_quality_buttons,
-                update_texture_quality_button_colors,
-                poly_quality_buttons,
-                update_poly_quality_button_colors,
-                respawn_arena_cars_on_quality_change,
-                respawn_gun_mesh_parts_on_quality_change,
                     resize_scene_render_target,
                     scroll_settings_menu,
                     touch_scroll_settings_menu,
@@ -621,10 +610,6 @@ impl Plugin for GamePlugin {
                     update_auto_maintain_button_color,
                     update_touch_controls_idle_hidden,
                     hide_ui_when_locked,
-                    gun_texture_quality_buttons,
-                    update_gun_texture_quality_button_colors,
-                    gun_poly_quality_buttons,
-                    update_gun_poly_quality_button_colors,
                 )
                     .chain(),
                 (
@@ -638,8 +623,6 @@ impl Plugin for GamePlugin {
                     light_quality_buttons,
                     update_light_quality_button_colors,
                     apply_zombie_texture_quality,
-                    zombie_texture_quality_buttons,
-                    update_zombie_texture_quality_button_colors,
                     apply_point_light_quality,
                     point_light_quality_buttons,
                     update_point_light_quality_button_colors,

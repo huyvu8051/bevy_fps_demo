@@ -6,11 +6,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(default)]
 pub(crate) struct PersistedSettings {
-    pub(crate) texture_quality: Option<u8>,
-    pub(crate) poly_quality: Option<u8>,
-    pub(crate) zombie_texture_quality: Option<u8>,
-    pub(crate) gun_texture_quality: Option<u8>,
-    pub(crate) gun_poly_quality: Option<u8>,
     pub(crate) light_quality: Option<u8>,
     pub(crate) shadow_quality: Option<u8>,
     pub(crate) point_light_quality: Option<u8>,
@@ -119,11 +114,6 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
             }
         };
     }
-    apply!(texture_quality, TextureQuality);
-    apply!(poly_quality, PolyQuality);
-    apply!(zombie_texture_quality, ZombieTextureQuality);
-    apply!(gun_texture_quality, GunTextureQuality);
-    apply!(gun_poly_quality, GunPolyQuality);
     apply!(light_quality, LightQuality);
     apply!(shadow_quality, ShadowQuality);
     apply!(point_light_quality, PointLightQuality);
@@ -181,12 +171,7 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
             world.get_resource_ref::<$resource>().is_some_and(|r| r.is_changed())
         };
     }
-    let any_changed = changed!(TextureQuality)
-        || changed!(PolyQuality)
-        || changed!(ZombieTextureQuality)
-        || changed!(GunTextureQuality)
-        || changed!(GunPolyQuality)
-        || changed!(LightQuality)
+    let any_changed = changed!(LightQuality)
         || changed!(ShadowQuality)
         || changed!(PointLightQuality)
         || changed!(RenderResolutionScale)
@@ -224,11 +209,6 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
 
 fn read_settings_from_world(world: &World) -> PersistedSettings {
     PersistedSettings {
-        texture_quality: world.get_resource::<TextureQuality>().map(|r| r.0),
-        poly_quality: world.get_resource::<PolyQuality>().map(|r| r.0),
-        zombie_texture_quality: world.get_resource::<ZombieTextureQuality>().map(|r| r.0),
-        gun_texture_quality: world.get_resource::<GunTextureQuality>().map(|r| r.0),
-        gun_poly_quality: world.get_resource::<GunPolyQuality>().map(|r| r.0),
         light_quality: world.get_resource::<LightQuality>().map(|r| r.0),
         shadow_quality: world.get_resource::<ShadowQuality>().map(|r| r.0),
         point_light_quality: world.get_resource::<PointLightQuality>().map(|r| r.0),

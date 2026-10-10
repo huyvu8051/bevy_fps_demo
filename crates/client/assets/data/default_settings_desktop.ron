@@ -16,11 +16,6 @@
 // the flat, load-bearing "what tier does this platform ship at" numbers
 // are pinned here.
 (
-    texture_quality: Some(5),
-    poly_quality: Some(5),
-    zombie_texture_quality: Some(5),
-    gun_texture_quality: Some(5),
-    gun_poly_quality: Some(5),
     light_quality: None,
     shadow_quality: None,
     point_light_quality: None,

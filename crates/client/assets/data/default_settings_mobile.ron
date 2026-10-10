@@ -5,11 +5,6 @@
 // pinned to something different; everything else matches desktop's file
 // value-for-value.
 (
-    texture_quality: Some(2),
-    poly_quality: Some(2),
-    zombie_texture_quality: Some(2),
-    gun_texture_quality: Some(2),
-    gun_poly_quality: Some(2),
     light_quality: None,
     shadow_quality: Some(1),
     point_light_quality: None,

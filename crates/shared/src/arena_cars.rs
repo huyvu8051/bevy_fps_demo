@@ -19,21 +19,16 @@ pub const ARENA_CAR_PATHS: [&str; 16] = [
     "props/car_minivan/mesh/car_minivan_light.glb",
 ];
 
-pub fn arena_car_mesh_path(index: usize, poly_quality: u8) -> String {
-    let base = ARENA_CAR_PATHS[index];
-    if poly_quality >= 5 {
-        return base.to_string();
-    }
-    let poly_quality = poly_quality.max(1);
-    let stem = base.strip_suffix(".glb").unwrap_or(base);
-    format!("{stem}_p{poly_quality}.glb")
+pub fn arena_car_mesh_path(index: usize) -> &'static str {
+    ARENA_CAR_PATHS[index]
 }
 
-pub fn arena_car_texture_paths(index: usize, texture_quality: u8) -> (String, String, String) {
+/// `_q5` is the only tier that still ships; the decimated meshes and the
+/// smaller textures were deleted.
+pub fn arena_car_texture_paths(index: usize) -> (String, String, String) {
     let base = ARENA_CAR_PATHS[index];
     let dir = base.rsplit_once('/').map(|(dir, _)| dir).unwrap_or(base);
-    let quality = texture_quality.min(5);
-    let slot = |name: &str| format!("{dir}/textures/{name}_q{quality}.jpg");
+    let slot = |name: &str| format!("{dir}/textures/{name}_q5.jpg");
     (slot("base_color"), slot("normal"), slot("metallic_roughness"))
 }
 

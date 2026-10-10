@@ -67,14 +67,14 @@ pub(crate) fn spawn_arena_car_props(
     commands: &mut Commands,
     asset_server: &AssetServer,
     materials: &mut Assets<StandardMaterial>,
-    poly_quality: u8,
-    texture_quality: u8,
+
+
 ) {
     for (i, (path, physics)) in shared::ARENA_CAR_PATHS.iter().zip(shared::arena_car_physics()).enumerate() {
 
         let name = path.split('/').nth(1).unwrap_or(path);
-        let mesh_path = shared::arena_car_mesh_path(i, poly_quality);
-        let (base_color_path, normal_path, metallic_roughness_path) = shared::arena_car_texture_paths(i, texture_quality);
+        let mesh_path = shared::arena_car_mesh_path(i);
+        let (base_color_path, normal_path, metallic_roughness_path) = shared::arena_car_texture_paths(i);
         let material = materials.add(StandardMaterial {
             base_color_texture: Some(asset_server.load(base_color_path)),
             normal_map_texture: Some(load_linear_car_texture(asset_server, normal_path)),

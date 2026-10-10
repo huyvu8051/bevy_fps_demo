@@ -147,10 +147,6 @@ pub(crate) fn setup_gameplay(
     mut images: ResMut<Assets<Image>>,
     touch_enabled: Res<TouchControlsEnabled>,
     player_model_tuning: Res<PlayerModelTuning>,
-    texture_quality: Res<TextureQuality>,
-    poly_quality: Res<PolyQuality>,
-    gun_texture_quality: Res<GunTextureQuality>,
-    gun_poly_quality: Res<GunPolyQuality>,
     scene_target: Option<Res<SceneRenderTarget>>,
     mut pending: ResMut<MapSelectionPending>,
 ) {
@@ -173,7 +169,7 @@ pub(crate) fn setup_gameplay(
         }
         Scenario::StressTest => {
             spawn_test_arena(&mut commands, &mut meshes, &mut materials, scenario.map_id());
-            spawn_arena_car_props(&mut commands, &asset_server, &mut materials, poly_quality.0, texture_quality.0);
+            spawn_arena_car_props(&mut commands, &asset_server, &mut materials);
         }
     }
 
@@ -256,7 +252,7 @@ pub(crate) fn setup_gameplay(
             ChildOf(camera),
         ))
         .id();
-    spawn_gun_mesh_parts(&mut commands, &asset_server, &mut materials, gun_entity, gun_poly_quality.0, gun_texture_quality.0);
+    spawn_gun_mesh_parts(&mut commands, &asset_server, &mut materials, gun_entity);
 
     commands.spawn((
         Name::new("ThirdPersonCamera (KeyU, inactive until CameraMode::ThirdPerson)"),
