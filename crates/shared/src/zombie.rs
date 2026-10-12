@@ -220,7 +220,11 @@ pub enum ZombieKind {
     Female,
 }
 
-pub const ZOMBIE_KIND_WEIGHTS: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+// Classic/Meshy/Soldier's meshes were pulled (see zombie_kind_mesh_path):
+// their non-1:1 rig scale made cross-kind animation reuse too fragile to
+// fix safely. Female is the only kind with a model until replacements land
+// at the same paths.
+pub const ZOMBIE_KIND_WEIGHTS: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 pub fn zombie_kind_for_phase(phase: f32, weights: [f32; 4]) -> ZombieKind {
     let total: f32 = weights.iter().sum();
