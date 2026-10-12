@@ -2,11 +2,6 @@
 
 Slug: `soldier` · Asset metadata: [`crates/client/assets/characters/soldier/character.ron`](../../crates/client/assets/characters/soldier/character.ron)
 
-## Story / lore
-
-_TODO — who is the player character, who are the other survivors seen as
-remote players?_
-
 ## Visual notes
 
 _TODO — silhouette, color palette, distinguishing features for concept art
