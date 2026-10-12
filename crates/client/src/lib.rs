@@ -31,7 +31,7 @@ use shared::{
     PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieMotion, ZombieShowcaseClip, wire_zombie_hitbox_bones,
     zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_anim_path,
-    zombie_kind_pose_clips, zombie_kind_hip_bob_anim_path,
+    zombie_kind_pose_clips,
     INTERP_DELAY_SECS, MAX_SHOT_DISTANCE,
     HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
     resolve_bone_world_positions, zombie_hit_damage_ray,

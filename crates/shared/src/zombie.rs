@@ -175,39 +175,12 @@ pub const ZOMBIE_SOLDIER_ANIM_PATH: &str = "characters/zombie_soldier/anims/sold
 /// the `mixamorig:` names Classic's were renamed to.
 pub const ZOMBIE_FEMALE_PATH: &str = "characters/zombie_female/mesh/zombie_female.glb";
 
-/// `zombie.glb`'s clips, re-rooted so cross-file reuse actually binds.
-///
-/// Bevy bakes a clip's curve target paths starting at the glTF's own
-/// scene-root node name; `zombie.glb`'s root is "RootNode > Zombie > bone",
-/// but `wire_zombie_scene_animation_targets` roots live-spawned paths at
-/// whatever node is named "target_character" directly above the bones. This
-/// is `zombie.glb` with its scene pointed at the "Zombie" node, renamed to
-/// "target_character" — same curve data, baked under the matching name chain.
-pub const ZOMBIE_CLASSIC_POSES_ANIM_PATH: &str = "characters/zombie/anims/classic_poses.glb";
-
-/// Hips' translation curve (hip bob), split out of `ZOMBIE_CLASSIC_POSES_ANIM_PATH`
-/// and baked as a zero-centered delta in real meters: `(raw - Classic's own rest
-/// translation) * 26.751644` (= the "Zombie" node's 107.0066 scale times
-/// "RootNode"'s 0.25). Meant to be played through an additive graph node, so it
-/// layers onto whatever rest height the target skeleton actually has instead of
-/// snapping Hips to Classic's own (very differently-scaled) raw curve values.
-pub const ZOMBIE_CLASSIC_HIP_BOB_ANIM_PATH: &str = "characters/zombie/anims/classic_hip_bob.glb";
-
 pub fn zombie_kind_anim_path(kind: ZombieKind) -> &'static str {
     match kind {
         ZombieKind::Classic => ZOMBIE_PATH,
         ZombieKind::Meshy => ZOMBIE_MESHY_PATH,
         ZombieKind::Soldier => ZOMBIE_SOLDIER_ANIM_PATH,
-        ZombieKind::Female => ZOMBIE_CLASSIC_POSES_ANIM_PATH,
-    }
-}
-
-/// `None` for kinds that play their own self-contained clips, where rotation
-/// and translation are already baked consistently against the same rig.
-pub fn zombie_kind_hip_bob_anim_path(kind: ZombieKind) -> Option<&'static str> {
-    match kind {
-        ZombieKind::Female => Some(ZOMBIE_CLASSIC_HIP_BOB_ANIM_PATH),
-        ZombieKind::Classic | ZombieKind::Meshy | ZombieKind::Soldier => None,
+        ZombieKind::Female => ZOMBIE_FEMALE_PATH,
     }
 }
 
@@ -220,11 +193,11 @@ pub enum ZombieKind {
     Female,
 }
 
-// Classic/Meshy/Soldier's meshes were pulled (see zombie_kind_mesh_path):
-// their non-1:1 rig scale made cross-kind animation reuse too fragile to
-// fix safely. Female is the only kind with a model until replacements land
-// at the same paths.
-pub const ZOMBIE_KIND_WEIGHTS: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+// All four kinds are between generations: Classic/Meshy/Soldier have no
+// mesh (see zombie_kind_mesh_path), and Female's pose clips below are
+// placeholder indices into a file that no longer ships them — nothing
+// spawns until fresh models and a matching 5-pose clip set land.
+pub const ZOMBIE_KIND_WEIGHTS: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 
 pub fn zombie_kind_for_phase(phase: f32, weights: [f32; 4]) -> ZombieKind {
     let total: f32 = weights.iter().sum();

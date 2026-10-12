@@ -35,7 +35,6 @@ use shared::{
     LAG_COMPENSATION_MAX_SECS, PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
     PROTOCOL_ID,
     ZombieKind, zombie_kind_for_phase, ZOMBIE_KIND_WEIGHTS, zombie_kind_mesh_path, zombie_kind_anim_path, zombie_kind_pose_clips,
-    zombie_kind_hip_bob_anim_path,
     ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
     ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
     ZOMBIE_TURN_RATE_DEG,
@@ -871,7 +870,6 @@ struct ServerZombieKindAnim {
     graph: Handle<AnimationGraph>,
 
     poses: [AnimationNodeIndex; 5],
-    hip_bob_poses: Option<[AnimationNodeIndex; 5]>,
 }
 
 fn server_pose_slot(pose: ZombiePose) -> usize {
@@ -890,12 +888,6 @@ impl ServerZombieKindAnim {
     }
     fn idle(&self) -> AnimationNodeIndex {
         self.poses[0]
-    }
-    fn hip_bob_node(&self, pose: ZombiePose) -> Option<AnimationNodeIndex> {
-        self.hip_bob_poses.map(|poses| poses[server_pose_slot(pose)])
-    }
-    fn hip_bob_idle(&self) -> Option<AnimationNodeIndex> {
-        self.hip_bob_poses.map(|poses| poses[0])
     }
 }
 
@@ -937,22 +929,9 @@ fn setup_server_zombie_anim(
             })
             .collect();
 
-        let hip_bob_poses = zombie_kind_hip_bob_anim_path(kind).map(|hip_bob_path| {
-            let additive = graph.add_additive_blend(1.0, root);
-            let nodes: Vec<AnimationNodeIndex> = pose_indices
-                .into_iter()
-                .map(|index| {
-                    let clip = asset_server.load(GltfAssetLabel::Animation(index).from_asset(hip_bob_path));
-                    graph.add_clip(clip, 1.0, additive)
-                })
-                .collect();
-            [nodes[0], nodes[1], nodes[2], nodes[3], nodes[4]]
-        });
-
         ServerZombieKindAnim {
             graph: graphs.add(graph),
             poses: [poses[0], poses[1], poses[2], poses[3], poses[4]],
-            hip_bob_poses,
         }
     };
     commands.insert_resource(ServerZombieAnim {
@@ -996,9 +975,6 @@ fn wire_server_zombie_animations(
         let slot = anim.slot(kind);
         commands.entity(player_entity).try_insert(AnimationGraphHandle(slot.graph.clone()));
         player.play(slot.idle()).repeat();
-        if let Some(hip_bob) = slot.hip_bob_idle() {
-            player.play(hip_bob).repeat();
-        }
 
         commands.entity(root).try_insert(ZombieAnimationPlayer(player_entity));
     }
@@ -1027,9 +1003,6 @@ fn update_server_zombie_pose(
             let slot = anim.slot(kind.copied().unwrap_or_default());
             player.stop_all();
             player.play(slot.node(new_pose)).repeat();
-            if let Some(hip_bob) = slot.hip_bob_node(new_pose) {
-                player.play(hip_bob).repeat();
-            }
         }
     }
 }
