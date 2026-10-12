@@ -185,12 +185,29 @@ pub const ZOMBIE_FEMALE_PATH: &str = "characters/zombie_female/mesh/zombie_femal
 /// "target_character" — same curve data, baked under the matching name chain.
 pub const ZOMBIE_CLASSIC_POSES_ANIM_PATH: &str = "characters/zombie/anims/classic_poses.glb";
 
+/// Hips' translation curve (hip bob), split out of `ZOMBIE_CLASSIC_POSES_ANIM_PATH`
+/// and baked as a zero-centered delta in real meters: `(raw - Classic's own rest
+/// translation) * 26.751644` (= the "Zombie" node's 107.0066 scale times
+/// "RootNode"'s 0.25). Meant to be played through an additive graph node, so it
+/// layers onto whatever rest height the target skeleton actually has instead of
+/// snapping Hips to Classic's own (very differently-scaled) raw curve values.
+pub const ZOMBIE_CLASSIC_HIP_BOB_ANIM_PATH: &str = "characters/zombie/anims/classic_hip_bob.glb";
+
 pub fn zombie_kind_anim_path(kind: ZombieKind) -> &'static str {
     match kind {
         ZombieKind::Classic => ZOMBIE_PATH,
         ZombieKind::Meshy => ZOMBIE_MESHY_PATH,
         ZombieKind::Soldier => ZOMBIE_SOLDIER_ANIM_PATH,
         ZombieKind::Female => ZOMBIE_CLASSIC_POSES_ANIM_PATH,
+    }
+}
+
+/// `None` for kinds that play their own self-contained clips, where rotation
+/// and translation are already baked consistently against the same rig.
+pub fn zombie_kind_hip_bob_anim_path(kind: ZombieKind) -> Option<&'static str> {
+    match kind {
+        ZombieKind::Female => Some(ZOMBIE_CLASSIC_HIP_BOB_ANIM_PATH),
+        ZombieKind::Classic | ZombieKind::Meshy | ZombieKind::Soldier => None,
     }
 }
 

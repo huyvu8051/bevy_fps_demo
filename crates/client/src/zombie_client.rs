@@ -82,20 +82,33 @@ pub(crate) struct ZombieKindGameplayAnim {
     pub(crate) graph: Handle<AnimationGraph>,
 
     poses: [AnimationNodeIndex; 5],
+    /// Hip-bob layer, played through an additive graph node alongside `poses`.
+    /// `None` for kinds with no split-out hip-bob source.
+    hip_bob_poses: Option<[AnimationNodeIndex; 5]>,
+}
+
+fn pose_slot(pose: ZombiePose) -> usize {
+    match pose {
+        ZombiePose::Idle => 0,
+        ZombiePose::Walk => 1,
+        ZombiePose::Run => 2,
+        ZombiePose::Crawl => 3,
+        ZombiePose::Bite => 4,
+    }
 }
 
 impl ZombieKindGameplayAnim {
     pub(crate) fn node(&self, pose: ZombiePose) -> AnimationNodeIndex {
-        self.poses[match pose {
-            ZombiePose::Idle => 0,
-            ZombiePose::Walk => 1,
-            ZombiePose::Run => 2,
-            ZombiePose::Crawl => 3,
-            ZombiePose::Bite => 4,
-        }]
+        self.poses[pose_slot(pose)]
     }
     pub(crate) fn idle(&self) -> AnimationNodeIndex {
         self.poses[0]
+    }
+    pub(crate) fn hip_bob_node(&self, pose: ZombiePose) -> Option<AnimationNodeIndex> {
+        self.hip_bob_poses.map(|poses| poses[pose_slot(pose)])
+    }
+    pub(crate) fn hip_bob_idle(&self) -> Option<AnimationNodeIndex> {
+        self.hip_bob_poses.map(|poses| poses[0])
     }
 }
 
@@ -121,14 +134,33 @@ impl ZombieAnim {
 pub(crate) fn build_zombie_anim(asset_server: &AssetServer, graphs: &mut Assets<AnimationGraph>) -> ZombieAnim {
     let mut build = |kind: ZombieKind| {
         let path = zombie_kind_anim_path(kind);
-        let clips: Vec<Handle<AnimationClip>> = zombie_kind_pose_clips(kind)
+        let pose_indices = zombie_kind_pose_clips(kind);
+        let mut graph = AnimationGraph::new();
+        let root = graph.root;
+        let poses: Vec<AnimationNodeIndex> = pose_indices
             .into_iter()
-            .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(path)))
+            .map(|index| {
+                let clip = asset_server.load(GltfAssetLabel::Animation(index).from_asset(path));
+                graph.add_clip(clip, 1.0, root)
+            })
             .collect();
-        let (graph, nodes) = AnimationGraph::from_clips(clips);
+
+        let hip_bob_poses = zombie_kind_hip_bob_anim_path(kind).map(|hip_bob_path| {
+            let additive = graph.add_additive_blend(1.0, root);
+            let nodes: Vec<AnimationNodeIndex> = pose_indices
+                .into_iter()
+                .map(|index| {
+                    let clip = asset_server.load(GltfAssetLabel::Animation(index).from_asset(hip_bob_path));
+                    graph.add_clip(clip, 1.0, additive)
+                })
+                .collect();
+            [nodes[0], nodes[1], nodes[2], nodes[3], nodes[4]]
+        });
+
         ZombieKindGameplayAnim {
             graph: graphs.add(graph),
-            poses: [nodes[0], nodes[1], nodes[2], nodes[3], nodes[4]],
+            poses: [poses[0], poses[1], poses[2], poses[3], poses[4]],
+            hip_bob_poses,
         }
     };
     ZombieAnim {
@@ -554,6 +586,9 @@ pub(crate) fn wire_zombie_animations(
                 .entity(player_entity)
                 .try_insert(AnimationGraphHandle(slot.graph.clone()));
             player.play(slot.idle()).repeat();
+            if let Some(hip_bob) = slot.hip_bob_idle() {
+                player.play(hip_bob).repeat();
+            }
         }
         commands.entity(root).try_insert(ZombieAnimationPlayer(player_entity));
     }
@@ -797,8 +832,12 @@ pub(crate) fn update_zombie_animation(
         }
         *pose = new_pose;
         if let Ok(mut player) = players.get_mut(link.0) {
+            let slot = anim.slot(kind.copied().unwrap_or_default());
             player.stop_all();
-            player.play(anim.slot(kind.copied().unwrap_or_default()).node(new_pose)).repeat();
+            player.play(slot.node(new_pose)).repeat();
+            if let Some(hip_bob) = slot.hip_bob_node(new_pose) {
+                player.play(hip_bob).repeat();
+            }
         }
     }
 }
