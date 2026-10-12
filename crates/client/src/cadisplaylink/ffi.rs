@@ -24,7 +24,7 @@ fn zombie_model_specs() -> Vec<SkinnedModelSpec> {
         y_offset: -0.76,
         facing_radians: 0.0,
     }];
-    for kind in [shared::ZombieKind::Classic, shared::ZombieKind::Meshy, shared::ZombieKind::Soldier] {
+    for kind in [shared::ZombieKind::Classic, shared::ZombieKind::Soldier] {
         specs.push(SkinnedModelSpec {
             name: shared::zombie_kind_metal_model_name(kind),
             asset_path: shared::zombie_kind_mesh_path(kind),

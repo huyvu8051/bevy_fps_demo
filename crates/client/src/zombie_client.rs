@@ -106,7 +106,6 @@ impl ZombieKindGameplayAnim {
 #[derive(Resource)]
 pub(crate) struct ZombieAnim {
     classic: ZombieKindGameplayAnim,
-    meshy: ZombieKindGameplayAnim,
     soldier: ZombieKindGameplayAnim,
     female: ZombieKindGameplayAnim,
 }
@@ -115,7 +114,6 @@ impl ZombieAnim {
     pub(crate) fn slot(&self, kind: ZombieKind) -> &ZombieKindGameplayAnim {
         match kind {
             ZombieKind::Classic => &self.classic,
-            ZombieKind::Meshy => &self.meshy,
             ZombieKind::Soldier => &self.soldier,
             ZombieKind::Female => &self.female,
         }
@@ -143,7 +141,6 @@ pub(crate) fn build_zombie_anim(asset_server: &AssetServer, graphs: &mut Assets<
     };
     ZombieAnim {
         classic: build(ZombieKind::Classic),
-        meshy: build(ZombieKind::Meshy),
         soldier: build(ZombieKind::Soldier),
         female: build(ZombieKind::Female),
     }
@@ -152,7 +149,6 @@ pub(crate) fn build_zombie_anim(asset_server: &AssetServer, graphs: &mut Assets<
 #[derive(Resource)]
 pub(crate) struct ZombieKindAnims {
     classic: (Handle<AnimationGraph>, Vec<AnimationNodeIndex>),
-    meshy: (Handle<AnimationGraph>, Vec<AnimationNodeIndex>),
     soldier: (Handle<AnimationGraph>, Vec<AnimationNodeIndex>),
     female: (Handle<AnimationGraph>, Vec<AnimationNodeIndex>),
 }
@@ -161,7 +157,6 @@ impl ZombieKindAnims {
     fn slot(&self, kind: ZombieKind) -> &(Handle<AnimationGraph>, Vec<AnimationNodeIndex>) {
         match kind {
             ZombieKind::Classic => &self.classic,
-            ZombieKind::Meshy => &self.meshy,
             ZombieKind::Soldier => &self.soldier,
             ZombieKind::Female => &self.female,
         }
@@ -181,7 +176,6 @@ pub(crate) fn build_zombie_kind_anims(
     };
     ZombieKindAnims {
         classic: build(ZombieKind::Classic),
-        meshy: build(ZombieKind::Meshy),
         soldier: build(ZombieKind::Soldier),
         female: build(ZombieKind::Female),
     }

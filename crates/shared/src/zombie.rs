@@ -52,29 +52,9 @@ const CLASSIC_HITBOX_SLOTS: &[(&str, HitboxSetter)] = &[
     ("mixamorig:RightFoot", |b, e| b.right_leg[2] = Some(e)),
 ];
 
-const MESHY_HITBOX_SLOTS: &[(&str, HitboxSetter)] = &[
-    ("Head", |b, e| b.head = Some(e)),
-    ("Spine", |b, e| b.belly = Some(e)),
-    ("Spine02", |b, e| b.chest = Some(e)),
-    ("LeftArm", |b, e| b.left_arm[0] = Some(e)),
-    ("LeftForeArm", |b, e| b.left_arm[1] = Some(e)),
-    ("LeftHand", |b, e| b.left_arm[2] = Some(e)),
-    ("RightArm", |b, e| b.right_arm[0] = Some(e)),
-    ("RightForeArm", |b, e| b.right_arm[1] = Some(e)),
-    ("RightHand", |b, e| b.right_arm[2] = Some(e)),
-    ("LeftUpLeg", |b, e| b.left_leg[0] = Some(e)),
-    ("LeftLeg", |b, e| b.left_leg[1] = Some(e)),
-    ("LeftFoot", |b, e| b.left_leg[2] = Some(e)),
-    ("RightUpLeg", |b, e| b.right_leg[0] = Some(e)),
-    ("RightLeg", |b, e| b.right_leg[1] = Some(e)),
-    ("RightFoot", |b, e| b.right_leg[2] = Some(e)),
-];
-
 pub fn zombie_hitbox_bone_slots(kind: ZombieKind) -> &'static [(&'static str, HitboxSetter)] {
     match kind {
-        ZombieKind::Classic | ZombieKind::Female => CLASSIC_HITBOX_SLOTS,
-
-        ZombieKind::Meshy | ZombieKind::Soldier => MESHY_HITBOX_SLOTS,
+        ZombieKind::Classic | ZombieKind::Soldier | ZombieKind::Female => CLASSIC_HITBOX_SLOTS,
     }
 }
 
@@ -86,7 +66,7 @@ pub fn wire_zombie_hitbox_bones(
     for (bone_entity, name) in &new_names {
         let n = name.as_str();
 
-        if n != "Spine02" && !CLASSIC_HITBOX_SLOTS.iter().any(|&(s, _)| s == n) {
+        if !CLASSIC_HITBOX_SLOTS.iter().any(|&(s, _)| s == n) {
             continue;
         }
 
@@ -159,27 +139,14 @@ pub const ZOMBIE_MODEL_Y_OFFSET: f32 = -(ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0);
 
 pub const ZOMBIE_PATH: &str = "characters/zombie/mesh/zombie.glb";
 
-pub const ZOMBIE_ANIM_BITE: usize = 0;
-pub const ZOMBIE_ANIM_CRAWL: usize = 1;
-pub const ZOMBIE_ANIM_IDLE: usize = 2;
-pub const ZOMBIE_ANIM_RUN: usize = 3;
-pub const ZOMBIE_ANIM_WALK: usize = 4;
-
-pub const ZOMBIE_MESHY_PATH: &str = "characters/zombie_meshy/mesh/zombie_meshy.glb";
-
 pub const ZOMBIE_SOLDIER_PATH: &str = "characters/zombie_soldier/mesh/zombie_soldier.glb";
 
-pub const ZOMBIE_SOLDIER_ANIM_PATH: &str = "characters/zombie_soldier/anims/soldier_running.glb";
-
-/// A Meshy-AI model generated with the Mixamo rig option, so its bones share
-/// the `mixamorig:` names Classic's were renamed to.
 pub const ZOMBIE_FEMALE_PATH: &str = "characters/zombie_female/mesh/zombie_female.glb";
 
 pub fn zombie_kind_anim_path(kind: ZombieKind) -> &'static str {
     match kind {
         ZombieKind::Classic => ZOMBIE_PATH,
-        ZombieKind::Meshy => ZOMBIE_MESHY_PATH,
-        ZombieKind::Soldier => ZOMBIE_SOLDIER_ANIM_PATH,
+        ZombieKind::Soldier => ZOMBIE_SOLDIER_PATH,
         ZombieKind::Female => ZOMBIE_FEMALE_PATH,
     }
 }
@@ -188,18 +155,17 @@ pub fn zombie_kind_anim_path(kind: ZombieKind) -> &'static str {
 pub enum ZombieKind {
     #[default]
     Classic,
-    Meshy,
     Soldier,
     Female,
 }
 
-// All four kinds are between generations: Classic/Meshy/Soldier have no
-// mesh (see zombie_kind_mesh_path), and Female's pose clips below are
-// placeholder indices into a file that no longer ships them — nothing
-// spawns until fresh models and a matching 5-pose clip set land.
-pub const ZOMBIE_KIND_WEIGHTS: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+// Classic and Soldier have fresh Mixamo-rigged meshes (Meshy AI, each
+// bundling its own clips — see zombie_kind_pose_clips), but each only ships
+// Idle/Walk/Run; Crawl and Bite fall back to Idle below until real clips are
+// generated.
+pub const ZOMBIE_KIND_WEIGHTS: [f32; 3] = [1.0, 1.0, 1.0];
 
-pub fn zombie_kind_for_phase(phase: f32, weights: [f32; 4]) -> ZombieKind {
+pub fn zombie_kind_for_phase(phase: f32, weights: [f32; 3]) -> ZombieKind {
     let total: f32 = weights.iter().sum();
     if total <= 0.0 {
         return ZombieKind::default();
@@ -207,7 +173,7 @@ pub fn zombie_kind_for_phase(phase: f32, weights: [f32; 4]) -> ZombieKind {
     let target = phase * total;
     let mut cumulative = 0.0;
     for (kind, &weight) in
-        [ZombieKind::Classic, ZombieKind::Meshy, ZombieKind::Soldier, ZombieKind::Female].into_iter().zip(&weights)
+        [ZombieKind::Classic, ZombieKind::Soldier, ZombieKind::Female].into_iter().zip(&weights)
     {
         cumulative += weight;
         if target < cumulative {
@@ -221,7 +187,6 @@ impl std::fmt::Display for ZombieKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             ZombieKind::Classic => "classic",
-            ZombieKind::Meshy => "meshy",
             ZombieKind::Soldier => "soldier",
             ZombieKind::Female => "female",
         })
@@ -234,59 +199,46 @@ pub struct ZombieShowcaseClip(pub usize);
 pub fn zombie_kind_mesh_path(kind: ZombieKind) -> &'static str {
     match kind {
         ZombieKind::Classic => ZOMBIE_PATH,
-        ZombieKind::Meshy => ZOMBIE_MESHY_PATH,
         ZombieKind::Soldier => ZOMBIE_SOLDIER_PATH,
         ZombieKind::Female => ZOMBIE_FEMALE_PATH,
     }
 }
 
-/// `None` for kinds that ship their own material instead of the tiered
-/// `base_color_qN.jpg` set the other kinds swap between.
-pub fn zombie_kind_texture_path(kind: ZombieKind, tier: u8) -> Option<String> {
-    let dir = match kind {
-        ZombieKind::Classic => "zombie",
-        ZombieKind::Meshy => "zombie_meshy",
-        ZombieKind::Soldier => "zombie_soldier",
-        ZombieKind::Female => return None,
-    };
-    Some(format!("characters/{dir}/mesh/textures/base_color_q{}.jpg", tier.min(5)))
+/// Every kind currently ships its own embedded material, so this is always
+/// `None`. Kept as a hook for a future kind that wants the tiered
+/// `base_color_qN.jpg` set the car props swap between.
+pub fn zombie_kind_texture_path(_kind: ZombieKind, _tier: u8) -> Option<String> {
+    None
 }
 
 pub fn zombie_kind_clip_count(kind: ZombieKind) -> usize {
     match kind {
-        ZombieKind::Classic => 5,
-        ZombieKind::Meshy => 7,
-
-        ZombieKind::Soldier => 1,
-        ZombieKind::Female => 5,
+        // Classic ships a full 21-clip "infected" pack (see
+        // zombie_kind_pose_clips); Soldier/Female only bundled Running,
+        // Walking, Armature|clip0|baselayer (idle) — see the Crawl/Bite
+        // fallback that implies.
+        ZombieKind::Classic => 21,
+        ZombieKind::Soldier => 3,
+        ZombieKind::Female => 4,
     }
 }
 
 pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; 5] {
     match kind {
-        ZombieKind::Classic => [
-            ZOMBIE_ANIM_IDLE,
-            ZOMBIE_ANIM_WALK,
-            ZOMBIE_ANIM_RUN,
-            ZOMBIE_ANIM_CRAWL,
-            ZOMBIE_ANIM_BITE,
-        ],
-        ZombieKind::Meshy => [0, 6, 5, 0, 0],
-        ZombieKind::Soldier => [0, 0, 0, 0, 0],
-        ZombieKind::Female => [
-            ZOMBIE_ANIM_IDLE,
-            ZOMBIE_ANIM_WALK,
-            ZOMBIE_ANIM_RUN,
-            ZOMBIE_ANIM_CRAWL,
-            ZOMBIE_ANIM_BITE,
-        ],
+        // [idle, walk, run, crawl, bite]. Classic's 21-clip pack has real
+        // clips for everything but Crawl: 20=idle baselayer, 16=Unsteady_
+        // Walk, 0=Running, 2=Attack. Crawl still falls back to idle.
+        ZombieKind::Classic => [20, 16, 0, 20, 2],
+        // Soldier/Female: 0=Running, 1=Walking, 2=idle-equivalent (the
+        // file's 3rd, auto-named clip). No Crawl/Bite clip exists yet, so
+        // both fall back to idle.
+        ZombieKind::Soldier | ZombieKind::Female => [2, 1, 0, 2, 2],
     }
 }
 
 pub fn zombie_kind_metal_model_name(kind: ZombieKind) -> &'static str {
     match kind {
         ZombieKind::Classic => "zombie_classic",
-        ZombieKind::Meshy => "zombie_meshy",
         ZombieKind::Soldier => "zombie_soldier",
         ZombieKind::Female => "zombie_female",
     }

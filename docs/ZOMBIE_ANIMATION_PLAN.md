@@ -15,9 +15,14 @@ of wiring a finished `.glb` in (clip index order, bone names, scale) are in
   and `update_zombie_animation` (client) both play the matching clip with a
   hard cut (`stop_all()` then `play(node).repeat()`), no blend.
 - Per-kind clip mapping is `zombie_kind_pose_clips(kind) -> [idle, walk,
-  run, crawl, bite]` — clip **indices** into that kind's `.glb`. Classic
-  and Meshy have different files with different clip orders, so this
-  indirection is the only thing that has to match a regenerated file.
+  run, crawl, bite]` — clip **indices** into that kind's own `.glb`. Each
+  `ZombieKind` (`Classic`, `Soldier`, `Female`) is a fully self-contained
+  file with its own mesh *and* its own animations baked together — **never
+  share or retarget clips across kinds** (a cross-rig shared-animation
+  system was built and then fully ripped out after repeated scale/unit
+  mismatches broke animated motion; see git history around "drop the
+  Classic-reuse animation system"). The per-kind index mapping is the only
+  thing that has to match a regenerated file.
 - **The zombie always turns to face its movement direction**
   (`turn_towards` in `move_zombies`). It never strafes, backpedals, or
   moves diagonally relative to its own body — so there is **no** 8-way /
@@ -30,18 +35,41 @@ of wiring a finished `.glb` in (clip index order, bone names, scale) are in
 
 ## Current state
 
-| Kind | File | Clips it ships |
-|---|---|---|
-| Classic | `assets/characters/zombie/mesh/zombie.glb` | 5: BITE=0, CRAWL=1, IDLE=2, RUN=3, WALK=4 — all wired |
-| Meshy | `assets/characters/zombie_meshy/mesh/zombie_meshy.glb` | 7: 0–4 = placeholder Text-to-Motion, 5 = Running, 6 = Walking. Only Walk/Run are usable; `zombie_kind_pose_clips` currently falls Idle/Crawl/Bite back to clip 0 |
+All 3 kinds were (re)generated on Meshy AI (Mixamo rig) as one mesh+anim
+`.glb` each. Soldier/Female landed with 3 bare clips (`0 = Running`, `1 =
+Walking`, `2 =` an auto-named idle/rest clip) — `zombie_kind_pose_clips`
+maps `[idle, walk, run, crawl, bite] = [2, 1, 0, 2, 2]` for both, i.e.
+Crawl and Bite fall back to playing Idle.
 
-Everything below is what to generate on the **Meshy** rig (and optionally
-regenerate on Classic later for parity).
+Classic was regenerated with Meshy's full "infected" animation pack — 21
+clips, covering most of Tier 1-3 plus some of Tier 5 for free (`Attack`,
+`Hit_Reaction`, `Gunshot_Reaction`, `Dead`, `Knock_Down`,
+`Shot_and_Fall_Forward`/`Shot_in_the_Back_and_Fall`, `Zombie_Scream`,
+`Mummy_Stagger(_inplace)`, `Fast_Ladder_Climb`, `Jump_and_Grab_Wall`,
+several Run variants). No real Crawl clip in the pack, so Crawl still
+falls back to Idle. Current mapping: `[idle, walk, run, crawl, bite] =
+[20, 16, 0, 20, 2]` (20=`Armature|clip0|baselayer`, 16=`Unsteady_Walk`,
+0=`Running`, 2=`Attack`). The unused clips (Hit_Reaction, Dead, Scream,
+etc.) aren't wired to any game state yet — see Tier 2/3/5 below for the
+code hooks each one needs.
+
+| Kind | File |
+|---|---|
+| Classic | `assets/characters/zombie/mesh/zombie.glb` (21 clips) |
+| Soldier | `assets/characters/zombie_soldier/mesh/zombie_soldier.glb` (3 clips) |
+| Female | `assets/characters/zombie_female/mesh/zombie_female.glb` (4 clips) |
+
+Everything below is what to generate — same clip list, same prompts, for
+**every kind above**. Regenerate each kind's file as one Meshy export
+(mesh + all clips together, Mixamo rig) so the clips stay self-consistent
+with that kind's own rig; don't mix clips from one kind's file into
+another's.
 
 ## Tier 1 — core, required
 
-The pose machine already dispatches all 5. Meshy is missing usable Idle,
-Crawl and at least one attack.
+The pose machine already dispatches all 5. Every kind is currently missing
+a real Crawl and a real attack (both fall back to Idle — see "Current
+state" above).
 
 | # | Clip | Plays when | Loop | Length |
 |---|---|---|---|---|
@@ -105,12 +133,12 @@ gravy.
 - **Jump up onto ledges** — Fall + Land cover the only vertical motion the
   movement code produces (gravity down slopes / off edges).
 
-## Recommended target clip order for a regenerated Meshy `.glb`
+## Recommended target clip order for a regenerated kind `.glb`
 
-If you regenerate the whole set, produce them in this index order so the
-mapping is obvious. `zombie_kind_pose_clips(ZombieKind::Meshy)` then just
-becomes `[0, 1, 2, 3, 4]` for the core poses; the extras get their own
-constants as they're wired.
+If you regenerate the whole set for a kind, produce them in this index
+order so the mapping is obvious. `zombie_kind_pose_clips(kind)` then just
+becomes `[0, 1, 2, 3, 4]` for the core poses for that kind; the extras get
+their own constants as they're wired.
 
 ```
 0  Idle
@@ -262,8 +290,8 @@ directionless. In place, no forward root motion.
 
 ## Suggested generation order
 
-1. **Idle, Crawl** + one **Attack: Bite** — finishes the core set Meshy
-   is missing; just remap `zombie_kind_pose_clips`, no new code.
+1. **Crawl** + one **Attack: Bite**, per kind — finishes the core set each
+   kind is missing; just remap `zombie_kind_pose_clips`, no new code.
 2. **Attack: Claw right / Claw left** — cheap variety, needs the random
    attack-pick wiring.
 3. **Hit reaction** — highest feel-per-effort; needs the "recently
