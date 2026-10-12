@@ -897,7 +897,7 @@ struct ServerZombieAnim {
 impl ServerZombieAnim {
     fn slot(&self, kind: ZombieKind) -> &ServerZombieKindAnim {
         match kind {
-            ZombieKind::Classic => &self.classic,
+            ZombieKind::Classic | ZombieKind::Female => &self.classic,
             ZombieKind::Meshy => &self.meshy,
             ZombieKind::Soldier => &self.soldier,
         }

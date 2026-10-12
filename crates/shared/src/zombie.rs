@@ -35,21 +35,21 @@ pub struct ZombieHitboxBones {
 type HitboxSetter = fn(&mut ZombieHitboxBones, Entity);
 
 const CLASSIC_HITBOX_SLOTS: &[(&str, HitboxSetter)] = &[
-    ("Head", |b, e| b.head = Some(e)),
-    ("Spine", |b, e| b.belly = Some(e)),
-    ("Spine2", |b, e| b.chest = Some(e)),
-    ("LeftArm", |b, e| b.left_arm[0] = Some(e)),
-    ("LeftForeArm", |b, e| b.left_arm[1] = Some(e)),
-    ("LeftHand", |b, e| b.left_arm[2] = Some(e)),
-    ("RightArm", |b, e| b.right_arm[0] = Some(e)),
-    ("RightForeArm", |b, e| b.right_arm[1] = Some(e)),
-    ("RightHand", |b, e| b.right_arm[2] = Some(e)),
-    ("LeftUpLeg", |b, e| b.left_leg[0] = Some(e)),
-    ("LeftLeg", |b, e| b.left_leg[1] = Some(e)),
-    ("LeftFoot", |b, e| b.left_leg[2] = Some(e)),
-    ("RightUpLeg", |b, e| b.right_leg[0] = Some(e)),
-    ("RightLeg", |b, e| b.right_leg[1] = Some(e)),
-    ("RightFoot", |b, e| b.right_leg[2] = Some(e)),
+    ("mixamorig:Head", |b, e| b.head = Some(e)),
+    ("mixamorig:Spine", |b, e| b.belly = Some(e)),
+    ("mixamorig:Spine2", |b, e| b.chest = Some(e)),
+    ("mixamorig:LeftArm", |b, e| b.left_arm[0] = Some(e)),
+    ("mixamorig:LeftForeArm", |b, e| b.left_arm[1] = Some(e)),
+    ("mixamorig:LeftHand", |b, e| b.left_arm[2] = Some(e)),
+    ("mixamorig:RightArm", |b, e| b.right_arm[0] = Some(e)),
+    ("mixamorig:RightForeArm", |b, e| b.right_arm[1] = Some(e)),
+    ("mixamorig:RightHand", |b, e| b.right_arm[2] = Some(e)),
+    ("mixamorig:LeftUpLeg", |b, e| b.left_leg[0] = Some(e)),
+    ("mixamorig:LeftLeg", |b, e| b.left_leg[1] = Some(e)),
+    ("mixamorig:LeftFoot", |b, e| b.left_leg[2] = Some(e)),
+    ("mixamorig:RightUpLeg", |b, e| b.right_leg[0] = Some(e)),
+    ("mixamorig:RightLeg", |b, e| b.right_leg[1] = Some(e)),
+    ("mixamorig:RightFoot", |b, e| b.right_leg[2] = Some(e)),
 ];
 
 const MESHY_HITBOX_SLOTS: &[(&str, HitboxSetter)] = &[
@@ -72,7 +72,7 @@ const MESHY_HITBOX_SLOTS: &[(&str, HitboxSetter)] = &[
 
 pub fn zombie_hitbox_bone_slots(kind: ZombieKind) -> &'static [(&'static str, HitboxSetter)] {
     match kind {
-        ZombieKind::Classic => CLASSIC_HITBOX_SLOTS,
+        ZombieKind::Classic | ZombieKind::Female => CLASSIC_HITBOX_SLOTS,
 
         ZombieKind::Meshy | ZombieKind::Soldier => MESHY_HITBOX_SLOTS,
     }
@@ -171,11 +171,18 @@ pub const ZOMBIE_SOLDIER_PATH: &str = "characters/zombie_soldier/mesh/zombie_sol
 
 pub const ZOMBIE_SOLDIER_ANIM_PATH: &str = "characters/zombie_soldier/anims/soldier_running.glb";
 
+/// A Meshy-AI model generated with the Mixamo rig option, which is why it
+/// reuses Classic's animation source directly: both skeletons now share the
+/// `mixamorig:` bone names Mixamo exports use, so Classic's idle/walk/run/
+/// crawl/bite clips bind to it with no retargeting.
+pub const ZOMBIE_FEMALE_PATH: &str = "characters/zombie_female/mesh/zombie_female.glb";
+
 pub fn zombie_kind_anim_path(kind: ZombieKind) -> &'static str {
     match kind {
         ZombieKind::Classic => ZOMBIE_PATH,
         ZombieKind::Meshy => ZOMBIE_MESHY_PATH,
         ZombieKind::Soldier => ZOMBIE_SOLDIER_ANIM_PATH,
+        ZombieKind::Female => ZOMBIE_PATH,
     }
 }
 
@@ -185,24 +192,27 @@ pub enum ZombieKind {
     Classic,
     Meshy,
     Soldier,
+    Female,
 }
 
-pub const ZOMBIE_KIND_WEIGHTS: [f32; 3] = [1.0, 1.0, 1.0];
+pub const ZOMBIE_KIND_WEIGHTS: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
-pub fn zombie_kind_for_phase(phase: f32, weights: [f32; 3]) -> ZombieKind {
+pub fn zombie_kind_for_phase(phase: f32, weights: [f32; 4]) -> ZombieKind {
     let total: f32 = weights.iter().sum();
     if total <= 0.0 {
         return ZombieKind::default();
     }
     let target = phase * total;
     let mut cumulative = 0.0;
-    for (kind, &weight) in [ZombieKind::Classic, ZombieKind::Meshy, ZombieKind::Soldier].into_iter().zip(&weights) {
+    for (kind, &weight) in
+        [ZombieKind::Classic, ZombieKind::Meshy, ZombieKind::Soldier, ZombieKind::Female].into_iter().zip(&weights)
+    {
         cumulative += weight;
         if target < cumulative {
             return kind;
         }
     }
-    ZombieKind::Soldier
+    ZombieKind::Female
 }
 
 impl std::fmt::Display for ZombieKind {
@@ -211,6 +221,7 @@ impl std::fmt::Display for ZombieKind {
             ZombieKind::Classic => "classic",
             ZombieKind::Meshy => "meshy",
             ZombieKind::Soldier => "soldier",
+            ZombieKind::Female => "female",
         })
     }
 }
@@ -223,16 +234,20 @@ pub fn zombie_kind_mesh_path(kind: ZombieKind) -> &'static str {
         ZombieKind::Classic => ZOMBIE_PATH,
         ZombieKind::Meshy => ZOMBIE_MESHY_PATH,
         ZombieKind::Soldier => ZOMBIE_SOLDIER_PATH,
+        ZombieKind::Female => ZOMBIE_FEMALE_PATH,
     }
 }
 
-pub fn zombie_kind_texture_path(kind: ZombieKind, tier: u8) -> String {
+/// `None` for kinds that ship their own material instead of the tiered
+/// `base_color_qN.jpg` set the other kinds swap between.
+pub fn zombie_kind_texture_path(kind: ZombieKind, tier: u8) -> Option<String> {
     let dir = match kind {
         ZombieKind::Classic => "zombie",
         ZombieKind::Meshy => "zombie_meshy",
         ZombieKind::Soldier => "zombie_soldier",
+        ZombieKind::Female => return None,
     };
-    format!("characters/{dir}/mesh/textures/base_color_q{}.jpg", tier.min(5))
+    Some(format!("characters/{dir}/mesh/textures/base_color_q{}.jpg", tier.min(5)))
 }
 
 pub fn zombie_kind_clip_count(kind: ZombieKind) -> usize {
@@ -241,6 +256,7 @@ pub fn zombie_kind_clip_count(kind: ZombieKind) -> usize {
         ZombieKind::Meshy => 7,
 
         ZombieKind::Soldier => 1,
+        ZombieKind::Female => 5,
     }
 }
 
@@ -255,6 +271,13 @@ pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; 5] {
         ],
         ZombieKind::Meshy => [0, 6, 5, 0, 0],
         ZombieKind::Soldier => [0, 0, 0, 0, 0],
+        ZombieKind::Female => [
+            ZOMBIE_ANIM_IDLE,
+            ZOMBIE_ANIM_WALK,
+            ZOMBIE_ANIM_RUN,
+            ZOMBIE_ANIM_CRAWL,
+            ZOMBIE_ANIM_BITE,
+        ],
     }
 }
 
@@ -263,6 +286,7 @@ pub fn zombie_kind_metal_model_name(kind: ZombieKind) -> &'static str {
         ZombieKind::Classic => "zombie_classic",
         ZombieKind::Meshy => "zombie_meshy",
         ZombieKind::Soldier => "zombie_soldier",
+        ZombieKind::Female => "zombie_female",
     }
 }
 

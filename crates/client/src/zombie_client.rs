@@ -109,7 +109,7 @@ pub(crate) struct ZombieAnim {
 impl ZombieAnim {
     pub(crate) fn slot(&self, kind: ZombieKind) -> &ZombieKindGameplayAnim {
         match kind {
-            ZombieKind::Classic => &self.classic,
+            ZombieKind::Classic | ZombieKind::Female => &self.classic,
             ZombieKind::Meshy => &self.meshy,
             ZombieKind::Soldier => &self.soldier,
         }
@@ -146,7 +146,7 @@ pub(crate) struct ZombieKindAnims {
 impl ZombieKindAnims {
     fn slot(&self, kind: ZombieKind) -> &(Handle<AnimationGraph>, Vec<AnimationNodeIndex>) {
         match kind {
-            ZombieKind::Classic => &self.classic,
+            ZombieKind::Classic | ZombieKind::Female => &self.classic,
             ZombieKind::Meshy => &self.meshy,
             ZombieKind::Soldier => &self.soldier,
         }
@@ -286,10 +286,14 @@ pub(crate) fn apply_zombie_texture_quality(
         if applied.contains(&kind) {
             continue;
         }
+        let Some(path) = shared::zombie_kind_texture_path(kind, ASSET_QUALITY_TIER) else {
+            applied.insert(kind);
+            continue;
+        };
         let Some(handle) = find_material_in_descendants(entity, &children, &mesh_materials) else {
             continue;
         };
-        let texture: Handle<Image> = asset_server.load(shared::zombie_kind_texture_path(kind, ASSET_QUALITY_TIER));
+        let texture: Handle<Image> = asset_server.load(path);
         if let Some(mut material) = materials.get_mut(&handle) {
             material.base_color_texture = Some(texture);
             applied.insert(kind);
