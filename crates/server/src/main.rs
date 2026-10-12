@@ -892,14 +892,16 @@ struct ServerZombieAnim {
     classic: ServerZombieKindAnim,
     meshy: ServerZombieKindAnim,
     soldier: ServerZombieKindAnim,
+    female: ServerZombieKindAnim,
 }
 
 impl ServerZombieAnim {
     fn slot(&self, kind: ZombieKind) -> &ServerZombieKindAnim {
         match kind {
-            ZombieKind::Classic | ZombieKind::Female => &self.classic,
+            ZombieKind::Classic => &self.classic,
             ZombieKind::Meshy => &self.meshy,
             ZombieKind::Soldier => &self.soldier,
+            ZombieKind::Female => &self.female,
         }
     }
 }
@@ -926,6 +928,7 @@ fn setup_server_zombie_anim(
         classic: build(ZombieKind::Classic),
         meshy: build(ZombieKind::Meshy),
         soldier: build(ZombieKind::Soldier),
+        female: build(ZombieKind::Female),
     });
 }
 

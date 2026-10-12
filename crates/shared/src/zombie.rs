@@ -171,18 +171,26 @@ pub const ZOMBIE_SOLDIER_PATH: &str = "characters/zombie_soldier/mesh/zombie_sol
 
 pub const ZOMBIE_SOLDIER_ANIM_PATH: &str = "characters/zombie_soldier/anims/soldier_running.glb";
 
-/// A Meshy-AI model generated with the Mixamo rig option, which is why it
-/// reuses Classic's animation source directly: both skeletons now share the
-/// `mixamorig:` bone names Mixamo exports use, so Classic's idle/walk/run/
-/// crawl/bite clips bind to it with no retargeting.
+/// A Meshy-AI model generated with the Mixamo rig option, so its bones share
+/// the `mixamorig:` names Classic's were renamed to.
 pub const ZOMBIE_FEMALE_PATH: &str = "characters/zombie_female/mesh/zombie_female.glb";
+
+/// `zombie.glb`'s clips, re-rooted so cross-file reuse actually binds.
+///
+/// Bevy bakes a clip's curve target paths starting at the glTF's own
+/// scene-root node name; `zombie.glb`'s root is "RootNode > Zombie > bone",
+/// but `wire_zombie_scene_animation_targets` roots live-spawned paths at
+/// whatever node is named "target_character" directly above the bones. This
+/// is `zombie.glb` with its scene pointed at the "Zombie" node, renamed to
+/// "target_character" — same curve data, baked under the matching name chain.
+pub const ZOMBIE_CLASSIC_POSES_ANIM_PATH: &str = "characters/zombie/anims/classic_poses.glb";
 
 pub fn zombie_kind_anim_path(kind: ZombieKind) -> &'static str {
     match kind {
         ZombieKind::Classic => ZOMBIE_PATH,
         ZombieKind::Meshy => ZOMBIE_MESHY_PATH,
         ZombieKind::Soldier => ZOMBIE_SOLDIER_ANIM_PATH,
-        ZombieKind::Female => ZOMBIE_PATH,
+        ZombieKind::Female => ZOMBIE_CLASSIC_POSES_ANIM_PATH,
     }
 }
 
