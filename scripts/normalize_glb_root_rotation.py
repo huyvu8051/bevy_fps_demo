@@ -37,6 +37,54 @@ import struct
 import sys
 
 
+def mat4_to_trs(m):
+    """Decomposes a column-major glTF node matrix into (translation,
+    rotation quaternion, scale). Assumes no shear; errors out if the
+    columns aren't orthogonal (a shear/skew this can't represent as TRS)."""
+    translation = (m[12], m[13], m[14])
+    cols = [(m[0], m[1], m[2]), (m[4], m[5], m[6]), (m[8], m[9], m[10])]
+    scale = tuple(math.sqrt(sum(c * c for c in col)) for col in cols)
+    rot_cols = [tuple(c / s for c in col) for col, s in zip(cols, scale)]
+
+    def dot(a, b):
+        return sum(x * y for x, y in zip(a, b))
+
+    for i in range(3):
+        for j in range(i + 1, 3):
+            if abs(dot(rot_cols[i], rot_cols[j])) > 1e-4:
+                sys.exit("matrix root has shear/skew — not supported, fix by hand")
+
+    m00, m10, m20 = rot_cols[0]
+    m01, m11, m21 = rot_cols[1]
+    m02, m12, m22 = rot_cols[2]
+    trace = m00 + m11 + m22
+    if trace > 0:
+        s = math.sqrt(trace + 1.0) * 2
+        qw = 0.25 * s
+        qx = (m21 - m12) / s
+        qy = (m02 - m20) / s
+        qz = (m10 - m01) / s
+    elif m00 > m11 and m00 > m22:
+        s = math.sqrt(1.0 + m00 - m11 - m22) * 2
+        qw = (m21 - m12) / s
+        qx = 0.25 * s
+        qy = (m01 + m10) / s
+        qz = (m02 + m20) / s
+    elif m11 > m22:
+        s = math.sqrt(1.0 + m11 - m00 - m22) * 2
+        qw = (m02 - m20) / s
+        qx = (m01 + m10) / s
+        qy = 0.25 * s
+        qz = (m12 + m21) / s
+    else:
+        s = math.sqrt(1.0 + m22 - m00 - m11) * 2
+        qw = (m10 - m01) / s
+        qx = (m02 + m20) / s
+        qy = (m12 + m21) / s
+        qz = 0.25 * s
+    return translation, (qx, qy, qz, qw), scale
+
+
 def quat_mul(a, b):
     ax, ay, az, aw = a
     bx, by, bz, bw = b
@@ -112,8 +160,14 @@ def main():
     for i in root_indices:
         node = gltf["nodes"][i]
         if "matrix" in node:
-            sys.exit(f"root node[{i}] ({node.get('name')!r}) uses a matrix, not TRS — not supported, fix by hand")
-        existing = tuple(node.get("rotation", (0.0, 0.0, 0.0, 1.0)))
+            translation, existing, scale = mat4_to_trs(node["matrix"])
+            del node["matrix"]
+            node["translation"] = list(translation)
+            if scale != (1.0, 1.0, 1.0):
+                node["scale"] = list(scale)
+            print(f"root node[{i}] ({node.get('name')!r}): decomposed matrix -> translation={translation} rotation={existing} scale={scale}")
+        else:
+            existing = tuple(node.get("rotation", (0.0, 0.0, 0.0, 1.0)))
         node["rotation"] = list(quat_mul(correction, existing))
         print(f"root node[{i}] ({node.get('name')!r}): rotation {existing} -> {node['rotation']}")
 
