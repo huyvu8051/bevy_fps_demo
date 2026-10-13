@@ -2,17 +2,10 @@ use bevy::prelude::*;
 use bevy_landmass::prelude::*;
 use bevy_landmass::{Agent3d, ArchipelagoOptions, PointSampleDistance3d};
 use bevy_rerecast::prelude::*;
-use bevy_rerecast::NavmeshSettings;
 use landmass_rerecast::{Island3dBundle, LandmassRerecastPlugin, NavMeshHandle3d};
-use shared::zombie::{
-    ZOMBIE_LENGTH, ZOMBIE_REST_HEIGHT, ZOMBIE_RADIUS, ZOMBIE_RUN_SPEED, ZOMBIE_WALK_SPEED,
-};
+use shared::zombie::{ZOMBIE_REST_HEIGHT, ZOMBIE_RADIUS, ZOMBIE_RUN_SPEED, ZOMBIE_WALK_SPEED};
 use shared::Scenario;
 
-const WALKABLE_CLIMB: f32 = 0.5;
-const CELL_SIZE_FRACTION: f32 = 1.0;
-const MIN_REGION_SIZE: u16 = 32;
-const MERGE_REGION_SIZE: u16 = 80;
 const NAVMESH_SAMPLE_DISTANCE_ABOVE: f32 = 1.0;
 const NAVMESH_SAMPLE_SLACK_BELOW_FEET: f32 = 1.0;
 
@@ -30,21 +23,6 @@ impl Plugin for ServerNavmeshPlugin {
         ))
         .add_systems(Startup, load_baked_navmesh)
         .add_systems(Update, register_zombie_agents.before(LandmassSystems::SyncExistence));
-    }
-}
-
-pub fn agent_height() -> f32 {
-    ZOMBIE_LENGTH + ZOMBIE_RADIUS * 2.0
-}
-
-pub fn bake_settings() -> NavmeshSettings {
-    NavmeshSettings {
-        walkable_climb: WALKABLE_CLIMB,
-        walkable_slope_angle: shared::MAX_WALKABLE_SLOPE_DEGREES.to_radians(),
-        min_region_size: MIN_REGION_SIZE,
-        merge_region_size: MERGE_REGION_SIZE,
-        cell_size_fraction: CELL_SIZE_FRACTION,
-        ..NavmeshSettings::from_agent_3d(ZOMBIE_RADIUS, agent_height())
     }
 }
 

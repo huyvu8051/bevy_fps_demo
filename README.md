@@ -243,14 +243,21 @@ Chỉ khiến app **đủ điều kiện** — hệ điều hành mới quyết 
 
 ## Navmesh
 
-Navmesh được bake offline rồi ship kèm asset (`maps/<map>/navmesh.nav`); server chỉ load,
+Navmesh được bake offline rồi ship kèm asset (`maps/<map>/navmesh_*.nav`); server chỉ load,
 không bake lúc khởi động — voxel hoá một map cỡ thị trấn quá lâu để nằm trong đường boot.
+Server load **mọi** file `navmesh*.nav` trong thư mục map, mỗi file thành một landmass
+Island dưới cùng một Archipelago, nên một map có thể bake làm nhiều lượt theo từng vùng mà
+không cần gộp file.
+
+Bake bằng [`mapbake_editor`](../mapbake_editor) — tool riêng, mở map lên xem được, chỉnh
+thông số bake trực tiếp và hiện navmesh đè lên scene:
 
 ```bash
-MAP_ID=1 cargo run -p server --bin navmesh_baker
+cargo run --release -- <đường-dẫn-thư-mục-map>
 ```
 
-Chạy lại lệnh này mỗi khi hình học của map đổi, nếu không navmesh sẽ lệch khỏi level.
+Chạy lại mỗi khi hình học của map đổi, nếu không navmesh sẽ lệch khỏi level. Vị trí spawn
+zombie (`maps/<map>/zombie_spawns.ron`) cũng được đặt trong tool này.
 
 ## Credits
 
