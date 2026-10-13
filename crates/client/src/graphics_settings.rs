@@ -156,7 +156,7 @@ pub(crate) struct PointLightBaseIntensity(pub(crate) f32);
 pub(crate) const ASSET_QUALITY_TIER: u8 = if cfg!(target_os = "ios") { 2 } else { 5 };
 
 pub(crate) fn gun_mesh_path() -> &'static str {
-    "models/ak47_scope/mesh/ak47_scope_light.glb"
+    "models/ak47_scope/mesh/ak47_scope.glb"
 }
 
 pub(crate) fn gun_texture_paths(mat_index: usize) -> (String, String, String) {
