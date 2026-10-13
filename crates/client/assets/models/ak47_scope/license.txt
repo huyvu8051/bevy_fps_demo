@@ -1,0 +1,11 @@
+Model Information:
+* title:	AK47 with scope
+* source:	https://sketchfab.com/3d-models/ak47-with-scope-d4d9720f3677485b958ceecc02f7965c
+* author:	Wolf Schevelenbos (https://sketchfab.com/Wolf_Schevelenbos)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "AK47 with scope" (https://sketchfab.com/3d-models/ak47-with-scope-d4d9720f3677485b958ceecc02f7965c) by Wolf Schevelenbos (https://sketchfab.com/Wolf_Schevelenbos) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

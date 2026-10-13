@@ -163,8 +163,8 @@ pub(crate) fn gun_texture_paths(mat_index: usize) -> (String, String, String) {
     let base_ext = if mat_index == 1 { "png" } else { "jpg" };
     (
         format!("models/ak47_scope/mesh/textures/mat{mat_index}_base_color_q5.{base_ext}"),
-        format!("models/ak47_scope/mesh/textures/mat{mat_index}_normal_q5.jpg"),
-        format!("models/ak47_scope/mesh/textures/mat{mat_index}_metallic_roughness_q5.jpg"),
+        format!("models/ak47_scope/mesh/textures/mat{mat_index}_normal_q5.png"),
+        format!("models/ak47_scope/mesh/textures/mat{mat_index}_metallic_roughness_q5.png"),
     )
 }
 
