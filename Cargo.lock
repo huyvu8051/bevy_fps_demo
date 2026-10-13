@@ -2036,6 +2036,7 @@ dependencies = [
 [[package]]
 name = "big-brain"
 version = "0.23.0"
+source = "git+https://github.com/huyvu8051/big-brain?rev=c8e2cf2#c8e2cf268ae4807360b41f2f666a3d222267da08"
 dependencies = [
  "bevy",
  "big-brain-derive",
@@ -2044,6 +2045,7 @@ dependencies = [
 [[package]]
 name = "big-brain-derive"
 version = "0.23.0"
+source = "git+https://github.com/huyvu8051/big-brain?rev=c8e2cf2#c8e2cf268ae4807360b41f2f666a3d222267da08"
 dependencies = [
  "proc-macro2",
  "quote",

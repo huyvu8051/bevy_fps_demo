@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = ["crates/client", "crates/shared", "crates/server"]
-exclude = ["vendor/big-brain"]
 
 # Build faster during dev
 [profile.dev]
