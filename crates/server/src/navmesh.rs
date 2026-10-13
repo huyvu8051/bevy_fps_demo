@@ -60,20 +60,50 @@ fn zombie_archipelago() -> Archipelago3d {
     })
 }
 
+/// mapbake_editor can bake a map in pieces, each piece landing as its own `navmesh_N.nav`
+/// (see mapbake_editor's bake.rs). Loading every `navmesh*.nav` in the map's directory as a
+/// separate landmass Island under one Archipelago — rather than a single fixed filename —
+/// means those pieces don't need merging into one file: landmass stitches adjacent islands
+/// together at query time. Older maps that still ship a single bare `navmesh.nav` keep
+/// working unchanged, since that filename matches the same glob.
 fn load_baked_navmesh(
     scenario: Res<Scenario>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
-    let path = scenario.baked_navmesh_path();
+    let declared_path = scenario.baked_navmesh_path();
+    let Some((asset_dir, _)) = declared_path.rsplit_once('/') else {
+        panic!("{scenario:?}'s baked_navmesh_path {declared_path:?} has no directory component");
+    };
+    let fs_dir = std::path::Path::new(&baked_navmesh_file(*scenario))
+        .parent()
+        .expect("baked_navmesh_file always has a parent directory")
+        .to_path_buf();
+
+    let mut chunk_files: Vec<String> = std::fs::read_dir(&fs_dir)
+        .unwrap_or_else(|e| panic!("could not read navmesh directory {fs_dir:?}: {e}"))
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .filter(|name| name.starts_with("navmesh") && name.ends_with(".nav"))
+        .collect();
+    chunk_files.sort();
+
+    if chunk_files.is_empty() {
+        panic!("no navmesh*.nav files found in {fs_dir:?} for {scenario:?}");
+    }
+
     let archipelago = commands.spawn(zombie_archipelago()).id();
-    commands.spawn(Island3dBundle {
-        island: Island,
-        archipelago_ref: ArchipelagoRef3d::new(archipelago),
-        nav_mesh: NavMeshHandle3d(asset_server.load(path)),
-    });
+    for file_name in &chunk_files {
+        let path = format!("{asset_dir}/{file_name}");
+        commands.spawn(Island3dBundle {
+            island: Island,
+            archipelago_ref: ArchipelagoRef3d::new(archipelago),
+            nav_mesh: NavMeshHandle3d(asset_server.load(&path)),
+        });
+        info!("loading baked navmesh chunk {path}");
+    }
     commands.insert_resource(ZombieArchipelago(archipelago));
-    info!("loading baked navmesh {path}");
+    info!("{}: {} navmesh chunk(s) loaded as islands", scenario.title(), chunk_files.len());
 }
 
 fn register_zombie_agents(
