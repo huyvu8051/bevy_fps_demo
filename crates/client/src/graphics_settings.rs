@@ -155,52 +155,29 @@ pub(crate) struct PointLightBaseIntensity(pub(crate) f32);
 /// have tiers — only their sharpest meshes and textures are left on disk.
 pub(crate) const ASSET_QUALITY_TIER: u8 = if cfg!(target_os = "ios") { 2 } else { 5 };
 
+/// The gun loads as a whole glTF *scene*, like every other model in the game, rather than
+/// pulling individual primitives out of it. `GltfAssetLabel::Primitive` reads raw vertex
+/// data and ignores the file's node transforms, which is why the old path needed the mesh
+/// pre-baked with those transforms folded into the vertices; loading the scene lets Bevy
+/// apply them, and build the materials straight from the glTF, so the asset can stay exactly
+/// as the artist exported it.
 pub(crate) fn gun_mesh_path() -> &'static str {
-    "models/ak47_scope/mesh/ak47_scope.glb"
-}
-
-pub(crate) fn gun_texture_paths(mat_index: usize) -> (String, String, String) {
-    let base_ext = if mat_index == 1 { "png" } else { "jpg" };
-    (
-        format!("models/ak47_scope/mesh/textures/mat{mat_index}_base_color_q5.{base_ext}"),
-        format!("models/ak47_scope/mesh/textures/mat{mat_index}_normal_q5.png"),
-        format!("models/ak47_scope/mesh/textures/mat{mat_index}_metallic_roughness_q5.png"),
-    )
+    "models/ak47_scope/raw/scene.gltf"
 }
 
 pub(crate) fn spawn_gun_mesh_parts(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    materials: &mut Assets<StandardMaterial>,
+    _materials: &mut Assets<StandardMaterial>,
     gun_entity: Entity,
 ) {
-    let mesh_path = gun_mesh_path();
-    let linear = |path: String| {
-        asset_server.load_with_settings(path, |settings: &mut bevy::image::ImageLoaderSettings| {
-            settings.is_srgb = false;
-        })
-    };
-    for mat_index in 0..2usize {
-        let (base_color_path, normal_path, metallic_roughness_path) = gun_texture_paths(mat_index);
-        let metallic_roughness_handle = linear(metallic_roughness_path);
-        let material = materials.add(StandardMaterial {
-            base_color_texture: Some(asset_server.load(base_color_path)),
-            normal_map_texture: Some(linear(normal_path)),
-            metallic_roughness_texture: Some(metallic_roughness_handle.clone()),
-            occlusion_texture: Some(metallic_roughness_handle),
-            cull_mode: None,
-            alpha_mode: if mat_index == 1 { AlphaMode::Blend } else { AlphaMode::Opaque },
-            ..default()
-        });
-        commands.spawn((
-            Name::new(if mat_index == 0 { "Gun body" } else { "Gun scope lens" }),
-            Mesh3d(asset_server.load(GltfAssetLabel::Primitive { mesh: mat_index, primitive: 0 }.from_asset(mesh_path))),
-            MeshMaterial3d(material),
-            Transform::IDENTITY,
-            GunMeshPart,
-            ChildOf(gun_entity),
-        ));
-    }
+    commands.spawn((
+        Name::new("Gun mesh"),
+        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(gun_mesh_path()))),
+        Transform::IDENTITY,
+        GunMeshPart,
+        ChildOf(gun_entity),
+    ));
 }
 
 pub(crate) fn dynamic_lights_enabled() -> bool {
