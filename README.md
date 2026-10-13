@@ -162,21 +162,6 @@ Kết quả: **cả chu trình sửa code → build → deploy → launch còn ~
 
 **Về hot reload**: đã tìm hiểu (`dexterous_developer`/`hot-lib-reloader`) — **không khả thi trên thiết bị thật**, đây là giới hạn cứng của iOS từ iOS 10 trở đi (sandbox chặn `dlopen` bất kỳ code nào không nằm sẵn trong app bundle lúc cài, kể cả build dev có entitlement `get-task-allow`). Trên Simulator thì có khả năng khả thi hơn (Simulator chạy như 1 process macOS bình thường, `dlopen` ít bị chặn hơn) nhưng cần đổi `crate-type` sang thêm `cdylib` riêng cho path Simulator — dự án này cố tình chỉ dùng `staticlib` vì từng dính crash `dyld` thật trên thiết bị khi build kèm `cdylib` (xem comment trong `crates/client/Cargo.toml`). Chưa làm — nếu 20s/lần vẫn chưa đủ nhanh, đây là hướng tiếp theo đáng thử nhưng tốn công hơn hẳn 2 thay đổi ở trên.
 
-### Chế độ "minimal map probe" (debug UI/perf)
-
-Build riêng chỉ có camera + map Sponza + touch controls, không có network/zombie/UI đầy đủ — dùng để cô lập bug input/hiệu năng khỏi độ phức tạp của game thật. **Chỉ bật được qua `devicectl` launch** (icon-tap trên Home Screen không đọc được env var này):
-
-```bash
-xcrun devicectl device process launch --device <DEVICE_UUID> \
-  -e '{"MINIMAL_MAP_PROBE":"1"}' com.huyvu8051.bevyfpsdemo
-```
-
-Bấm lại icon trên máy như bình thường sẽ quay về game đầy đủ.
-
-Trên desktop cũng test được probe này (vẫn dùng đường winit bình thường trên desktop, chỉ iOS đổi sang CADisplayLink):
-```bash
-MINIMAL_MAP_PROBE=1 TOUCH_UI_PREVIEW=1 cargo run -p client
-```
 
 ## Đo CPU/GPU trên iOS
 
