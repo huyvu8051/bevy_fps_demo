@@ -7,7 +7,6 @@ pub fn spawn_map_colliders(commands: &mut Commands, scenario: Scenario, asset_se
         Scenario::Desert => spawn_gltf_scene_colliders(commands, asset_server, scenario),
         Scenario::StressTest => {
             spawn_arena_colliders(commands, scenario.map_id());
-            spawn_arena_car_colliders(commands, asset_server);
         }
     }
 }
@@ -38,19 +37,6 @@ fn spawn_arena_colliders(commands: &mut Commands, map_id: u8) {
             Transform::from_translation(piece.translation).with_rotation(piece.rotation),
             RigidBody::Static,
             collider,
-        ));
-    }
-}
-
-fn spawn_arena_car_colliders(commands: &mut Commands, asset_server: &AssetServer) {
-    for (path, physics) in shared::ARENA_CAR_PATHS.iter().zip(shared::arena_car_physics()) {
-        commands.spawn((
-            WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(*path))),
-            Transform::from_xyz(physics.x, physics.y, physics.z)
-                .with_rotation(physics.rotation)
-                .with_scale(Vec3::splat(physics.scale)),
-            RigidBody::Static,
-            ColliderConstructorHierarchy::new(ColliderConstructor::ConvexHullFromMesh),
         ));
     }
 }

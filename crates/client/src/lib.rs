@@ -79,8 +79,8 @@ use scene_setup::*;
 mod network_setup;
 use network_setup::*;
 
-mod arena_cars;
-use arena_cars::*;
+mod f9_debug;
+use f9_debug::*;
 
 mod arena_layout;
 use arena_layout::*;
@@ -482,7 +482,7 @@ impl Plugin for GamePlugin {
         .add_observer(on_player_fired_fx)
         .add_observer(on_player_died_fx)
         .add_observer(on_game_state_event)
-        .add_plugins(ArenaCarsPlugin)
+        .add_plugins(F9DebugPlugin)
         .add_plugins(navigation::ClientNavigationPlugin)
         .add_plugins(ArenaLayoutPlugin)
 
@@ -519,7 +519,6 @@ impl Plugin for GamePlugin {
         .init_resource::<CameraMode>()
         .init_resource::<PlayerModelTuning>()
         .init_resource::<GunVisible>()
-        .init_resource::<CarsVisible>()
         .init_resource::<MapMsaaOn>()
         .init_resource::<ShadowQuality>()
         .init_resource::<LightQuality>()
@@ -624,7 +623,6 @@ impl Plugin for GamePlugin {
                     apply_point_light_quality,
                     point_light_quality_buttons,
                     update_point_light_quality_button_colors,
-                    apply_cars_visible,
                 )
                     .chain(),
             )

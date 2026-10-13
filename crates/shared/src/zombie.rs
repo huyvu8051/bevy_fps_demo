@@ -203,8 +203,8 @@ pub fn zombie_kind_mesh_path(kind: ZombieKind) -> &'static str {
 }
 
 /// Every kind currently ships its own embedded material, so this is always
-/// `None`. Kept as a hook for a future kind that wants the tiered
-/// `base_color_qN.jpg` set the car props swap between.
+/// `None`. Kept as a hook for a future kind that wants a separately-loaded
+/// `base_color_qN.jpg`-style texture instead.
 pub fn zombie_kind_texture_path(_kind: ZombieKind, _tier: u8) -> Option<String> {
     None
 }

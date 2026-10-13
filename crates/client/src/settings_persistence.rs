@@ -23,7 +23,6 @@ pub(crate) struct PersistedSettings {
     pub(crate) zombie_health_bars_hidden: Option<bool>,
     pub(crate) player_model_visible: Option<bool>,
     pub(crate) gun_visible: Option<bool>,
-    pub(crate) cars_visible: Option<bool>,
     pub(crate) aim_dof_focal_distance_alt: Option<bool>,
     pub(crate) autopilot_look_only: Option<bool>,
     pub(crate) show_autopilot_target: Option<bool>,
@@ -131,7 +130,6 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(zombie_health_bars_hidden, ZombieHealthBarsHidden);
     apply!(player_model_visible, PlayerModelVisible);
     apply!(gun_visible, GunVisible);
-    apply!(cars_visible, CarsVisible);
     apply!(aim_dof_focal_distance_alt, AimDofFocalDistanceAlt);
     apply!(autopilot_look_only, AutopilotLookOnly);
     apply!(show_autopilot_target, ShowAutopilotTarget);
@@ -188,7 +186,6 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(ZombieHealthBarsHidden)
         || changed!(PlayerModelVisible)
         || changed!(GunVisible)
-        || changed!(CarsVisible)
         || changed!(AimDofFocalDistanceAlt)
         || changed!(AutopilotLookOnly)
         || changed!(ShowAutopilotTarget)
@@ -226,7 +223,6 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         zombie_health_bars_hidden: world.get_resource::<ZombieHealthBarsHidden>().map(|r| r.0),
         player_model_visible: world.get_resource::<PlayerModelVisible>().map(|r| r.0),
         gun_visible: world.get_resource::<GunVisible>().map(|r| r.0),
-        cars_visible: world.get_resource::<CarsVisible>().map(|r| r.0),
         aim_dof_focal_distance_alt: world.get_resource::<AimDofFocalDistanceAlt>().map(|r| r.0),
         autopilot_look_only: world.get_resource::<AutopilotLookOnly>().map(|r| r.0),
         show_autopilot_target: world.get_resource::<ShowAutopilotTarget>().map(|r| r.0),

@@ -169,7 +169,6 @@ pub(crate) fn setup_gameplay(
         }
         Scenario::StressTest => {
             spawn_test_arena(&mut commands, &mut meshes, &mut materials, scenario.map_id());
-            spawn_arena_car_props(&mut commands, &asset_server, &mut materials);
         }
     }
 
