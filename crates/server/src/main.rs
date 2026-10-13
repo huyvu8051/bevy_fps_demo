@@ -29,7 +29,7 @@ use shared::{
     PLAYER_LENGTH, PLAYER_RADIUS, Scenario,
     
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
-    ZOMBIE_LENGTH, ZOMBIE_LOD_DISTANCE, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
+    ZOMBIE_LENGTH, ZOMBIE_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
     DIRECTOR_CALM_DURATION_SECS, DIRECTOR_CALM_PRESSURE_THRESHOLD, DIRECTOR_HORDE_SIZE,
     DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, INTERP_DELAY_SECS,
     LAG_COMPENSATION_MAX_SECS, PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
@@ -640,7 +640,7 @@ struct NextZombieSpawnIndex(usize);
 fn zombie_spawn_pos_for(scenario: Scenario, seed: usize, desert: &[Vec3]) -> (Vec3, f32) {
     match scenario {
         Scenario::Desert if !desert.is_empty() => {
-            (desert[seed % desert.len()] + Vec3::Y * ZOMBIE_LOD_REST_HEIGHT, 0.0)
+            (desert[seed % desert.len()] + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0)
         }
         Scenario::Desert => (scenario.player_spawn(), 0.0),
         Scenario::StressTest => (random_zombie_spawn_pos(seed), 0.0),
@@ -861,7 +861,7 @@ fn spawn_desert_zombies(
     let count = (target.0 as usize).min(points.0.len());
     let spawns: Vec<(Vec3, f32)> = points.0[..count]
         .iter()
-        .map(|p| (*p + Vec3::Y * ZOMBIE_LOD_REST_HEIGHT, 0.0))
+        .map(|p| (*p + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0))
         .collect();
     spawn_zombies(&mut commands, &spawns, true, false);
 }
@@ -1155,26 +1155,6 @@ fn move_zombies(
         let horizontal = Vec3::new(to_target.x, 0.0, to_target.z);
         let distance = horizontal.length();
 
-        if distance > ZOMBIE_LOD_DISTANCE {
-            if let Some(agent_target) = agent_target.as_deref_mut() {
-                *agent_target = AgentTarget3d::None;
-            }
-            if distance > ZOMBIE_STOP_DISTANCE {
-                let direction = horizontal / distance;
-                transform.translation += direction * zombie_speed_for(distance) * time.delta_secs();
-                let target_rotation = Transform::default().looking_to(-direction, Vec3::Y).rotation;
-                turn_towards(&mut transform.rotation, target_rotation, ZOMBIE_TURN_RATE_DEG.to_radians() * time.delta_secs());
-            }
-            transform.translation.y = ZOMBIE_LOD_REST_HEIGHT;
-            motion.grounded = true;
-            motion.vertical_velocity = 0.0;
-            motion.far = true;
-            net_transform.translation = transform.translation;
-            net_transform.yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
-            net_transform.moving = distance > ZOMBIE_STOP_DISTANCE;
-            continue;
-        }
-        motion.far = false;
         if let Some(agent_target) = agent_target.as_deref_mut() {
             *agent_target = AgentTarget3d::Point(target_translation);
         }
@@ -1552,7 +1532,7 @@ fn on_request_restart(
                 .0
                 .iter()
                 .take(scenario.zombie_count())
-                .map(|p| (*p + Vec3::Y * ZOMBIE_LOD_REST_HEIGHT, 0.0))
+                .map(|p| (*p + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0))
                 .collect();
             spawn_zombies(&mut commands, &spawns, true, false);
         }

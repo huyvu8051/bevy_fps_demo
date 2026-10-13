@@ -14,8 +14,6 @@ pub struct ZombieMotion {
     pub grounded: bool,
     pub path_recalc_timer: f32,
     pub cached_path_dir: Vec3,
-
-    pub far: bool,
 }
 
 #[derive(Component, Default)]
@@ -306,9 +304,7 @@ pub fn zombie_pose_for(distance: f32, health_fraction: f32, moving: bool) -> Zom
     }
 }
 
-pub const ZOMBIE_LOD_DISTANCE: f32 = 15.0;
-
-pub const ZOMBIE_LOD_REST_HEIGHT: f32 = ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0;
+pub const ZOMBIE_REST_HEIGHT: f32 = ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0;
 pub const ZOMBIE_AVOID_PROBE_DISTANCE: f32 = 2.5;
 pub const ZOMBIE_AVOID_ANGLES_DEG: [f32; 6] = [25.0, -25.0, 50.0, -50.0, 80.0, -80.0];
 pub const ZOMBIE_SEPARATION_RADIUS: f32 = 1.1;

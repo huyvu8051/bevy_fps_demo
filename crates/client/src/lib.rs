@@ -29,7 +29,7 @@ use shared::{
     ZombieAnimationPlayer,
     PlayerDiedFx, PlayerFiredFx,
     PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
-    SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieMotion, ZombieShowcaseClip, wire_zombie_hitbox_bones,
+    SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieShowcaseClip, wire_zombie_hitbox_bones,
     zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_anim_path,
     zombie_kind_pose_clips,
     INTERP_DELAY_SECS, MAX_SHOT_DISTANCE,
@@ -315,8 +315,6 @@ const ZOMBIE_ANIM_CROWD_HZ_3: f32 = 2.0;
 const ZOMBIE_HEALTH_BAR_HEIGHT: f32 = 1.3;
 const ZOMBIE_HEALTH_BAR_WIDTH_PX: f32 = 50.0;
 const ZOMBIE_HEALTH_BAR_HEIGHT_PX: f32 = 6.0;
-
-const ZOMBIE_HEALTH_BAR_MAX_VISIBLE: usize = 30;
 
 impl Default for SettingsMenuVisible {
     fn default() -> Self {

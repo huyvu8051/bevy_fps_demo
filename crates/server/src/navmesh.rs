@@ -6,7 +6,7 @@ use bevy_rerecast::NavmeshSettings;
 use landmass_rerecast::{Island3dBundle, LandmassRerecastPlugin, NavMeshHandle3d};
 use rerecast::PolygonNavmesh;
 use shared::zombie::{
-    ZOMBIE_LENGTH, ZOMBIE_LOD_REST_HEIGHT, ZOMBIE_RADIUS, ZOMBIE_RUN_SPEED, ZOMBIE_WALK_SPEED,
+    ZOMBIE_LENGTH, ZOMBIE_REST_HEIGHT, ZOMBIE_RADIUS, ZOMBIE_RUN_SPEED, ZOMBIE_WALK_SPEED,
 };
 use shared::Scenario;
 
@@ -53,7 +53,7 @@ fn zombie_archipelago() -> Archipelago3d {
     Archipelago3d::new(ArchipelagoOptions {
         point_sample_distance: PointSampleDistance3d {
             distance_above: NAVMESH_SAMPLE_DISTANCE_ABOVE,
-            distance_below: ZOMBIE_LOD_REST_HEIGHT + NAVMESH_SAMPLE_SLACK_BELOW_FEET,
+            distance_below: ZOMBIE_REST_HEIGHT + NAVMESH_SAMPLE_SLACK_BELOW_FEET,
             ..PointSampleDistance3d::from_agent_radius(ZOMBIE_RADIUS)
         },
         ..ArchipelagoOptions::from_agent_radius(ZOMBIE_RADIUS)

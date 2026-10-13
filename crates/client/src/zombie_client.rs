@@ -378,17 +378,13 @@ pub(crate) fn update_zombie_health_bars(
     mut timings: ResMut<PerfTimings>,
     hidden: Res<ZombieHealthBarsHidden>,
     camera: Query<(&Camera, &GlobalTransform), With<FpsCamera>>,
-    player: Query<&Transform, With<Player>>,
-    zombies: Query<(Entity, &Transform, &Health, &ZombieMotion), With<Zombie>>,
+    zombies: Query<(&Transform, &Health), With<Zombie>>,
     mut bars: Query<(Entity, &ZombieHealthBar, &mut Node, &Children)>,
     mut fills: Query<&mut Node, (With<ZombieHealthBarFill>, Without<ZombieHealthBar>)>,
     mut texts: Query<&mut Text, With<ZombieHealthBarText>>,
 ) {
     let perf_start = std::time::Instant::now();
     let Ok((camera, camera_transform)) = camera.single() else {
-        return;
-    };
-    let Ok(player_transform) = player.single() else {
         return;
     };
 
@@ -400,26 +396,12 @@ pub(crate) fn update_zombie_health_bars(
         return;
     }
 
-    let mut candidates: Vec<(Entity, f32)> = zombies
-        .iter()
-        
-        .map(|(entity, transform, ..)| (entity, transform.translation.distance(player_transform.translation)))
-        .collect();
-    candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
-    candidates.truncate(ZOMBIE_HEALTH_BAR_MAX_VISIBLE);
-    let visible_zombies: std::collections::HashSet<Entity> = candidates.into_iter().map(|(entity, _)| entity).collect();
-
     for (bar_entity, bar, mut node, children) in &mut bars {
-        let Ok((_, zombie_transform, health, _)) = zombies.get(bar.zombie) else {
+        let Ok((zombie_transform, health)) = zombies.get(bar.zombie) else {
 
             commands.entity(bar_entity).try_despawn();
             continue;
         };
-
-        if !visible_zombies.contains(&bar.zombie) {
-            node.display = Display::None;
-            continue;
-        }
 
         let head_pos = zombie_transform.translation + Vec3::Y * ZOMBIE_HEALTH_BAR_HEIGHT;
         let Ok(screen_pos) = camera.world_to_viewport(camera_transform, head_pos) else {

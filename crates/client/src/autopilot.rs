@@ -314,7 +314,7 @@ pub(crate) fn autopilot_think(
         let routed = path_direction(
             &archipelagos,
             &mut pathing,
-            target_transform.translation - Vec3::Y * shared::ZOMBIE_LOD_REST_HEIGHT,
+            target_transform.translation - Vec3::Y * shared::ZOMBIE_REST_HEIGHT,
         );
         yaw_relative_axis(
             cam.yaw,
