@@ -1,13 +1,12 @@
 use avian3d::prelude::{ColliderConstructor, ColliderConstructorHierarchy, RigidBody};
 use bevy::prelude::*;
 
-use crate::player::PLAYER_SPAWN;
-
 pub const SERVER_PORT_BASE: u16 = 5031;
 
-pub const DESERT_SPAWN_MIN_RADIUS: f32 = 8.0;
-pub const DESERT_SPAWN_MAX_RADIUS: f32 = 45.0;
-pub const DESERT_SPAWN_MAX_RISE_ABOVE_PLAYER: f32 = 3.0;
+/// Upper bound for the zombie-count control. Previously the length of a hardcoded spawn
+/// grid; spawn positions now come from each map's authored `zombie_spawns.ron`, which can be
+/// any length, so the cap is its own number.
+pub const ZOMBIE_MAX_COUNT: u32 = 100;
 
 macro_rules! scenarios {
     ($(
@@ -62,6 +61,7 @@ macro_rules! scenarios {
 }
 
 scenarios! {
+    #[default]
     Desert {
         id: 1,
         title: "DESERT CITY",
@@ -69,17 +69,6 @@ scenarios! {
         navmesh: "maps/desert_city/navmesh.nav",
         scene: Some("maps/desert_city/scene.gltf"),
         player_spawn: Vec3::new(0.0, 3.0, 0.0),
-        zombies: 10,
-    }
-
-    #[default]
-    StressTest {
-        id: 2,
-        title: "ARENA",
-        subtitle: "OPEN FLAT ARENA, CHASE-AI ZOMBIES",
-        navmesh: "maps/arena/navmesh.nav",
-        scene: None,
-        player_spawn: PLAYER_SPAWN,
         zombies: 10,
     }
 
@@ -105,6 +94,51 @@ impl Scenario {
 
     pub fn require_gltf_scene_path(self) -> &'static str {
         self.gltf_scene_path().unwrap_or_else(|| panic!("{self:?} is not a glTF map"))
+    }
+
+    /// The map's asset directory, e.g. `maps/desert_city` — derived from the navmesh path so
+    /// every per-map data file (navmesh chunks, zombie spawns) has one place to live.
+    pub fn map_asset_dir(self) -> &'static str {
+        let path = self.baked_navmesh_path();
+        path.rsplit_once('/')
+            .unwrap_or_else(|| panic!("{self:?}'s navmesh path {path:?} has no directory component"))
+            .0
+    }
+}
+
+/// Zombie spawn positions, authored in mapbake_editor and saved as `zombie_spawns.ron` in
+/// the map's asset directory. This is the only source of spawn positions: deriving them from
+/// the navmesh at runtime was dropped because it regularly placed zombies inside walls.
+///
+/// A map with no authored spawns yields an empty list rather than panicking — that's a
+/// content gap to fill in the editor, not a reason to take the server down on boot.
+pub fn zombie_spawn_points(scenario: Scenario) -> Vec<Vec3> {
+    let relative = format!("{}/zombie_spawns.ron", scenario.map_asset_dir());
+
+    #[cfg(target_os = "ios")]
+    let path = {
+        let Some(resource_path) = crate::ios_bundle_resource_path() else {
+            error!("could not read {relative}: NSBundle.main.resourcePath was nil");
+            return Vec::new();
+        };
+        std::path::Path::new(&resource_path).join("assets").join(&relative)
+    };
+    #[cfg(not(target_os = "ios"))]
+    let path = std::path::PathBuf::from(format!(
+        "{}/../client/assets/{relative}",
+        env!("CARGO_MANIFEST_DIR")
+    ));
+
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        error!("no authored zombie spawns at {path:?} — author them in mapbake_editor");
+        return Vec::new();
+    };
+    match ron::de::from_str::<Vec<[f32; 3]>>(&text) {
+        Ok(raw) => raw.into_iter().map(Vec3::from).collect(),
+        Err(e) => {
+            error!("failed to parse {path:?}: {e}");
+            Vec::new()
+        }
     }
 }
 

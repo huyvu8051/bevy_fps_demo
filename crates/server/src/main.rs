@@ -22,7 +22,7 @@ use shared::{
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount,
     ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
-    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, random_zombie_spawn_pos, 
+    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, 
     DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
     DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     MAX_SHOT_DISTANCE, MOVE_SPEED,
@@ -36,7 +36,7 @@ use shared::{
     PROTOCOL_ID,
     ZombieKind, zombie_kind_for_phase, ZOMBIE_KIND_WEIGHTS, zombie_kind_mesh_path, zombie_kind_anim_path, zombie_kind_pose_clips,
     ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
-    ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
+    ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
     ZOMBIE_TURN_RATE_DEG,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
@@ -148,17 +148,14 @@ fn main() {
         .init_resource::<ZombieTargetCount>()
         .init_resource::<AutoMaintainZombies>()
         .init_resource::<NextZombieSpawnIndex>()
-        .init_resource::<DesertSpawnPoints>()
+        .init_resource::<ZombieSpawnPoints>()
         .add_systems(
             Startup,
             (
                 start_server,
                 spawn_arena_colliders,
 
-                spawn_stress_test_zombies.run_if(resource_equals(Scenario::StressTest)),
-                (collect_desert_spawn_points, spawn_desert_zombies)
-                    .chain()
-                    .run_if(resource_equals(Scenario::Desert)),
+                (load_zombie_spawn_points, spawn_initial_zombies).chain(),
                 setup_server_zombie_anim,
             ),
         )
@@ -637,14 +634,11 @@ impl Default for AutoMaintainZombies {
 #[derive(Resource, Default)]
 struct NextZombieSpawnIndex(usize);
 
-fn zombie_spawn_pos_for(scenario: Scenario, seed: usize, desert: &[Vec3]) -> (Vec3, f32) {
-    match scenario {
-        Scenario::Desert if !desert.is_empty() => {
-            (desert[seed % desert.len()] + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0)
-        }
-        Scenario::Desert | Scenario::Garage => (scenario.player_spawn(), 0.0),
-        Scenario::StressTest => (random_zombie_spawn_pos(seed), 0.0),
+fn zombie_spawn_pos_for(scenario: Scenario, seed: usize, points: &[Vec3]) -> (Vec3, f32) {
+    if points.is_empty() {
+        return (scenario.player_spawn(), 0.0);
     }
+    (points[seed % points.len()] + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0)
 }
 
 fn on_set_zombie_count(
@@ -653,16 +647,16 @@ fn on_set_zombie_count(
     scenario: Res<Scenario>,
     mut target: ResMut<ZombieTargetCount>,
     mut next_spawn_index: ResMut<NextZombieSpawnIndex>,
-    desert_points: Res<DesertSpawnPoints>,
+    points: Res<ZombieSpawnPoints>,
     baseline_zombies: Query<Entity, (With<Zombie>, Without<DirectorSpawned>)>,
 ) {
     let kind = *scenario;
-    target.0 = trigger.message.0.min(ZOMBIE_SPAWNS.len() as u32);
+    target.0 = trigger.message.0.min(shared::ZOMBIE_MAX_COUNT);
     let current = baseline_zombies.iter().count() as u32;
     if current < target.0 {
         let to_spawn: Vec<(Vec3, f32)> = (0..target.0 - current)
             .map(|_| {
-                let spawn = zombie_spawn_pos_for(kind, next_spawn_index.0, &desert_points.0);
+                let spawn = zombie_spawn_pos_for(kind, next_spawn_index.0, &points.0);
                 next_spawn_index.0 += 1;
                 spawn
             })
@@ -691,8 +685,14 @@ fn on_set_auto_maintain_zombies(trigger: On<FromClient<SetAutoMaintainZombies>>,
     auto_maintain.0 = trigger.message.0;
 }
 
-fn spawn_more_zombies(_trigger: On<FromClient<SpawnMoreZombies>>, mut commands: Commands) {
-    spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS), ZOMBIE_AI_ENABLED, false);
+fn spawn_more_zombies(
+    _trigger: On<FromClient<SpawnMoreZombies>>,
+    points: Res<ZombieSpawnPoints>,
+    mut commands: Commands,
+) {
+    let spawns: Vec<(Vec3, f32)> =
+        points.0.iter().map(|p| (*p + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0)).collect();
+    spawn_zombies(&mut commands, &spawns, ZOMBIE_AI_ENABLED, false);
 }
 
 #[derive(Component)]
@@ -804,58 +804,24 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[(Vec3, f32)], ai_enabled: bo
     }
 }
 
-fn with_zero_yaw(positions: &[Vec3]) -> Vec<(Vec3, f32)> {
-    positions.iter().map(|&p| (p, 0.0)).collect()
-}
-
-fn spawn_stress_test_zombies(scenario: Res<Scenario>, mut commands: Commands) {
-    spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS[..scenario.zombie_count()]), true, false);
-}
-
+/// Authored in mapbake_editor, loaded from the map's `zombie_spawns.ron`. Replaces the old
+/// navmesh-derived spawn search, which regularly picked points inside walls.
 #[derive(Resource, Default)]
-struct DesertSpawnPoints(Vec<Vec3>);
+struct ZombieSpawnPoints(Vec<Vec3>);
 
-const DESERT_SPAWN_SPACING: f32 = 5.0;
-
-fn collect_desert_spawn_points(scenario: Res<Scenario>, mut commands: Commands) {
-    let Some(navmesh) = server::navmesh::read_baked_navmesh(*scenario) else {
-        return;
-    };
-
-    let origin = scenario.player_spawn();
-    let mut points = thin_out(
-        within_spawn_band(server::navmesh::points_reachable_from(&navmesh, origin), origin),
-        origin,
-    );
-    points.truncate(scenario.zombie_count().max(1) * 8);
-
-    info!("desert: {} spawn points reachable from the player", points.len());
-    commands.insert_resource(DesertSpawnPoints(points));
+fn load_zombie_spawn_points(scenario: Res<Scenario>, mut commands: Commands) {
+    let points = shared::zombie_spawn_points(*scenario);
+    info!("{}: {} authored zombie spawn point(s)", scenario.title(), points.len());
+    commands.insert_resource(ZombieSpawnPoints(points));
 }
 
-fn within_spawn_band(points: Vec<Vec3>, origin: Vec3) -> Vec<Vec3> {
-    points
-        .into_iter()
-        .filter(|p| {
-            let flat = Vec3::new(p.x - origin.x, 0.0, p.z - origin.z).length();
-            (shared::DESERT_SPAWN_MIN_RADIUS..shared::DESERT_SPAWN_MAX_RADIUS).contains(&flat)
-                && (p.y - origin.y).abs() < shared::DESERT_SPAWN_MAX_RISE_ABOVE_PLAYER
-        })
-        .collect()
-}
-
-fn thin_out(mut points: Vec<Vec3>, origin: Vec3) -> Vec<Vec3> {
-    points.sort_by(|a, b| a.distance(origin).total_cmp(&b.distance(origin)));
-    points.dedup_by(|a, b| a.distance(*b) < DESERT_SPAWN_SPACING);
-    points
-}
-
-fn spawn_desert_zombies(
-    points: Res<DesertSpawnPoints>,
+fn spawn_initial_zombies(
+    points: Res<ZombieSpawnPoints>,
     target: Res<ZombieTargetCount>,
     mut commands: Commands,
 ) {
     if points.0.is_empty() {
+        error!("no zombie spawn points authored for this map — spawning nothing");
         return;
     }
     let count = (target.0 as usize).min(points.0.len());
@@ -1266,7 +1232,7 @@ fn tick_respawns(
     mut respawns: ResMut<PendingRespawns>,
     mut next_spawn_index: ResMut<NextZombieSpawnIndex>,
     auto_maintain: Res<AutoMaintainZombies>,
-    desert_points: Res<DesertSpawnPoints>,
+    points: Res<ZombieSpawnPoints>,
 ) {
     let kind = *scenario;
     let dt = time.delta_secs();
@@ -1278,7 +1244,7 @@ fn tick_respawns(
             respawns.0.swap_remove(i);
             if auto_maintain.0 {
 
-                to_spawn.push(zombie_spawn_pos_for(kind, next_spawn_index.0, &desert_points.0));
+                to_spawn.push(zombie_spawn_pos_for(kind, next_spawn_index.0, &points.0));
                 next_spawn_index.0 += 1;
             }
         } else {
@@ -1511,7 +1477,7 @@ fn on_request_restart(
     mut respawns: ResMut<PendingRespawns>,
     mut director: ResMut<Director>,
     scenario: Res<Scenario>,
-    desert_points: Res<DesertSpawnPoints>,
+    points: Res<ZombieSpawnPoints>,
     zombies: Query<Entity, With<Zombie>>,
     mut players: Query<(Entity, &mut Transform, &mut Player, &mut NetTransform), With<NetPlayer>>,
 ) {
@@ -1526,25 +1492,13 @@ fn on_request_restart(
         commands.entity(entity).despawn();
     }
 
-    match *scenario {
-        Scenario::Desert => {
-            let spawns: Vec<(Vec3, f32)> = desert_points
-                .0
-                .iter()
-                .take(scenario.zombie_count())
-                .map(|p| (*p + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0))
-                .collect();
-            spawn_zombies(&mut commands, &spawns, true, false);
-        }
-        Scenario::StressTest => {
-            spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS[..scenario.zombie_count()]), true, false);
-        }
-        Scenario::Garage => {
-            let spawn = scenario.player_spawn() + Vec3::Y * ZOMBIE_REST_HEIGHT;
-            let spawns: Vec<(Vec3, f32)> = std::iter::repeat_n((spawn, 0.0), scenario.zombie_count()).collect();
-            spawn_zombies(&mut commands, &spawns, true, false);
-        }
-    }
+    let spawns: Vec<(Vec3, f32)> = points
+        .0
+        .iter()
+        .take(scenario.zombie_count())
+        .map(|p| (*p + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0))
+        .collect();
+    spawn_zombies(&mut commands, &spawns, true, false);
     let player_spawn = scenario.player_spawn();
 
     for (entity, mut transform, mut player, mut net_transform) in &mut players {

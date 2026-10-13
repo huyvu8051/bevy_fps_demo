@@ -157,20 +157,12 @@ pub(crate) fn setup_gameplay(
     let scenario = current_scenario();
     let player_spawn = scenario.player_spawn();
 
-    match scenario {
-        Scenario::Desert | Scenario::Garage => {
-            let scene = scenario.require_gltf_scene_path();
-            commands.spawn((
-                Name::new(scenario.title()),
-                WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene))),
-                Transform::IDENTITY,
-                shared::gltf_scene_colliders(),
-            ));
-        }
-        Scenario::StressTest => {
-            spawn_test_arena(&mut commands, &mut meshes, &mut materials, scenario.map_id());
-        }
-    }
+    commands.spawn((
+        Name::new(scenario.title()),
+        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(scenario.require_gltf_scene_path()))),
+        Transform::IDENTITY,
+        shared::gltf_scene_colliders(),
+    ));
 
     commands.spawn((
         DirectionalLight {
@@ -360,74 +352,6 @@ pub(crate) fn setup_gameplay(
     spawn_mouse_ui_lock_indicator(&mut commands);
     if touch_enabled.0 {
         spawn_touch_controls(&mut commands);
-    }
-}
-
-#[derive(Component)]
-struct ArenaGeometry;
-
-#[derive(Component)]
-pub(crate) struct ArenaBoxDims {
-    pub(crate) shape: shared::ArenaShape,
-    pub(crate) size: Vec3,
-    pub(crate) index: usize,
-}
-
-fn spawn_test_arena(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    map_id: u8,
-) {
-    let floor_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.35, 0.35, 0.38),
-        perceptual_roughness: 0.9,
-        ..default()
-    });
-    let wall_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.55, 0.5, 0.45),
-        perceptual_roughness: 0.85,
-        ..default()
-    });
-
-    for (i, b) in shared::arena_layout(map_id).iter().enumerate() {
-        let material = if i == 0 { floor_material.clone() } else { wall_material.clone() };
-        let (mesh, collider): (Handle<Mesh>, Collider) = match b.shape {
-            shared::ArenaShape::Cuboid => (
-                meshes.add(Cuboid::new(b.size.x, b.size.y, b.size.z)),
-                Collider::cuboid(b.size.x, b.size.y, b.size.z),
-            ),
-
-            shared::ArenaShape::Cylinder => (
-                meshes.add(Cylinder::new(b.size.x * 0.5, b.size.y)),
-                Collider::cylinder(b.size.x * 0.5, b.size.y),
-            ),
-        };
-        commands.spawn((
-            Mesh3d(mesh),
-            MeshMaterial3d(material),
-            Transform::from_translation(b.translation).with_rotation(b.rotation),
-            RigidBody::Static,
-            collider,
-            ArenaGeometry,
-            ArenaBoxDims { shape: b.shape, size: b.size, index: i },
-        ));
-
-    }
-
-    if dynamic_lights_enabled() {
-        commands.spawn((
-            PointLight {
-                color: Color::srgb(1.0, 0.98, 0.92),
-                intensity: 4_000_000.0,
-                range: ARENA_HALF_SIZE * 3.0,
-                shadow_maps_enabled: light_shadows_enabled(),
-                ..default()
-            },
-            PointLightBaseIntensity(4_000_000.0),
-            Transform::from_xyz(0.0, ARENA_WALL_HEIGHT - 0.2, 0.0),
-            ArenaGeometry,
-        ));
     }
 }
 

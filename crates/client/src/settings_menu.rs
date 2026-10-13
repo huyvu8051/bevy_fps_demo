@@ -1131,7 +1131,7 @@ pub(crate) fn zombie_count_buttons(
     dec1_btn: Query<&Interaction, (With<ZombieCountDec1Button>, Changed<Interaction>)>,
     inc1_btn: Query<&Interaction, (With<ZombieCountInc1Button>, Changed<Interaction>)>,
 ) {
-    let max = ZOMBIE_SPAWNS.len() as u32;
+    let max = shared::ZOMBIE_MAX_COUNT;
     let mut changed = false;
     for interaction in &dec_btn {
         if *interaction == Interaction::Pressed {

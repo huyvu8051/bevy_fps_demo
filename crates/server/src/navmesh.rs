@@ -4,7 +4,6 @@ use bevy_landmass::{Agent3d, ArchipelagoOptions, PointSampleDistance3d};
 use bevy_rerecast::prelude::*;
 use bevy_rerecast::NavmeshSettings;
 use landmass_rerecast::{Island3dBundle, LandmassRerecastPlugin, NavMeshHandle3d};
-use rerecast::PolygonNavmesh;
 use shared::zombie::{
     ZOMBIE_LENGTH, ZOMBIE_REST_HEIGHT, ZOMBIE_RADIUS, ZOMBIE_RUN_SPEED, ZOMBIE_WALK_SPEED,
 };
@@ -135,16 +134,6 @@ pub fn baked_navmesh_file(scenario: Scenario) -> String {
     )
 }
 
-pub fn read_baked_navmesh(scenario: Scenario) -> Option<Navmesh> {
-    let path = baked_navmesh_file(scenario);
-    let bytes = std::fs::read(&path)
-        .inspect_err(|e| error!("could not read {path}: {e}"))
-        .ok()?;
-    bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
-        .inspect_err(|e| error!("could not decode {path}: {e}"))
-        .ok()
-        .map(|(navmesh, _)| navmesh)
-}
 pub fn connectivity(navmesh: &Navmesh) -> (usize, f32) {
     let polygons = &navmesh.polygon;
     let vertices_per_polygon = polygons.max_vertices_per_polygon as usize;
@@ -178,85 +167,4 @@ pub fn connectivity(navmesh: &Navmesh) -> (usize, f32) {
         components += 1;
     }
     (components, largest as f32 / polygon_count as f32)
-}
-
-pub fn points_reachable_from(navmesh: &Navmesh, origin: Vec3) -> Vec<Vec3> {
-    let polygons = &navmesh.polygon;
-    let vertices_per_polygon = polygons.max_vertices_per_polygon as usize;
-    let polygon_count = polygons.polygon_count();
-    if vertices_per_polygon == 0 || polygon_count == 0 || navmesh.detail.meshes.len() < polygon_count
-    {
-        return Vec::new();
-    }
-
-    let Some(start) = polygon_nearest_to(navmesh, origin) else {
-        return Vec::new();
-    };
-
-    let mut visited = vec![false; polygon_count];
-    let mut queue = std::collections::VecDeque::from([start]);
-    visited[start] = true;
-    let mut points = Vec::new();
-    while let Some(polygon) = queue.pop_front() {
-        points.extend(detail_triangle_centroids(navmesh, polygon));
-
-        let edges = polygon * vertices_per_polygon..(polygon + 1) * vertices_per_polygon;
-        for &neighbour in &polygons.polygon_neighbors[edges] {
-            let neighbour = neighbour as usize;
-            if neighbour < polygon_count && !visited[neighbour] {
-                visited[neighbour] = true;
-                queue.push_back(neighbour);
-            }
-        }
-    }
-    points
-}
-
-fn polygon_nearest_to(navmesh: &Navmesh, origin: Vec3) -> Option<usize> {
-    (0..navmesh.polygon.polygon_count())
-        .filter_map(|polygon| {
-            polygon_centroid(navmesh, polygon).map(|c| (polygon, c.distance_squared(origin)))
-        })
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(polygon, _)| polygon)
-}
-
-fn polygon_centroid(navmesh: &Navmesh, polygon: usize) -> Option<Vec3> {
-    let polygons = &navmesh.polygon;
-    let vertices_per_polygon = polygons.max_vertices_per_polygon as usize;
-    let corners: Vec<Vec3> = polygons.polygons
-        [polygon * vertices_per_polygon..(polygon + 1) * vertices_per_polygon]
-        .iter()
-        .copied()
-        .take_while(|index| *index != PolygonNavmesh::NO_INDEX)
-        .map(|index| polygon_vertex(navmesh, index))
-        .collect();
-    (!corners.is_empty()).then(|| corners.iter().sum::<Vec3>() / corners.len() as f32)
-}
-
-fn polygon_vertex(navmesh: &Navmesh, index: u16) -> Vec3 {
-    let polygons = &navmesh.polygon;
-    let vertex = polygons.vertices[index as usize];
-    Vec3::new(
-        polygons.aabb.min.x + vertex.x as f32 * polygons.cell_size,
-        polygons.aabb.min.y + vertex.y as f32 * polygons.cell_height,
-        polygons.aabb.min.z + vertex.z as f32 * polygons.cell_size,
-    )
-}
-
-fn detail_triangle_centroids(navmesh: &Navmesh, polygon: usize) -> Vec<Vec3> {
-    let submesh = &navmesh.detail.meshes[polygon];
-    let base_vertex = submesh.base_vertex_index as usize;
-    let base_triangle = submesh.base_triangle_index as usize;
-    (0..submesh.triangle_count as usize)
-        .filter_map(|triangle| navmesh.detail.triangles.get(base_triangle + triangle))
-        .map(|corners| {
-            corners
-                .iter()
-                .filter_map(|corner| navmesh.detail.vertices.get(base_vertex + *corner as usize))
-                .copied()
-                .sum::<Vec3>()
-                / 3.0
-        })
-        .collect()
 }

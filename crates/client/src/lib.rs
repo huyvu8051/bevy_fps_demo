@@ -37,8 +37,7 @@ use shared::{
     resolve_bone_world_positions, zombie_hit_damage_ray,
     PROTOCOL_ID,
     ZOMBIE_ATTACK_INTERVAL, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS,
-    zombie_pose_for, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_SPAWNS, ZOMBIE_STOP_DISTANCE,
-    ARENA_HALF_SIZE, ARENA_WALL_HEIGHT,
+    zombie_pose_for, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_STOP_DISTANCE,
 };
 
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
@@ -82,8 +81,6 @@ use network_setup::*;
 mod f9_debug;
 use f9_debug::*;
 
-mod arena_layout;
-use arena_layout::*;
 
 
 mod navigation;
@@ -484,7 +481,6 @@ impl Plugin for GamePlugin {
         .add_observer(on_game_state_event)
         .add_plugins(F9DebugPlugin)
         .add_plugins(navigation::ClientNavigationPlugin)
-        .add_plugins(ArenaLayoutPlugin)
 
 
         .insert_resource(Noclip(false))

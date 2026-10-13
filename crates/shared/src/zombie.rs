@@ -2,7 +2,6 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::arena::ARENA_HALF_SIZE;
 
 #[derive(Component, Default, Serialize, Deserialize)]
 #[require(Transform)]
@@ -312,32 +311,6 @@ pub const ZOMBIE_SEPARATION_STRENGTH: f32 = 1.2;
 pub const KNOCKBACK_DECAY_RATE: f32 = 6.0;
 
 pub const ZOMBIE_TURN_RATE_DEG: f32 = 180.0;
-
-pub const fn zombie_spawn_grid(half_x: f32, half_z: f32, y: f32) -> [Vec3; 100] {
-    let mut spawns = [Vec3::ZERO; 100];
-    let mut i = 0usize;
-    while i < 100 {
-        let row = (i / 10) as f32;
-        let col = (i % 10) as f32;
-        let x = -half_x + col * (2.0 * half_x / 9.0);
-        let z = -half_z + row * (2.0 * half_z / 9.0);
-        spawns[i] = Vec3::new(x, y, z);
-        i += 1;
-    }
-    spawns
-}
-
-pub const ZOMBIE_SPAWNS: [Vec3; 100] =
-    zombie_spawn_grid(ARENA_HALF_SIZE - 3.0, ARENA_HALF_SIZE - 3.0, ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0);
-
-pub fn random_zombie_spawn_pos(seed: usize) -> Vec3 {
-    const INV_G: f32 = 0.754_877_7;
-    const INV_G2: f32 = 0.569_840_3;
-    let half = ARENA_HALF_SIZE - 3.0;
-    let x = (-1.0 + 2.0 * (seed as f32 * INV_G).fract()) * half;
-    let z = (-1.0 + 2.0 * (seed as f32 * INV_G2).fract()) * half;
-    Vec3::new(x, ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0, z)
-}
 
 #[derive(Event, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct SpawnMoreZombies;
