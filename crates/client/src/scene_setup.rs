@@ -158,10 +158,10 @@ pub(crate) fn setup_gameplay(
     let player_spawn = scenario.player_spawn();
 
     match scenario {
-        Scenario::Desert => {
+        Scenario::Desert | Scenario::Garage => {
             let scene = scenario.require_gltf_scene_path();
             commands.spawn((
-                Name::new("DesertCity"),
+                Name::new(scenario.title()),
                 WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene))),
                 Transform::IDENTITY,
                 shared::gltf_scene_colliders(),

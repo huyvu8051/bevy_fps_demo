@@ -642,7 +642,7 @@ fn zombie_spawn_pos_for(scenario: Scenario, seed: usize, desert: &[Vec3]) -> (Ve
         Scenario::Desert if !desert.is_empty() => {
             (desert[seed % desert.len()] + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0)
         }
-        Scenario::Desert => (scenario.player_spawn(), 0.0),
+        Scenario::Desert | Scenario::Garage => (scenario.player_spawn(), 0.0),
         Scenario::StressTest => (random_zombie_spawn_pos(seed), 0.0),
     }
 }
@@ -1538,6 +1538,11 @@ fn on_request_restart(
         }
         Scenario::StressTest => {
             spawn_zombies(&mut commands, &with_zero_yaw(&ZOMBIE_SPAWNS[..scenario.zombie_count()]), true, false);
+        }
+        Scenario::Garage => {
+            let spawn = scenario.player_spawn() + Vec3::Y * ZOMBIE_REST_HEIGHT;
+            let spawns: Vec<(Vec3, f32)> = std::iter::repeat_n((spawn, 0.0), scenario.zombie_count()).collect();
+            spawn_zombies(&mut commands, &spawns, true, false);
         }
     }
     let player_spawn = scenario.player_spawn();

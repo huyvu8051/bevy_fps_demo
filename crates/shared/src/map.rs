@@ -82,6 +82,16 @@ scenarios! {
         player_spawn: PLAYER_SPAWN,
         zombies: 10,
     }
+
+    Garage {
+        id: 3,
+        title: "PARKING GARAGE",
+        subtitle: "UNDERGROUND TEST MAP, BAKED NAVMESH",
+        navmesh: "maps/basement_parking_garage/navmesh.nav",
+        scene: Some("maps/basement_parking_garage/scene.glb"),
+        player_spawn: Vec3::new(21.2, 3.0, 4.6),
+        zombies: 10,
+    }
 }
 
 impl Scenario {

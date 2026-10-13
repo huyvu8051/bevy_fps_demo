@@ -4,7 +4,7 @@ use shared::Scenario;
 
 pub fn spawn_map_colliders(commands: &mut Commands, scenario: Scenario, asset_server: &AssetServer) {
     match scenario {
-        Scenario::Desert => spawn_gltf_scene_colliders(commands, asset_server, scenario),
+        Scenario::Desert | Scenario::Garage => spawn_gltf_scene_colliders(commands, asset_server, scenario),
         Scenario::StressTest => {
             spawn_arena_colliders(commands, scenario.map_id());
         }
