@@ -56,15 +56,17 @@ fn player_archipelago() -> Archipelago3d {
 }
 
 fn load_baked_navmesh(asset_server: Res<AssetServer>, mut commands: Commands) {
-    let path = current_scenario().baked_navmesh_path();
+    let chunks = shared::navmesh_chunk_paths(current_scenario());
     let archipelago = commands.spawn(player_archipelago()).id();
-    commands.spawn(Island3dBundle {
-        island: Island,
-        archipelago_ref: ArchipelagoRef3d::new(archipelago),
-        nav_mesh: NavMeshHandle3d(asset_server.load(path)),
-    });
+    for path in &chunks {
+        commands.spawn(Island3dBundle {
+            island: Island,
+            archipelago_ref: ArchipelagoRef3d::new(archipelago),
+            nav_mesh: NavMeshHandle3d(asset_server.load(path)),
+        });
+    }
     commands.insert_resource(PlayerArchipelago(archipelago));
-    info!("client navmesh: loading {path}");
+    info!("client navmesh: loading {} chunk(s)", chunks.len());
 }
 
 fn register_player_agent(

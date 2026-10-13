@@ -106,6 +106,51 @@ impl Scenario {
     }
 }
 
+/// Where an asset-relative path (`maps/foo/bar.ron`) actually lives on disk. iOS reads out
+/// of the app bundle; everywhere else out of the client crate's assets directory.
+fn asset_file_path(relative: &str) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "ios")]
+    {
+        let Some(resource_path) = crate::ios_bundle_resource_path() else {
+            error!("could not resolve {relative}: NSBundle.main.resourcePath was nil");
+            return None;
+        };
+        Some(std::path::Path::new(&resource_path).join("assets").join(relative))
+    }
+    #[cfg(not(target_os = "ios"))]
+    Some(std::path::PathBuf::from(format!(
+        "{}/../client/assets/{relative}",
+        env!("CARGO_MANIFEST_DIR")
+    )))
+}
+
+/// Every baked navmesh chunk for a map, as asset-relative paths ready for `AssetServer::load`.
+///
+/// mapbake_editor bakes a map in pieces, one `navmesh_N.nav` per region, so both client and
+/// server load all of them as separate landmass Islands under one Archipelago rather than
+/// expecting a single fixed filename. A bare `navmesh.nav` from before that change still
+/// matches, so older maps keep working.
+pub fn navmesh_chunk_paths(scenario: Scenario) -> Vec<String> {
+    let asset_dir = scenario.map_asset_dir();
+    let Some(dir) = asset_file_path(asset_dir) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        error!("could not read navmesh directory {dir:?}");
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .filter(|name| name.starts_with("navmesh") && name.ends_with(".nav"))
+        .collect();
+    names.sort();
+    if names.is_empty() {
+        error!("no navmesh*.nav found in {dir:?} — bake the map in mapbake_editor");
+    }
+    names.into_iter().map(|name| format!("{asset_dir}/{name}")).collect()
+}
+
 /// Zombie spawn positions, authored in mapbake_editor and saved as `zombie_spawns.ron` in
 /// the map's asset directory. This is the only source of spawn positions: deriving them from
 /// the navmesh at runtime was dropped because it regularly placed zombies inside walls.
@@ -114,20 +159,9 @@ impl Scenario {
 /// content gap to fill in the editor, not a reason to take the server down on boot.
 pub fn zombie_spawn_points(scenario: Scenario) -> Vec<Vec3> {
     let relative = format!("{}/zombie_spawns.ron", scenario.map_asset_dir());
-
-    #[cfg(target_os = "ios")]
-    let path = {
-        let Some(resource_path) = crate::ios_bundle_resource_path() else {
-            error!("could not read {relative}: NSBundle.main.resourcePath was nil");
-            return Vec::new();
-        };
-        std::path::Path::new(&resource_path).join("assets").join(&relative)
+    let Some(path) = asset_file_path(&relative) else {
+        return Vec::new();
     };
-    #[cfg(not(target_os = "ios"))]
-    let path = std::path::PathBuf::from(format!(
-        "{}/../client/assets/{relative}",
-        env!("CARGO_MANIFEST_DIR")
-    ));
 
     let Ok(text) = std::fs::read_to_string(&path) else {
         error!("no authored zombie spawns at {path:?} — author them in mapbake_editor");
