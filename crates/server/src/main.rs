@@ -32,14 +32,14 @@ use shared::{
     ZOMBIE_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL, INTERP_DELAY_SECS,
     LAG_COMPENSATION_MAX_SECS, PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
     PROTOCOL_ID,
-    ZombieKind, zombie_kind_for_phase, ZOMBIE_KIND_WEIGHTS, zombie_kind_mesh_path, zombie_kind_anim_path, zombie_kind_pose_clips,
+    ZombieAnim, ZombieKind, zombie_kind_for_phase, ZOMBIE_KIND_WEIGHTS, zombie_kind_mesh_path, zombie_kind_anim_path,
     ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
     ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
     ZOMBIE_TURN_RATE_DEG,
 };
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
-use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex};
+use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle};
 use bevy::animation::AnimationPlayer;
 use bevy::gltf::GltfAssetLabel;
 use bevy::pbr::StandardMaterial;
@@ -761,67 +761,14 @@ fn spawn_initial_zombies(
     spawn_zombies(&mut commands, &spawns, true);
 }
 
-struct ServerZombieKindAnim {
-    graph: Handle<AnimationGraph>,
-
-    poses: [AnimationNodeIndex; 5],
-}
-
-impl ServerZombieKindAnim {
-    fn node(&self, pose: ZombiePose) -> AnimationNodeIndex {
-        self.poses[pose.clip_slot()]
-    }
-    fn idle(&self) -> AnimationNodeIndex {
-        self.poses[0]
-    }
-}
-
-#[derive(Resource)]
-struct ServerZombieAnim {
-    classic: ServerZombieKindAnim,
-    soldier: ServerZombieKindAnim,
-    female: ServerZombieKindAnim,
-}
-
-impl ServerZombieAnim {
-    fn slot(&self, kind: ZombieKind) -> &ServerZombieKindAnim {
-        match kind {
-            ZombieKind::Classic => &self.classic,
-            ZombieKind::Soldier => &self.soldier,
-            ZombieKind::Female => &self.female,
-        }
-    }
-}
-
 fn setup_server_zombie_anim(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
-    let mut build = |kind: ZombieKind| {
-
-        let path = zombie_kind_anim_path(kind);
-        let pose_indices = zombie_kind_pose_clips(kind);
-        let mut graph = AnimationGraph::new();
-        let root = graph.root;
-        let poses: Vec<AnimationNodeIndex> = pose_indices
-            .into_iter()
-            .map(|index| {
-                let clip = asset_server.load(GltfAssetLabel::Animation(index).from_asset(path));
-                graph.add_clip(clip, 1.0, root)
-            })
-            .collect();
-
-        ServerZombieKindAnim {
-            graph: graphs.add(graph),
-            poses: [poses[0], poses[1], poses[2], poses[3], poses[4]],
-        }
-    };
-    commands.insert_resource(ServerZombieAnim {
-        classic: build(ZombieKind::Classic),
-        soldier: build(ZombieKind::Soldier),
-        female: build(ZombieKind::Female),
-    });
+    commands.insert_resource(ZombieAnim::build(&mut graphs, |kind, index| {
+        asset_server.load(GltfAssetLabel::Animation(index).from_asset(zombie_kind_anim_path(kind)))
+    }));
 }
 
 fn on_zombie_spawned(
@@ -844,7 +791,7 @@ fn on_zombie_spawned(
 
 fn wire_server_zombie_animations(
     mut commands: Commands,
-    anim: Res<ServerZombieAnim>,
+    anim: Res<ZombieAnim>,
     child_of: Query<&ChildOf>,
     zombies: Query<Option<&ZombieKind>, With<Zombie>>,
     mut new_players: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
@@ -863,7 +810,7 @@ fn wire_server_zombie_animations(
 }
 
 fn update_server_zombie_pose(
-    anim: Res<ServerZombieAnim>,
+    anim: Res<ZombieAnim>,
     players: Query<&Transform, (With<NetPlayer>, Without<Zombie>)>,
     mut zombies: Query<
         (&Transform, &NetTransform, &Health, &ChaseTarget, &ZombieAnimationPlayer, Option<&ZombieKind>, &mut ZombiePose),

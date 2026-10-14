@@ -255,6 +255,56 @@ impl ZombiePose {
     }
 }
 
+pub struct ZombieKindAnim {
+    pub graph: Handle<AnimationGraph>,
+    poses: [AnimationNodeIndex; ZombiePose::COUNT],
+}
+
+impl ZombieKindAnim {
+    pub fn node(&self, pose: ZombiePose) -> AnimationNodeIndex {
+        self.poses[pose.clip_slot()]
+    }
+
+    pub fn idle(&self) -> AnimationNodeIndex {
+        self.poses[ZombiePose::Idle.clip_slot()]
+    }
+}
+
+#[derive(Resource)]
+pub struct ZombieAnim {
+    classic: ZombieKindAnim,
+    soldier: ZombieKindAnim,
+    female: ZombieKindAnim,
+}
+
+impl ZombieAnim {
+    pub fn slot(&self, kind: ZombieKind) -> &ZombieKindAnim {
+        match kind {
+            ZombieKind::Classic => &self.classic,
+            ZombieKind::Soldier => &self.soldier,
+            ZombieKind::Female => &self.female,
+        }
+    }
+
+    pub fn build(
+        graphs: &mut Assets<AnimationGraph>,
+        mut load_clip: impl FnMut(ZombieKind, usize) -> Handle<AnimationClip>,
+    ) -> Self {
+        let mut build_kind = |kind: ZombieKind| {
+            let mut graph = AnimationGraph::new();
+            let root = graph.root;
+            let poses = zombie_kind_pose_clips(kind)
+                .map(|index| graph.add_clip(load_clip(kind, index), 1.0, root));
+            ZombieKindAnim { graph: graphs.add(graph), poses }
+        };
+        Self {
+            classic: build_kind(ZombieKind::Classic),
+            soldier: build_kind(ZombieKind::Soldier),
+            female: build_kind(ZombieKind::Female),
+        }
+    }
+}
+
 pub const ZOMBIE_CRAWL_HEALTH_FRACTION: f32 = 0.35;
 
 pub const ZOMBIE_RUN_DISTANCE: f32 = 20.0;

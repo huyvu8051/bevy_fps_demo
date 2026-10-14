@@ -123,7 +123,9 @@ pub(crate) fn setup_common(
         }),
     });
 
-    commands.insert_resource(build_zombie_anim(&asset_server, &mut graphs));
+    commands.insert_resource(ZombieAnim::build(&mut graphs, |kind, index| {
+        asset_server.load(GltfAssetLabel::Animation(index).from_asset(zombie_kind_anim_path(kind)))
+    }));
     commands.insert_resource(build_zombie_kind_anims(&asset_server, &mut graphs));
     commands.insert_resource(build_player_model_anim(&asset_server, &mut graphs, &player_model_tuning));
     commands.insert_resource(ScopeZoom(SCOPE_DEFAULT_ZOOM));

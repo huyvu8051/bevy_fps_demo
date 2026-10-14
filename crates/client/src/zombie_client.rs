@@ -78,64 +78,6 @@ pub(crate) struct GunMesh;
 #[derive(Component)]
 pub(crate) struct GunMeshPart;
 
-pub(crate) struct ZombieKindGameplayAnim {
-    pub(crate) graph: Handle<AnimationGraph>,
-
-    poses: [AnimationNodeIndex; ZombiePose::COUNT],
-}
-
-impl ZombieKindGameplayAnim {
-    pub(crate) fn node(&self, pose: ZombiePose) -> AnimationNodeIndex {
-        self.poses[pose.clip_slot()]
-    }
-    pub(crate) fn idle(&self) -> AnimationNodeIndex {
-        self.poses[0]
-    }
-}
-
-#[derive(Resource)]
-pub(crate) struct ZombieAnim {
-    classic: ZombieKindGameplayAnim,
-    soldier: ZombieKindGameplayAnim,
-    female: ZombieKindGameplayAnim,
-}
-
-impl ZombieAnim {
-    pub(crate) fn slot(&self, kind: ZombieKind) -> &ZombieKindGameplayAnim {
-        match kind {
-            ZombieKind::Classic => &self.classic,
-            ZombieKind::Soldier => &self.soldier,
-            ZombieKind::Female => &self.female,
-        }
-    }
-}
-
-pub(crate) fn build_zombie_anim(asset_server: &AssetServer, graphs: &mut Assets<AnimationGraph>) -> ZombieAnim {
-    let mut build = |kind: ZombieKind| {
-        let path = zombie_kind_anim_path(kind);
-        let pose_indices = zombie_kind_pose_clips(kind);
-        let mut graph = AnimationGraph::new();
-        let root = graph.root;
-        let poses: Vec<AnimationNodeIndex> = pose_indices
-            .into_iter()
-            .map(|index| {
-                let clip = asset_server.load(GltfAssetLabel::Animation(index).from_asset(path));
-                graph.add_clip(clip, 1.0, root)
-            })
-            .collect();
-
-        ZombieKindGameplayAnim {
-            graph: graphs.add(graph),
-            poses: [poses[0], poses[1], poses[2], poses[3], poses[4]],
-        }
-    };
-    ZombieAnim {
-        classic: build(ZombieKind::Classic),
-        soldier: build(ZombieKind::Soldier),
-        female: build(ZombieKind::Female),
-    }
-}
-
 #[derive(Resource)]
 pub(crate) struct ZombieKindAnims {
     classic: (Handle<AnimationGraph>, Vec<AnimationNodeIndex>),

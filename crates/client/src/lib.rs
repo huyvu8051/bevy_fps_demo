@@ -31,13 +31,12 @@ use shared::{
     PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieShowcaseClip, wire_zombie_hitbox_bones,
     zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_anim_path,
-    zombie_kind_pose_clips,
     INTERP_DELAY_SECS, MAX_SHOT_DISTANCE,
     HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
     resolve_bone_world_positions, zombie_hit_damage_ray,
     PROTOCOL_ID,
     ZOMBIE_ATTACK_INTERVAL, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS,
-    zombie_pose_for, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_STOP_DISTANCE,
+    zombie_pose_for, ZombieAnim, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_STOP_DISTANCE,
 };
 
 use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
