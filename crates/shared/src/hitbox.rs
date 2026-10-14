@@ -3,7 +3,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::zombie::{ZombieHitboxBones, ZOMBIE_RADIUS, ZOMBIE_SCALE_FACTOR};
+use crate::zombie::{ZombieHitboxBones, ZOMBIE_RADIUS};
 
 pub const ZOMBIE_MAX_HEALTH: f32 = 8.0;
 
@@ -15,10 +15,10 @@ pub const LIMB_DAMAGE: f32 = 0.5;
 #[derive(Event, Clone, Copy, Serialize, Deserialize)]
 pub struct SetDamageMultiplier(pub f32);
 
-pub const HITBOX_HEAD_MIN_Y: f32 = 0.9 * ZOMBIE_SCALE_FACTOR;
-pub const HITBOX_CHEST_MIN_Y: f32 = 0.3 * ZOMBIE_SCALE_FACTOR;
-pub const HITBOX_BELLY_MIN_Y: f32 = -0.2 * ZOMBIE_SCALE_FACTOR;
-pub const HITBOX_LIMB_LATERAL_MIN: f32 = 0.35 * ZOMBIE_SCALE_FACTOR;
+pub const HITBOX_HEAD_MIN_Y: f32 = 2.25;
+pub const HITBOX_CHEST_MIN_Y: f32 = 0.75;
+pub const HITBOX_BELLY_MIN_Y: f32 = -0.5;
+pub const HITBOX_LIMB_LATERAL_MIN: f32 = 0.875;
 
 pub const HEAD_HITBOX_RADIUS: f32 = 1.0 * ZOMBIE_RADIUS;
 

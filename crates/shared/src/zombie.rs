@@ -114,16 +114,9 @@ pub fn zombie_speed_for(distance: f32) -> f32 {
     }
 }
 
-pub const ZOMBIE_SCALE: f32 = 0.25;
+const ZOMBIE_WORLD_HEIGHT: f32 = 2.0367;
 
-const ZOMBIE_MESH_REFERENCE_HEIGHT: f32 = 8.1468;
-const ZOMBIE_WORLD_HEIGHT: f32 = ZOMBIE_MESH_REFERENCE_HEIGHT * ZOMBIE_SCALE;
-
-pub(crate) const ZOMBIE_SCALE_FACTOR: f32 = ZOMBIE_SCALE / 0.1;
-
-const ZOMBIE_MESH_REFERENCE_TORSO_WIDTH: f32 = 1.7042;
-
-pub const ZOMBIE_RADIUS: f32 = ZOMBIE_MESH_REFERENCE_TORSO_WIDTH * ZOMBIE_SCALE / 2.0;
+pub const ZOMBIE_RADIUS: f32 = 0.213025;
 
 pub const ZOMBIE_LENGTH: f32 = ZOMBIE_WORLD_HEIGHT - 2.0 * ZOMBIE_RADIUS;
 
@@ -363,4 +356,4 @@ pub struct SetFreezeZombies(pub bool);
 
 pub const ZOMBIE_RESPAWN_DELAY: f32 = 1.0;
 
-pub const KNOCKBACK_FORCE: f32 = 3.5 * ZOMBIE_SCALE_FACTOR;
+pub const KNOCKBACK_FORCE: f32 = 8.75;
