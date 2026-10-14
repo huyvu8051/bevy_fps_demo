@@ -29,13 +29,11 @@ use shared::{
     PLAYER_LENGTH, PLAYER_RADIUS, Scenario,
     
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
-    ZOMBIE_LENGTH, ZOMBIE_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
-    DIRECTOR_CALM_DURATION_SECS, DIRECTOR_CALM_PRESSURE_THRESHOLD, DIRECTOR_HORDE_SIZE,
-    DIRECTOR_HORDE_SPAWN_RADIUS, DIRECTOR_MELEE_RANGE, DIRECTOR_PRESSURE_SMOOTHING, INTERP_DELAY_SECS,
+    ZOMBIE_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL, INTERP_DELAY_SECS,
     LAG_COMPENSATION_MAX_SECS, PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
     PROTOCOL_ID,
     ZombieKind, zombie_kind_for_phase, ZOMBIE_KIND_WEIGHTS, zombie_kind_mesh_path, zombie_kind_anim_path, zombie_kind_pose_clips,
-    ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
+    ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
     ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
     ZOMBIE_TURN_RATE_DEG,
 };
@@ -144,7 +142,6 @@ fn main() {
         .init_resource::<PendingRespawns>()
         .init_resource::<GameOver>()
         .init_resource::<DebugBotIdCounter>()
-        .init_resource::<Director>()
         .init_resource::<ZombieTargetCount>()
         .init_resource::<AutoMaintainZombies>()
         .init_resource::<NextZombieSpawnIndex>()
@@ -286,62 +283,6 @@ fn decay_player_threat(time: Res<Time>, mut threats: Query<&mut PlayerThreat>) {
     for mut threat in &mut threats {
         threat.0 *= decay;
     }
-}
-
-#[derive(Resource, Default)]
-struct Director {
-    pressure: f32,
-    calm_timer: f32,
-}
-
-fn run_ai_director(
-    time: Res<Time>,
-    mut director: ResMut<Director>,
-    mut commands: Commands,
-    zombies: Query<(&Transform, &ChaseTarget), With<Zombie>>,
-    players: Query<(Entity, &Transform), (With<NetPlayer>, Without<Zombie>)>,
-) {
-    let dt = time.delta_secs();
-    let player_positions: Vec<(Entity, Vec3)> = players.iter().map(|(e, t)| (e, t.translation)).collect();
-    if player_positions.is_empty() {
-        return;
-    }
-
-    let in_melee_range = zombies
-        .iter()
-        .filter(|(transform, chase_target)| {
-            chase_target
-                .entity
-                .and_then(|target| player_positions.iter().find(|&&(e, _)| e == target))
-                .is_some_and(|&(_, pos)| transform.translation.distance(pos) <= DIRECTOR_MELEE_RANGE)
-        })
-        .count() as f32;
-
-    director.pressure += (in_melee_range - director.pressure) * (DIRECTOR_PRESSURE_SMOOTHING * dt).min(1.0);
-
-    if director.pressure <= DIRECTOR_CALM_PRESSURE_THRESHOLD {
-        director.calm_timer += dt;
-    } else {
-        director.calm_timer = 0.0;
-    }
-
-    if director.calm_timer < DIRECTOR_CALM_DURATION_SECS {
-        return;
-    }
-    director.calm_timer = 0.0;
-
-    let center = player_positions[(time.elapsed_secs() as usize) % player_positions.len()].1;
-
-    let spawn_y = ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0;
-    let spawns: Vec<(Vec3, f32)> = (0..DIRECTOR_HORDE_SIZE)
-        .map(|i| {
-            let angle = i as f32 / DIRECTOR_HORDE_SIZE as f32 * std::f32::consts::TAU;
-            let pos = Vec3::new(center.x + angle.cos() * DIRECTOR_HORDE_SPAWN_RADIUS, spawn_y, center.z + angle.sin() * DIRECTOR_HORDE_SPAWN_RADIUS);
-            (pos, 0.0)
-        })
-        .collect();
-    info!("AI Director: sustained calm, spawning a {}-zombie horde near {center}", DIRECTOR_HORDE_SIZE);
-    spawn_zombies(&mut commands, &spawns, ZOMBIE_AI_ENABLED, true);
 }
 
 fn log_client_disconnect(trigger: On<Remove, ConnectedClient>) {
@@ -554,7 +495,6 @@ fn debug_bot_fire(
     mut zombies: Query<(Entity, &Transform, &mut Health, &mut KnockbackVelocity, &ZombieHitboxBones), (With<Zombie>, Without<DebugBot>)>,
     bone_transforms: Query<&GlobalTransform>,
     mut respawns: ResMut<PendingRespawns>,
-    director_spawned: Query<(), With<DirectorSpawned>>,
     damage_multiplier: Res<DamageMultiplierServer>,
 ) {
     for (transform, mut ai) in &mut bots {
@@ -593,11 +533,8 @@ fn debug_bot_fire(
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {
-            let was_director_spawn = director_spawned.contains(entity);
             commands.entity(entity).despawn();
-            if !was_director_spawn {
-                respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
-            }
+            respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
         } else {
             let push = Vec3::new(zombie_transform.translation.x - origin.x, 0.0, zombie_transform.translation.z - origin.z)
                 .normalize_or_zero()
@@ -648,7 +585,7 @@ fn on_set_zombie_count(
     mut target: ResMut<ZombieTargetCount>,
     mut next_spawn_index: ResMut<NextZombieSpawnIndex>,
     points: Res<ZombieSpawnPoints>,
-    baseline_zombies: Query<Entity, (With<Zombie>, Without<DirectorSpawned>)>,
+    baseline_zombies: Query<Entity, With<Zombie>>,
 ) {
     let kind = *scenario;
     target.0 = trigger.message.0.min(shared::ZOMBIE_MAX_COUNT);
@@ -661,7 +598,7 @@ fn on_set_zombie_count(
                 spawn
             })
             .collect();
-        spawn_zombies(&mut commands, &to_spawn, ZOMBIE_AI_ENABLED, false);
+        spawn_zombies(&mut commands, &to_spawn, ZOMBIE_AI_ENABLED);
     } else if current > target.0 {
         for entity in baseline_zombies.iter().take((current - target.0) as usize) {
             commands.entity(entity).try_despawn();
@@ -692,11 +629,8 @@ fn spawn_more_zombies(
 ) {
     let spawns: Vec<(Vec3, f32)> =
         points.0.iter().map(|p| (*p + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0)).collect();
-    spawn_zombies(&mut commands, &spawns, ZOMBIE_AI_ENABLED, false);
+    spawn_zombies(&mut commands, &spawns, ZOMBIE_AI_ENABLED);
 }
-
-#[derive(Component)]
-struct DirectorSpawned;
 
 #[derive(Clone, Default)]
 struct BoneLocalOffsets {
@@ -758,7 +692,7 @@ fn zombie_history_at(history: &ZombieHistory, target_time: f32) -> Option<(Vec3,
     ))
 }
 
-fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: bool, director_spawned: bool) {
+fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: bool) {
     let mut zombie = commands.spawn_empty();
     let phase = entity_phase(zombie.id());
     zombie.insert((
@@ -793,14 +727,11 @@ fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: b
     if ai_enabled {
         zombie.insert(Thinker::build().picker(FirstToScore { threshold: 0.8 }).when(NearPlayer, ChaseAction));
     }
-    if director_spawned {
-        zombie.insert(DirectorSpawned);
-    }
 }
 
-fn spawn_zombies(commands: &mut Commands, spawns: &[(Vec3, f32)], ai_enabled: bool, director_spawned: bool) {
+fn spawn_zombies(commands: &mut Commands, spawns: &[(Vec3, f32)], ai_enabled: bool) {
     for &(position, yaw) in spawns {
-        spawn_zombie(commands, position, yaw, ai_enabled, director_spawned);
+        spawn_zombie(commands, position, yaw, ai_enabled);
     }
 }
 
@@ -829,7 +760,7 @@ fn spawn_initial_zombies(
         .iter()
         .map(|p| (*p + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0))
         .collect();
-    spawn_zombies(&mut commands, &spawns, true, false);
+    spawn_zombies(&mut commands, &spawns, true);
 }
 
 struct ServerZombieKindAnim {
@@ -1252,7 +1183,7 @@ fn tick_respawns(
         }
     }
     if !to_spawn.is_empty() {
-        spawn_zombies(&mut commands, &to_spawn, ZOMBIE_AI_ENABLED, false);
+        spawn_zombies(&mut commands, &to_spawn, ZOMBIE_AI_ENABLED);
     }
 }
 
@@ -1266,7 +1197,6 @@ fn handle_fire_shot(
     mut zombies: Query<(Entity, &mut Health, &mut KnockbackVelocity, &ZombieHistory), With<Zombie>>,
     mut respawns: ResMut<PendingRespawns>,
     mut threats: Query<&mut PlayerThreat>,
-    director_spawned: Query<(), With<DirectorSpawned>>,
     damage_multiplier: Res<DamageMultiplierServer>,
 ) {
 
@@ -1353,11 +1283,8 @@ fn handle_fire_shot(
             health.0 -= damage;
             let killed = health.0 <= 0.0;
             if killed {
-                let was_director_spawn = director_spawned.contains(entity);
                 commands.entity(entity).despawn();
-                if !was_director_spawn {
-                    respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
-                }
+                respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
             } else {
                 let push = Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
                 knockback.0 += push;
@@ -1406,11 +1333,8 @@ fn handle_fire_shot(
         health.0 -= damage;
         let killed = health.0 <= 0.0;
         if killed {
-            let was_director_spawn = director_spawned.contains(entity);
             commands.entity(entity).despawn();
-            if !was_director_spawn {
-                respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
-            }
+            respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
         } else {
             let push = Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
             knockback.0 += push;
@@ -1475,7 +1399,6 @@ fn on_request_restart(
     mut commands: Commands,
     mut game_over: ResMut<GameOver>,
     mut respawns: ResMut<PendingRespawns>,
-    mut director: ResMut<Director>,
     scenario: Res<Scenario>,
     points: Res<ZombieSpawnPoints>,
     zombies: Query<Entity, With<Zombie>>,
@@ -1486,7 +1409,6 @@ fn on_request_restart(
     }
     game_over.0 = false;
     respawns.0.clear();
-    *director = Director::default();
 
     for entity in &zombies {
         commands.entity(entity).despawn();
@@ -1498,7 +1420,7 @@ fn on_request_restart(
         .take(scenario.zombie_count())
         .map(|p| (*p + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0))
         .collect();
-    spawn_zombies(&mut commands, &spawns, true, false);
+    spawn_zombies(&mut commands, &spawns, true);
     let player_spawn = scenario.player_spawn();
 
     for (entity, mut transform, mut player, mut net_transform) in &mut players {

@@ -251,13 +251,6 @@ pub const ZOMBIE_THREAT_DISTANCE_BONUS: f32 = 8.0;
 
 pub const ZOMBIE_LOAD_BALANCE_PENALTY: f32 = 1.0;
 
-pub const DIRECTOR_MELEE_RANGE: f32 = 2.5;
-
-pub const DIRECTOR_PRESSURE_SMOOTHING: f32 = 0.5;
-pub const DIRECTOR_CALM_PRESSURE_THRESHOLD: f32 = 1.0;
-pub const DIRECTOR_CALM_DURATION_SECS: f32 = 20.0;
-pub const DIRECTOR_HORDE_SIZE: usize = 10;
-pub const DIRECTOR_HORDE_SPAWN_RADIUS: f32 = 6.0;
 pub const ZOMBIE_STOP_DISTANCE: f32 = 1.2;
 
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq, Debug, Reflect)]
