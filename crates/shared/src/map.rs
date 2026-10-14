@@ -14,7 +14,6 @@ macro_rules! scenarios {
             subtitle: $subtitle:literal,
             navmesh: $navmesh:literal,
             scene: $scene:expr,
-            player_spawn: $spawn:expr,
             zombies: $zombies:literal,
         }
     )*) => {
@@ -46,10 +45,6 @@ macro_rules! scenarios {
                 match self { $(Scenario::$variant => $scene,)* }
             }
 
-            pub fn player_spawn(self) -> Vec3 {
-                match self { $(Scenario::$variant => $spawn,)* }
-            }
-
             pub fn zombie_count(self) -> usize {
                 match self { $(Scenario::$variant => $zombies,)* }
             }
@@ -65,7 +60,6 @@ scenarios! {
         subtitle: "OPEN DESERT TOWN, BAKED NAVMESH",
         navmesh: "maps/desert_city/navmesh.nav",
         scene: Some("maps/desert_city/scene.gltf"),
-        player_spawn: Vec3::new(0.0, 3.0, 0.0),
         zombies: 10,
     }
 
@@ -75,7 +69,6 @@ scenarios! {
         subtitle: "UNDERGROUND TEST MAP, BAKED NAVMESH",
         navmesh: "maps/basement_parking_garage/navmesh.nav",
         scene: Some("maps/basement_parking_garage/scene.glb"),
-        player_spawn: Vec3::new(21.2, 3.0, 4.6),
         zombies: 10,
     }
 }
@@ -98,6 +91,30 @@ impl Scenario {
         path.rsplit_once('/')
             .unwrap_or_else(|| panic!("{self:?}'s navmesh path {path:?} has no directory component"))
             .0
+    }
+
+    pub fn player_spawn(self) -> Vec3 {
+        let floor = player_spawn_floor_point(self).unwrap_or_else(|| {
+            panic!(
+                "{:?} has no player_spawn.ron in {} — set the player spawn in mapbake_editor",
+                self,
+                self.map_asset_dir()
+            )
+        });
+        floor + Vec3::Y * crate::PLAYER_REST_HEIGHT
+    }
+}
+
+pub fn player_spawn_floor_point(scenario: Scenario) -> Option<Vec3> {
+    let relative = format!("{}/player_spawn.ron", scenario.map_asset_dir());
+    let path = asset_file_path(&relative)?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    match ron::de::from_str::<[f32; 3]>(&text) {
+        Ok(raw) => Some(Vec3::from(raw)),
+        Err(e) => {
+            error!("failed to parse {path:?}: {e}");
+            None
+        }
     }
 }
 

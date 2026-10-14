@@ -1,0 +1,9 @@
+(
+    agent_radius: 0.213,
+    agent_height: 1.7370002,
+    walkable_climb: 0.29999995,
+    max_slope_deg: 45.0,
+    cell_size_fraction: 2.0,
+    min_region_size: 8.0,
+    merge_region_size: 20.0,
+)
