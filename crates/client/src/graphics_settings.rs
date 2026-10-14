@@ -151,8 +151,8 @@ impl Default for PointLightQuality {
 pub(crate) struct PointLightBaseIntensity(pub(crate) f32);
 
 /// Which variant of the zombie base-colour textures ships: mobile takes a
-/// reduced one, desktop the original. The gun and the arena cars no longer
-/// have tiers — only their sharpest meshes and textures are left on disk.
+/// reduced one, desktop the original. The gun no longer has tiers — only its
+/// sharpest mesh and textures are left on disk.
 pub(crate) const ASSET_QUALITY_TIER: u8 = if cfg!(target_os = "ios") { 2 } else { 5 };
 
 /// The gun loads as a whole glTF *scene*, like every other model in the game, rather than

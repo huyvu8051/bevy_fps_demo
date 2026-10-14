@@ -150,7 +150,7 @@ fn main() {
             Startup,
             (
                 start_server,
-                spawn_arena_colliders,
+                setup_map_colliders,
 
                 (load_zombie_spawn_points, spawn_initial_zombies).chain(),
                 setup_server_zombie_anim,
@@ -227,7 +227,7 @@ fn start_server(mut commands: Commands, channels: Res<RepliconChannels>, scenari
     info!("dedicated server listening on {public_addr}");
 }
 
-fn spawn_arena_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_server: Res<AssetServer>) {
+fn setup_map_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_server: Res<AssetServer>) {
     server::map_colliders::spawn_map_colliders(&mut commands, *scenario, &asset_server);
 }
 

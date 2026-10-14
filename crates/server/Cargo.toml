@@ -8,10 +8,9 @@ edition = "2024"
 shared = { path = "../shared" }
 avian3d = "0.7"
 big-brain = { git = "https://github.com/huyvu8051/big-brain", rev = "c8e2cf2" }
-# "png" / "jpeg": zombie.glb embeds PNG textures, the item-gallery car
-# .glb files (also loaded here for their convex-hull colliders — see
-# spawn_arena_car_colliders) embed JPEG ones. The server never
-# renders either (no RenderPlugin at all here), but bevy_gltf's loader
+# "png" / "jpeg": zombie.glb embeds PNG textures, and the map .glb files
+# (loaded here for their colliders — see map_colliders) embed both. The
+# server never renders either (no RenderPlugin at all here), but bevy_gltf's loader
 # still tries to decode every embedded image while loading the scene, and
 # aborts the whole load (skeleton / mesh included) if it hits a format
 # with no decoder compiled in. Cheapest fix: just let it decode the

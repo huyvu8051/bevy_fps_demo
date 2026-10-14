@@ -32,7 +32,7 @@ avian3d = "0.7"
 # Only for PlayerModelTuning (lib.rs) — parses
 # assets/characters/soldier/character.ron (scale/y_offset/facing_deg +
 # animation clip-index mapping, F9-tunable), same crate+version shared
-# already uses for its own RON data files (arena/car/zombie).
+# already uses for its own RON data files.
 ron = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 

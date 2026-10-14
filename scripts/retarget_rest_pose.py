@@ -95,8 +95,7 @@ def quat_apply(q, v):
 
 
 def compose_trs(parent_t, parent_r, parent_s, child_t, child_r, child_s):
-    """world = parent * child, for a uniform-scale TRS pair (see
-    bake_mesh_transform.py's identical helper for the full derivation)."""
+    """world = parent * child, for a uniform-scale TRS pair."""
     new_scale = tuple(p * c for p, c in zip(parent_s, child_s))
     new_rotation = quat_mul(parent_r, child_r)
     scaled_child_t = tuple(p * c for p, c in zip(parent_s, child_t))

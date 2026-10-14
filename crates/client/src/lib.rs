@@ -666,8 +666,6 @@ impl Plugin for GamePlugin {
                 wire_zombie_animations,
                 wire_zombie_hitbox_bones,
                 wire_gun_mesh,
-                spawn_level_box_visuals,
-                spawn_level_panel_visuals,
                 update_zombie_animation,
                 freeze_zombie_animations,
 

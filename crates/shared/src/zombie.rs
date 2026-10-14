@@ -132,8 +132,6 @@ pub const ZOMBIE_OUTER_HEIGHT: f32 = ZOMBIE_WORLD_HEIGHT;
 
 pub const ZOMBIE_MOVE_RADIUS: f32 = 0.3;
 
-pub const ZOMBIE_MODEL_Y_OFFSET: f32 = -(ZOMBIE_RADIUS + ZOMBIE_LENGTH / 2.0);
-
 pub const ZOMBIE_PATH: &str = "characters/zombie/mesh/zombie.glb";
 
 pub const ZOMBIE_SOLDIER_PATH: &str = "characters/zombie_soldier/mesh/zombie_soldier.glb";

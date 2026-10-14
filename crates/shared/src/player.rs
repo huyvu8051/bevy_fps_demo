@@ -22,7 +22,6 @@ pub struct Health(pub f32);
 #[derive(Resource, Default)]
 pub struct GameOver(pub bool);
 
-pub const PLAYER_SPAWN: Vec3 = Vec3::new(0.0, 3.0, 0.0);
 pub const PLAYER_MAX_HEALTH: f32 = 100.0;
 
 pub const MOVE_SPEED: f32 = 4.0;
