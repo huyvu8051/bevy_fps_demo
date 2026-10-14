@@ -1048,7 +1048,7 @@ fn move_zombies(
 
         let velocity = horizontal_velocity + knockback.0 + Vec3::Y * motion.vertical_velocity;
 
-        let shape = Collider::cylinder(ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT);
+        let shape = Collider::capsule(ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT - 2.0 * ZOMBIE_MOVE_RADIUS);
         let config = MoveAndSlideConfig::default();
 
         let was_grounded = motion.grounded;
@@ -1069,9 +1069,27 @@ fn move_zombies(
             },
         );
 
-        transform.translation = output.position;
-        motion.grounded = grounded_this_frame;
-        motion.vertical_velocity = if grounded_this_frame { motion.vertical_velocity.min(0.0) } else { motion.vertical_velocity };
+        let dt = time.delta_secs();
+        let step_velocity = Vec3::new(velocity.x, 0.0, velocity.z);
+        let blocked = was_grounded && blocked_horizontally(transform.translation, output.position, step_velocity, dt);
+        let stepped_up = blocked
+            .then(|| {
+                try_step_up(
+                    &mover,
+                    &shape,
+                    transform.rotation,
+                    transform.translation,
+                    step_velocity,
+                    dt,
+                    &config,
+                    &filter,
+                )
+            })
+            .flatten();
+
+        transform.translation = stepped_up.unwrap_or(output.position);
+        motion.grounded = grounded_this_frame || stepped_up.is_some();
+        motion.vertical_velocity = if motion.grounded { motion.vertical_velocity.min(0.0) } else { motion.vertical_velocity };
 
         if horizontal_velocity != Vec3::ZERO {
             let target_rotation = Transform::default().looking_to(-horizontal_velocity, Vec3::Y).rotation;
