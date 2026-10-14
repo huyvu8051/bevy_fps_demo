@@ -154,10 +154,6 @@ pub enum ZombieKind {
     Female,
 }
 
-// Classic and Soldier have fresh Mixamo-rigged meshes (Meshy AI, each
-// bundling its own clips — see zombie_kind_pose_clips), but each only ships
-// Idle/Walk/Run; Crawl and Bite fall back to Idle below until real clips are
-// generated.
 pub const ZOMBIE_KIND_WEIGHTS: [f32; 3] = [1.0, 1.0, 1.0];
 
 pub fn zombie_kind_for_phase(phase: f32, weights: [f32; 3]) -> ZombieKind {
@@ -199,34 +195,17 @@ pub fn zombie_kind_mesh_path(kind: ZombieKind) -> &'static str {
     }
 }
 
-/// Every kind currently ships its own embedded material, so this is always
-/// `None`. Kept as a hook for a future kind that wants a separately-loaded
-/// `base_color_qN.jpg`-style texture instead.
-pub fn zombie_kind_texture_path(_kind: ZombieKind, _tier: u8) -> Option<String> {
-    None
-}
-
 pub fn zombie_kind_clip_count(kind: ZombieKind) -> usize {
     match kind {
-        // Classic ships a full 21-clip "infected" pack (see
-        // zombie_kind_pose_clips); Soldier/Female only bundled Running,
-        // Walking, Armature|clip0|baselayer (idle) — see the Crawl/Bite
-        // fallback that implies.
         ZombieKind::Classic => 21,
         ZombieKind::Soldier => 3,
         ZombieKind::Female => 4,
     }
 }
 
-pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; 5] {
+pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; ZombiePose::COUNT] {
     match kind {
-        // [idle, walk, run, crawl, bite]. Classic's 21-clip pack has real
-        // clips for everything but Crawl: 20=idle baselayer, 16=Unsteady_
-        // Walk, 0=Running, 2=Attack. Crawl still falls back to idle.
         ZombieKind::Classic => [20, 16, 0, 20, 2],
-        // Soldier/Female: 0=Running, 1=Walking, 2=idle-equivalent (the
-        // file's 3rd, auto-named clip). No Crawl/Bite clip exists yet, so
-        // both fall back to idle.
         ZombieKind::Soldier | ZombieKind::Female => [2, 1, 0, 2, 2],
     }
 }
@@ -260,6 +239,20 @@ pub enum ZombiePose {
     Run,
     Crawl,
     Bite,
+}
+
+impl ZombiePose {
+    pub const COUNT: usize = 5;
+
+    pub fn clip_slot(self) -> usize {
+        match self {
+            ZombiePose::Idle => 0,
+            ZombiePose::Walk => 1,
+            ZombiePose::Run => 2,
+            ZombiePose::Crawl => 3,
+            ZombiePose::Bite => 4,
+        }
+    }
 }
 
 pub const ZOMBIE_CRAWL_HEALTH_FRACTION: f32 = 0.35;

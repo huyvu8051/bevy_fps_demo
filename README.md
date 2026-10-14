@@ -160,7 +160,7 @@ Cách sửa (đã áp dụng sẵn trong `scripts/deploy_ios_*.sh`, không cần
 
 Kết quả: **cả chu trình sửa code → build → deploy → launch còn ~20 giây** (đo thật, cache ấm), so với trước đây mỗi lần đều full build lại (>1 phút).
 
-**Về hot reload**: đã tìm hiểu (`dexterous_developer`/`hot-lib-reloader`) — **không khả thi trên thiết bị thật**, đây là giới hạn cứng của iOS từ iOS 10 trở đi (sandbox chặn `dlopen` bất kỳ code nào không nằm sẵn trong app bundle lúc cài, kể cả build dev có entitlement `get-task-allow`). Trên Simulator thì có khả năng khả thi hơn (Simulator chạy như 1 process macOS bình thường, `dlopen` ít bị chặn hơn) nhưng cần đổi `crate-type` sang thêm `cdylib` riêng cho path Simulator — dự án này cố tình chỉ dùng `staticlib` vì từng dính crash `dyld` thật trên thiết bị khi build kèm `cdylib` (xem comment trong `crates/client/Cargo.toml`). Chưa làm — nếu 20s/lần vẫn chưa đủ nhanh, đây là hướng tiếp theo đáng thử nhưng tốn công hơn hẳn 2 thay đổi ở trên.
+**Về hot reload**: đã tìm hiểu (`dexterous_developer`/`hot-lib-reloader`) — **không khả thi trên thiết bị thật**, đây là giới hạn cứng của iOS từ iOS 10 trở đi (sandbox chặn `dlopen` bất kỳ code nào không nằm sẵn trong app bundle lúc cài, kể cả build dev có entitlement `get-task-allow`). Trên Simulator thì có khả năng khả thi hơn (Simulator chạy như 1 process macOS bình thường, `dlopen` ít bị chặn hơn) nhưng cần đổi `crate-type` sang thêm `cdylib` riêng cho path Simulator — dự án này cố tình chỉ dùng `staticlib` vì từng dính crash `dyld` thật trên thiết bị khi build kèm `cdylib` (xem "Ràng buộc build" bên dưới). Chưa làm — nếu 20s/lần vẫn chưa đủ nhanh, đây là hướng tiếp theo đáng thử nhưng tốn công hơn hẳn 2 thay đổi ở trên.
 
 
 ## Đo CPU/GPU trên iOS
@@ -216,7 +216,6 @@ Chỉ khiến app **đủ điều kiện** — hệ điều hành mới quyết 
 ## Trạng thái tạm/test (cần dọn lại sau khi test xong)
 
 - `SERVER_ADDR` fallback trong `crates/client/src/lib.rs` đang hardcode IP Tailscale (`100.97.13.68:5031`) thay vì `127.0.0.1:5031`, để icon-tap launch trên điện thoại tự nối vào server chạy local qua Tailscale (icon-tap không đọc được scheme env var của Xcode).
-- `run_ai_director` đang bị comment out khỏi `Update` schedule của server (tạm tắt vì chồng chéo với tính năng chỉnh số lượng zombie trong Cheats panel) — để lại 2 warning dead-code khi build server, là chủ ý, chưa fix.
 - `ZombieTargetCount` mặc định là `10` (trước đây game spawn tối đa `ZOMBIE_SPAWNS.len()` ~100) — giờ là tham số chỉnh được qua Cheats panel (`+10`/`-10`/`Auto`), không còn hardcode.
 
 ## Ghi chú khác
@@ -225,6 +224,19 @@ Chỉ khiến app **đủ điều kiện** — hệ điều hành mới quyết 
 - iOS: cần bật `CADisableMinimumFrameDurationOnPhone` trong Info.plist mới lên được ProMotion 120Hz trên iPhone (đã bật sẵn trong `crates/client/gen/apple/iOS/bevy_in_iOS/Info.plist`).
 - Chưa hỗ trợ Android (chưa có scaffold `gen/android`).
 - Chuột/bàn phím Bluetooth **có** điều khiển được game trên iOS (đã ghép nối qua Settings > Bluetooth của máy trước) — dùng Apple's GameController framework (`GCKeyboard`/`GCMouse`), bridge qua `crates/client/gen/apple/iOS/base/GameControllerInput.swift` → `cadisplaylink_key_changed`/`cadisplaylink_mouse_moved`/`cadisplaylink_mouse_button_changed` (`crates/client/src/cadisplaylink/ffi.rs`). Cắm chuột vào là look tự khoá luôn (không có con trỏ để bấm-khoá như desktop). Yêu cầu iOS 14+ (gated bằng `#available`, không ảnh hưởng máy chạy iOS 13).
+
+## Ràng buộc build
+
+Bốn thứ trong các file `Cargo.toml` trông như thừa nhưng bỏ đi là vỡ, phần lớn **vỡ im lặng**:
+
+- **`crates/client`: `crate-type = ["staticlib", "rlib"]` — tuyệt đối không thêm `cdylib`.** Build `cdylib` cùng `staticlib` trong một lệnh khiến rustc nhúng một `LC_LOAD_DYLIB` vào cả output *static*, trỏ tới `libclient.dylib` trên máy build. Simulator vẫn chạy (cùng filesystem với Mac) nhưng thiết bị thật `dyld`-fail ngay lúc launch với "Library not loaded" nếu không có debugger Xcode vá hộ. Xcode link qua `-lclient`, không bao giờ cần cdylib.
+- **`crates/server`: bevy feature `"png"` + `"jpeg"`.** Server không render gì (không có `RenderPlugin`), nhưng loader của `bevy_gltf` vẫn decode mọi ảnh nhúng khi load scene và **abort toàn bộ load — kể cả skeleton và mesh** nếu gặp format không có decoder. `zombie.glb` nhúng PNG, `maps/basement_parking_garage/scene.glb` nhúng cả PNG và JPEG.
+- **`crates/server`: bevy feature `"gltf_animation"`** (khác `"bevy_animation"`). Thiếu nó thì loader không chuyển animation curve thành `AnimationClip` asset, và `zombie.glb` load ra **0 sub-asset `AnimationN`** dù `bevy_animation` đã bật.
+- **`crates/shared` + `crates/client`: `objc` (chỉ target iOS).** `ios_bundle_resource_path()` cần `NSBundle.main.resourcePath` để tìm file RON trong bundle; đường đọc native thông thường (`std::fs` tương đối với `CARGO_MANIFEST_DIR`) chỉ resolve được trên máy đã build app, không resolve trong sandbox của thiết bị.
+
+- **`Cargo.toml` gốc: `[patch.crates-io]` trỏ `rerecast` vào [fork riêng](https://github.com/huyvu8051/rerecast-vendor).** Bản upstream abort cả lượt bake khi một contour không triangulate được; fork bỏ qua contour lỗi rồi bake tiếp.
+
+Profile `dev-fast` ở `Cargo.toml` gốc: xem "Build nhanh hơn khi lặp lại" bên trên.
 
 ## Navmesh
 

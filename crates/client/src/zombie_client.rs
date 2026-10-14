@@ -81,22 +81,12 @@ pub(crate) struct GunMeshPart;
 pub(crate) struct ZombieKindGameplayAnim {
     pub(crate) graph: Handle<AnimationGraph>,
 
-    poses: [AnimationNodeIndex; 5],
-}
-
-fn pose_slot(pose: ZombiePose) -> usize {
-    match pose {
-        ZombiePose::Idle => 0,
-        ZombiePose::Walk => 1,
-        ZombiePose::Run => 2,
-        ZombiePose::Crawl => 3,
-        ZombiePose::Bite => 4,
-    }
+    poses: [AnimationNodeIndex; ZombiePose::COUNT],
 }
 
 impl ZombieKindGameplayAnim {
     pub(crate) fn node(&self, pose: ZombiePose) -> AnimationNodeIndex {
-        self.poses[pose_slot(pose)]
+        self.poses[pose.clip_slot()]
     }
     pub(crate) fn idle(&self) -> AnimationNodeIndex {
         self.poses[0]
@@ -282,46 +272,6 @@ pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer, kind: ZombieKind) -
         WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(zombie_kind_mesh_path(kind)))),
         Transform::IDENTITY,
     )
-}
-
-pub(crate) fn apply_zombie_texture_quality(
-    asset_server: Res<AssetServer>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    zombies: Query<(Entity, &ZombieKind)>,
-    children: Query<&Children>,
-    mesh_materials: Query<&MeshMaterial3d<StandardMaterial>>,
-    mut applied: Local<std::collections::HashSet<ZombieKind>>,
-) {
-    for (entity, &kind) in &zombies {
-        if applied.contains(&kind) {
-            continue;
-        }
-        let Some(path) = shared::zombie_kind_texture_path(kind, ASSET_QUALITY_TIER) else {
-            applied.insert(kind);
-            continue;
-        };
-        let Some(handle) = find_material_in_descendants(entity, &children, &mesh_materials) else {
-            continue;
-        };
-        let texture: Handle<Image> = asset_server.load(path);
-        if let Some(mut material) = materials.get_mut(&handle) {
-            material.base_color_texture = Some(texture);
-            applied.insert(kind);
-        }
-    }
-}
-
-
-pub(crate) fn find_material_in_descendants(
-    entity: Entity,
-    children: &Query<&Children>,
-    mesh_materials: &Query<&MeshMaterial3d<StandardMaterial>>,
-) -> Option<Handle<StandardMaterial>> {
-    if let Ok(material) = mesh_materials.get(entity) {
-        return Some(material.0.clone());
-    }
-    let kids = children.get(entity).ok()?;
-    kids.iter().find_map(|child| find_material_in_descendants(child, children, mesh_materials))
 }
 
 pub(crate) fn spawn_zombie_health_bar(commands: &mut Commands, zombie: Entity) {

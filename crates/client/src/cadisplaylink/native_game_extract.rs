@@ -448,12 +448,10 @@ fn extract_hitbox_lines(world: &mut bevy::ecs::world::World, queries: &mut Extra
     out
 }
 
-/// Every `TextFont` in this project uses `FontSize::Px`; viewport/rem-relative
-/// sizes would need the viewport size to resolve, which this path doesn't have.
 fn font_size_px(size: FontSize) -> f32 {
     match size {
         FontSize::Px(px) => px,
-        other => other.eval(bevy::math::Vec2::ZERO, 16.0),
+        viewport_relative => viewport_relative.eval(bevy::math::Vec2::ZERO, 16.0),
     }
 }
 
@@ -498,9 +496,6 @@ fn walk_generic_ui_node(
     else {
         return;
     };
-    // `Display::None` drops the whole subtree from layout, so stop here. `Visibility::Hidden`
-    // only skips painting — layout still applies and a child may force itself back visible,
-    // so that case keeps walking.
     if node.display == Display::None {
         return;
     }

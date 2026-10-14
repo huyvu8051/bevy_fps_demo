@@ -735,8 +735,6 @@ fn spawn_zombies(commands: &mut Commands, spawns: &[(Vec3, f32)], ai_enabled: bo
     }
 }
 
-/// Authored in mapbake_editor, loaded from the map's `zombie_spawns.ron`. Replaces the old
-/// navmesh-derived spawn search, which regularly picked points inside walls.
 #[derive(Resource, Default)]
 struct ZombieSpawnPoints(Vec<Vec3>);
 
@@ -769,19 +767,9 @@ struct ServerZombieKindAnim {
     poses: [AnimationNodeIndex; 5],
 }
 
-fn server_pose_slot(pose: ZombiePose) -> usize {
-    match pose {
-        ZombiePose::Idle => 0,
-        ZombiePose::Walk => 1,
-        ZombiePose::Run => 2,
-        ZombiePose::Crawl => 3,
-        ZombiePose::Bite => 4,
-    }
-}
-
 impl ServerZombieKindAnim {
     fn node(&self, pose: ZombiePose) -> AnimationNodeIndex {
-        self.poses[server_pose_slot(pose)]
+        self.poses[pose.clip_slot()]
     }
     fn idle(&self) -> AnimationNodeIndex {
         self.poses[0]

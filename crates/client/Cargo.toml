@@ -3,21 +3,9 @@ name = "client"
 version = "0.1.0"
 edition = "2024"
 
-# iOS build (see gen/apple/, scaffolded via `cargo mobile init` run in a
-# scratch dir — see crates/client/README.md for why not directly in here —
-# then hand-merged: only these two sections + the lib.rs/main.rs split
-# below were added, nothing here touches the real dependency list).
 [package.metadata.cargo-apple.ios]
 frameworks = ["AudioToolbox"]
 
-# staticlib only: Xcode links against libclient.a via -lclient (see
-# gen/apple/project.yml's LIBRARY_SEARCH_PATHS), it never touches a cdylib.
-# Building "cdylib" alongside "staticlib" in the same invocation was making
-# rustc bake an LC_LOAD_DYLIB into the STATIC output too, pointing at
-# target/aarch64-apple-ios/debug/deps/libclient.dylib on THIS Mac — works
-# on Simulator (same filesystem as the Mac) but dyld-fails on a real
-# device with "Library not loaded" the moment the app launches without
-# Xcode's debugger attached to patch it.
 [lib]
 crate-type = ["staticlib", "rlib"]
 
@@ -29,29 +17,14 @@ bevy_landmass = "0.12"
 landmass_rerecast = "0.3"
 avian3d = "0.7"
 
-# Only for PlayerModelTuning (lib.rs) — parses
-# assets/characters/soldier/character.ron (scale/y_offset/facing_deg +
-# animation clip-index mapping, F9-tunable), same crate+version shared
-# already uses for its own RON data files.
 ron = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 
-# Dev navmesh visualiser (crates/client/src/nav_debug.rs) — same vendored
-# crate the server pathfinds with, plus its gizmo debug feature so the
-# client can draw the reconstructed navmesh. Only wired up in debug builds
-# (the "NavDbg" settings toggle).
 bevy = { version = "0.19", features = ["jpeg", "bevy_dev_tools", "wav"] }
 bevy_replicon = "0.41"
 bevy_replicon_renet2 = { version = "0.18", features = ["native_transport"] }
 
-
-# CADisplayLink probe experiment (crates/client/src/cadisplaylink/) — an
-# alternate iOS entry point bypassing WinitPlugin entirely, driven by a
-# native CADisplayLink instead. iOS-only; harmless to keep out of the
-# normal desktop dependency graph.
 [target.'cfg(target_os = "ios")'.dependencies]
-# The generic Metal renderer, kept in its own repo so the measurement
-# baselines can link it without dragging the game in.
 metal_renderer = { path = "../../../metal_renderer" }
 raw-window-handle = "0.6"
 objc = "0.2"

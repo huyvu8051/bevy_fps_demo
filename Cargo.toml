@@ -2,28 +2,16 @@
 resolver = "2"
 members = ["crates/client", "crates/shared", "crates/server"]
 
-# Build faster during dev
 [profile.dev]
 opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
 
-# Used by scripts/deploy_ios_*.sh — measured (xcodebuild
-# -showBuildTimingSummary) that iOS deploy time is dominated by Xcode's
-# CodeSign step, which is roughly proportional to binary size, not by
-# rustc/link time. line-tables-only (keeps backtraces with line numbers,
-# drops per-variable/type debug info) + stripping debuginfo roughly halves
-# the linked binary (2.58GB -> 1.24GB measured), which roughly halves
-# CodeSign time in turn (~19s -> ~9.5s measured). See README.md's "Build
-# nhanh hơn khi lặp lại" for the full writeup. Use plain `--profile dev`
-# instead when you actually need LLDB variable/type inspection.
 [profile.dev-fast]
 inherits = "dev"
 debug = "line-tables-only"
 strip = "debuginfo"
 
 [patch.crates-io]
-# Upstream aborts the whole bake when one contour fails to triangulate; this
-# fork skips the bad contour instead.
 rerecast = { git = "https://github.com/huyvu8051/rerecast-vendor.git", branch = "main" }

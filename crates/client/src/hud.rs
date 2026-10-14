@@ -2,7 +2,6 @@
 use bevy::prelude::*;
 use crate::*;
 
-/// Tags a UI entity (and its `Children`) for generic, data-driven rendering on iOS.
 #[derive(Component)]
 pub(crate) struct NativeUiRoot;
 

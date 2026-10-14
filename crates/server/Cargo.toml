@@ -8,18 +8,6 @@ edition = "2024"
 shared = { path = "../shared" }
 avian3d = "0.7"
 big-brain = { git = "https://github.com/huyvu8051/big-brain", rev = "c8e2cf2" }
-# "png" / "jpeg": zombie.glb embeds PNG textures, and the map .glb files
-# (loaded here for their colliders — see map_colliders) embed both. The
-# server never renders either (no RenderPlugin at all here), but bevy_gltf's loader
-# still tries to decode every embedded image while loading the scene, and
-# aborts the whole load (skeleton / mesh included) if it hits a format
-# with no decoder compiled in. Cheapest fix: just let it decode the
-# pixels we'll ignore.
-# "gltf_animation" (distinct from "bevy_animation"!) is what actually
-# makes bevy_gltf's loader convert the file's animation curves into
-# AnimationClip assets at all — without it, zombie.glb loaded with zero
-# "AnimationN" labeled sub-assets even though bevy_animation itself was
-# already enabled.
 bevy = { version = "0.19", default-features = false, features = ["bevy_log", "bevy_render", "bevy_gltf", "bevy_scene", "bevy_world_serialization", "bevy_animation", "gltf_animation", "png", "jpeg", "bevy_pbr", "debug", "reflect_auto_register"] }
 bevy_rerecast = { version = "0.5", default-features = false, features = ["bevy_mesh"] }
 rerecast = "0.4"

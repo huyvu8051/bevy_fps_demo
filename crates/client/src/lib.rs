@@ -615,7 +615,6 @@ impl Plugin for GamePlugin {
                     update_shadow_quality_button_colors,
                     light_quality_buttons,
                     update_light_quality_button_colors,
-                    apply_zombie_texture_quality,
                     apply_point_light_quality,
                     point_light_quality_buttons,
                     update_point_light_quality_button_colors,

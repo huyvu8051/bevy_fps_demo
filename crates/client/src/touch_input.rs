@@ -39,8 +39,6 @@ pub(crate) struct TouchLeanRightButton;
 #[derive(Component)]
 pub(crate) struct TouchControlButton;
 
-/// The button's un-pressed `BackgroundColor`, so the press-brighten effect
-/// can always compute from a stable base instead of compounding onto itself.
 #[derive(Component)]
 pub(crate) struct TouchButtonBaseColor(pub(crate) Color);
 

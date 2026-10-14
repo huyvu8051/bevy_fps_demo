@@ -10,12 +10,5 @@ ron = "0.8"
 renet2_netcode = { version = "0.16", features = ["native_transport"] }
 avian3d = "0.7"
 
-
-# Needed for ios_bundle_resource_path() (lib.rs) — real iOS devices need
-# NSBundle.main.resourcePath to find bundled RON data files;
-# CARGO_MANIFEST_DIR-relative std::fs reads (this crate's usual native
-# path) only resolve on the dev machine that built the app, not a
-# sandboxed device bundle. Same crate client already depends on for the
-# identical reason (cadisplaylink's bundle_resource_path).
 [target.'cfg(target_os = "ios")'.dependencies]
 objc = "0.2"

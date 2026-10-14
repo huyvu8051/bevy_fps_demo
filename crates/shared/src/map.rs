@@ -3,9 +3,6 @@ use bevy::prelude::*;
 
 pub const SERVER_PORT_BASE: u16 = 5031;
 
-/// Upper bound for the zombie-count control. Previously the length of a hardcoded spawn
-/// grid; spawn positions now come from each map's authored `zombie_spawns.ron`, which can be
-/// any length, so the cap is its own number.
 pub const ZOMBIE_MAX_COUNT: u32 = 100;
 
 macro_rules! scenarios {
@@ -96,8 +93,6 @@ impl Scenario {
         self.gltf_scene_path().unwrap_or_else(|| panic!("{self:?} is not a glTF map"))
     }
 
-    /// The map's asset directory, e.g. `maps/desert_city` — derived from the navmesh path so
-    /// every per-map data file (navmesh chunks, zombie spawns) has one place to live.
     pub fn map_asset_dir(self) -> &'static str {
         let path = self.baked_navmesh_path();
         path.rsplit_once('/')
@@ -106,8 +101,6 @@ impl Scenario {
     }
 }
 
-/// Where an asset-relative path (`maps/foo/bar.ron`) actually lives on disk. iOS reads out
-/// of the app bundle; everywhere else out of the client crate's assets directory.
 fn asset_file_path(relative: &str) -> Option<std::path::PathBuf> {
     #[cfg(target_os = "ios")]
     {
@@ -124,12 +117,6 @@ fn asset_file_path(relative: &str) -> Option<std::path::PathBuf> {
     )))
 }
 
-/// Every baked navmesh chunk for a map, as asset-relative paths ready for `AssetServer::load`.
-///
-/// mapbake_editor bakes a map in pieces, one `navmesh_N.nav` per region, so both client and
-/// server load all of them as separate landmass Islands under one Archipelago rather than
-/// expecting a single fixed filename. A bare `navmesh.nav` from before that change still
-/// matches, so older maps keep working.
 pub fn navmesh_chunk_paths(scenario: Scenario) -> Vec<String> {
     let asset_dir = scenario.map_asset_dir();
     let Some(dir) = asset_file_path(asset_dir) else {
@@ -151,12 +138,6 @@ pub fn navmesh_chunk_paths(scenario: Scenario) -> Vec<String> {
     names.into_iter().map(|name| format!("{asset_dir}/{name}")).collect()
 }
 
-/// Zombie spawn positions, authored in mapbake_editor and saved as `zombie_spawns.ron` in
-/// the map's asset directory. This is the only source of spawn positions: deriving them from
-/// the navmesh at runtime was dropped because it regularly placed zombies inside walls.
-///
-/// A map with no authored spawns yields an empty list rather than panicking — that's a
-/// content gap to fill in the editor, not a reason to take the server down on boot.
 pub fn zombie_spawn_points(scenario: Scenario) -> Vec<Vec3> {
     let relative = format!("{}/zombie_spawns.ron", scenario.map_asset_dir());
     let Some(path) = asset_file_path(&relative) else {

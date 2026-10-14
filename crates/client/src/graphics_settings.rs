@@ -150,17 +150,6 @@ impl Default for PointLightQuality {
 #[derive(Component)]
 pub(crate) struct PointLightBaseIntensity(pub(crate) f32);
 
-/// Which variant of the zombie base-colour textures ships: mobile takes a
-/// reduced one, desktop the original. The gun no longer has tiers — only its
-/// sharpest mesh and textures are left on disk.
-pub(crate) const ASSET_QUALITY_TIER: u8 = if cfg!(target_os = "ios") { 2 } else { 5 };
-
-/// The gun loads as a whole glTF *scene*, like every other model in the game, rather than
-/// pulling individual primitives out of it. `GltfAssetLabel::Primitive` reads raw vertex
-/// data and ignores the file's node transforms, which is why the old path needed the mesh
-/// pre-baked with those transforms folded into the vertices; loading the scene lets Bevy
-/// apply them, and build the materials straight from the glTF, so the asset can stay exactly
-/// as the artist exported it.
 pub(crate) fn gun_mesh_path() -> &'static str {
     "models/ak47_scope/raw/scene.gltf"
 }

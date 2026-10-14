@@ -9,8 +9,6 @@ use bevy::input::touch::{TouchInput, TouchPhase};
 use bevy::math::Vec2;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window};
 
-/// Owns both halves of the iOS entry point: the game's headless ECS app and
-/// the generic Metal renderer that draws whatever the app extracts.
 pub struct GameHost {
     app: App,
     renderer: NativeMetalRenderer,
