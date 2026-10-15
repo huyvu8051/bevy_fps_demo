@@ -201,6 +201,8 @@ fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: b
 
         ZombieHitboxBones::default(),
 
+        crate::vfx::ZombieHeadLook::default(),
+
         ZombiePose::default(),
 
         Visibility::default(),

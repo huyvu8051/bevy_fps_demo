@@ -960,3 +960,74 @@ pub(crate) fn update_smoke(mut commands: Commands, time: Res<Time>, mut query: Q
     }
 }
 
+
+const ZOMBIE_HEAD_YAW_LIMIT_DEG: f32 = 72.0;
+const ZOMBIE_HEAD_PITCH_LIMIT_DEG: f32 = 32.0;
+const ZOMBIE_HEAD_TURN_RATE: f32 = 9.0;
+
+#[derive(Component, Default)]
+pub(crate) struct ZombieHeadLook {
+    yaw: f32,
+    pitch: f32,
+}
+
+pub(crate) fn aim_zombie_heads(
+    time: Res<Time>,
+    camera: Query<&GlobalTransform, With<FpsCamera>>,
+    mut zombies: Query<(&Transform, &ZombieHitboxBones, &mut ZombieHeadLook), With<Zombie>>,
+    child_of: Query<&ChildOf>,
+    globals: Query<&GlobalTransform>,
+    mut bone_transforms: Query<&mut Transform, Without<Zombie>>,
+) {
+    let Ok(camera_global) = camera.single() else {
+        return;
+    };
+    let target = camera_global.translation();
+    let blend = (ZOMBIE_HEAD_TURN_RATE * time.delta_secs()).min(1.0);
+    let yaw_limit = ZOMBIE_HEAD_YAW_LIMIT_DEG.to_radians();
+    let pitch_limit = ZOMBIE_HEAD_PITCH_LIMIT_DEG.to_radians();
+
+    for (body, bones, mut look) in &mut zombies {
+        let Some(head) = bones.head else {
+            continue;
+        };
+        let Ok(head_global) = globals.get(head) else {
+            continue;
+        };
+
+        let to_target = target - head_global.translation();
+        let flat = Vec3::new(to_target.x, 0.0, to_target.z);
+        let forward = body.rotation * Vec3::Z;
+        let forward_flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
+        if flat.length_squared() < 1e-6 || forward_flat == Vec3::ZERO {
+            continue;
+        }
+        let target_flat = flat.normalize();
+
+        let yaw = forward_flat
+            .cross(target_flat)
+            .dot(Vec3::Y)
+            .atan2(forward_flat.dot(target_flat))
+            .clamp(-yaw_limit, yaw_limit);
+        let pitch = to_target.y.atan2(flat.length()).clamp(-pitch_limit, pitch_limit);
+
+        look.yaw += (yaw - look.yaw) * blend;
+        look.pitch += (pitch - look.pitch) * blend;
+
+        let yaw_rotation = Quat::from_axis_angle(Vec3::Y, look.yaw);
+        let right = (yaw_rotation * forward_flat.cross(Vec3::Y)).normalize_or_zero();
+        let world_rotation = Quat::from_axis_angle(right, look.pitch) * yaw_rotation;
+
+        let parent_rotation = child_of
+            .get(head)
+            .ok()
+            .and_then(|parent| globals.get(parent.0).ok())
+            .map(|global| global.rotation())
+            .unwrap_or(Quat::IDENTITY);
+        let local_rotation = parent_rotation.inverse() * world_rotation * parent_rotation;
+        let Ok(mut transform) = bone_transforms.get_mut(head) else {
+            continue;
+        };
+        transform.rotation = local_rotation * transform.rotation;
+    }
+}
