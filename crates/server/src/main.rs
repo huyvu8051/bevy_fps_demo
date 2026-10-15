@@ -17,7 +17,7 @@ use bevy_replicon_renet2::{
 use big_brain::prelude::*;
 use shared::movement::{blocked_horizontally, resolve_slope_hit, try_step_up};
 use shared::{
-    entity_phase, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, FireShot,
+    entity_phase, resolve_bone_world_positions, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, NetPlayer,
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount,
@@ -27,8 +27,8 @@ use shared::{
     MAX_SHOT_DISTANCE, Scenario,
     
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
-    ZOMBIE_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL, INTERP_DELAY_SECS,
-    LAG_COMPENSATION_MAX_SECS, PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
+    ZOMBIE_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
+    PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
     PROTOCOL_ID,
     ZombieAnim, ZombieKind, zombie_kind_for_phase, ZOMBIE_KIND_WEIGHTS, zombie_kind_mesh_path, zombie_kind_anim_path,
     ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
@@ -159,7 +159,7 @@ fn main() {
             Update,
             (
                 move_players,
-                (move_zombies, update_server_zombie_pose, record_zombie_history)
+                (move_zombies, update_server_zombie_pose)
                     .chain()
                     .after(LandmassSystems::Output),
                 tick_respawns,
@@ -390,66 +390,6 @@ fn spawn_more_zombies(
     spawn_zombies(&mut commands, &spawns, ZOMBIE_AI_ENABLED);
 }
 
-#[derive(Clone, Default)]
-struct BoneLocalOffsets {
-    head: Option<Vec3>,
-    belly: Option<Vec3>,
-    chest: Option<Vec3>,
-    left_arm: [Option<Vec3>; 3],
-    right_arm: [Option<Vec3>; 3],
-    left_leg: [Option<Vec3>; 3],
-    right_leg: [Option<Vec3>; 3],
-}
-
-#[derive(Component, Default)]
-struct ZombieHistory(std::collections::VecDeque<(f32, Vec3, Quat, BoneLocalOffsets)>);
-
-fn record_zombie_history(
-    time: Res<Time>,
-    mut zombies: Query<(&Transform, &mut ZombieHistory, &ZombieHitboxBones), With<Zombie>>,
-    bone_transforms: Query<&GlobalTransform>,
-) {
-    let now = time.elapsed_secs();
-    for (transform, mut history, bones) in &mut zombies {
-        let inv_rotation = transform.rotation.inverse();
-        let local_offset = |bone: Entity| bone_transforms.get(bone).ok().map(|g| inv_rotation * (g.translation() - transform.translation));
-        let offset_chain = |chain: &[Option<Entity>; 3]| chain.map(|joint| joint.and_then(local_offset));
-        let offsets = BoneLocalOffsets {
-            head: bones.head.and_then(local_offset),
-            belly: bones.belly.and_then(local_offset),
-            chest: bones.chest.and_then(local_offset),
-            left_arm: offset_chain(&bones.left_arm),
-            right_arm: offset_chain(&bones.right_arm),
-            left_leg: offset_chain(&bones.left_leg),
-            right_leg: offset_chain(&bones.right_leg),
-        };
-        history.0.push_back((now, transform.translation, transform.rotation, offsets));
-        while history.0.front().is_some_and(|&(t, ..)| now - t > LAG_COMPENSATION_MAX_SECS) {
-            history.0.pop_front();
-        }
-    }
-}
-
-fn zombie_history_at(history: &ZombieHistory, target_time: f32) -> Option<(Vec3, Quat, BoneWorldPositions)> {
-    let &(_, translation, rotation, ref offsets) =
-        history.0.iter().min_by(|(a, ..), (b, ..)| (a - target_time).abs().total_cmp(&(b - target_time).abs()))?;
-    let to_world = |local: Vec3| translation + rotation * local;
-    let to_world_chain = |chain: &[Option<Vec3>; 3]| chain.map(|joint| joint.map(to_world));
-    Some((
-        translation,
-        rotation,
-        BoneWorldPositions {
-            head: offsets.head.map(to_world),
-            belly: offsets.belly.map(to_world),
-            chest: offsets.chest.map(to_world),
-            left_arm: to_world_chain(&offsets.left_arm),
-            right_arm: to_world_chain(&offsets.right_arm),
-            left_leg: to_world_chain(&offsets.left_leg),
-            right_leg: to_world_chain(&offsets.right_leg),
-        },
-    ))
-}
-
 fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: bool) {
     let mut zombie = commands.spawn_empty();
     let phase = entity_phase(zombie.id());
@@ -474,7 +414,6 @@ fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: b
         Replicated,
 
         Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
-        ZombieHistory::default(),
 
         ZombieHitboxBones::default(),
 
@@ -901,16 +840,14 @@ fn tick_respawns(
 fn handle_fire_shot(
     trigger: On<FromClient<FireShot>>,
     mut commands: Commands,
-    time: Res<Time>,
-    renet_server: Res<RenetServer>,
     network_ids: Query<&NetworkId>,
     spatial_query: SpatialQuery,
-    mut zombies: Query<(Entity, &mut Health, &mut KnockbackVelocity, &ZombieHistory), With<Zombie>>,
+    bone_globals: Query<&GlobalTransform>,
+    mut zombies: Query<(Entity, &Transform, &ZombieHitboxBones, &mut Health, &mut KnockbackVelocity), With<Zombie>>,
     mut respawns: ResMut<PendingRespawns>,
     mut threats: Query<&mut PlayerThreat>,
     damage_multiplier: Res<DamageMultiplierServer>,
 ) {
-
     if let Some(shooter) = trigger.client_id.entity() {
         if let Ok(mut threat) = threats.get_mut(shooter) {
             threat.0 += PLAYER_THREAT_PER_SHOT;
@@ -931,41 +868,29 @@ fn handle_fire_shot(
     info!("[shot] fired: origin={:.2?} direction={:.2?}", shot.origin, *direction);
 
     let filter = SpatialQueryFilter::default();
-
-    let live_hit = spatial_query.cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &filter);
-
     let wall_filter = SpatialQueryFilter::from_excluded_entities(zombies.iter().map(|(e, ..)| e));
     let wall_distance = spatial_query
         .cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &wall_filter)
         .map(|hit| hit.distance);
 
-    let rtt = trigger
-        .client_id
-        .entity()
-        .and_then(|entity| network_ids.get(entity).ok())
-        .map_or(0.0, |network_id| renet_server.rtt(network_id.get()));
-    let rewind_secs = (rtt as f32 / 2.0 + INTERP_DELAY_SECS).min(LAG_COMPENSATION_MAX_SECS);
-    let rewind_time = time.elapsed_secs() - rewind_secs;
-
     let cylinder = Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT);
 
-    let mut rewound_candidates: Vec<(f32, Entity, BoneWorldPositions, Vec3)> = zombies
+    let mut candidates: Vec<(f32, Entity, BoneWorldPositions, Vec3)> = zombies
         .iter()
-        .filter_map(|(entity, _, _, history)| {
-            let (position, rotation, bones) = zombie_history_at(history, rewind_time)?;
-            let (distance, _outer_normal) = cylinder.cast_ray(position, rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
-
-            Some((distance, entity, bones, rotation * Vec3::NEG_Z))
+        .filter_map(|(entity, transform, bones, _, _)| {
+            let (distance, _outer_normal) =
+                cylinder.cast_ray(transform.translation, transform.rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
+            let resolved = resolve_bone_world_positions(bones, |bone| bone_globals.get(bone).ok().map(|g| g.translation()));
+            Some((distance, entity, resolved, transform.rotation * Vec3::NEG_Z))
         })
         .collect();
-    rewound_candidates.sort_by(|(a, ..), (b, ..)| a.total_cmp(b));
+    candidates.sort_by(|(a, ..), (b, ..)| a.total_cmp(b));
 
-    for (distance, entity, bones, forward) in &rewound_candidates {
+    for (distance, entity, bones, forward) in &candidates {
         let (entity, forward) = (*entity, *forward);
-        info!("[shot] outer capsule hit (rewound): zombie={entity} distance={distance:.2}");
+        info!("[shot] outer capsule hit: zombie={entity} distance={distance:.2}");
 
         let Some((hit_point, normal, damage)) = zombie_hit_damage_ray(shot.origin, direction, MAX_SHOT_DISTANCE, bones, forward) else {
-
             let outer_hit_point = shot.origin + *direction * distance;
             if let Some((region, nearest_distance, radius)) = zombie_hit_nearest_region(outer_hit_point, bones, forward) {
                 info!(
@@ -990,7 +915,7 @@ fn handle_fire_shot(
             continue;
         }
         info!("[shot] inner bone capsule hit: zombie={entity} damage={damage:.1}");
-        if let Ok((_, mut health, mut knockback, _)) = zombies.get_mut(entity) {
+        if let Ok((_, _, _, mut health, mut knockback)) = zombies.get_mut(entity) {
             health.0 -= damage;
             let killed = health.0 <= 0.0;
             if killed {
@@ -1014,57 +939,20 @@ fn handle_fire_shot(
         return;
     }
 
-    let Some(hit) = live_hit else {
+    let Some(hit) = spatial_query.cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &filter) else {
         info!("[shot] missed everything (no zombie, no surface)");
         return;
     };
-    let outer_hit_point = shot.origin + *direction * hit.distance;
-
-    if let Ok((entity, mut health, mut knockback, history)) = zombies.get_mut(hit.entity) {
-        info!("[shot] outer capsule hit (live, no rewind match): zombie={entity} distance={:.2}", hit.distance);
-        let (_, rotation, bones) = zombie_history_at(history, time.elapsed_secs())
-            .unwrap_or((outer_hit_point, Quat::IDENTITY, BoneWorldPositions::default()));
-
-        let forward = rotation * Vec3::NEG_Z;
-
-        let Some((hit_point, normal, damage)) = zombie_hit_damage_ray(shot.origin, direction, MAX_SHOT_DISTANCE, &bones, forward) else {
-            if let Some((region, nearest_distance, radius)) = zombie_hit_nearest_region(outer_hit_point, &bones, forward) {
-                info!(
-                    "[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} — nearest was {region}, \
-                     distance={nearest_distance:.3} radius={radius:.3} (missed by {:.3}) — treating as a genuine miss, no VFX",
-                    nearest_distance - radius
-                );
-            } else {
-                info!("[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} (no bones resolved yet) — treating as a genuine miss, no VFX");
-            }
-            return;
-        };
-        let damage = damage * damage_multiplier.0;
-        info!("[shot] inner bone capsule hit: zombie={entity} damage={damage:.1}");
-        health.0 -= damage;
-        let killed = health.0 <= 0.0;
-        if killed {
-            commands.entity(entity).despawn();
-            respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
-        } else {
-            let push = Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
-            knockback.0 += push;
-        }
-        commands.server_trigger(ToClients {
-            targets: SendTargets::AllExcept(trigger.client_id),
-            message: ShotFx::ZombieHit { origin: shot.origin, point: hit_point, normal, damage, killed },
-        });
-        commands.server_trigger(ToClients {
-            targets: SendTargets::Single(trigger.client_id),
-            message: ShotConfirmed { point: hit_point, normal, damage, killed },
-        });
+    if zombies.contains(hit.entity) {
+        info!("[shot] outer capsule hit but missed every inner bone capsule — treating as a genuine miss, no VFX");
         return;
     }
 
-    info!("[shot] hit a surface, no zombie: point={:.2?}", outer_hit_point);
+    let surface_point = shot.origin + *direction * hit.distance;
+    info!("[shot] hit a surface, no zombie: point={surface_point:.2?}");
     commands.server_trigger(ToClients {
         targets: SendTargets::All,
-        message: ShotFx::SurfaceHit { origin: shot.origin, point: outer_hit_point, normal: hit.normal },
+        message: ShotFx::SurfaceHit { origin: shot.origin, point: surface_point, normal: hit.normal },
     });
 }
 
