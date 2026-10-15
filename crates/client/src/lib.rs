@@ -48,6 +48,7 @@ use zombie_client::*;
 mod vfx;
 use vfx::*;
 
+
 mod hud;
 use hud::*;
 
@@ -674,7 +675,7 @@ const COMPASS_MARKS: [(f32, &str); 8] =
     [(0.0, "N"), (45.0, "NE"), (90.0, "E"), (135.0, "SE"), (180.0, "S"), (225.0, "SW"), (270.0, "W"), (315.0, "NW")];
 
 const RADAR_LEFT: f32 = 16.0;
-const RADAR_TOP: f32 = 56.0;
+const RADAR_TOP: f32 = 16.0;
 const RADAR_SIZE: f32 = 150.0;
 const RADAR_RADIUS: f32 = RADAR_SIZE / 2.0;
 const RADAR_RANGE: f32 = 40.0;

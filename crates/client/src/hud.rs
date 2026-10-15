@@ -118,10 +118,11 @@ pub(crate) fn spawn_health_ui(commands: &mut Commands) {
         TextColor(Color::srgb(1.0, 0.3, 0.3)),
         Node {
             position_type: PositionType::Absolute,
-            left: Val::Px(16.0),
-            top: Val::Px(16.0),
+            left: Val::Percent(50.0),
+            bottom: Val::Px(16.0),
             ..default()
         },
+        UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
         GlobalZIndex(STATIC_UI_Z_INDEX),
         HealthUi,
         NativeUiRoot,
