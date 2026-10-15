@@ -36,8 +36,6 @@ pub(crate) enum PlayerModelPose {
     Run,
 }
 
-#[derive(Component)]
-pub(crate) struct PlayerModelDead;
 
 #[derive(Component)]
 pub(crate) struct ZombieHealthBar {
@@ -121,8 +119,6 @@ pub(crate) struct PlayerModelAnim {
     pub(crate) run: AnimationNodeIndex,
 
     pub(crate) run_back: AnimationNodeIndex,
-    pub(crate) shoot: AnimationNodeIndex,
-    pub(crate) death: AnimationNodeIndex,
 }
 
 pub(crate) fn build_player_model_anim(
@@ -135,8 +131,6 @@ pub(crate) fn build_player_model_anim(
         tuning.animations.walk,
         tuning.animations.run,
         tuning.animations.run_back,
-        tuning.animations.shoot,
-        tuning.animations.death,
     ]
     .into_iter()
     .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(tuning.anim_source_or_mesh().to_string())))
@@ -148,8 +142,6 @@ pub(crate) fn build_player_model_anim(
         walk: nodes[1],
         run: nodes[2],
         run_back: nodes[3],
-        shoot: nodes[4],
-        death: nodes[5],
     }
 }
 
@@ -475,47 +467,6 @@ pub(crate) fn wire_player_model_animations(
     }
 }
 
-pub(crate) fn update_remote_player_model_animation(
-    over: Res<PlayerModelPoseOverride>,
-    parents: Query<&NetTransform, With<NetPlayer>>,
-    mut roots: Query<
-        (&ChildOf, &PlayerModelAnimationPlayer, &mut PlayerModelPose),
-        (With<PlayerModelAnimRoot>, Without<PlayerModelDead>),
-    >,
-    anim: Res<PlayerModelAnim>,
-    mut players: Query<&mut AnimationPlayer>,
-) {
-
-    if over.0 {
-        return;
-    }
-    for (child_of, link, mut pose) in &mut roots {
-        let Ok(net_transform) = parents.get(child_of.0) else {
-            continue;
-        };
-
-        let new_pose = if net_transform.moving && net_transform.sprinting {
-            PlayerModelPose::Run
-        } else if net_transform.moving {
-            PlayerModelPose::Walk
-        } else {
-            PlayerModelPose::Idle
-        };
-        if new_pose == *pose {
-            continue;
-        }
-        *pose = new_pose;
-        if let Ok(mut player) = players.get_mut(link.0) {
-            player.stop_all();
-            let node = match new_pose {
-                PlayerModelPose::Idle => anim.idle,
-                PlayerModelPose::Walk => anim.walk,
-                PlayerModelPose::Run => anim.run,
-            };
-            player.play(node).repeat();
-        }
-    }
-}
 
 pub(crate) fn update_local_player_model_animation(
     over: Res<PlayerModelPoseOverride>,

@@ -210,9 +210,6 @@ pub(crate) fn spawn_ammo_ui(commands: &mut Commands) {
     ));
 }
 
-#[derive(Component)]
-pub(crate) struct PingUi;
-
 
 
 pub(crate) fn heading_deg(yaw: f32) -> f32 {

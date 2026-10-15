@@ -62,24 +62,7 @@ pub(crate) struct Noclip(pub(crate) bool);
 #[derive(Resource)]
 pub(crate) struct GunVisible(pub(crate) bool);
 
-#[derive(Resource, Default)]
-pub(crate) struct PredictedInputs(pub(crate) std::collections::VecDeque<(u32, ClientInput, f32, f32, bool)>);
-
 pub(crate) const INPUT_SEND_HZ: f32 = 32.0;
-
-const RECONCILE_POS_THRESHOLD: f32 = 0.15;
-const RECONCILE_SMOOTH_SECS: f32 = 0.12;
-
-#[derive(Resource, Default)]
-pub(crate) struct PredictionSmooth {
-    offset: Vec3,
-}
-
-#[derive(Default)]
-pub(crate) struct InputSendThrottleState {
-    elapsed: f32,
-    jump_edge_pending: bool,
-}
 
 
 pub(crate) fn zombies_damage_player(
@@ -395,8 +378,6 @@ pub(crate) fn send_player_input(
     touch: TouchGameplayInputs,
     time: Res<Time>,
     game_over: Res<GameOver>,
-    mut commands: Commands,
-    mut pending: ResMut<PredictedInputs>,
     mut sequence: Local<u32>,
     camera_query: Query<&FpsCamera>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
@@ -413,7 +394,6 @@ pub(crate) fn send_player_input(
     ),
     mover: MoveAndSlide,
 
-    mut input_send_state: Local<InputSendThrottleState>,
 ) {
     if game_over.0 {
         return;
@@ -476,26 +456,12 @@ pub(crate) fn send_player_input(
     };
 
     shared::movement::simulate_player_step(&mover, &mut transform, &mut player, stance, &input, dt);
-    pending.0.push_back((*sequence, input, dt, player.vertical_velocity, player.grounded));
 
-    input_send_state.jump_edge_pending |= input.jump;
-    input_send_state.elapsed += dt;
-    if input_send_state.elapsed < 1.0 / INPUT_SEND_HZ {
-        return;
-    }
-    input_send_state.elapsed = 0.0;
-    let mut sent_input = input;
-    sent_input.jump = input_send_state.jump_edge_pending;
-    input_send_state.jump_edge_pending = false;
-
-    commands.trigger(sent_input);
 }
 
 pub(crate) fn sync_camera_to_player(
-    time: Res<Time>,
     player_query: Query<(&Transform, &PlayerStance), (With<Player>, Without<FpsCamera>)>,
     mut camera_query: Query<(&mut Transform, &Lean), With<FpsCamera>>,
-    mut smooth: ResMut<PredictionSmooth>,
 ) {
     let Ok((player_transform, stance)) = player_query.single() else {
         return;
@@ -509,10 +475,7 @@ pub(crate) fn sync_camera_to_player(
         PlayerStance::Prone => PRONE_EYE_HEIGHT_OFFSET,
     };
 
-    smooth.offset = smooth
-        .offset
-        .lerp(Vec3::ZERO, (time.delta_secs() / RECONCILE_SMOOTH_SECS).min(1.0));
-    let eye = player_transform.translation + smooth.offset + Vec3::Y * eye_height_offset;
+    let eye = player_transform.translation + Vec3::Y * eye_height_offset;
 
     let side_offset = *camera_transform.right() * LEAN_SIDE_OFFSET * lean.current;
     camera_transform.translation = eye + side_offset;
@@ -645,7 +608,7 @@ pub(crate) fn shoot(
     mut camera: Query<(&Transform, &mut ViewRecoil), With<FpsCamera>>,
     mut gun: Query<&mut Gun>,
     mut vfx_assets: VfxAssets,
-    zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
+    zombies: Query<(Entity, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
     spatial_query: SpatialQuery,
     touch_firing: Res<TouchFiring>,
@@ -764,10 +727,9 @@ pub(crate) fn shoot(
         .map(|hit| hit.distance);
     let predicted_hit = zombies
         .iter()
-        .filter_map(|(entity, transform, bones)| {
+        .filter_map(|(entity, bones)| {
             let bone_positions = resolve_bone_world_positions(bones, |bone| globals.get(bone).ok().map(GlobalTransform::translation));
-            let forward = *transform.forward();
-            zombie_hit_damage_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, &bone_positions, forward)
+            zombie_hit_damage_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, &bone_positions)
                 .map(|(point, normal, _damage)| (point.distance(camera_transform.translation), entity, point, normal))
         })
         .filter(|(distance, ..)| !wall_distance.is_some_and(|w| w < distance - 0.1))

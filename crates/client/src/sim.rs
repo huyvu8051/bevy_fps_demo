@@ -610,24 +610,24 @@ fn handle_fire_shot(
 
     let cylinder = Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT);
 
-    let mut candidates: Vec<(f32, Entity, BoneWorldPositions, Vec3)> = zombies
+    let mut candidates: Vec<(f32, Entity, BoneWorldPositions)> = zombies
         .iter()
         .filter_map(|(entity, transform, bones, _, _)| {
             let (distance, _outer_normal) =
                 cylinder.cast_ray(transform.translation, transform.rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
             let resolved = resolve_bone_world_positions(bones, |bone| bone_globals.get(bone).ok().map(|g| g.translation()));
-            Some((distance, entity, resolved, transform.rotation * Vec3::NEG_Z))
+            Some((distance, entity, resolved))
         })
         .collect();
     candidates.sort_by(|(a, ..), (b, ..)| a.total_cmp(b));
 
-    for (distance, entity, bones, forward) in &candidates {
-        let (entity, forward) = (*entity, *forward);
+    for (distance, entity, bones) in &candidates {
+        let entity = *entity;
         info!("[shot] outer capsule hit: zombie={entity} distance={distance:.2}");
 
-        let Some((hit_point, normal, damage)) = zombie_hit_damage_ray(shot.origin, direction, MAX_SHOT_DISTANCE, bones, forward) else {
+        let Some((hit_point, normal, damage)) = zombie_hit_damage_ray(shot.origin, direction, MAX_SHOT_DISTANCE, bones) else {
             let outer_hit_point = shot.origin + *direction * distance;
-            if let Some((region, nearest_distance, radius)) = zombie_hit_nearest_region(outer_hit_point, bones, forward) {
+            if let Some((region, nearest_distance, radius)) = zombie_hit_nearest_region(outer_hit_point, bones) {
                 info!(
                     "[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} — nearest was {region}, \
                      distance={nearest_distance:.3} radius={radius:.3} (missed by {:.3}) — trying the next zombie behind it, if any",

@@ -338,10 +338,6 @@ struct PerfTimings {
 #[derive(Resource, Default)]
 struct MouseLookDelta(Vec2);
 
-const RECONNECT_INTERVAL: f32 = 2.0;
-
-const INTERP_BUFFER_MAX_AGE_SECS: f32 = 0.5;
-
 #[bevy_main]
 pub fn main() {
     let mut app = App::new();
@@ -444,8 +440,6 @@ impl Plugin for GamePlugin {
         .init_resource::<PerfTimings>()
         .init_resource::<ZombieAnimDisabled>()
         .init_resource::<ZombieHealthBarsHidden>()
-        .init_resource::<PredictedInputs>()
-        .init_resource::<PredictionSmooth>()
         .init_resource::<PlayerModelVisible>()
         .init_resource::<CameraMode>()
         .init_resource::<PlayerModelTuning>()
@@ -603,7 +597,6 @@ impl Plugin for GamePlugin {
                 (
                     wire_player_model_scene_nodes,
                     wire_player_model_animations,
-                    update_remote_player_model_animation,
                     update_local_player_model_animation,
                     apply_player_model_pose_override,
                     update_health_ui,
@@ -668,8 +661,6 @@ impl Default for AutoMaintainUi {
 }
 
 const TOUCH_CONTROLS_IDLE_HIDE_SECS: f32 = 10.0;
-
-const PING_UI_REFRESH_SECS: f32 = 1.0 / 30.0;
 
 const COMPASS_WIDTH: f32 = 280.0;
 const COMPASS_HEIGHT: f32 = 26.0;

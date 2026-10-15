@@ -109,7 +109,7 @@ pub fn random_aim_point(bones: &BoneWorldPositions, target: Entity) -> Option<(V
     Some(joints[idx])
 }
 
-pub fn zombie_hit_damage_bones(hit_point: Vec3, bones: &BoneWorldPositions, _forward: Vec3) -> f32 {
+pub fn zombie_hit_damage_bones(hit_point: Vec3, bones: &BoneWorldPositions) -> f32 {
     if let Some(pos) = bones.head {
         if hit_point.distance(pos) <= HEAD_HITBOX_RADIUS {
             return HEAD_DAMAGE;
@@ -150,7 +150,7 @@ pub fn zombie_hit_damage_bones(hit_point: Vec3, bones: &BoneWorldPositions, _for
     0.0
 }
 
-pub fn zombie_hit_nearest_region(hit_point: Vec3, bones: &BoneWorldPositions, _forward: Vec3) -> Option<(&'static str, f32, f32)> {
+pub fn zombie_hit_nearest_region(hit_point: Vec3, bones: &BoneWorldPositions) -> Option<(&'static str, f32, f32)> {
     let mut nearest: Option<(&'static str, f32, f32)> = None;
     let mut consider = |name: &'static str, distance: f32, radius: f32| {
         if nearest.is_none_or(|(_, best, _)| distance < best) {
@@ -178,7 +178,7 @@ pub fn zombie_hit_nearest_region(hit_point: Vec3, bones: &BoneWorldPositions, _f
     nearest
 }
 
-pub fn zombie_hit_damage_ray(origin: Vec3, direction: Dir3, max_distance: f32, bones: &BoneWorldPositions, _forward: Vec3) -> Option<(Vec3, Vec3, f32)> {
+pub fn zombie_hit_damage_ray(origin: Vec3, direction: Dir3, max_distance: f32, bones: &BoneWorldPositions) -> Option<(Vec3, Vec3, f32)> {
     let mut best: Option<(f32, Vec3, f32)> = None;
     let mut consider = |hit: Option<(f32, Vec3)>, damage: f32| {
         if let Some((toi, normal)) = hit {

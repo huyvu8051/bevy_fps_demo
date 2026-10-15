@@ -74,5 +74,3 @@ pub struct NetTransform {
 #[require(Transform)]
 pub struct NetPlayer;
 
-#[derive(Component, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct LastProcessedInput(pub u32);

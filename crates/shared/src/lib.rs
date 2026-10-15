@@ -41,7 +41,6 @@ pub mod combat;
 pub mod game_state;
 pub mod hitbox;
 pub mod map;
-pub mod network;
 pub mod player;
 pub mod zombie;
 
@@ -49,6 +48,5 @@ pub use combat::*;
 pub use game_state::*;
 pub use hitbox::*;
 pub use map::*;
-pub use network::*;
 pub use player::*;
 pub use zombie::*;
