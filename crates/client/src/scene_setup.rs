@@ -118,7 +118,9 @@ pub(crate) fn setup_common(
                     base_color: Color::srgba(1.0, 0.42, 0.38, 0.92),
                     base_color_texture: Some(asset_server.load(format!("textures/blood/splatter_{i}.png"))),
                     alpha_mode: AlphaMode::Blend,
-                    unlit: true,
+                    perceptual_roughness: 0.12,
+                    metallic: 0.0,
+                    reflectance: 0.75,
                     cull_mode: None,
                     ..default()
                 })
