@@ -48,6 +48,9 @@ use zombie_client::*;
 mod vfx;
 use vfx::*;
 
+mod audio;
+use audio::*;
+
 
 mod hud;
 use hud::*;
@@ -609,6 +612,8 @@ impl Plugin for GamePlugin {
                     update_radar_ui,
                     update_zombie_health_bars,
                     update_floating_damage_texts,
+                    play_footsteps,
+                    play_zombie_footsteps,
                 )
                     .chain(),
             )

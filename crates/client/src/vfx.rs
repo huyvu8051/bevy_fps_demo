@@ -94,12 +94,6 @@ pub(crate) struct SparkAssets {
     pub(crate) material: Handle<StandardMaterial>,
 }
 
-#[derive(Resource)]
-pub(crate) struct GunshotSound(pub(crate) Handle<AudioSource>);
-
-#[derive(Resource)]
-pub(crate) struct ReloadSound(pub(crate) Handle<AudioSource>);
-
 #[derive(SystemParam)]
 pub(crate) struct VfxAssets<'w, 's> {
     pub(crate) hit_assets: Res<'w, HitMarkerAssets>,

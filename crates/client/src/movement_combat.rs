@@ -689,7 +689,7 @@ pub(crate) fn shoot(
     gun.recoil = RECOIL_DURATION;
 
     gun.recoil_roll = ops::sin(time.elapsed_secs() * 641.0);
-    commands.spawn((AudioPlayer(vfx_assets.gunshot.0.clone()), PlaybackSettings::DESPAWN));
+    commands.spawn((AudioPlayer(vfx_assets.gunshot.0.clone()), PlaybackSettings::DESPAWN, GunshotVoice));
     if gun.ammo == 0 {
 
         gun.reload_remaining = RELOAD_DURATION;

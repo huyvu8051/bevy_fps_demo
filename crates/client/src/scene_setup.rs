@@ -61,6 +61,14 @@ pub(crate) fn setup_common(
 
     commands.insert_resource(GunshotSound(asset_server.load("audio/gunshot.wav")));
     commands.insert_resource(ReloadSound(asset_server.load("audio/reload.wav")));
+    commands.insert_resource(FootstepSounds {
+        player: (0..PLAYER_FOOTSTEP_SAMPLES)
+            .map(|i| asset_server.load(format!("audio/footsteps/{PLAYER_FOOTSTEP_SURFACE}/{i}.ogg")))
+            .collect(),
+        zombie: (0..ZOMBIE_FOOTSTEP_SAMPLES)
+            .map(|i| asset_server.load(format!("audio/footsteps/{ZOMBIE_FOOTSTEP_SURFACE}/{i}.ogg")))
+            .collect(),
+    });
 
     commands.insert_resource(MuzzleFxAssets {
         flash_mesh: meshes.add(Rectangle::new(0.18, 0.18)),
@@ -209,6 +217,7 @@ pub(crate) fn setup_gameplay(
                 ..default()
             }),
             Transform::from_translation(player_spawn + Vec3::Y * EYE_HEIGHT_OFFSET),
+            SpatialListener::default(),
             FpsCamera { yaw: review_yaw, pitch: review_pitch },
             ViewRecoil::default(),
             Lean::default(),

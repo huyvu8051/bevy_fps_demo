@@ -1,0 +1,15 @@
+footsteps/
+    A per-surface footstep pack: each subdirectory holds its own license.txt
+    naming the Freesound original it derives from. Licences are mixed, so
+    check the subdirectory before switching a surface:
+
+        gravel/  CC0 1.0          (public domain, no attribution needed)
+        grass/   CC-BY 3.0        (attribution required: swuing / Freesound)
+
+    gravel is used for the player and grass for zombies; see
+    PLAYER_FOOTSTEP_SURFACE and ZOMBIE_FOOTSTEP_SURFACE in client/src/audio.rs.
+
+    These are .ogg, which is why the client enables bevy's "vorbis" feature.
+
+gunshot.wav, reload.wav
+    Source unrecorded.
