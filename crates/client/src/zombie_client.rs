@@ -319,54 +319,16 @@ pub(crate) fn update_zombie_health_bars(
 }
 
 pub(crate) fn freeze_zombie_animations(
-    time: Res<Time>,
     freeze: Res<FreezeZombies>,
     anim_disabled: Res<ZombieAnimDisabled>,
-    player: Query<&Transform, With<Player>>,
-    zombies: Query<(&Transform, &ZombieAnimationPlayer), (With<Zombie>, Without<Player>)>,
+    zombies: Query<&ZombieAnimationPlayer, With<Zombie>>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    let Ok(player_transform) = player.single() else {
-        return;
-    };
-    if anim_disabled.0 {
-        for (_, link) in &zombies {
-            if let Ok(mut player) = players.get_mut(link.0) {
-                for (_, active) in player.playing_animations_mut() {
-                    active.pause();
-                }
-            }
-        }
-        return;
-    }
-
-    let total_zombie_count = zombies.iter().count();
-    let global_max_hz = if total_zombie_count > ZOMBIE_ANIM_CROWD_THRESHOLD_3 {
-        ZOMBIE_ANIM_CROWD_HZ_3
-    } else if total_zombie_count > ZOMBIE_ANIM_CROWD_THRESHOLD_2 {
-        ZOMBIE_ANIM_CROWD_HZ_2
-    } else if total_zombie_count > ZOMBIE_ANIM_CROWD_THRESHOLD_1 {
-        ZOMBIE_ANIM_CROWD_HZ_1
-    } else {
-        f32::INFINITY
-    };
-
-    for (zombie_transform, link) in &zombies {
+    let should_pause = freeze.0 || anim_disabled.0;
+    for link in &zombies {
         let Ok(mut player) = players.get_mut(link.0) else {
             continue;
         };
-        let distance = zombie_transform.translation.distance(player_transform.translation);
-
-        let hz = if distance <= ZOMBIE_ANIM_FULL_DISTANCE {
-            global_max_hz
-        } else {
-            ZOMBIE_ANIM_THROTTLE_HZ.min(global_max_hz)
-        };
-
-        let phase = ops::sin(zombie_transform.translation.x * 12.9898).abs();
-        let throttle_cycle = (time.elapsed_secs() * hz + phase * 2.0) % 2.0;
-        let throttled_paused_this_tick = hz.is_finite() && throttle_cycle < 1.0;
-        let should_pause = freeze.0 || throttled_paused_this_tick;
         for (_, active) in player.playing_animations_mut() {
             if should_pause {
                 active.pause();
