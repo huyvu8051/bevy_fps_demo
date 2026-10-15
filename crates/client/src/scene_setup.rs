@@ -115,7 +115,7 @@ pub(crate) fn setup_common(
         stain_materials: (0..BLOOD_STAIN_VARIANTS)
             .map(|i| {
                 materials.add(StandardMaterial {
-                    base_color: Color::srgba(1.0, 1.0, 1.0, 0.9),
+                    base_color: Color::srgba(1.0, 0.42, 0.38, 0.92),
                     base_color_texture: Some(asset_server.load(format!("textures/blood/splatter_{i}.png"))),
                     alpha_mode: AlphaMode::Blend,
                     unlit: true,

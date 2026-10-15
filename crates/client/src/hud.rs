@@ -213,7 +213,8 @@ pub(crate) fn spawn_ammo_ui(commands: &mut Commands) {
 
 
 pub(crate) fn heading_deg(yaw: f32) -> f32 {
-    (-yaw.to_degrees()).rem_euclid(360.0)
+    // rem_euclid passes -0.0 through, which formats as "-00"
+    (-yaw.to_degrees()).rem_euclid(360.0) + 0.0
 }
 
 pub(crate) fn heading_diff(a: f32, b: f32) -> f32 {
