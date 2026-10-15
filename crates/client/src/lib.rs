@@ -23,12 +23,12 @@ use bevy_replicon_renet2::{
     RenetChannelsExt, RepliconRenetPlugins,
 };
 use shared::{
-    ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, find_animation_root, FireShot, GameOver, GameStateEvent, Health,
+    ClearAllZombies, ClientInput, find_animation_root, FireShot, GameOver, GameStateEvent, Health,
     HEAD_DAMAGE, HITBOX_BELLY_MIN_Y, HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN,
-    KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer, NetTransform, Player, PlayerDied,
+    KnockbackVelocity, LastProcessedInput, NetPlayer, NetTransform, Player, PlayerDied,
     ZombieAnimationPlayer,
     PlayerDiedFx, PlayerFiredFx,
-    PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx, SpawnDebugBot,
+    PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieShowcaseClip, wire_zombie_hitbox_bones,
     zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_anim_path,
     INTERP_DELAY_SECS, MAX_SHOT_DISTANCE,
@@ -38,8 +38,6 @@ use shared::{
     ZOMBIE_ATTACK_INTERVAL, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS,
     zombie_pose_for, ZombieAnim, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_STOP_DISTANCE,
 };
-
-use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
 #[cfg(target_os = "ios")]
 pub mod cadisplaylink;
@@ -79,8 +77,6 @@ use network_setup::*;
 
 mod f9_debug;
 use f9_debug::*;
-
-
 
 mod navigation;
 use navigation::*;
@@ -347,9 +343,6 @@ struct LocalPlayerSprinting(bool);
 struct LocalPlayerMoveAxis(Vec2);
 
 #[derive(Resource, Default)]
-struct SelectedDebugBot(Option<u32>);
-
-#[derive(Resource, Default)]
 struct PerfTimings {
     health_bars_ms: f32,
 
@@ -430,7 +423,6 @@ impl Plugin for GamePlugin {
         .replicate::<ZombieKind>()
         .replicate::<Health>()
         .replicate::<LastProcessedInput>()
-        .replicate::<DebugBot>()
 
         .init_resource::<PlayerModelPoseOverride>()
         .register_type::<PlayerModelPose>()
@@ -446,9 +438,6 @@ impl Plugin for GamePlugin {
         .add_client_event::<PlayerDied>(Channel::Ordered)
         .add_client_event::<RequestRestart>(Channel::Ordered)
         .add_server_event::<GameStateEvent>(Channel::Ordered)
-        .add_client_event::<SpawnDebugBot>(Channel::Ordered)
-        .add_client_event::<MoveDebugBot>(Channel::Ordered)
-        .add_client_event::<DespawnDebugBot>(Channel::Ordered)
         .add_client_event::<SetZombieCount>(Channel::Ordered)
         .add_client_event::<ClearAllZombies>(Channel::Ordered)
         .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
@@ -480,7 +469,6 @@ impl Plugin for GamePlugin {
         .add_observer(on_game_state_event)
         .add_plugins(F9DebugPlugin)
         .add_plugins(navigation::ClientNavigationPlugin)
-
 
         .insert_resource(Noclip(false))
         .init_resource::<InspectMode>()
@@ -519,7 +507,6 @@ impl Plugin for GamePlugin {
         .init_resource::<LightQuality>()
         .init_resource::<PointLightQuality>()
         .init_resource::<ScopeCameraEnabled>()
-        .init_resource::<SelectedDebugBot>()
         .init_resource::<LocalPlayerMoving>()
 .init_resource::<LocalPlayerSprinting>()
 .init_resource::<LocalPlayerMoveAxis>()
@@ -609,7 +596,6 @@ impl Plugin for GamePlugin {
                     autopilot_toggle_button,
                     update_extra_toggle_colors,
                     cheat_spawn_zombie_button,
-                    debug_bot_buttons,
                     shadow_quality_buttons,
                     update_shadow_quality_button_colors,
                     light_quality_buttons,

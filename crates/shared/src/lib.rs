@@ -36,10 +36,8 @@ macro_rules! read_ron_data_file {
 }
 
 pub mod movement;
-pub mod sim_latency;
 
 pub mod combat;
-pub mod debug_bot;
 pub mod game_state;
 pub mod hitbox;
 pub mod map;
@@ -48,7 +46,6 @@ pub mod player;
 pub mod zombie;
 
 pub use combat::*;
-pub use debug_bot::*;
 pub use game_state::*;
 pub use hitbox::*;
 pub use map::*;

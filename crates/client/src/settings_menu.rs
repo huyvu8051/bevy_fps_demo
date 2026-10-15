@@ -1070,59 +1070,6 @@ pub(crate) fn cheat_spawn_zombie_button(
     spawn_local_zombie(&mut commands, &asset_server, player_transform.translation + forward * 2.0);
 }
 
-pub(crate) fn debug_bot_buttons(
-    mut commands: Commands,
-    player: Query<&Transform, With<Player>>,
-    camera: Query<&FpsCamera>,
-    camera_transform: Query<&Transform, (With<FpsCamera>, Without<Player>)>,
-    spatial_query: SpatialQuery,
-    debug_bots: Query<&DebugBot>,
-    mut selected_bot: ResMut<SelectedDebugBot>,
-    spawn_btn: Query<&Interaction, (With<CheatSpawnBotButton>, Changed<Interaction>)>,
-    prev_btn: Query<&Interaction, (With<CheatPrevBotButton>, Changed<Interaction>)>,
-    next_btn: Query<&Interaction, (With<CheatNextBotButton>, Changed<Interaction>)>,
-    move_btn: Query<&Interaction, (With<CheatMoveBotButton>, Changed<Interaction>)>,
-    despawn_btn: Query<&Interaction, (With<CheatDespawnBotButton>, Changed<Interaction>)>,
-) {
-    if tapped(&spawn_btn) {
-        if let Ok(player_transform) = player.single() {
-            let forward = camera.single().map(|cam| Quat::from_rotation_y(cam.yaw) * Vec3::NEG_Z).unwrap_or(Vec3::NEG_Z);
-            commands.client_trigger(SpawnDebugBot { at: player_transform.translation + forward * 2.0 });
-        }
-    }
-    let cycle_forward = tapped(&next_btn);
-    if cycle_forward || tapped(&prev_btn) {
-        let mut ids: Vec<u32> = debug_bots.iter().map(|bot| bot.0).collect();
-        ids.sort_unstable();
-        if !ids.is_empty() {
-            let next_index = match selected_bot.0.and_then(|current| ids.iter().position(|&id| id == current)) {
-                Some(index) if cycle_forward => (index + 1) % ids.len(),
-                Some(index) => (index + ids.len() - 1) % ids.len(),
-                None => 0,
-            };
-            selected_bot.0 = Some(ids[next_index]);
-        }
-    }
-    if tapped(&move_btn) {
-        if let Some(id) = selected_bot.0 {
-            if let Ok(camera_transform) = camera_transform.single() {
-                let filter = SpatialQueryFilter::default();
-                let target = spatial_query
-                    .cast_ray(camera_transform.translation, camera_transform.forward(), MAX_SHOT_DISTANCE, true, &filter)
-                    .map(|hit| camera_transform.translation + camera_transform.forward() * hit.distance)
-                    .unwrap_or(camera_transform.translation + camera_transform.forward() * 5.0);
-                commands.client_trigger(MoveDebugBot { id, target });
-            }
-        }
-    }
-    if tapped(&despawn_btn) {
-        if let Some(id) = selected_bot.0 {
-            commands.client_trigger(DespawnDebugBot { id });
-            selected_bot.0 = None;
-        }
-    }
-}
-
 pub(crate) fn zombie_count_buttons(
     mut commands: Commands,
     mut count: ResMut<ZombieCountUi>,

@@ -17,16 +17,14 @@ use bevy_replicon_renet2::{
 use big_brain::prelude::*;
 use shared::movement::{blocked_horizontally, resolve_slope_hit, try_step_up};
 use shared::{
-    entity_phase, resolve_bone_world_positions, zombie_hit_damage_bones, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, DebugBot, DespawnDebugBot, FireShot,
-    GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, MoveDebugBot, NetPlayer,
+    entity_phase, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, FireShot,
+    GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, NetPlayer,
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount,
-    ShotConfirmed, ShotFx, SpawnDebugBot, SpawnMoreZombies, Zombie,
+    ShotConfirmed, ShotFx, SpawnMoreZombies, Zombie,
     ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, 
-    DEBUG_BOT_DETECT_RANGE, DEBUG_BOT_ENGAGE_RANGE, DEBUG_BOT_EYE_HEIGHT, DEBUG_BOT_FIRE_INTERVAL_SECS,
-    DEBUG_BOT_RETARGET_INTERVAL, GRAVITY, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
-    MAX_SHOT_DISTANCE, MOVE_SPEED,
-    PLAYER_LENGTH, PLAYER_RADIUS, Scenario,
+    GRAVITY, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
+    MAX_SHOT_DISTANCE, Scenario,
     
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
     ZOMBIE_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL, INTERP_DELAY_SECS,
@@ -37,7 +35,6 @@ use shared::{
     ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
     ZOMBIE_TURN_RATE_DEG,
 };
-use shared::sim_latency::{sim_latency_from_env, LaggedSocket};
 
 use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle};
 use bevy::animation::AnimationPlayer;
@@ -117,7 +114,6 @@ fn main() {
         .replicate::<ZombieKind>()
         .replicate::<Health>()
         .replicate::<LastProcessedInput>()
-        .replicate::<DebugBot>()
 
         .add_client_event::<ClientInput>(Channel::Unreliable)
         .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
@@ -129,9 +125,6 @@ fn main() {
         .add_client_event::<PlayerDied>(Channel::Ordered)
         .add_client_event::<RequestRestart>(Channel::Ordered)
         .add_server_event::<GameStateEvent>(Channel::Ordered)
-        .add_client_event::<SpawnDebugBot>(Channel::Ordered)
-        .add_client_event::<MoveDebugBot>(Channel::Ordered)
-        .add_client_event::<DespawnDebugBot>(Channel::Ordered)
         .add_client_event::<SetZombieCount>(Channel::Ordered)
         .add_client_event::<ClearAllZombies>(Channel::Ordered)
         .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
@@ -141,7 +134,6 @@ fn main() {
         .init_resource::<DamageMultiplierServer>()
         .init_resource::<PendingRespawns>()
         .init_resource::<GameOver>()
-        .init_resource::<DebugBotIdCounter>()
         .init_resource::<ZombieTargetCount>()
         .init_resource::<AutoMaintainZombies>()
         .init_resource::<NextZombieSpawnIndex>()
@@ -170,7 +162,6 @@ fn main() {
                 (move_zombies, update_server_zombie_pose, record_zombie_history)
                     .chain()
                     .after(LandmassSystems::Output),
-                (bot_pick_target, move_debug_bots, debug_bot_fire).chain(),
                 tick_respawns,
                 decay_player_threat,
 
@@ -191,9 +182,6 @@ fn main() {
         .add_observer(on_player_died)
         .add_observer(on_request_restart)
         .add_observer(handle_fire_shot)
-        .add_observer(spawn_debug_bot)
-        .add_observer(move_debug_bot_command)
-        .add_observer(despawn_debug_bot)
         .run();
 }
 
@@ -209,7 +197,7 @@ fn start_server(mut commands: Commands, channels: Res<RepliconChannels>, scenari
 
     let public_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), scenario.port());
     let udp_socket = UdpSocket::bind(public_addr).expect("failed to bind server UDP socket");
-    let native_socket = LaggedSocket::new(NativeSocket::new(udp_socket).unwrap(), sim_latency_from_env());
+    let native_socket = NativeSocket::new(udp_socket).unwrap();
 
     let server_config = ServerSetupConfig {
         current_time,
@@ -316,236 +304,6 @@ fn move_players(
 
         net_transform.moving = input.move_axis != Vec2::ZERO;
         net_transform.sprinting = input.sprint;
-    }
-}
-
-#[derive(Resource, Default)]
-struct DebugBotIdCounter(u32);
-
-#[derive(Component)]
-struct DebugBotTarget(Vec3);
-
-#[derive(Component, Default)]
-struct DebugBotMotion {
-    vertical_velocity: f32,
-    grounded: bool,
-}
-
-#[derive(Component, Default)]
-struct DebugBotAi {
-    target_zombie: Option<Entity>,
-    retarget_timer: f32,
-    fire_timer: f32,
-}
-
-fn spawn_debug_bot(trigger: On<FromClient<SpawnDebugBot>>, mut commands: Commands, mut counter: ResMut<DebugBotIdCounter>) {
-    let id = counter.0;
-    counter.0 += 1;
-    let at = trigger.message.at;
-    commands.spawn((
-        Transform::from_translation(at),
-        NetPlayer,
-        NetTransform {
-            translation: at,
-            yaw: 0.0,
-            moving: false,
-            sprinting: false,
-        },
-        DebugBot(id),
-        DebugBotTarget(at),
-        DebugBotAi::default(),
-        DebugBotMotion::default(),
-        PlayerThreat::default(),
-        Replicated,
-    ));
-    info!("debug bot {id} spawned at {at}");
-}
-
-fn move_debug_bot_command(
-    trigger: On<FromClient<MoveDebugBot>>,
-    mut bots: Query<(&DebugBot, &mut DebugBotTarget)>,
-) {
-    for (bot, mut target) in &mut bots {
-        if bot.0 == trigger.message.id {
-            target.0 = trigger.message.target;
-            break;
-        }
-    }
-}
-
-fn despawn_debug_bot(trigger: On<FromClient<DespawnDebugBot>>, mut commands: Commands, bots: Query<(Entity, &DebugBot)>) {
-    for (entity, bot) in &bots {
-        if bot.0 == trigger.message.id {
-            commands.entity(entity).despawn();
-            break;
-        }
-    }
-}
-
-fn bot_pick_target(
-    time: Res<Time>,
-    mut bots: Query<(Entity, &Transform, &mut DebugBotAi, &mut DebugBotTarget), With<DebugBot>>,
-    zombies: Query<(Entity, &Transform), (With<Zombie>, Without<DebugBot>)>,
-) {
-    for (entity, transform, mut ai, mut manual_target) in &mut bots {
-        ai.retarget_timer -= time.delta_secs();
-        let target_alive = ai.target_zombie.is_some_and(|target| zombies.contains(target));
-        if !target_alive || ai.retarget_timer <= 0.0 {
-            ai.target_zombie = zombies
-                .iter()
-                .map(|(zombie, zombie_transform)| (zombie, transform.translation.distance(zombie_transform.translation)))
-                .filter(|&(_, distance)| distance <= DEBUG_BOT_DETECT_RANGE)
-                .min_by(|(_, a), (_, b)| a.total_cmp(b))
-                .map(|(zombie, _)| zombie);
-
-            ai.retarget_timer = DEBUG_BOT_RETARGET_INTERVAL * (0.75 + entity_phase(entity) * 0.5);
-        }
-        if let Some(target) = ai.target_zombie {
-            if let Ok((_, zombie_transform)) = zombies.get(target) {
-                manual_target.0 = zombie_transform.translation;
-            }
-        }
-    }
-}
-
-fn move_debug_bots(
-    time: Res<Time>,
-    mut bots: Query<
-        (&mut Transform, &mut NetTransform, &DebugBotTarget, &DebugBotAi, &mut DebugBotMotion),
-        With<DebugBot>,
-    >,
-    mover: MoveAndSlide,
-) {
-    let filter = SpatialQueryFilter::default();
-    for (mut transform, mut net_transform, target, ai, mut motion) in &mut bots {
-
-        let stop_distance = if ai.target_zombie.is_some() { DEBUG_BOT_ENGAGE_RANGE } else { 0.05 };
-        let to_target = target.0 - transform.translation;
-        let horizontal = Vec3::new(to_target.x, 0.0, to_target.z);
-        let distance = horizontal.length();
-        let moving = distance > stop_distance;
-        net_transform.moving = moving;
-        let horizontal_velocity = if moving { (horizontal / distance) * MOVE_SPEED } else { Vec3::ZERO };
-
-        if motion.grounded && motion.vertical_velocity < 0.0 {
-            motion.vertical_velocity = -1.0;
-        }
-        motion.vertical_velocity += GRAVITY * time.delta_secs();
-
-        let velocity = horizontal_velocity + Vec3::Y * motion.vertical_velocity;
-        let shape = Collider::capsule(PLAYER_RADIUS, PLAYER_LENGTH);
-        let config = MoveAndSlideConfig::default();
-        let was_grounded = motion.grounded;
-        let mut grounded_this_frame = false;
-        let output = mover.move_and_slide(
-            &shape,
-            transform.translation,
-            transform.rotation,
-            velocity,
-            time.delta(),
-            &config,
-            &filter,
-            |mut hit| {
-                if resolve_slope_hit(&mut hit, velocity, was_grounded) {
-                    grounded_this_frame = true;
-                }
-                MoveAndSlideHitResponse::Accept
-            },
-        );
-        let dt = time.delta_secs();
-        let stepped_up = (was_grounded
-            && blocked_horizontally(transform.translation, output.position, horizontal_velocity, dt))
-        .then(|| {
-            try_step_up(
-                &mover,
-                &shape,
-                transform.rotation,
-                transform.translation,
-                horizontal_velocity,
-                dt,
-                &config,
-                &filter,
-            )
-        })
-        .flatten();
-
-        transform.translation = stepped_up.unwrap_or(output.position);
-        motion.grounded = grounded_this_frame || stepped_up.is_some();
-        motion.vertical_velocity = if motion.grounded { motion.vertical_velocity.min(0.0) } else { motion.vertical_velocity };
-
-        if horizontal_velocity != Vec3::ZERO {
-            let target_rotation = Transform::default().looking_to(-horizontal_velocity, Vec3::Y).rotation;
-            turn_towards(&mut transform.rotation, target_rotation, ZOMBIE_TURN_RATE_DEG.to_radians() * time.delta_secs());
-        } else if ai.target_zombie.is_some() && distance > 0.05 {
-
-            let direction = horizontal / distance;
-            let target_rotation = Transform::default().looking_to(-direction, Vec3::Y).rotation;
-            turn_towards(&mut transform.rotation, target_rotation, ZOMBIE_TURN_RATE_DEG.to_radians() * time.delta_secs());
-        }
-
-        net_transform.translation = transform.translation;
-        net_transform.yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
-    }
-}
-
-fn debug_bot_fire(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut bots: Query<(&Transform, &mut DebugBotAi), With<DebugBot>>,
-    mut zombies: Query<(Entity, &Transform, &mut Health, &mut KnockbackVelocity, &ZombieHitboxBones), (With<Zombie>, Without<DebugBot>)>,
-    bone_transforms: Query<&GlobalTransform>,
-    mut respawns: ResMut<PendingRespawns>,
-    damage_multiplier: Res<DamageMultiplierServer>,
-) {
-    for (transform, mut ai) in &mut bots {
-        ai.fire_timer -= time.delta_secs();
-        let Some(target) = ai.target_zombie else { continue };
-        let Ok((entity, zombie_transform, mut health, mut knockback, bones)) = zombies.get_mut(target) else {
-            continue;
-        };
-
-        let origin = transform.translation + Vec3::Y * DEBUG_BOT_EYE_HEIGHT;
-
-        if origin.distance(zombie_transform.translation) > DEBUG_BOT_ENGAGE_RANGE + 1.0 || ai.fire_timer > 0.0 {
-            continue;
-        }
-        ai.fire_timer = DEBUG_BOT_FIRE_INTERVAL_SECS;
-
-        let Ok(direction) = Dir3::new(zombie_transform.translation - origin) else {
-            continue;
-        };
-        let cylinder = Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT);
-        let Some((hit_distance, normal)) = cylinder.cast_ray(
-            zombie_transform.translation,
-            zombie_transform.rotation,
-            origin,
-            *direction,
-            MAX_SHOT_DISTANCE,
-            true,
-        ) else {
-            continue;
-        };
-
-        let hit_point = origin + *direction * hit_distance;
-
-        let resolved_bones = resolve_bone_world_positions(bones, |bone| bone_transforms.get(bone).ok().map(|g| g.translation()));
-        let damage = zombie_hit_damage_bones(hit_point, &resolved_bones, *zombie_transform.forward()) * damage_multiplier.0;
-        health.0 -= damage;
-        let killed = health.0 <= 0.0;
-        if killed {
-            commands.entity(entity).despawn();
-            respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
-        } else {
-            let push = Vec3::new(zombie_transform.translation.x - origin.x, 0.0, zombie_transform.translation.z - origin.z)
-                .normalize_or_zero()
-                * KNOCKBACK_FORCE;
-            knockback.0 += push;
-        }
-
-        commands.server_trigger(ToClients {
-            targets: SendTargets::All,
-            message: ShotFx::ZombieHit { origin, point: hit_point, normal, damage, killed },
-        });
     }
 }
 
@@ -1318,7 +1076,7 @@ fn on_player_died(
     mut commands: Commands,
     mut game_over: ResMut<GameOver>,
 
-    connected: Query<Entity, (With<NetPlayer>, Without<DebugBot>)>,
+    connected: Query<Entity, With<NetPlayer>>,
     dead: Query<(), With<Dead>>,
     network_ids: Query<&NetworkId>,
 ) {

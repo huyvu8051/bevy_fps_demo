@@ -111,7 +111,7 @@ pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &Replic
         server_addr,
         user_data: None,
     };
-    let socket = LaggedSocket::new(NativeSocket::new(socket).unwrap(), sim_latency_from_env());
+    let socket = NativeSocket::new(socket).unwrap();
     let transport = NetcodeClientTransport::new(current_time, authentication, socket)
         .expect("failed to set up netcode client transport");
 
