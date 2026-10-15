@@ -11,6 +11,7 @@ pub struct Zombie;
 pub struct ZombieMotion {
     pub vertical_velocity: f32,
     pub grounded: bool,
+    pub moving: bool,
     pub path_recalc_timer: f32,
     pub cached_path_dir: Vec3,
 }

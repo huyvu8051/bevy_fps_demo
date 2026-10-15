@@ -572,7 +572,7 @@ pub(crate) fn update_zombie_animation(
     player: Query<&Transform, With<Player>>,
 
     mut zombies: Query<
-        (&Transform, &NetTransform, &Health, &ZombieAnimationPlayer, Option<&ZombieKind>, &mut ZombiePose),
+        (&Transform, &ZombieMotion, &Health, &ZombieAnimationPlayer, Option<&ZombieKind>, &mut ZombiePose),
         (With<Zombie>, Without<ZombieShowcaseClip>),
     >,
     mut players: Query<&mut AnimationPlayer>,

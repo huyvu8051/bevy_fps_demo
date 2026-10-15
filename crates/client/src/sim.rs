@@ -6,7 +6,7 @@ use shared::movement::{blocked_horizontally, resolve_slope_hit, try_step_up};
 use shared::{
     entity_phase, resolve_bone_world_positions, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity,
-    NetTransform, Player, PlayerDied, RequestRestart,
+    Player, PlayerDied, RequestRestart,
     SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount,
     ShotConfirmed, ShotFx, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, zombie_speed_for, 
     GRAVITY, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
@@ -191,12 +191,6 @@ fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: b
         },
         KnockbackVelocity::default(),
         ZombieAttackTimer::default(),
-        NetTransform {
-            translation: position,
-            yaw,
-            moving: false,
-            sprinting: false,
-        },
         Health(ZOMBIE_MAX_HEALTH),
 
         ZombieHitboxBones::default(),
@@ -371,7 +365,6 @@ fn move_zombies(
             &mut ZombieMotion,
             &mut ChaseTarget,
             &mut KnockbackVelocity,
-            &mut NetTransform,
             Option<&mut AgentTarget3d>,
             Option<&AgentDesiredVelocity3d>,
         ),
@@ -382,8 +375,8 @@ fn move_zombies(
 ) {
 
     if freeze.0 {
-        for (.., mut net_transform, _, _) in &mut zombies {
-            net_transform.moving = false;
+        for (_, _, mut motion, ..) in &mut zombies {
+            motion.moving = false;
         }
         return;
     }
@@ -393,13 +386,13 @@ fn move_zombies(
     let candidates: Vec<(Entity, Vec3, f32)> = players.iter().map(|(e, t, threat)| (e, t.translation, threat.0)).collect();
 
     let mut chase_load: std::collections::HashMap<Entity, u32> = std::collections::HashMap::new();
-    for (.., chase_target, _, _, _, _) in &zombies {
+    for (.., chase_target, _, _, _) in &zombies {
         if let Some(target) = chase_target.entity {
             *chase_load.entry(target).or_insert(0) += 1;
         }
     }
 
-    for (entity, mut transform, mut motion, mut chase_target, mut knockback, mut net_transform, mut agent_target, desired_velocity) in
+    for (entity, mut transform, mut motion, mut chase_target, mut knockback, mut agent_target, desired_velocity) in
         &mut zombies
     {
 
@@ -540,9 +533,7 @@ fn move_zombies(
             turn_towards(&mut transform.rotation, target_rotation, ZOMBIE_TURN_RATE_DEG.to_radians() * time.delta_secs());
         }
 
-        net_transform.translation = transform.translation;
-        net_transform.yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
-        net_transform.moving = horizontal_velocity != Vec3::ZERO;
+        motion.moving = horizontal_velocity != Vec3::ZERO;
     }
 }
 

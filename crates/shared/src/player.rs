@@ -60,16 +60,6 @@ pub struct ClientInput {
     pub noclip: bool,
 }
 
-#[derive(Component, Clone, Copy, Serialize, Deserialize, Default)]
-pub struct NetTransform {
-    pub translation: Vec3,
-    pub yaw: f32,
-
-    pub moving: bool,
-
-    pub sprinting: bool,
-}
-
 #[derive(Component, Clone, Copy, Default, Serialize, Deserialize)]
 #[require(Transform)]
 pub struct NetPlayer;

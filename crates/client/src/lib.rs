@@ -16,7 +16,7 @@ use bevy::winit::{UpdateMode, WinitSettings};
 use shared::{
     ClearAllZombies, ClientInput, find_animation_root, FireShot, GameOver, GameStateEvent, Health,
     HEAD_DAMAGE, HITBOX_BELLY_MIN_Y, HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN,
-    KnockbackVelocity, NetPlayer, NetTransform, Player, PlayerDied,
+    KnockbackVelocity, NetPlayer, Player, PlayerDied, ZombieMotion,
     ZombieAnimationPlayer,
     PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieShowcaseClip, wire_zombie_hitbox_bones,
@@ -64,8 +64,8 @@ use graphics_settings::*;
 mod scene_setup;
 use scene_setup::*;
 
-mod network_setup;
-use network_setup::*;
+mod game_flow;
+use game_flow::*;
 
 mod f9_debug;
 use f9_debug::*;
@@ -305,7 +305,7 @@ impl Default for SettingsMenuVisible {
 
 impl Default for MapSelectionPending {
     fn default() -> Self {
-        Self(network_setup::map_id_override().is_none())
+        Self(game_flow::map_id_override().is_none())
     }
 }
 

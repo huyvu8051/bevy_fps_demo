@@ -122,7 +122,7 @@ pub(crate) fn play_zombie_footsteps(
     time: Res<Time>,
     sounds: Option<Res<FootstepSounds>>,
     listener: Query<&GlobalTransform, With<FpsCamera>>,
-    zombies: Query<(Entity, &Transform, &NetTransform, &ZombieAnimationPlayer), With<Zombie>>,
+    zombies: Query<(Entity, &Transform, &ZombieMotion, &ZombieAnimationPlayer), With<Zombie>>,
     anim_players: Query<(&AnimationPlayer, &AnimationGraphHandle)>,
     graphs: Res<Assets<AnimationGraph>>,
     clips: Res<Assets<AnimationClip>>,

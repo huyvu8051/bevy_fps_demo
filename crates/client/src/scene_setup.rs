@@ -144,7 +144,7 @@ pub(crate) fn setup_common(
     commands.insert_resource(build_player_model_anim(&asset_server, &mut graphs, &player_model_tuning));
     commands.insert_resource(ScopeZoom(SCOPE_DEFAULT_ZOOM));
     commands.insert_resource(GameOver(false));
-    if network_setup::map_id_override().is_some() {
+    if game_flow::map_id_override().is_some() {
         next_state.set(AppState::InGame);
     } else {
         next_state.set(AppState::Menu);
