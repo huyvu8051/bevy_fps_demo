@@ -345,7 +345,6 @@ pub(crate) fn setup_gameplay(
     spawn_crosshair(&mut commands);
     spawn_health_ui(&mut commands);
     spawn_ammo_ui(&mut commands);
-    spawn_ping_ui(&mut commands);
     spawn_compass_ui(&mut commands);
     spawn_radar_ui(&mut commands);
     spawn_inspect_ui(&mut commands);

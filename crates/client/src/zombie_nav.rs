@@ -12,9 +12,9 @@ const NAVMESH_SAMPLE_SLACK_BELOW_FEET: f32 = 1.0;
 #[derive(Resource)]
 pub struct ZombieArchipelago(pub Entity);
 
-pub struct ServerNavmeshPlugin;
+pub struct ZombieNavmeshPlugin;
 
-impl Plugin for ServerNavmeshPlugin {
+impl Plugin for ZombieNavmeshPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             NavmeshPlugins::default(),

@@ -212,49 +212,7 @@ pub(crate) fn spawn_ammo_ui(commands: &mut Commands) {
 #[derive(Component)]
 pub(crate) struct PingUi;
 
-pub(crate) fn spawn_ping_ui(commands: &mut Commands) {
-    commands.spawn((
-        Text::new("Ping: -- ms   Loss: --"),
-        TextFont {
-            font_size: FontSize::Px(16.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.7, 0.85, 1.0)),
-        Node {
-            position_type: PositionType::Absolute,
-            right: Val::Px(16.0),
-            top: Val::Px(16.0),
-            ..default()
-        },
-        GlobalZIndex(STATIC_UI_Z_INDEX),
-        PingUi,
-        NativeUiRoot,
-    ));
-}
 
-pub(crate) fn update_ping_ui(
-    time: Res<Time>,
-    client: Option<Res<RenetClient>>,
-    mut timer: Local<f32>,
-    mut text: Query<&mut Text, With<PingUi>>,
-) {
-    *timer -= time.delta_secs();
-    if *timer > 0.0 {
-        return;
-    }
-    *timer = PING_UI_REFRESH_SECS;
-
-    let Ok(mut text) = text.single_mut() else {
-        return;
-    };
-    text.0 = match client {
-        Some(client) => {
-            let info = client.network_info();
-            format!("Ping: {:.0} ms   Loss: {:.0}%", info.rtt * 1000.0, info.packet_loss * 100.0)
-        }
-        None => "Ping: -- ms   Loss: --".to_string(),
-    };
-}
 
 pub(crate) fn heading_deg(yaw: f32) -> f32 {
     (-yaw.to_degrees()).rem_euclid(360.0)
@@ -689,7 +647,7 @@ pub(crate) fn toggle_debug_flags(
     if keys.just_pressed(KeyCode::KeyF) {
         freeze.0 = !freeze.0;
 
-        commands.client_trigger(SetFreezeZombies(freeze.0));
+        commands.trigger(SetFreezeZombies(freeze.0));
     }
     if keys.just_pressed(KeyCode::KeyH) {
         show_hitboxes.0 = !show_hitboxes.0;

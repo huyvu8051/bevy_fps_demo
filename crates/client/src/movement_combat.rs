@@ -81,49 +81,6 @@ pub(crate) struct InputSendThrottleState {
     jump_edge_pending: bool,
 }
 
-pub(crate) fn predict_player_movement(
-    local: Query<
-        (&NetTransform, &LastProcessedInput),
-        (With<NetPlayer>, With<LocalPlayer>, Without<Player>, Changed<LastProcessedInput>),
-    >,
-    mut player: Query<(&mut Transform, &mut Player), Without<NetPlayer>>,
-    mut pending: ResMut<PredictedInputs>,
-    mut smooth: ResMut<PredictionSmooth>,
-    mover: MoveAndSlide,
-) {
-    let Ok((net_transform, last_processed)) = local.single() else {
-        return;
-    };
-    let Ok((mut transform, mut player)) = player.single_mut() else {
-        return;
-    };
-
-    let mut baseline = None;
-    while pending.0.front().is_some_and(|&(sequence, ..)| sequence <= last_processed.0) {
-        let (_, _, _, vv, grounded) = pending.0.pop_front().unwrap();
-        baseline = Some((vv, grounded));
-    }
-    let Some((base_vv, base_grounded)) = baseline else {
-        return;
-    };
-
-    let mut scratch_tf = *transform;
-    scratch_tf.translation = net_transform.translation;
-    let mut scratch_player = Player { vertical_velocity: base_vv, grounded: base_grounded };
-    for (_, input, dt, ..) in &pending.0 {
-
-        shared::movement::simulate_player_step(&mover, &mut scratch_tf, &mut scratch_player, input.stance, input, *dt);
-    }
-
-    if transform.translation.distance(scratch_tf.translation) > RECONCILE_POS_THRESHOLD {
-        let pre = transform.translation;
-        *transform = scratch_tf;
-        player.vertical_velocity = scratch_player.vertical_velocity;
-        player.grounded = scratch_player.grounded;
-
-        smooth.offset += pre - transform.translation;
-    }
-}
 
 pub(crate) fn zombies_damage_player(
     time: Res<Time>,
@@ -531,7 +488,7 @@ pub(crate) fn send_player_input(
     sent_input.jump = input_send_state.jump_edge_pending;
     input_send_state.jump_edge_pending = false;
 
-    commands.client_trigger(sent_input);
+    commands.trigger(sent_input);
 }
 
 pub(crate) fn sync_camera_to_player(
@@ -840,7 +797,7 @@ pub(crate) fn shoot(
     spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 733.0, tracer_start, tracer_end, show_tracers.0);
 
     info!("[shot] fired: origin={:.2?} direction={:.2?}", camera_transform.translation, *direction);
-    commands.client_trigger(FireShot {
+    commands.trigger(FireShot {
         origin: camera_transform.translation,
         direction: *direction,
     });

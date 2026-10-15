@@ -754,7 +754,7 @@ pub(crate) fn cheat_toggle_buttons(
     if tapped(&freeze_btn) {
         freeze.0 = !freeze.0;
 
-        commands.client_trigger(SetFreezeZombies(freeze.0));
+        commands.trigger(SetFreezeZombies(freeze.0));
     }
     if tapped(&gun_btn) {
         gun_visible.0 = !gun_visible.0;
@@ -1019,7 +1019,7 @@ pub(crate) fn update_extra_toggle_colors(
 pub(crate) fn cheat_kill_all_button(mut commands: Commands, kill_btn: Query<&Interaction, (With<CheatKillAllButton>, Changed<Interaction>)>) {
     for interaction in &kill_btn {
         if *interaction == Interaction::Pressed {
-            commands.client_trigger(ClearAllZombies);
+            commands.trigger(ClearAllZombies);
         }
     }
 }
@@ -1040,7 +1040,7 @@ pub(crate) fn cheat_zombie_health_buttons(
     near_death_btn: Query<&Interaction, (With<NearDeathNearestButton>, Changed<Interaction>)>,
 ) {
     if tapped(&spawn_more_btn) {
-        commands.client_trigger(SpawnMoreZombies);
+        commands.trigger(SpawnMoreZombies);
     }
     let Ok(player_transform) = player.single() else {
         return;
@@ -1105,7 +1105,7 @@ pub(crate) fn zombie_count_buttons(
         }
     }
     if changed {
-        commands.client_trigger(SetZombieCount(count.0));
+        commands.trigger(SetZombieCount(count.0));
     }
 }
 
@@ -1164,7 +1164,7 @@ pub(crate) fn damage_multiplier_buttons(
         }
     }
     if changed {
-        commands.client_trigger(SetDamageMultiplier(multiplier.0));
+        commands.trigger(SetDamageMultiplier(multiplier.0));
     }
 }
 
@@ -1185,7 +1185,7 @@ pub(crate) fn auto_maintain_button(
     for interaction in &btn {
         if *interaction == Interaction::Pressed {
             auto_maintain.0 = !auto_maintain.0;
-            commands.client_trigger(SetAutoMaintainZombies(auto_maintain.0));
+            commands.trigger(SetAutoMaintainZombies(auto_maintain.0));
         }
     }
 }

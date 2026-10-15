@@ -1,19 +1,6 @@
-use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
-use std::time::SystemTime;
-
 use avian3d::prelude::*;
 use bevy_landmass::prelude::*;
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
-use bevy_replicon::prelude::*;
-use bevy_replicon::shared::backend::connected_client::NetworkId;
-use bevy_replicon_renet2::{
-    netcode::{
-        BoxedSocket, NativeSocket, NetcodeServerTransport, ServerAuthentication, ServerSetupConfig,
-    },
-    renet2::{ConnectionConfig, RenetServer},
-    RenetChannelsExt, RepliconRenetPlugins,
-};
 use big_brain::prelude::*;
 use shared::movement::{blocked_horizontally, resolve_slope_hit, try_step_up};
 use shared::{
@@ -41,214 +28,51 @@ use bevy::animation::AnimationPlayer;
 use bevy::gltf::GltfAssetLabel;
 use bevy::pbr::StandardMaterial;
 
-const MAX_CLIENTS: usize = 256;
+pub(crate) struct SimPlugin;
 
-fn scenario_from_env() -> Scenario {
-    std::env::var("MAP_ID")
-        .ok()
-        .and_then(|s| s.parse::<u8>().ok())
-        .map(Scenario::from_map_id)
-        .unwrap_or_default()
-}
-
-const SERVER_TICK_HZ: f64 = 32.0;
-
-fn main() {
-    let scenario = scenario_from_env();
-
-    eprintln!("[server] scenario: {scenario:?} (port {})", scenario.port());
-    App::new()
-        .insert_resource(scenario)
-        .add_plugins((
-            MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(std::time::Duration::from_secs_f64(
-                1.0 / SERVER_TICK_HZ,
-            ))),
-            bevy::log::LogPlugin::default(),
-
-            bevy::asset::AssetPlugin {
-                file_path: "../client/assets".to_string(),
-                ..default()
-            },
-            bevy::mesh::MeshPlugin,
-            bevy::scene::ScenePlugin,
-            bevy::world_serialization::WorldSerializationPlugin,
-
-            bevy::image::ImagePlugin::default(),
-
-            bevy::animation::AnimationPlugin,
-            bevy::gltf::GltfPlugin::default(),
-            StatesPlugin,
-            PhysicsPlugins::default(),
-            BigBrainPlugin::new(PreUpdate),
-            RepliconPlugins,
-            RepliconRenetPlugins,
-            server::navmesh::ServerNavmeshPlugin,
-        ))
-        .init_asset::<StandardMaterial>()
-
-        .register_type::<Transform>()
-        .register_type::<GlobalTransform>()
-        .register_type::<bevy::transform::components::TransformTreeChanged>()
-        .register_type::<Visibility>()
-        .register_type::<InheritedVisibility>()
-        .register_type::<ViewVisibility>()
-        .register_type::<Name>()
-        .register_type::<Mesh3d>()
-        .register_type::<MeshMaterial3d<StandardMaterial>>()
-        .register_type::<bevy::ecs::hierarchy::Children>()
-        .register_type::<bevy::ecs::hierarchy::ChildOf>()
-        .register_type::<bevy::animation::AnimatedBy>()
-        .register_type::<AnimationPlayer>()
-        .register_type::<bevy::camera::primitives::Aabb>()
-        .register_type::<bevy::gltf::GltfExtras>()
-        .register_type::<bevy::gltf::GltfSceneExtras>()
-        .register_type::<bevy::gltf::GltfMeshExtras>()
-        .register_type::<bevy::gltf::GltfMaterialExtras>()
-        .register_type::<bevy::gltf::GltfMeshName>()
-        .register_type::<bevy::gltf::GltfMaterialName>()
-        .register_type::<bevy::mesh::skinning::SkinnedMesh>()
-        .replicate::<NetworkId>()
-        .replicate::<NetPlayer>()
-        .replicate::<NetTransform>()
-        .replicate::<Zombie>()
-        .replicate::<ZombieKind>()
-        .replicate::<Health>()
-        .replicate::<LastProcessedInput>()
-
-        .add_client_event::<ClientInput>(Channel::Unreliable)
-        .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
-        .add_client_event::<FireShot>(Channel::Ordered)
-        .add_server_event::<ShotFx>(Channel::Ordered)
-        .add_server_event::<ShotConfirmed>(Channel::Ordered)
-        .add_server_event::<PlayerFiredFx>(Channel::Unordered)
-        .add_server_event::<PlayerDiedFx>(Channel::Ordered)
-        .add_client_event::<PlayerDied>(Channel::Ordered)
-        .add_client_event::<RequestRestart>(Channel::Ordered)
-        .add_server_event::<GameStateEvent>(Channel::Ordered)
-        .add_client_event::<SetZombieCount>(Channel::Ordered)
-        .add_client_event::<ClearAllZombies>(Channel::Ordered)
-        .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
-        .add_client_event::<SetFreezeZombies>(Channel::Ordered)
-        .add_client_event::<SetDamageMultiplier>(Channel::Ordered)
-        .init_resource::<FreezeZombiesServer>()
-        .init_resource::<DamageMultiplierServer>()
-        .init_resource::<PendingRespawns>()
-        .init_resource::<GameOver>()
-        .init_resource::<ZombieTargetCount>()
-        .init_resource::<AutoMaintainZombies>()
-        .init_resource::<NextZombieSpawnIndex>()
-        .init_resource::<ZombieSpawnPoints>()
-        .add_systems(
-            Startup,
-            (
-                start_server,
-                setup_map_colliders,
-
-                (load_zombie_spawn_points, spawn_initial_zombies).chain(),
-                setup_server_zombie_anim,
-            ),
-        )
-        .add_systems(
-            PreUpdate,
-            (
-                chase_action_system.in_set(BigBrainSet::Actions),
-                near_player_scorer.in_set(BigBrainSet::Scorers),
-            ),
-        )
-        .add_systems(
-            Update,
-            (
-                move_players,
-                (move_zombies, update_server_zombie_pose)
-                    .chain()
-                    .after(LandmassSystems::Output),
-                tick_respawns,
-                decay_player_threat,
-
-                wire_server_zombie_animations,
-                wire_zombie_hitbox_bones,
-            ),
-        )
-        .add_observer(spawn_player)
-        .add_observer(log_client_disconnect)
-        .add_observer(apply_client_input)
-        .add_observer(on_zombie_spawned)
-        .add_observer(spawn_more_zombies)
-        .add_observer(on_set_zombie_count)
-        .add_observer(on_clear_all_zombies)
-        .add_observer(on_set_auto_maintain_zombies)
-        .add_observer(on_set_freeze_zombies)
-.add_observer(on_set_damage_multiplier)
-        .add_observer(on_player_died)
-        .add_observer(on_request_restart)
-        .add_observer(handle_fire_shot)
-        .run();
-}
-
-fn start_server(mut commands: Commands, channels: Res<RepliconChannels>, scenario: Res<Scenario>) {
-    let server = RenetServer::new(ConnectionConfig::from_channels(
-        channels.server_configs(),
-        channels.client_configs(),
-    ));
-
-    let current_time = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .expect("system clock should be after the unix epoch");
-
-    let public_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), scenario.port());
-    let udp_socket = UdpSocket::bind(public_addr).expect("failed to bind server UDP socket");
-    let native_socket = NativeSocket::new(udp_socket).unwrap();
-
-    let server_config = ServerSetupConfig {
-        current_time,
-        max_clients: MAX_CLIENTS,
-        protocol_id: PROTOCOL_ID,
-        authentication: ServerAuthentication::Unsecure,
-
-        socket_addresses: vec![vec![public_addr]],
-    };
-    let transport = NetcodeServerTransport::new_with_sockets(server_config, vec![BoxedSocket::new(native_socket)])
-        .expect("failed to set up netcode server transport");
-
-    commands.insert_resource(server);
-    commands.insert_resource(transport);
-    info!("dedicated server listening on {public_addr}");
-}
-
-fn setup_map_colliders(mut commands: Commands, scenario: Res<Scenario>, asset_server: Res<AssetServer>) {
-    server::map_colliders::spawn_map_colliders(&mut commands, *scenario, &asset_server);
-}
-
-fn spawn_player(trigger: On<Add, ConnectedClient>, mut commands: Commands, scenario: Res<Scenario>) {
-    let entity = trigger.event().entity;
-    info!("client connected: {entity}");
-    let spawn_pos = scenario.player_spawn();
-    commands.entity(entity).insert((
-        Transform::from_translation(spawn_pos),
-        Player {
-            vertical_velocity: 0.0,
-            grounded: false,
-        },
-        PlayerStance::default(),
-        ClientInput::default(),
-        NetPlayer,
-        NetTransform {
-            translation: spawn_pos,
-            yaw: 0.0,
-            moving: false,
-            sprinting: false,
-        },
-        LastProcessedInput::default(),
-        PlayerThreat::default(),
-        Replicated,
-    ));
+impl Plugin for SimPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(BigBrainPlugin::new(PreUpdate))
+            .init_resource::<FreezeZombiesServer>()
+            .init_resource::<DamageMultiplierServer>()
+            .init_resource::<PendingRespawns>()
+            .init_resource::<ZombieTargetCount>()
+            .init_resource::<AutoMaintainZombies>()
+            .init_resource::<NextZombieSpawnIndex>()
+            .init_resource::<ZombieSpawnPoints>()
+            .add_systems(Startup, (load_zombie_spawn_points, spawn_initial_zombies).chain())
+            .add_systems(
+                PreUpdate,
+                (
+                    chase_action_system.in_set(BigBrainSet::Actions),
+                    near_player_scorer.in_set(BigBrainSet::Scorers),
+                ),
+            )
+            .add_systems(
+                Update,
+                (
+                    move_zombies.after(LandmassSystems::Output),
+                    tick_respawns,
+                    decay_player_threat,
+                ),
+            )
+            .add_observer(spawn_more_zombies)
+            .add_observer(on_set_zombie_count)
+            .add_observer(on_clear_all_zombies)
+            .add_observer(on_set_auto_maintain_zombies)
+            .add_observer(on_set_freeze_zombies)
+            .add_observer(on_set_damage_multiplier)
+            .add_observer(on_player_died)
+            .add_observer(on_request_restart)
+            .add_observer(handle_fire_shot);
+    }
 }
 
 #[derive(Resource, Default)]
 struct FreezeZombiesServer(bool);
 
-fn on_set_freeze_zombies(trigger: On<FromClient<SetFreezeZombies>>, mut freeze: ResMut<FreezeZombiesServer>) {
-    freeze.0 = trigger.message.0;
+fn on_set_freeze_zombies(trigger: On<SetFreezeZombies>, mut freeze: ResMut<FreezeZombiesServer>) {
+    freeze.0 = trigger.event().0;
 }
 
 #[derive(Resource)]
@@ -259,8 +83,8 @@ impl Default for DamageMultiplierServer {
     }
 }
 
-fn on_set_damage_multiplier(trigger: On<FromClient<SetDamageMultiplier>>, mut multiplier: ResMut<DamageMultiplierServer>) {
-    multiplier.0 = trigger.message.0.max(0.0);
+fn on_set_damage_multiplier(trigger: On<SetDamageMultiplier>, mut multiplier: ResMut<DamageMultiplierServer>) {
+    multiplier.0 = trigger.event().0.max(0.0);
 }
 
 #[derive(Component, Default)]
@@ -270,40 +94,6 @@ fn decay_player_threat(time: Res<Time>, mut threats: Query<&mut PlayerThreat>) {
     let decay = (1.0 - PLAYER_THREAT_DECAY_RATE * time.delta_secs()).clamp(0.0, 1.0);
     for mut threat in &mut threats {
         threat.0 *= decay;
-    }
-}
-
-fn log_client_disconnect(trigger: On<Remove, ConnectedClient>) {
-    info!("client disconnected: {}", trigger.event().entity);
-}
-
-fn apply_client_input(
-    trigger: On<FromClient<ClientInput>>,
-    mut players: Query<(&mut ClientInput, &mut LastProcessedInput, &mut PlayerStance)>,
-) {
-    let Some(entity) = trigger.client_id.entity() else {
-        return;
-    };
-    if let Ok((mut input, mut last_processed, mut stance)) = players.get_mut(entity) {
-
-        *stance = trigger.message.stance;
-        *input = trigger.message;
-        last_processed.0 = trigger.message.sequence;
-    }
-}
-
-fn move_players(
-    time: Res<Time>,
-    mut players: Query<(&mut Transform, &mut Player, &PlayerStance, &ClientInput, &mut NetTransform)>,
-    mover: MoveAndSlide,
-) {
-    for (mut transform, mut player, stance, input, mut net_transform) in &mut players {
-        shared::movement::simulate_player_step(&mover, &mut transform, &mut player, *stance, input, time.delta_secs());
-        net_transform.translation = transform.translation;
-        net_transform.yaw = input.yaw;
-
-        net_transform.moving = input.move_axis != Vec2::ZERO;
-        net_transform.sprinting = input.sprint;
     }
 }
 
@@ -337,7 +127,7 @@ fn zombie_spawn_pos_for(scenario: Scenario, seed: usize, points: &[Vec3]) -> (Ve
 }
 
 fn on_set_zombie_count(
-    trigger: On<FromClient<SetZombieCount>>,
+    trigger: On<SetZombieCount>,
     mut commands: Commands,
     scenario: Res<Scenario>,
     mut target: ResMut<ZombieTargetCount>,
@@ -346,7 +136,7 @@ fn on_set_zombie_count(
     baseline_zombies: Query<Entity, With<Zombie>>,
 ) {
     let kind = *scenario;
-    target.0 = trigger.message.0.min(shared::ZOMBIE_MAX_COUNT);
+    target.0 = trigger.event().0.min(shared::ZOMBIE_MAX_COUNT);
     let current = baseline_zombies.iter().count() as u32;
     if current < target.0 {
         let to_spawn: Vec<(Vec3, f32)> = (0..target.0 - current)
@@ -365,7 +155,7 @@ fn on_set_zombie_count(
 }
 
 fn on_clear_all_zombies(
-    _trigger: On<FromClient<ClearAllZombies>>,
+    _trigger: On<ClearAllZombies>,
     mut commands: Commands,
     all_zombies: Query<Entity, With<Zombie>>,
     mut respawns: ResMut<PendingRespawns>,
@@ -376,12 +166,12 @@ fn on_clear_all_zombies(
     respawns.0.clear();
 }
 
-fn on_set_auto_maintain_zombies(trigger: On<FromClient<SetAutoMaintainZombies>>, mut auto_maintain: ResMut<AutoMaintainZombies>) {
-    auto_maintain.0 = trigger.message.0;
+fn on_set_auto_maintain_zombies(trigger: On<SetAutoMaintainZombies>, mut auto_maintain: ResMut<AutoMaintainZombies>) {
+    auto_maintain.0 = trigger.event().0;
 }
 
 fn spawn_more_zombies(
-    _trigger: On<FromClient<SpawnMoreZombies>>,
+    _trigger: On<SpawnMoreZombies>,
     points: Res<ZombieSpawnPoints>,
     mut commands: Commands,
 ) {
@@ -411,7 +201,6 @@ fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: b
             sprinting: false,
         },
         Health(ZOMBIE_MAX_HEALTH),
-        Replicated,
 
         Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
 
@@ -456,81 +245,6 @@ fn spawn_initial_zombies(
         .map(|p| (*p + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0))
         .collect();
     spawn_zombies(&mut commands, &spawns, true);
-}
-
-fn setup_server_zombie_anim(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut graphs: ResMut<Assets<AnimationGraph>>,
-) {
-    commands.insert_resource(ZombieAnim::build(&mut graphs, |kind, index| {
-        asset_server.load(GltfAssetLabel::Animation(index).from_asset(zombie_kind_anim_path(kind)))
-    }));
-}
-
-fn on_zombie_spawned(
-    trigger: On<Add, Zombie>,
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    kinds: Query<&ZombieKind>,
-) {
-    let entity = trigger.event().entity;
-
-    let kind = kinds.get(entity).copied().unwrap_or_default();
-    let scene = asset_server.load(GltfAssetLabel::Scene(0).from_asset(zombie_kind_mesh_path(kind)));
-    commands.entity(entity).with_child((
-
-        Transform::IDENTITY,
-        Visibility::default(),
-        WorldAssetRoot(scene),
-    ));
-}
-
-fn wire_server_zombie_animations(
-    mut commands: Commands,
-    anim: Res<ZombieAnim>,
-    child_of: Query<&ChildOf>,
-    zombies: Query<Option<&ZombieKind>, With<Zombie>>,
-    mut new_players: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
-) {
-    for (player_entity, mut player) in &mut new_players {
-        let Some(root) = find_animation_root(player_entity, &child_of, |e| zombies.get(e).is_ok()) else {
-            continue;
-        };
-        let kind = zombies.get(root).ok().flatten().copied().unwrap_or_default();
-        let slot = anim.slot(kind);
-        commands.entity(player_entity).try_insert(AnimationGraphHandle(slot.graph.clone()));
-        player.play(slot.idle()).repeat();
-
-        commands.entity(root).try_insert(ZombieAnimationPlayer(player_entity));
-    }
-}
-
-fn update_server_zombie_pose(
-    anim: Res<ZombieAnim>,
-    players: Query<&Transform, (With<NetPlayer>, Without<Zombie>)>,
-    mut zombies: Query<
-        (&Transform, &NetTransform, &Health, &ChaseTarget, &ZombieAnimationPlayer, Option<&ZombieKind>, &mut ZombiePose),
-        With<Zombie>,
-    >,
-    mut anim_players: Query<&mut AnimationPlayer>,
-) {
-    for (transform, net_transform, health, chase_target, link, kind, mut pose) in &mut zombies {
-        let distance = chase_target
-            .entity
-            .and_then(|target| players.get(target).ok())
-            .map_or(f32::MAX, |target_transform| transform.translation.distance(target_transform.translation));
-        let new_pose = zombie_pose_for(distance, health.0 / ZOMBIE_MAX_HEALTH, net_transform.moving);
-        if new_pose == *pose {
-            continue;
-        }
-        *pose = new_pose;
-        if let Ok(mut player) = anim_players.get_mut(link.0) {
-            let slot = anim.slot(kind.copied().unwrap_or_default());
-            player.stop_all();
-            player.play(slot.node(new_pose)).repeat();
-        }
-    }
 }
 
 #[derive(Clone, Component, Debug, ScorerBuilder)]
@@ -838,9 +552,8 @@ fn tick_respawns(
 }
 
 fn handle_fire_shot(
-    trigger: On<FromClient<FireShot>>,
+    trigger: On<FireShot>,
     mut commands: Commands,
-    network_ids: Query<&NetworkId>,
     spatial_query: SpatialQuery,
     bone_globals: Query<&GlobalTransform>,
     mut zombies: Query<(Entity, &Transform, &ZombieHitboxBones, &mut Health, &mut KnockbackVelocity), With<Zombie>>,
@@ -848,20 +561,11 @@ fn handle_fire_shot(
     mut threats: Query<&mut PlayerThreat>,
     damage_multiplier: Res<DamageMultiplierServer>,
 ) {
-    if let Some(shooter) = trigger.client_id.entity() {
-        if let Ok(mut threat) = threats.get_mut(shooter) {
-            threat.0 += PLAYER_THREAT_PER_SHOT;
-        }
-
-        if let Ok(network_id) = network_ids.get(shooter) {
-            commands.server_trigger(ToClients {
-                targets: SendTargets::All,
-                message: PlayerFiredFx { shooter_network_id: network_id.get() },
-            });
-        }
+    for mut threat in &mut threats {
+        threat.0 += PLAYER_THREAT_PER_SHOT;
     }
 
-    let shot = trigger.message;
+    let shot = *trigger.event();
     let Ok(direction) = Dir3::new(shot.direction) else {
         return;
     };
@@ -926,15 +630,7 @@ fn handle_fire_shot(
                 knockback.0 += push;
             }
 
-            commands.server_trigger(ToClients {
-                targets: SendTargets::AllExcept(trigger.client_id),
-                message: ShotFx::ZombieHit { origin: shot.origin, point: hit_point, normal, damage, killed },
-            });
-
-            commands.server_trigger(ToClients {
-                targets: SendTargets::Single(trigger.client_id),
-                message: ShotConfirmed { point: hit_point, normal, damage, killed },
-            });
+            commands.trigger(ShotConfirmed { point: hit_point, normal, damage, killed });
         }
         return;
     }
@@ -950,51 +646,37 @@ fn handle_fire_shot(
 
     let surface_point = shot.origin + *direction * hit.distance;
     info!("[shot] hit a surface, no zombie: point={surface_point:.2?}");
-    commands.server_trigger(ToClients {
-        targets: SendTargets::All,
-        message: ShotFx::SurfaceHit { origin: shot.origin, point: surface_point, normal: hit.normal },
-    });
+    commands.trigger(ShotFx::SurfaceHit { origin: shot.origin, point: surface_point, normal: hit.normal });
 }
 
 #[derive(Component)]
 struct Dead;
 
 fn on_player_died(
-    trigger: On<FromClient<PlayerDied>>,
+    trigger: On<PlayerDied>,
     mut commands: Commands,
     mut game_over: ResMut<GameOver>,
 
-    connected: Query<Entity, With<NetPlayer>>,
+    players: Query<Entity, With<Player>>,
     dead: Query<(), With<Dead>>,
-    network_ids: Query<&NetworkId>,
 ) {
-    let Some(entity) = trigger.client_id.entity() else {
+    let Ok(entity) = players.single() else {
         return;
     };
     commands.entity(entity).insert(Dead);
 
-    if let Ok(network_id) = network_ids.get(entity) {
-        commands.server_trigger(ToClients {
-            targets: SendTargets::All,
-            message: PlayerDiedFx { who_network_id: network_id.get() },
-        });
-    }
-
     if game_over.0 {
         return;
     }
-    let all_dead = connected.iter().all(|e| e == entity || dead.contains(e));
+    let all_dead = players.iter().all(|e| e == entity || dead.contains(e));
     if all_dead {
         game_over.0 = true;
-        commands.server_trigger(ToClients {
-            targets: SendTargets::All,
-            message: GameStateEvent::GameOver,
-        });
+        commands.trigger(GameStateEvent::GameOver);
     }
 }
 
 fn on_request_restart(
-    _trigger: On<FromClient<RequestRestart>>,
+    _trigger: On<RequestRestart>,
     mut commands: Commands,
     mut game_over: ResMut<GameOver>,
     mut respawns: ResMut<PendingRespawns>,
@@ -1031,8 +713,5 @@ fn on_request_restart(
         net_transform.yaw = 0.0;
     }
 
-    commands.server_trigger(ToClients {
-        targets: SendTargets::All,
-        message: GameStateEvent::Restarted,
-    });
+    commands.trigger(GameStateEvent::Restarted);
 }

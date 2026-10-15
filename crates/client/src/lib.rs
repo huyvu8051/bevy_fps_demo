@@ -13,15 +13,6 @@ use bevy::asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window, WindowMode};
 use bevy::winit::{UpdateMode, WinitSettings};
-use bevy_replicon::prelude::*;
-use bevy_replicon::shared::backend::connected_client::NetworkId;
-
-use bevy_replicon_renet2::netcode::NativeSocket;
-use bevy_replicon_renet2::{
-    netcode::{ClientAuthentication, NetcodeClientTransport},
-    renet2::{ConnectionConfig, RenetClient},
-    RenetChannelsExt, RepliconRenetPlugins,
-};
 use shared::{
     ClearAllZombies, ClientInput, find_animation_root, FireShot, GameOver, GameStateEvent, Health,
     HEAD_DAMAGE, HITBOX_BELLY_MIN_Y, HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN,
@@ -80,6 +71,11 @@ use f9_debug::*;
 
 mod navigation;
 use navigation::*;
+
+mod sim;
+use sim::SimPlugin;
+
+mod zombie_nav;
 
 mod settings_persistence;
 use settings_persistence::*;
@@ -380,9 +376,8 @@ pub fn main() {
                 }),
             MeshPickingPlugin,
             PhysicsPlugins::default(),
-
-            RepliconPlugins,
-            RepliconRenetPlugins,
+            SimPlugin,
+            zombie_nav::ZombieNavmeshPlugin,
         ))
 
         .insert_resource(if cfg!(target_os = "ios") {
@@ -416,56 +411,14 @@ pub(crate) struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-    app.replicate::<NetworkId>()
-        .replicate::<NetPlayer>()
-        .replicate::<NetTransform>()
-        .replicate::<Zombie>()
-        .replicate::<ZombieKind>()
-        .replicate::<Health>()
-        .replicate::<LastProcessedInput>()
-
-        .init_resource::<PlayerModelPoseOverride>()
-        .register_type::<PlayerModelPose>()
-        .register_type::<ZombiePose>()
-        .register_type::<PlayerModelPoseOverride>()
-        .add_client_event::<ClientInput>(Channel::Unreliable)
-        .add_client_event::<SpawnMoreZombies>(Channel::Unordered)
-        .add_client_event::<FireShot>(Channel::Ordered)
-        .add_server_event::<ShotFx>(Channel::Ordered)
-        .add_server_event::<ShotConfirmed>(Channel::Ordered)
-        .add_server_event::<PlayerFiredFx>(Channel::Unordered)
-        .add_server_event::<PlayerDiedFx>(Channel::Ordered)
-        .add_client_event::<PlayerDied>(Channel::Ordered)
-        .add_client_event::<RequestRestart>(Channel::Ordered)
-        .add_server_event::<GameStateEvent>(Channel::Ordered)
-        .add_client_event::<SetZombieCount>(Channel::Ordered)
-        .add_client_event::<ClearAllZombies>(Channel::Ordered)
-        .add_client_event::<SetAutoMaintainZombies>(Channel::Ordered)
-        .add_client_event::<SetFreezeZombies>(Channel::Ordered)
-        .add_client_event::<SetDamageMultiplier>(Channel::Ordered)
-        .init_resource::<ZombieCountUi>()
+    app.init_resource::<ZombieCountUi>()
         .init_resource::<AutoMaintainUi>()
 
         .init_state::<AppState>()
-        .add_systems(
-            Update,
-            (
-                log_client_connection_state,
-                mirror_local_player_net_transform,
-                (buffer_net_transform, interpolate_net_transform).chain(),
-                auto_reconnect,
-            ),
-        )
-        .add_systems(OnExit(ClientState::Connected), despawn_replicated_on_disconnect)
-        .add_observer(mark_local_player)
         .add_observer(on_zombie_replicated)
         .add_observer(on_zombie_kind_replicated)
-        .add_observer(on_net_transform_replicated)
-        .add_observer(on_net_player_replicated)
         .add_observer(on_shot_fx)
         .add_observer(on_shot_confirmed)
-        .add_observer(on_player_fired_fx)
-        .add_observer(on_player_died_fx)
         .add_observer(on_game_state_event)
         .add_plugins(F9DebugPlugin)
         .add_plugins(navigation::ClientNavigationPlugin)
@@ -530,7 +483,7 @@ impl Plugin for GamePlugin {
         .add_systems(Startup, (apply_persisted_settings, setup_common, force_game_over_on_start).chain())
         .add_systems(OnEnter(AppState::Menu), enter_menu)
         .add_systems(OnExit(AppState::Menu), exit_menu)
-        .add_systems(OnEnter(AppState::InGame), (setup_gameplay, connect_to_server).chain());
+        .add_systems(OnEnter(AppState::InGame), setup_gameplay);
     app.add_systems(Update, persist_settings_on_change);
 
     app.add_systems(
@@ -623,7 +576,6 @@ impl Plugin for GamePlugin {
                     apply_aim_zoom,
                     apply_aim_dof,
                     send_player_input,
-                    predict_player_movement,
                     sync_camera_to_player,
                     sync_player_model,
                     zombies_damage_player,
@@ -677,7 +629,6 @@ impl Plugin for GamePlugin {
                 sync_scope_camera,
                 update_scope_lens,
                 update_ammo_ui,
-                update_ping_ui,
                 update_crosshair,
                 set_hitbox_gizmo_depth_bias,
                 draw_zombie_hitboxes,

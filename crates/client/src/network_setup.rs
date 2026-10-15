@@ -19,10 +19,6 @@ pub(crate) enum AppState {
 #[derive(Resource)]
 pub(crate) struct MapSelectionPending(pub(crate) bool);
 
-pub(crate) fn connect_to_server(mut commands: Commands, channels: Res<RepliconChannels>) {
-    spawn_client_connection(&mut commands, &channels);
-}
-
 static MAP_ID_OVERRIDE: std::sync::Mutex<Option<u8>> = std::sync::Mutex::new(None);
 
 pub(crate) fn set_map_id(id: u8) {
@@ -36,208 +32,12 @@ pub(crate) fn map_id_override() -> Option<u8> {
         .or_else(|| std::env::var("MAP_ID").ok().and_then(|s| s.parse().ok()))
 }
 
-pub(crate) fn auto_reconnect(
-    mut commands: Commands,
-    time: Res<Time>,
-    state: Res<State<ClientState>>,
-    channels: Res<RepliconChannels>,
-    mut disconnected_for: Local<f32>,
-    pending: Res<MapSelectionPending>,
-) {
-    if pending.0 {
-        *disconnected_for = 0.0;
-        return;
-    }
-    if *state.get() != ClientState::Disconnected {
-        *disconnected_for = 0.0;
-        return;
-    }
-    *disconnected_for += time.delta_secs();
-    if *disconnected_for < RECONNECT_INTERVAL {
-        return;
-    }
-    *disconnected_for = 0.0;
-
-    commands.remove_resource::<RenetClient>();
-    commands.remove_resource::<NetcodeClientTransport>();
-    info!("connection lost — retrying");
-    spawn_client_connection(&mut commands, &channels);
-}
-
-pub(crate) fn despawn_replicated_on_disconnect(mut commands: Commands, entities: Query<Entity, Or<(With<Zombie>, With<NetPlayer>)>>) {
-    for entity in &entities {
-        commands.entity(entity).despawn();
-    }
-}
-
 pub(crate) fn current_scenario() -> Scenario {
     map_id_override().map(Scenario::from_map_id).unwrap_or_default()
 }
 
 pub(crate) fn autopilot_enabled_by_default(_scenario: Scenario) -> bool {
     true
-}
-
-pub(crate) fn spawn_client_connection(commands: &mut Commands, channels: &RepliconChannels) {
-
-    let server_addr_str = std::env::var("SERVER_ADDR").unwrap_or_else(|_| {
-        let host = if std::env::var("LOCAL").is_ok() {
-            "127.0.0.1".to_string()
-        } else {
-            std::env::var("SERVER_HOST").unwrap_or_else(|_| "100.97.13.68".to_string())
-        };
-        format!("{host}:{}", current_scenario().port())
-    });
-    let server_addr: std::net::SocketAddr = std::net::ToSocketAddrs::to_socket_addrs(&server_addr_str)
-        .unwrap_or_else(|_| panic!("SERVER_ADDR must be a resolvable host:port (DNS lookup failed for \"{server_addr_str}\"), e.g. 127.0.0.1:5031 or foo.tun.ply.gg:5031"))
-        .next()
-        .unwrap_or_else(|| panic!("SERVER_ADDR \"{server_addr_str}\" resolved to no addresses"));
-
-    let client = RenetClient::new(
-        ConnectionConfig::from_channels(channels.server_configs(), channels.client_configs()),
-        false,
-    );
-
-    let current_time = std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .expect("system clock should be after the unix epoch");
-    let client_id = current_time.as_millis() as u64;
-    let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))
-        .expect("failed to bind client UDP socket");
-    let authentication = ClientAuthentication::Unsecure {
-        client_id,
-        protocol_id: PROTOCOL_ID,
-        socket_id: 0,
-        server_addr,
-        user_data: None,
-    };
-    let socket = NativeSocket::new(socket).unwrap();
-    let transport = NetcodeClientTransport::new(current_time, authentication, socket)
-        .expect("failed to set up netcode client transport");
-
-    commands.insert_resource(client);
-    commands.insert_resource(transport);
-    commands.insert_resource(MyClientId(client_id));
-    info!("connecting to server at {server_addr}");
-}
-
-#[derive(Resource)]
-pub(crate) struct MyClientId(u64);
-
-#[derive(Component)]
-pub(crate) struct LocalPlayer;
-
-pub(crate) fn mark_local_player(
-    trigger: On<Add, NetworkId>,
-    mut commands: Commands,
-    my_id: Res<MyClientId>,
-    players: Query<&NetworkId, With<NetPlayer>>,
-) {
-    let entity = trigger.event().entity;
-    let Ok(network_id) = players.get(entity) else {
-        return;
-    };
-    if network_id.get() == my_id.0 {
-        commands.entity(entity).insert(LocalPlayer);
-    }
-}
-
-pub(crate) fn on_net_player_replicated(
-    trigger: On<Add, NetPlayer>,
-    mut commands: Commands,
-    my_id: Res<MyClientId>,
-    network_ids: Query<&NetworkId>,
-    asset_server: Res<AssetServer>,
-    tuning: Res<PlayerModelTuning>,
-) {
-    let entity = trigger.event().entity;
-    if network_ids.get(entity).is_ok_and(|id| id.get() == my_id.0) {
-        return;
-    }
-
-    commands.entity(entity).insert(Visibility::default());
-    commands.entity(entity).with_children(|parent| {
-        spawn_remote_player_model(parent, &asset_server, &tuning);
-    });
-}
-
-pub(crate) fn spawn_remote_player_model(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer, tuning: &PlayerModelTuning) {
-    parent.spawn((
-        Name::new("PlayerModel (remote NetPlayer)"),
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(tuning.mesh.clone()))),
-
-        Transform::from_xyz(0.0, tuning.y_offset, 0.0)
-            .with_rotation(Quat::from_rotation_y(tuning.facing_deg.to_radians()))
-            .with_scale(Vec3::splat(tuning.scale)),
-        PlayerModelAnimRoot,
-
-        PlayerModelSkeletonBones::default(),
-    ));
-}
-
-pub(crate) fn mirror_local_player_net_transform(
-    mut players: Query<(&NetTransform, &mut Transform), (Changed<NetTransform>, With<LocalPlayer>)>,
-) {
-    for (net_transform, mut transform) in &mut players {
-        transform.translation = net_transform.translation;
-        transform.rotation = Quat::from_rotation_y(net_transform.yaw);
-    }
-}
-
-#[derive(Component, Default)]
-pub(crate) struct NetTransformBuffer {
-    snapshots: std::collections::VecDeque<(f32, Vec3, f32)>,
-}
-
-pub(crate) fn on_net_transform_replicated(trigger: On<Add, NetTransform>, mut commands: Commands) {
-    commands.entity(trigger.event().entity).insert(NetTransformBuffer::default());
-}
-
-pub(crate) fn buffer_net_transform(
-    time: Res<Time>,
-    mut entities: Query<(&NetTransform, &mut NetTransformBuffer), (Changed<NetTransform>, Without<LocalPlayer>)>,
-) {
-    let now = time.elapsed_secs();
-    for (net_transform, mut buffer) in &mut entities {
-        buffer.snapshots.push_back((now, net_transform.translation, net_transform.yaw));
-        while buffer.snapshots.len() > 2 && now - buffer.snapshots[1].0 > INTERP_BUFFER_MAX_AGE_SECS {
-            buffer.snapshots.pop_front();
-        }
-    }
-}
-
-pub(crate) fn interpolate_net_transform(time: Res<Time>, mut entities: Query<(&NetTransformBuffer, &mut Transform), Without<LocalPlayer>>) {
-    let render_time = time.elapsed_secs() - INTERP_DELAY_SECS;
-    for (buffer, mut transform) in &mut entities {
-        let Some(&(_, latest_pos, latest_yaw)) = buffer.snapshots.back() else {
-            continue;
-        };
-        if buffer.snapshots.len() < 2 || render_time >= buffer.snapshots.back().unwrap().0 {
-            transform.translation = latest_pos;
-            transform.rotation = Quat::from_rotation_y(latest_yaw);
-            continue;
-        }
-
-        let bracket = buffer.snapshots.iter().zip(buffer.snapshots.iter().skip(1)).find(|(a, b)| render_time >= a.0 && render_time <= b.0);
-        let Some((&(t0, pos0, yaw0), &(t1, pos1, yaw1))) = bracket else {
-
-            let &(_, pos, yaw) = buffer.snapshots.front().unwrap();
-            transform.translation = pos;
-            transform.rotation = Quat::from_rotation_y(yaw);
-            continue;
-        };
-
-        let span = (t1 - t0).max(f32::EPSILON);
-        let t = ((render_time - t0) / span).clamp(0.0, 1.0);
-        transform.translation = pos0.lerp(pos1, t);
-        transform.rotation = Quat::from_rotation_y(yaw0).slerp(Quat::from_rotation_y(yaw1), t);
-    }
-}
-
-pub(crate) fn log_client_connection_state(state: Res<State<ClientState>>) {
-    if state.is_changed() {
-        info!("client connection state: {:?}", state.get());
-    }
 }
 
 pub(crate) fn check_game_over(
@@ -257,7 +57,7 @@ pub(crate) fn check_game_over(
     }
     game_over.0 = true;
 
-    commands.client_trigger(PlayerDied);
+    commands.trigger(PlayerDied);
 
     if let Ok(mut cursor) = cursor.single_mut() {
         cursor.grab_mode = CursorGrabMode::None;
@@ -492,13 +292,13 @@ pub(crate) fn restart_game(mut commands: Commands, keys: Res<ButtonInput<KeyCode
     if !game_over.0 || !keys.just_pressed(KeyCode::KeyR) {
         return;
     }
-    commands.client_trigger(RequestRestart);
+    commands.trigger(RequestRestart);
 }
 
 pub(crate) fn restart_button(mut commands: Commands, buttons: Query<&Interaction, (With<RestartButton>, Changed<Interaction>)>) {
     for interaction in &buttons {
         if *interaction == Interaction::Pressed {
-            commands.client_trigger(RequestRestart);
+            commands.trigger(RequestRestart);
         }
     }
 }
