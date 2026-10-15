@@ -62,6 +62,9 @@ use gun_view::*;
 
 mod map;
 
+mod damage_overlay;
+use damage_overlay::*;
+
 mod combat;
 
 
@@ -377,6 +380,7 @@ pub fn main() {
                     },
                 }),
             MeshPickingPlugin,
+            bevy::ui_render::prelude::UiMaterialPlugin::<DamageOverlayMaterial>::default(),
             PhysicsPlugins::default(),
             SimPlugin,
             zombie_nav::ZombieNavmeshPlugin,
@@ -431,6 +435,7 @@ impl Plugin for GamePlugin {
 
         .insert_resource(Noclip(false))
         .init_resource::<InspectMode>()
+        .init_resource::<HitFlash>()
         .init_resource::<Autopilot>()
         .init_resource::<AutopilotLookOnly>()
         .init_resource::<AutopilotState>()
@@ -622,6 +627,7 @@ impl Plugin for GamePlugin {
                     update_floating_damage_texts,
                     play_footsteps,
                     play_zombie_footsteps,
+                    update_damage_overlay,
                 )
                     .chain(),
             )

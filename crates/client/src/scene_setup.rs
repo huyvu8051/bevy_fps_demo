@@ -161,6 +161,7 @@ pub(crate) fn setup_gameplay(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut overlay_materials: ResMut<Assets<DamageOverlayMaterial>>,
     touch_enabled: Res<TouchControlsEnabled>,
     player_model_tuning: Res<PlayerModelTuning>,
     scene_target: Option<Res<SceneRenderTarget>>,
@@ -364,6 +365,7 @@ pub(crate) fn setup_gameplay(
     spawn_ammo_ui(&mut commands);
     spawn_compass_ui(&mut commands);
     spawn_radar_ui(&mut commands);
+    spawn_damage_overlay(&mut commands, &mut overlay_materials);
     spawn_inspect_ui(&mut commands);
     spawn_settings_menu(&mut commands);
     spawn_settings_toggle_button(&mut commands);

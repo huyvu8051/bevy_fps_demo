@@ -73,6 +73,7 @@ pub(crate) fn zombies_damage_player(
 
     mut zombies: Query<(&Transform, &mut ZombieAttackTimer), With<Zombie>>,
     mut player: Query<(&Transform, &mut Health), With<Player>>,
+    mut hit_flash: ResMut<HitFlash>,
     mut elapsed: Local<f32>,
 ) {
     if game_over.0 || freeze.0 || god_mode.0 {
@@ -96,6 +97,7 @@ pub(crate) fn zombies_damage_player(
         attack_timer.0 -= dt;
         if attack_timer.0 <= 0.0 {
             health.0 -= ZOMBIE_ATTACK_DAMAGE;
+            hit_flash.0 = 1.0;
             attack_timer.0 = ZOMBIE_ATTACK_INTERVAL;
         }
     }
