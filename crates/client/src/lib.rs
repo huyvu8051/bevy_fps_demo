@@ -411,7 +411,11 @@ pub(crate) struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-    app.init_resource::<ZombieCountUi>()
+    app.init_resource::<PlayerModelPoseOverride>()
+        .register_type::<PlayerModelPose>()
+        .register_type::<ZombiePose>()
+        .register_type::<PlayerModelPoseOverride>()
+        .init_resource::<ZombieCountUi>()
         .init_resource::<AutoMaintainUi>()
 
         .init_state::<AppState>()

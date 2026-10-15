@@ -16,12 +16,7 @@ pub struct ZombieNavmeshPlugin;
 
 impl Plugin for ZombieNavmeshPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            NavmeshPlugins::default(),
-            Landmass3dPlugin::default(),
-            LandmassRerecastPlugin::default(),
-        ))
-        .add_systems(Startup, load_baked_navmesh)
+        app.add_systems(Startup, load_baked_navmesh)
         .add_systems(Update, register_zombie_agents.before(LandmassSystems::SyncExistence));
     }
 }

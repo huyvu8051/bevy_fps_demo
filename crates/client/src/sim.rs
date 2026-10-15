@@ -33,6 +33,8 @@ pub(crate) struct SimPlugin;
 impl Plugin for SimPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(BigBrainPlugin::new(PreUpdate))
+            .insert_resource(crate::current_scenario())
+            .init_resource::<GameOver>()
             .init_resource::<FreezeZombiesServer>()
             .init_resource::<DamageMultiplierServer>()
             .init_resource::<PendingRespawns>()
