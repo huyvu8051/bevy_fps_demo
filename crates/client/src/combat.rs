@@ -1,6 +1,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::dissolve::begin_dissolve;
 use crate::map::*;
 use crate::sim::*;
 use shared::{
@@ -33,6 +34,9 @@ pub(crate) fn handle_fire_shot(
     mut respawns: ResMut<PendingRespawns>,
     mut threats: Query<&mut PlayerThreat>,
     damage_multiplier: Res<DamageMultiplierServer>,
+    children: Query<&Children>,
+    mesh_materials: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for mut threat in &mut threats {
         threat.0 += PLAYER_THREAT_PER_SHOT;
@@ -92,11 +96,12 @@ pub(crate) fn handle_fire_shot(
             continue;
         }
         info!("[shot] inner bone capsule hit: zombie={entity} damage={damage:.1}");
-        if let Ok((_, _, _, mut health, mut knockback)) = zombies.get_mut(entity) {
+        if let Ok((_, zombie_transform, _, mut health, mut knockback)) = zombies.get_mut(entity) {
             health.0 -= damage;
             let killed = health.0 <= 0.0;
             if killed {
-                commands.entity(entity).despawn();
+                let start_y = zombie_transform.translation.y;
+                begin_dissolve(&mut commands, entity, start_y, &children, &mesh_materials, &mut materials);
                 respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
             } else {
                 let push = Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero() * KNOCKBACK_FORCE;

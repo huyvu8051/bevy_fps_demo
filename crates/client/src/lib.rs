@@ -62,6 +62,9 @@ use gun_view::*;
 
 mod map;
 
+mod dissolve;
+use dissolve::*;
+
 mod damage_overlay;
 use damage_overlay::*;
 
@@ -628,6 +631,7 @@ impl Plugin for GamePlugin {
                     play_footsteps,
                     play_zombie_footsteps,
                     update_damage_overlay,
+                    update_dissolve,
                 )
                     .chain(),
             )
