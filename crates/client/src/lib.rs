@@ -579,7 +579,7 @@ impl Plugin for GamePlugin {
                     apply_view_recoil,
                     apply_aim_zoom,
                     apply_aim_dof,
-                    send_player_input,
+                    send_player_input.run_if(sim::world_ready),
                     sync_camera_to_player,
                     sync_player_model,
                     zombies_damage_player,

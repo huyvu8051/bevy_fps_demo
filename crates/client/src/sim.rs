@@ -42,7 +42,9 @@ impl Plugin for SimPlugin {
             .init_resource::<AutoMaintainZombies>()
             .init_resource::<NextZombieSpawnIndex>()
             .init_resource::<ZombieSpawnPoints>()
-            .add_systems(Startup, (load_zombie_spawn_points, spawn_initial_zombies).chain())
+            .init_resource::<WorldReady>()
+            .add_systems(Startup, load_zombie_spawn_points)
+            .add_systems(Update, (track_world_ready, spawn_initial_zombies.run_if(world_ready)).chain())
             .add_systems(
                 PreUpdate,
                 (
@@ -53,8 +55,8 @@ impl Plugin for SimPlugin {
             .add_systems(
                 Update,
                 (
-                    move_zombies.after(LandmassSystems::Output),
-                    tick_respawns,
+                    move_zombies.after(LandmassSystems::Output).run_if(world_ready),
+                    tick_respawns.run_if(world_ready),
                     decay_player_threat,
                 ),
             )
@@ -232,11 +234,48 @@ fn load_zombie_spawn_points(scenario: Res<Scenario>, mut commands: Commands) {
     commands.insert_resource(ZombieSpawnPoints(points));
 }
 
+#[derive(Component)]
+pub(crate) struct MapRoot;
+
+#[derive(Resource, Default)]
+pub(crate) struct WorldReady(pub(crate) bool);
+
+pub(crate) fn world_ready(ready: Res<WorldReady>) -> bool {
+    ready.0
+}
+
+fn track_world_ready(
+    asset_server: Res<AssetServer>,
+    map: Query<&WorldAssetRoot, With<MapRoot>>,
+    pending_colliders: Query<(), With<ColliderConstructorHierarchy>>,
+    mut ready: ResMut<WorldReady>,
+) {
+    if ready.0 {
+        return;
+    }
+    let Ok(root) = map.single() else {
+        return;
+    };
+    if !asset_server.is_loaded_with_dependencies(&root.0) {
+        return;
+    }
+    if !pending_colliders.is_empty() {
+        return;
+    }
+    ready.0 = true;
+    info!("[world] map loaded and colliders built — starting simulation");
+}
+
 fn spawn_initial_zombies(
     points: Res<ZombieSpawnPoints>,
     target: Res<ZombieTargetCount>,
+    mut done: Local<bool>,
     mut commands: Commands,
 ) {
+    if *done {
+        return;
+    }
+    *done = true;
     if points.0.is_empty() {
         error!("no zombie spawn points authored for this map — spawning nothing");
         return;
