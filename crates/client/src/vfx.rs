@@ -123,6 +123,7 @@ pub(crate) fn on_shot_confirmed(
     spatial_query: SpatialQuery,
     zombies: Query<(Entity, &Transform, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
+    child_of: Query<&ChildOf>,
     show_floating_damage: Res<ShowFloatingDamage>,
 ) {
     let ShotConfirmed { point, normal, damage, killed } = *trigger.event();
@@ -132,14 +133,19 @@ pub(crate) fn on_shot_confirmed(
         info!("[shot] server confirmed: outer capsule hit but missed every inner bone capsule (0 damage)");
     }
 
-    let nearest_bone = if killed {
+    let hit_zombie = if killed {
         None
     } else {
         zombies
             .iter()
             .min_by(|(_, a, _), (_, b, _)| a.translation.distance_squared(point).total_cmp(&b.translation.distance_squared(point)))
-            .and_then(|(_, _, bones)| nearest_zombie_bone(bones, point, &globals))
     };
+    let nearest_bone = hit_zombie.and_then(|(_, _, bones)| nearest_zombie_bone(bones, point, &globals));
+
+    if let (Some((_, _, bones)), Some((bone, _))) = (hit_zombie, nearest_bone.as_ref()) {
+        spawn_bone_flinch(&mut commands, bones, *bone, -normal, damage, &globals, &child_of);
+    }
+
     let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
     spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0);
 }
@@ -480,6 +486,103 @@ pub(crate) fn draw_zombie_hitboxes(
             HITBOX_LIMB_LATERAL_MIN,
             Color::srgb(1.0, 1.0, 0.0),
         );
+    }
+}
+
+const FLINCH_DURATION: f32 = 0.26;
+const FLINCH_MAX_ANGLE_DEG: f32 = 42.0;
+const FLINCH_CHAIN_FALLOFF: [f32; 3] = [1.0, 0.42, 0.16];
+const FLINCH_HEAD_TO_CHEST: f32 = 0.3;
+
+#[derive(Component)]
+pub(crate) struct BoneFlinch {
+    world_axis: Vec3,
+    angle: f32,
+    remaining: f32,
+}
+
+fn flinch_chain(bones: &ZombieHitboxBones, hit: Entity) -> Vec<Entity> {
+    for limb in [&bones.left_arm, &bones.right_arm, &bones.left_leg, &bones.right_leg] {
+        if let Some(index) = limb.iter().position(|bone| *bone == Some(hit)) {
+            return limb[..=index].iter().rev().copied().flatten().collect();
+        }
+    }
+    if Some(hit) == bones.head {
+        return [Some(hit), bones.chest].into_iter().flatten().collect();
+    }
+    vec![hit]
+}
+
+fn spawn_bone_flinch(
+    commands: &mut Commands,
+    bones: &ZombieHitboxBones,
+    hit_bone: Entity,
+    impulse: Vec3,
+    damage: f32,
+    globals: &Query<&GlobalTransform>,
+    child_of: &Query<&ChildOf>,
+) {
+    let chain = flinch_chain(bones, hit_bone);
+    let Some(&first) = chain.first() else { return };
+
+    let bone_direction = child_of
+        .get(first)
+        .ok()
+        .and_then(|parent| globals.get(parent.0).ok().zip(globals.get(first).ok()))
+        .map(|(parent, bone)| (bone.translation() - parent.translation()).normalize_or_zero())
+        .unwrap_or(Vec3::Y);
+
+    let mut axis = bone_direction.cross(impulse).normalize_or_zero();
+    if axis == Vec3::ZERO {
+        axis = impulse.cross(Vec3::Y).normalize_or_zero();
+    }
+    if axis == Vec3::ZERO {
+        return;
+    }
+
+    let head_hit = Some(hit_bone) == bones.head;
+    let base = FLINCH_MAX_ANGLE_DEG.to_radians() * (damage / ZOMBIE_MAX_HEALTH).clamp(0.25, 1.0);
+
+    for (index, bone) in chain.into_iter().enumerate() {
+        let falloff = if head_hit && index > 0 {
+            FLINCH_HEAD_TO_CHEST
+        } else {
+            FLINCH_CHAIN_FALLOFF[index.min(FLINCH_CHAIN_FALLOFF.len() - 1)]
+        };
+        commands.entity(bone).insert(BoneFlinch {
+            world_axis: axis,
+            angle: base * falloff,
+            remaining: FLINCH_DURATION,
+        });
+    }
+}
+
+pub(crate) fn apply_bone_flinch(
+    time: Res<Time>,
+    mut commands: Commands,
+    child_of: Query<&ChildOf>,
+    globals: Query<&GlobalTransform>,
+    mut flinches: Query<(Entity, &mut BoneFlinch)>,
+    mut transforms: Query<&mut Transform>,
+) {
+    for (entity, mut flinch) in &mut flinches {
+        flinch.remaining -= time.delta_secs();
+        if flinch.remaining <= 0.0 {
+            commands.entity(entity).remove::<BoneFlinch>();
+            continue;
+        }
+        let decay = (flinch.remaining / FLINCH_DURATION).clamp(0.0, 1.0);
+        let angle = flinch.angle * decay * decay;
+        let parent_rotation = child_of
+            .get(entity)
+            .ok()
+            .and_then(|parent| globals.get(parent.0).ok())
+            .map(|global| global.rotation())
+            .unwrap_or(Quat::IDENTITY);
+        let world_rotation = Quat::from_axis_angle(flinch.world_axis, angle);
+        let local_rotation = parent_rotation.inverse() * world_rotation * parent_rotation;
+        let Ok(mut transform) = transforms.get_mut(entity) else { continue };
+        transform.rotation = local_rotation * transform.rotation;
     }
 }
 

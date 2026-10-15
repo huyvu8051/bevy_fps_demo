@@ -711,7 +711,7 @@ impl Plugin for GamePlugin {
 
     app.add_systems(
         PostUpdate,
-        apply_player_model_travel_twist
+        (apply_player_model_travel_twist, apply_bone_flinch)
             .after(AnimationSystems)
             .before(TransformSystems::Propagate)
             .run_if(in_state(AppState::InGame)),
