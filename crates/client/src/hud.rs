@@ -180,7 +180,7 @@ pub(crate) fn update_inspect_ui(
     };
     let p = transform.translation;
     text.0 = format!(
-        "INSPECT  x={:.2} y={:.2} z={:.2}  yaw={:.0}° pitch={:.0}°",
+        "INSPECT  x={:.2} y={:.2} z={:.2}  yaw={:.0} pitch={:.0}",
         p.x,
         p.y,
         p.z,
@@ -280,7 +280,7 @@ pub(crate) fn spawn_compass_ui(commands: &mut Commands) {
         });
 
     commands.spawn((
-        Text::new("000°"),
+        Text::new("000"),
         TextFont {
             font_size: FontSize::Px(14.0),
             ..default()
@@ -290,9 +290,9 @@ pub(crate) fn spawn_compass_ui(commands: &mut Commands) {
             position_type: PositionType::Absolute,
             top: Val::Px(12.0 + COMPASS_HEIGHT + 2.0),
             left: Val::Percent(50.0),
-            margin: UiRect::left(Val::Px(-18.0)),
             ..default()
         },
+        UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
         GlobalZIndex(STATIC_UI_Z_INDEX),
         CompassHeadingText,
         NativeUiRoot,
@@ -314,7 +314,7 @@ pub(crate) fn update_compass_ui(
         node.left = Val::Px(x - 8.0);
     }
     if let Ok(mut text) = heading_text.single_mut() {
-        text.0 = format!("{:03.0}°", current);
+        text.0 = format!("{:03.0}", current);
     }
 }
 
@@ -368,16 +368,28 @@ pub(crate) fn spawn_radar_ui(commands: &mut Commands) {
                 top: Val::Px(RADAR_TOP),
                 width: Val::Px(RADAR_SIZE),
                 height: Val::Px(RADAR_SIZE),
-                border: UiRect::all(Val::Px(2.0)),
                 border_radius: BorderRadius::all(Val::Px(RADAR_RADIUS)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.05, 0.02, 0.55)),
-            BorderColor::all(Color::srgba(0.3, 1.0, 0.45, 0.6)),
             GlobalZIndex(STATIC_UI_Z_INDEX),
             NativeUiRoot,
         ))
         .with_children(|root| {
+            root.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    width: Val::Px(RADAR_SIZE),
+                    height: Val::Px(RADAR_SIZE),
+                    border: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(RADAR_RADIUS)),
+                    ..default()
+                },
+                BorderColor::all(Color::srgba(0.3, 1.0, 0.45, 0.6)),
+            ));
+
             for ring_fraction in [0.34, 0.68] {
                 let size = RADAR_SIZE * ring_fraction;
                 root.spawn((
