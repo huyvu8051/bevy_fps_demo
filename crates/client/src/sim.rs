@@ -199,8 +199,6 @@ fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: b
         },
         Health(ZOMBIE_MAX_HEALTH),
 
-        Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT),
-
         ZombieHitboxBones::default(),
 
         ZombiePose::default(),
