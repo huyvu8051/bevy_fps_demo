@@ -111,13 +111,19 @@ pub(crate) fn setup_common(
             ..default()
         }),
         stain_mesh: meshes.add(Rectangle::new(BLOOD_STAIN_SIZE, BLOOD_STAIN_SIZE)),
-        stain_material: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.35, 0.01, 0.01, 0.85),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            cull_mode: None,
-            ..default()
-        }),
+        floor_stain_mesh: meshes.add(Rectangle::new(BLOOD_FLOOR_STAIN_SIZE, BLOOD_FLOOR_STAIN_SIZE)),
+        stain_materials: (0..BLOOD_STAIN_VARIANTS)
+            .map(|i| {
+                materials.add(StandardMaterial {
+                    base_color: Color::srgba(1.0, 1.0, 1.0, 0.9),
+                    base_color_texture: Some(asset_server.load(format!("textures/blood/splatter_{i}.png"))),
+                    alpha_mode: AlphaMode::Blend,
+                    unlit: true,
+                    cull_mode: None,
+                    ..default()
+                })
+            })
+            .collect(),
     });
 
     commands.insert_resource(SparkAssets {

@@ -1,0 +1,4 @@
+splatter_0..3.png
+    Generated procedurally with ImageMagick (noise-threshold body, displacement
+    warp, drawn radial droplets, baked sheen). No third-party source, no
+    licence obligations. The recipe lives only in this note, not in the repo.

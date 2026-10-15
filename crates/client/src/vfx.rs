@@ -85,7 +85,8 @@ pub(crate) struct BloodAssets {
     pub(crate) particle_mesh: Handle<Mesh>,
     pub(crate) particle_material: Handle<StandardMaterial>,
     pub(crate) stain_mesh: Handle<Mesh>,
-    pub(crate) stain_material: Handle<StandardMaterial>,
+    pub(crate) floor_stain_mesh: Handle<Mesh>,
+    pub(crate) stain_materials: Vec<Handle<StandardMaterial>>,
 }
 
 #[derive(Resource)]
@@ -172,9 +173,9 @@ pub(crate) fn spawn_blood_effects(
 
     match bone {
         Some((entity, bone_global)) => {
-            spawn_blood_stain_on_zombie(commands, blood_assets, entity, bone_global, hit_point, hit_normal);
+            spawn_blood_stain_on_zombie(commands, blood_assets, entity, bone_global, hit_point, hit_normal, time.elapsed_secs() * 733.0);
         }
-        None if !killed => spawn_blood_stain(commands, blood_assets, None, hit_point, hit_normal),
+        None if !killed => spawn_blood_stain(commands, blood_assets, None, hit_point, hit_normal, time.elapsed_secs() * 733.0, blood_assets.stain_mesh.clone()),
         None => {}
     }
 
@@ -193,7 +194,7 @@ pub(crate) fn spawn_blood_effects(
         if let Some(floor_hit) = spatial_query.cast_ray(origin, down, BLOOD_FLOOR_RAYCAST_DISTANCE, true, &filter) {
             let floor_point = origin + Vec3::NEG_Y * floor_hit.distance;
 
-            spawn_blood_stain(commands, blood_assets, None, floor_point, floor_hit.normal);
+            spawn_blood_stain(commands, blood_assets, None, floor_point, floor_hit.normal, seed, blood_assets.floor_stain_mesh.clone());
         }
     }
 }
@@ -272,18 +273,37 @@ pub(crate) fn spawn_bullet_tracer(commands: &mut Commands, tracer_assets: &Trace
     ));
 }
 
+fn stain_variant(blood_assets: &BloodAssets, seed: f32) -> Option<Handle<StandardMaterial>> {
+    let materials = &blood_assets.stain_materials;
+    if materials.is_empty() {
+        return None;
+    }
+    let pick = (ops::sin(seed) * 43758.547).fract().abs();
+    materials.get((pick * materials.len() as f32) as usize % materials.len()).cloned()
+}
+
+fn stain_rotation(normal: Vec3, seed: f32) -> Quat {
+    let spin = (ops::sin(seed * 1.7) * 43758.547).fract().abs() * std::f32::consts::TAU;
+    Quat::from_rotation_arc(Vec3::Z, normal.normalize_or_zero()) * Quat::from_rotation_z(spin)
+}
+
 pub(crate) fn spawn_blood_stain(
     commands: &mut Commands,
     blood_assets: &BloodAssets,
     parent: Option<Entity>,
     point: Vec3,
     normal: Vec3,
+    seed: f32,
+    mesh: Handle<Mesh>,
 ) {
-    let rotation = Quat::from_rotation_arc(Vec3::Z, normal.normalize_or_zero());
-    let transform = Transform::from_translation(point + normal.normalize_or_zero() * 0.01).with_rotation(rotation);
+    let Some(material) = stain_variant(blood_assets, seed) else {
+        return;
+    };
+    let transform = Transform::from_translation(point + normal.normalize_or_zero() * 0.01)
+        .with_rotation(stain_rotation(normal, seed));
     let mut stain = commands.spawn((
-        Mesh3d(blood_assets.stain_mesh.clone()),
-        MeshMaterial3d(blood_assets.stain_material.clone()),
+        Mesh3d(mesh),
+        MeshMaterial3d(material),
         transform,
         BloodStain {
             remaining: BLOOD_STAIN_LIFETIME,
@@ -301,16 +321,21 @@ pub(crate) fn spawn_blood_stain_on_zombie(
     bone_global: &GlobalTransform,
     hit_point: Vec3,
     hit_normal: Vec3,
+    seed: f32,
 ) {
-    let rotation = Quat::from_rotation_arc(Vec3::Z, hit_normal.normalize_or_zero());
-    let world_transform =
-        GlobalTransform::from(Transform::from_translation(hit_point + hit_normal.normalize_or_zero() * 0.01).with_rotation(rotation));
+    let Some(material) = stain_variant(blood_assets, seed) else {
+        return;
+    };
+    let world_transform = GlobalTransform::from(
+        Transform::from_translation(hit_point + hit_normal.normalize_or_zero() * 0.01)
+            .with_rotation(stain_rotation(hit_normal, seed)),
+    );
     let local_transform = world_transform.reparented_to(bone_global);
 
     commands.entity(bone).with_children(|parent| {
         parent.spawn((
             Mesh3d(blood_assets.stain_mesh.clone()),
-            MeshMaterial3d(blood_assets.stain_material.clone()),
+            MeshMaterial3d(material),
             local_transform,
             BloodStain {
                 remaining: BLOOD_STAIN_LIFETIME,
