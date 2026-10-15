@@ -175,7 +175,7 @@ pub(crate) fn setup_gameplay(
 
     commands.spawn((
         Name::new(scenario.title()),
-        crate::sim::MapRoot,
+        crate::map::MapRoot,
         WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(scenario.require_gltf_scene_path()))),
         Transform::IDENTITY,
         shared::gltf_scene_colliders(),

@@ -1,21 +1,21 @@
 use avian3d::prelude::*;
 use bevy_landmass::prelude::*;
 use bevy::prelude::*;
+use crate::combat::*;
+use crate::map::*;
 use big_brain::prelude::*;
 use shared::movement::{blocked_horizontally, resolve_slope_hit, try_step_up};
 use shared::{
-    entity_phase, resolve_bone_world_positions, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, FireShot,
-    GameOver, GameStateEvent, Health, KnockbackVelocity,
-    Player, PlayerDied, RequestRestart,
-    SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount,
-    ShotConfirmed, ShotFx, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, zombie_speed_for, 
-    GRAVITY, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
-    MAX_SHOT_DISTANCE, Scenario,
+    entity_phase, Chase, ClearAllZombies,
+    GameOver, Health, KnockbackVelocity,
+    Player,
+    SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, zombie_speed_for, 
+    GRAVITY, KNOCKBACK_DECAY_RATE, Scenario,
     
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
     ZOMBIE_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
-    PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY, zombie_kind_for_phase, ZOMBIE_KIND_WEIGHTS,
-    ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
+    PLAYER_THREAT_DECAY_RATE, ZOMBIE_LOAD_BALANCE_PENALTY, zombie_kind_for_phase, ZOMBIE_KIND_WEIGHTS,
+    ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
     ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
     ZOMBIE_TURN_RATE_DEG,
 };
@@ -72,20 +72,10 @@ fn on_set_freeze_zombies(trigger: On<SetFreezeZombies>, mut freeze: ResMut<Freez
     freeze.0 = trigger.event().0;
 }
 
-#[derive(Resource)]
-struct DamageMultiplierServer(f32);
-impl Default for DamageMultiplierServer {
-    fn default() -> Self {
-        Self(1.0)
-    }
-}
 
-fn on_set_damage_multiplier(trigger: On<SetDamageMultiplier>, mut multiplier: ResMut<DamageMultiplierServer>) {
-    multiplier.0 = trigger.event().0.max(0.0);
-}
 
 #[derive(Component, Default)]
-pub(crate) struct PlayerThreat(f32);
+pub(crate) struct PlayerThreat(pub(crate) f32);
 
 fn decay_player_threat(time: Res<Time>, mut threats: Query<&mut PlayerThreat>) {
     let decay = (1.0 - PLAYER_THREAT_DECAY_RATE * time.delta_secs()).clamp(0.0, 1.0);
@@ -113,15 +103,7 @@ impl Default for AutoMaintainZombies {
     }
 }
 
-#[derive(Resource, Default)]
-struct NextZombieSpawnIndex(usize);
 
-fn zombie_spawn_pos_for(scenario: Scenario, seed: usize, points: &[Vec3]) -> (Vec3, f32) {
-    if points.is_empty() {
-        return (scenario.player_spawn(), 0.0);
-    }
-    (points[seed % points.len()] + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0)
-}
 
 fn on_set_zombie_count(
     trigger: On<SetZombieCount>,
@@ -206,52 +188,17 @@ fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: b
     }
 }
 
-fn spawn_zombies(commands: &mut Commands, spawns: &[(Vec3, f32)], ai_enabled: bool) {
+pub(crate) fn spawn_zombies(commands: &mut Commands, spawns: &[(Vec3, f32)], ai_enabled: bool) {
     for &(position, yaw) in spawns {
         spawn_zombie(commands, position, yaw, ai_enabled);
     }
 }
 
-#[derive(Resource, Default)]
-struct ZombieSpawnPoints(Vec<Vec3>);
 
-fn load_zombie_spawn_points(scenario: Res<Scenario>, mut commands: Commands) {
-    let points = shared::zombie_spawn_points(*scenario);
-    info!("{}: {} authored zombie spawn point(s)", scenario.title(), points.len());
-    commands.insert_resource(ZombieSpawnPoints(points));
-}
 
-#[derive(Component)]
-pub(crate) struct MapRoot;
 
-#[derive(Resource, Default)]
-pub(crate) struct WorldReady(pub(crate) bool);
 
-pub(crate) fn world_ready(ready: Res<WorldReady>) -> bool {
-    ready.0
-}
 
-fn track_world_ready(
-    asset_server: Res<AssetServer>,
-    map: Query<&WorldAssetRoot, With<MapRoot>>,
-    pending_colliders: Query<(), With<ColliderConstructorHierarchy>>,
-    mut ready: ResMut<WorldReady>,
-) {
-    if ready.0 {
-        return;
-    }
-    let Ok(root) = map.single() else {
-        return;
-    };
-    if !asset_server.is_loaded_with_dependencies(&root.0) {
-        return;
-    }
-    if !pending_colliders.is_empty() {
-        return;
-    }
-    ready.0 = true;
-    info!("[world] map loaded and colliders built — starting simulation");
-}
 
 fn spawn_initial_zombies(
     points: Res<ZombieSpawnPoints>,
@@ -538,10 +485,10 @@ fn move_zombies(
 }
 
 #[derive(Resource, Default)]
-struct PendingRespawns(Vec<PendingRespawn>);
+pub(crate) struct PendingRespawns(pub(crate) Vec<PendingRespawn>);
 
-struct PendingRespawn {
-    timer: f32,
+pub(crate) struct PendingRespawn {
+    pub(crate) timer: f32,
 }
 
 fn tick_respawns(
@@ -575,165 +522,6 @@ fn tick_respawns(
     }
 }
 
-fn handle_fire_shot(
-    trigger: On<FireShot>,
-    mut commands: Commands,
-    spatial_query: SpatialQuery,
-    bone_globals: Query<&GlobalTransform>,
-    mut zombies: Query<(Entity, &Transform, &ZombieHitboxBones, &mut Health, &mut KnockbackVelocity), With<Zombie>>,
-    mut respawns: ResMut<PendingRespawns>,
-    mut threats: Query<&mut PlayerThreat>,
-    damage_multiplier: Res<DamageMultiplierServer>,
-) {
-    for mut threat in &mut threats {
-        threat.0 += PLAYER_THREAT_PER_SHOT;
-    }
 
-    let shot = *trigger.event();
-    let Ok(direction) = Dir3::new(shot.direction) else {
-        return;
-    };
-    info!("[shot] fired: origin={:.2?} direction={:.2?}", shot.origin, *direction);
 
-    let filter = SpatialQueryFilter::default();
-    let wall_filter = SpatialQueryFilter::from_excluded_entities(zombies.iter().map(|(e, ..)| e));
-    let wall_distance = spatial_query
-        .cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &wall_filter)
-        .map(|hit| hit.distance);
 
-    let cylinder = Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT);
-
-    let mut candidates: Vec<(f32, Entity, BoneWorldPositions)> = zombies
-        .iter()
-        .filter_map(|(entity, transform, bones, _, _)| {
-            let (distance, _outer_normal) =
-                cylinder.cast_ray(transform.translation, transform.rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
-            let resolved = resolve_bone_world_positions(bones, |bone| bone_globals.get(bone).ok().map(|g| g.translation()));
-            Some((distance, entity, resolved))
-        })
-        .collect();
-    candidates.sort_by(|(a, ..), (b, ..)| a.total_cmp(b));
-
-    for (distance, entity, bones) in &candidates {
-        let entity = *entity;
-        info!("[shot] outer capsule hit: zombie={entity} distance={distance:.2}");
-
-        let Some((hit_point, normal, damage)) = zombie_hit_damage_ray(shot.origin, direction, MAX_SHOT_DISTANCE, bones) else {
-            let outer_hit_point = shot.origin + *direction * distance;
-            if let Some((region, nearest_distance, radius)) = zombie_hit_nearest_region(outer_hit_point, bones) {
-                info!(
-                    "[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} — nearest was {region}, \
-                     distance={nearest_distance:.3} radius={radius:.3} (missed by {:.3}) — trying the next zombie behind it, if any",
-                    nearest_distance - radius
-                );
-            } else {
-                info!("[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} (no bones resolved yet) — trying the next zombie behind it, if any");
-            }
-            continue;
-        };
-        let damage = damage * damage_multiplier.0;
-
-        let hit_distance = shot.origin.distance(hit_point);
-        if wall_distance.is_some_and(|w| w < hit_distance - 0.1) {
-            info!(
-                "[shot] blocked by level geometry before zombie={entity} (wall at {:.2} < zombie at {:.2})",
-                wall_distance.unwrap(),
-                hit_distance
-            );
-            continue;
-        }
-        info!("[shot] inner bone capsule hit: zombie={entity} damage={damage:.1}");
-        if let Ok((_, _, _, mut health, mut knockback)) = zombies.get_mut(entity) {
-            health.0 -= damage;
-            let killed = health.0 <= 0.0;
-            if killed {
-                commands.entity(entity).despawn();
-                respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
-            } else {
-                let push = Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero() * KNOCKBACK_FORCE;
-                knockback.0 += push;
-            }
-
-            commands.trigger(ShotConfirmed { point: hit_point, normal, damage, killed });
-        }
-        return;
-    }
-
-    let Some(hit) = spatial_query.cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &filter) else {
-        info!("[shot] missed everything (no zombie, no surface)");
-        return;
-    };
-    if zombies.contains(hit.entity) {
-        info!("[shot] outer capsule hit but missed every inner bone capsule — treating as a genuine miss, no VFX");
-        return;
-    }
-
-    let surface_point = shot.origin + *direction * hit.distance;
-    info!("[shot] hit a surface, no zombie: point={surface_point:.2?}");
-    commands.trigger(ShotFx::SurfaceHit { origin: shot.origin, point: surface_point, normal: hit.normal });
-}
-
-#[derive(Component)]
-struct Dead;
-
-fn on_player_died(
-    _trigger: On<PlayerDied>,
-    mut commands: Commands,
-    mut game_over: ResMut<GameOver>,
-
-    players: Query<Entity, With<Player>>,
-    dead: Query<(), With<Dead>>,
-) {
-    let Ok(entity) = players.single() else {
-        return;
-    };
-    commands.entity(entity).insert(Dead);
-
-    if game_over.0 {
-        return;
-    }
-    let all_dead = players.iter().all(|e| e == entity || dead.contains(e));
-    if all_dead {
-        game_over.0 = true;
-        commands.trigger(GameStateEvent::GameOver);
-    }
-}
-
-fn on_request_restart(
-    _trigger: On<RequestRestart>,
-    mut commands: Commands,
-    mut game_over: ResMut<GameOver>,
-    mut respawns: ResMut<PendingRespawns>,
-    scenario: Res<Scenario>,
-    points: Res<ZombieSpawnPoints>,
-    zombies: Query<Entity, With<Zombie>>,
-    mut players: Query<(Entity, &mut Transform, &mut Player), With<Player>>,
-) {
-    if !game_over.0 {
-        return;
-    }
-    game_over.0 = false;
-    respawns.0.clear();
-
-    for entity in &zombies {
-        commands.entity(entity).despawn();
-    }
-
-    let spawns: Vec<(Vec3, f32)> = points
-        .0
-        .iter()
-        .take(scenario.zombie_count())
-        .map(|p| (*p + Vec3::Y * ZOMBIE_REST_HEIGHT, 0.0))
-        .collect();
-    spawn_zombies(&mut commands, &spawns, true);
-    let player_spawn = scenario.player_spawn();
-
-    for (entity, mut transform, mut player) in &mut players {
-        commands.entity(entity).remove::<Dead>();
-        transform.translation = player_spawn;
-        player.vertical_velocity = 0.0;
-        player.grounded = false;
-    }
-
-    commands.trigger(GameStateEvent::Restarted);
-}

@@ -60,6 +60,10 @@ use zombie_reaction::*;
 mod gun_view;
 use gun_view::*;
 
+mod map;
+
+mod combat;
+
 
 mod hud;
 use hud::*;
@@ -575,7 +579,7 @@ impl Plugin for GamePlugin {
                     apply_view_recoil,
                     apply_aim_zoom,
                     apply_aim_dof,
-                    send_player_input.run_if(sim::world_ready),
+                    send_player_input.run_if(map::world_ready),
                     sync_camera_to_player,
                     sync_player_model,
                     zombies_damage_player,
