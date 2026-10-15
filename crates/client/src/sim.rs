@@ -5,7 +5,7 @@ use big_brain::prelude::*;
 use shared::movement::{blocked_horizontally, resolve_slope_hit, try_step_up};
 use shared::{
     entity_phase, resolve_bone_world_positions, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, FireShot,
-    GameOver, GameStateEvent, Health, KnockbackVelocity, LastProcessedInput, NetPlayer,
+    GameOver, GameStateEvent, Health, KnockbackVelocity,
     NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
     SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount,
     ShotConfirmed, ShotFx, SpawnMoreZombies, Zombie,
@@ -92,7 +92,7 @@ fn on_set_damage_multiplier(trigger: On<SetDamageMultiplier>, mut multiplier: Re
 }
 
 #[derive(Component, Default)]
-struct PlayerThreat(f32);
+pub(crate) struct PlayerThreat(f32);
 
 fn decay_player_threat(time: Res<Time>, mut threats: Query<&mut PlayerThreat>) {
     let decay = (1.0 - PLAYER_THREAT_DECAY_RATE * time.delta_secs()).clamp(0.0, 1.0);
@@ -293,7 +293,7 @@ struct NearPlayer;
 
 fn near_player_scorer(
     transforms: Query<&Transform>,
-    players: Query<&Transform, With<NetPlayer>>,
+    players: Query<&Transform, With<Player>>,
     mut query: Query<(&Actor, &mut Score), With<NearPlayer>>,
 ) {
     for (Actor(actor), mut score) in &mut query {
@@ -384,7 +384,7 @@ fn move_zombies(
         ),
         (With<Zombie>, With<Chase>),
     >,
-    players: Query<(Entity, &Transform, &PlayerThreat), (With<NetPlayer>, Without<Zombie>)>,
+    players: Query<(Entity, &Transform, &PlayerThreat), (With<Player>, Without<Zombie>)>,
     mover: MoveAndSlide,
 ) {
 
@@ -724,7 +724,7 @@ fn on_request_restart(
     scenario: Res<Scenario>,
     points: Res<ZombieSpawnPoints>,
     zombies: Query<Entity, With<Zombie>>,
-    mut players: Query<(Entity, &mut Transform, &mut Player, &mut NetTransform), With<NetPlayer>>,
+    mut players: Query<(Entity, &mut Transform, &mut Player), With<Player>>,
 ) {
     if !game_over.0 {
         return;
@@ -745,13 +745,11 @@ fn on_request_restart(
     spawn_zombies(&mut commands, &spawns, true);
     let player_spawn = scenario.player_spawn();
 
-    for (entity, mut transform, mut player, mut net_transform) in &mut players {
+    for (entity, mut transform, mut player) in &mut players {
         commands.entity(entity).remove::<Dead>();
         transform.translation = player_spawn;
         player.vertical_velocity = 0.0;
         player.grounded = false;
-        net_transform.translation = player_spawn;
-        net_transform.yaw = 0.0;
     }
 
     commands.trigger(GameStateEvent::Restarted);

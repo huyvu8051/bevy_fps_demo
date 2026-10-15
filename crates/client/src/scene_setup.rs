@@ -186,6 +186,7 @@ pub(crate) fn setup_gameplay(
         },
         Health(PLAYER_MAX_HEALTH),
         PlayerStance::default(),
+        crate::sim::PlayerThreat::default(),
     ));
 
     commands.spawn((
