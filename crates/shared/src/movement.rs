@@ -10,6 +10,7 @@ use crate::{
 const PROGRESS_MEANING_UNOBSTRUCTED: f32 = 0.7;
 const MIN_HEADROOM_FRACTION: f32 = 0.5;
 const LANDING_PROBE_OVERSHOOT: f32 = 0.05;
+const STEP_FORWARD_PROBE: f32 = 0.3;
 
 pub const STEP_HEIGHT: f32 = 0.45;
 
@@ -28,10 +29,14 @@ pub fn try_step_up(
     rotation: Quat,
     start: Vec3,
     horizontal_velocity: Vec3,
-    dt: f32,
     config: &MoveAndSlideConfig,
     filter: &SpatialQueryFilter,
 ) -> Option<Vec3> {
+    let speed = horizontal_velocity.length();
+    if speed < 1e-4 {
+        return None;
+    }
+
     let headroom = mover
         .spatial_query
         .cast_shape(shape, start, rotation, Dir3::Y, &ShapeCastConfig::from_max_distance(STEP_HEIGHT), filter)
@@ -46,7 +51,7 @@ pub fn try_step_up(
         raised,
         rotation,
         horizontal_velocity,
-        std::time::Duration::from_secs_f32(dt.max(0.0)),
+        std::time::Duration::from_secs_f32(STEP_FORWARD_PROBE / speed),
         config,
         filter,
         |_| MoveAndSlideHitResponse::Accept,
@@ -162,7 +167,6 @@ pub fn simulate_player_step(mover: &MoveAndSlide, transform: &mut Transform, pla
                 transform.rotation,
                 transform.translation,
                 horizontal_velocity,
-                dt,
                 &config,
                 &filter,
             )

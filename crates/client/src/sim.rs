@@ -525,7 +525,6 @@ fn move_zombies(
                     transform.rotation,
                     transform.translation,
                     step_velocity,
-                    dt,
                     &config,
                     &filter,
                 )
