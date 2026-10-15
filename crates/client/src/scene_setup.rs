@@ -164,6 +164,7 @@ pub(crate) fn setup_gameplay(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut overlay_materials: ResMut<Assets<DamageOverlayMaterial>>,
+    mut scope_lens_materials: ResMut<Assets<ScopeLensMaterial>>,
     touch_enabled: Res<TouchControlsEnabled>,
     player_model_tuning: Res<PlayerModelTuning>,
     scene_target: Option<Res<SceneRenderTarget>>,
@@ -350,11 +351,7 @@ pub(crate) fn setup_gameplay(
 
     commands.spawn((
         Mesh3d(meshes.add(Circle::new(SCOPE_LENS_SIZE / 2.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color_texture: Some(scope_image_handle),
-            unlit: true,
-            ..default()
-        })),
+        MeshMaterial3d(scope_lens_materials.add(scope_lens_material(scope_image_handle))),
         Transform::from_translation(SCOPE_LENS_OFFSET),
         Visibility::Hidden,
         RenderLayers::layer(VIEWMODEL_LAYER),

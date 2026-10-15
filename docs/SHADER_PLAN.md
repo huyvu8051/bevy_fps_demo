@@ -1,0 +1,83 @@
+# Shader plan
+
+The project had no custom shaders until the damage overlay. This note records
+what is worth writing next and, for each one, how much it couples to Bevy's
+shader library — because that coupling is what decides the cost of the 0.20
+upgrade.
+
+## The upgrade constraint
+
+Bevy 0.20 drops `naga_oil` and moves to [WESL](https://wesl-lang.dev).
+
+| | bevy 0.19.1 | bevy 0.20.0 |
+|---|---|---|
+| crate `wesl` | 0.3.1 (opt-in via `shader_format_wesl`) | 0.6.0 (always on) |
+| preprocessor | naga_oil | WESL |
+| GLSL | supported | removed |
+
+The migration guide states plainly: **"Plain WGSL files with no preprocessor
+directives keep working."** Everything else changes — imports take a semicolon
+and new module paths, `#ifdef` becomes `@if`, `#{BINDING}` becomes
+`constants::BINDING`, `#define_import_path` is gone.
+
+WESL itself is pre-1.0 and moved three minor versions between the two Bevy
+releases, so WESL-specific syntax written today is a guess at what 0.20 accepts.
+Prefer directive-free WGSL.
+
+## Coupling tiers
+
+**Tier 0 — no imports.** Fragment-only effects over a UI node. Declare the
+varyings struct locally instead of importing it. Survives the upgrade untouched.
+
+**Tier 1 — one import.** A 3D `Material` that overrides only the fragment
+shader still needs `VertexOutput`, whose fields are `#ifdef`-gated, so it must
+be imported rather than redeclared. Migration is a single line:
+`#import bevy_pbr::forward_io::VertexOutput` becomes
+`import bevy_pbr::render::forward_io::VertexOutput;`.
+
+**Tier 2 — engine bindings.** Anything reading lights, view uniforms or the
+skinning pipeline. Several imports, paths all moved, and the surrounding
+`#ifdef` logic has to become `@if`. Worth deferring to 0.20.
+
+## Done
+
+- **Damage overlay** (tier 0) — `assets/shaders/damage_overlay.wesl`. Red
+  vignette that tightens and pulses as health drops, plus a hit flash.
+
+## Next
+
+### Scope lens — tier 1, recommended first
+The scope is a circle mesh showing a render-target texture, unlit and flat. A
+fragment material would add barrel distortion toward the rim, a dark vignette,
+and slight chromatic fringing. This is what the player stares at while aiming,
+so it carries the most visual weight per line of shader.
+
+### Film grain — tier 0
+A time-varying grain over the whole frame. The garage textures already carry
+static noise; animated grain ties the image together.
+
+### Light adaptation — tier 0
+The two maps sit at opposite light levels. Easing exposure when moving between
+the dark garage and the bright desert street would sell the transition.
+
+### Wet blood — tier 2
+Blood decals now take real lighting, which gives a moving specular. A dedicated
+shader would go further: glossy pool interior, rough dried rim. Needs light
+bindings, so it waits for 0.20.
+
+### Burn-away dissolve — tier 2
+Death currently sinks and fades the corpse, which needs no shader. A burn edge
+creeping across the body needs a material on a skinned mesh — the deepest
+coupling of anything here.
+
+### Projected decals — tier 2
+Blood is a flat quad, so it clips through curved walls and stair edges. Proper
+decal projection needs depth reconstruction.
+
+## Rules of thumb
+
+- Write plain WGSL. Reach for a directive only when there is no alternative.
+- Prefer a UI material over a 3D material when the effect is screen-space.
+- Test on both maps. The garage is dark enough to hide effects that look fine
+  on the desert map, and vice versa — a lit-decal change was wrongly rejected
+  once because it was only checked in the garage.

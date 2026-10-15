@@ -62,6 +62,9 @@ use gun_view::*;
 
 mod map;
 
+mod scope_lens;
+use scope_lens::*;
+
 mod dissolve;
 use dissolve::*;
 
@@ -384,6 +387,7 @@ pub fn main() {
                 }),
             MeshPickingPlugin,
             bevy::ui_render::prelude::UiMaterialPlugin::<DamageOverlayMaterial>::default(),
+            MaterialPlugin::<ScopeLensMaterial>::default(),
             PhysicsPlugins::default(),
             SimPlugin,
             zombie_nav::ZombieNavmeshPlugin,
