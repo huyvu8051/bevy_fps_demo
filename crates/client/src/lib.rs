@@ -51,6 +51,15 @@ use vfx::*;
 mod audio;
 use audio::*;
 
+mod blood;
+use blood::*;
+
+mod zombie_reaction;
+use zombie_reaction::*;
+
+mod gun_view;
+use gun_view::*;
+
 
 mod hud;
 use hud::*;

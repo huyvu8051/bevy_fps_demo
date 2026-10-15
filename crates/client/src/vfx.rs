@@ -2,25 +2,10 @@
 use bevy::prelude::*;
 use crate::*;
 
-#[derive(Resource)]
-pub(crate) struct ScopeCameraEnabled(pub(crate) bool);
-impl Default for ScopeCameraEnabled {
-    fn default() -> Self {
-        Self(true)
-    }
-}
 
-#[derive(Component)]
-pub(crate) struct ScopeCamera;
 
-#[derive(Component)]
-pub(crate) struct ScopeLens;
 
-#[derive(Component)]
-pub(crate) struct ScopeReticle;
 
-#[derive(Resource)]
-pub(crate) struct ScopeZoom(pub(crate) f32);
 
 #[derive(Component)]
 pub(crate) struct HitMarker {
@@ -43,11 +28,6 @@ pub(crate) struct BulletTracer {
     pub(crate) remaining: f32,
 }
 
-#[derive(Component)]
-pub(crate) struct BloodParticle {
-    pub(crate) velocity: Vec3,
-    pub(crate) remaining: f32,
-}
 
 #[derive(Component)]
 pub(crate) struct SparkParticle {
@@ -55,10 +35,6 @@ pub(crate) struct SparkParticle {
     pub(crate) remaining: f32,
 }
 
-#[derive(Component)]
-pub(crate) struct BloodStain {
-    pub(crate) remaining: f32,
-}
 
 #[derive(Resource)]
 pub(crate) struct HitMarkerAssets {
@@ -80,14 +56,6 @@ pub(crate) struct TracerAssets {
     pub(crate) material: Handle<StandardMaterial>,
 }
 
-#[derive(Resource)]
-pub(crate) struct BloodAssets {
-    pub(crate) particle_mesh: Handle<Mesh>,
-    pub(crate) particle_material: Handle<StandardMaterial>,
-    pub(crate) stain_mesh: Handle<Mesh>,
-    pub(crate) floor_stain_mesh: Handle<Mesh>,
-    pub(crate) stain_materials: Vec<Handle<StandardMaterial>>,
-}
 
 #[derive(Resource)]
 pub(crate) struct SparkAssets {
@@ -145,82 +113,7 @@ pub(crate) fn on_shot_confirmed(
     spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0);
 }
 
-pub(crate) fn spawn_blood_effects(
-    commands: &mut Commands,
-    blood_assets: &BloodAssets,
-    spatial_query: &SpatialQuery,
-    time: &Time,
-    hit_point: Vec3,
-    hit_normal: Vec3,
-    bone: Option<(Entity, &GlobalTransform)>,
-    killed: bool,
-) {
-    for i in 0..BLOOD_PARTICLE_COUNT {
 
-        let seed = time.elapsed_secs() * 977.0 + i as f32 * 131.7;
-        let dir = Vec3::new(ops::sin(seed * 1.3), ops::sin(seed * 0.7).abs() * 0.6, ops::sin(seed * 2.1))
-            .normalize_or_zero();
-        commands.spawn((
-            Mesh3d(blood_assets.particle_mesh.clone()),
-            MeshMaterial3d(blood_assets.particle_material.clone()),
-            Transform::from_translation(hit_point),
-            BloodParticle {
-                velocity: dir * BLOOD_PARTICLE_SPEED,
-                remaining: BLOOD_PARTICLE_LIFETIME,
-            },
-        ));
-    }
-
-    match bone {
-        Some((entity, bone_global)) => {
-            spawn_blood_stain_on_zombie(commands, blood_assets, entity, bone_global, hit_point, hit_normal, time.elapsed_secs() * 733.0);
-        }
-        None if !killed => spawn_blood_stain(commands, blood_assets, None, hit_point, hit_normal, time.elapsed_secs() * 733.0, blood_assets.stain_mesh.clone()),
-        None => {}
-    }
-
-    let range = (BLOOD_FLOOR_STAIN_MAX - BLOOD_FLOOR_STAIN_MIN + 1) as f32;
-    let count = (BLOOD_FLOOR_STAIN_MIN as f32 + ops::sin(time.elapsed_secs() * 457.0).abs() * range) as usize;
-    let count = count.clamp(BLOOD_FLOOR_STAIN_MIN, BLOOD_FLOOR_STAIN_MAX);
-
-    let Ok(down) = Dir3::new(Vec3::NEG_Y) else {
-        return;
-    };
-    let filter = SpatialQueryFilter::default();
-    for i in 0..count {
-        let seed = time.elapsed_secs() * 613.0 + i as f32 * 219.3;
-        let jitter = Vec3::new(ops::sin(seed), 0.0, ops::sin(seed * 1.7)) * BLOOD_FLOOR_STAIN_SPREAD;
-        let origin = hit_point + jitter;
-        if let Some(floor_hit) = spatial_query.cast_ray(origin, down, BLOOD_FLOOR_RAYCAST_DISTANCE, true, &filter) {
-            let floor_point = origin + Vec3::NEG_Y * floor_hit.distance;
-
-            spawn_blood_stain(commands, blood_assets, None, floor_point, floor_hit.normal, seed, blood_assets.floor_stain_mesh.clone());
-        }
-    }
-}
-
-pub(crate) fn spawn_zombie_hit_feedback(
-    commands: &mut Commands,
-    blood_assets: &BloodAssets,
-    spark_assets: &SparkAssets,
-    spatial_query: &SpatialQuery,
-    time: &Time,
-    point: Vec3,
-    normal: Vec3,
-    damage: f32,
-    bone_for_blood: Option<(Entity, &GlobalTransform)>,
-    killed: bool,
-    show_floating_damage: bool,
-) {
-    if damage > 0.0 {
-        if show_floating_damage {
-            spawn_floating_damage(commands, point, damage);
-        }
-        spawn_blood_effects(commands, blood_assets, spatial_query, time, point, normal, bone_for_blood, killed);
-    } else {
-        spawn_spark_effects(commands, spark_assets, time, point, normal);
-    }
-}
 
 pub(crate) fn spawn_spark_effects(commands: &mut Commands, spark_assets: &SparkAssets, time: &Time, hit_point: Vec3, hit_normal: Vec3) {
     let normal = hit_normal.normalize_or_zero();
@@ -273,93 +166,10 @@ pub(crate) fn spawn_bullet_tracer(commands: &mut Commands, tracer_assets: &Trace
     ));
 }
 
-fn stain_variant(blood_assets: &BloodAssets, seed: f32) -> Option<Handle<StandardMaterial>> {
-    let materials = &blood_assets.stain_materials;
-    if materials.is_empty() {
-        return None;
-    }
-    let pick = (ops::sin(seed) * 43758.547).fract().abs();
-    materials.get((pick * materials.len() as f32) as usize % materials.len()).cloned()
-}
 
-fn stain_rotation(normal: Vec3, seed: f32) -> Quat {
-    let spin = (ops::sin(seed * 1.7) * 43758.547).fract().abs() * std::f32::consts::TAU;
-    Quat::from_rotation_arc(Vec3::Z, normal.normalize_or_zero()) * Quat::from_rotation_z(spin)
-}
 
-pub(crate) fn spawn_blood_stain(
-    commands: &mut Commands,
-    blood_assets: &BloodAssets,
-    parent: Option<Entity>,
-    point: Vec3,
-    normal: Vec3,
-    seed: f32,
-    mesh: Handle<Mesh>,
-) {
-    let Some(material) = stain_variant(blood_assets, seed) else {
-        return;
-    };
-    let transform = Transform::from_translation(point + normal.normalize_or_zero() * 0.01)
-        .with_rotation(stain_rotation(normal, seed));
-    let mut stain = commands.spawn((
-        Mesh3d(mesh),
-        MeshMaterial3d(material),
-        transform,
-        BloodStain {
-            remaining: BLOOD_STAIN_LIFETIME,
-        },
-    ));
-    if let Some(parent) = parent {
-        stain.insert(ChildOf(parent));
-    }
-}
 
-pub(crate) fn spawn_blood_stain_on_zombie(
-    commands: &mut Commands,
-    blood_assets: &BloodAssets,
-    bone: Entity,
-    bone_global: &GlobalTransform,
-    hit_point: Vec3,
-    hit_normal: Vec3,
-    seed: f32,
-) {
-    let Some(material) = stain_variant(blood_assets, seed) else {
-        return;
-    };
-    let world_transform = GlobalTransform::from(
-        Transform::from_translation(hit_point + hit_normal.normalize_or_zero() * 0.01)
-            .with_rotation(stain_rotation(hit_normal, seed)),
-    );
-    let local_transform = world_transform.reparented_to(bone_global);
 
-    commands.entity(bone).with_children(|parent| {
-        parent.spawn((
-            Mesh3d(blood_assets.stain_mesh.clone()),
-            MeshMaterial3d(material),
-            local_transform,
-            BloodStain {
-                remaining: BLOOD_STAIN_LIFETIME,
-            },
-        ));
-    });
-}
-
-pub(crate) fn update_blood_particles(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut query: Query<(Entity, &mut Transform, &mut BloodParticle)>,
-) {
-    let dt = time.delta_secs();
-    for (entity, mut transform, mut particle) in &mut query {
-        particle.velocity.y += BLOOD_PARTICLE_GRAVITY * dt;
-        transform.translation += particle.velocity * dt;
-
-        particle.remaining -= dt;
-        if particle.remaining <= 0.0 {
-            commands.entity(entity).try_despawn();
-        }
-    }
-}
 
 pub(crate) fn update_spark_particles(
     mut commands: Commands,
@@ -378,27 +188,7 @@ pub(crate) fn update_spark_particles(
     }
 }
 
-pub(crate) fn despawn_blood_stains(mut commands: Commands, time: Res<Time>, mut query: Query<(Entity, &mut BloodStain)>) {
-    for (entity, mut stain) in &mut query {
-        stain.remaining -= time.delta_secs();
-        if stain.remaining <= 0.0 {
-            commands.entity(entity).try_despawn();
-        }
-    }
-}
 
-pub(crate) fn update_scope_zoom_slider_visibility(
-    mouse: Res<ButtonInput<MouseButton>>,
-    touch_aiming: Res<TouchAiming>,
-    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    mut track: Query<&mut Node, With<TouchScopeZoomSliderTrack>>,
-) {
-    let Ok(mut node) = track.single_mut() else {
-        return;
-    };
-    let aiming = cursor.single().is_ok_and(|c| is_aiming(c, &mouse, touch_aiming.0));
-    node.display = if aiming { Display::Flex } else { Display::None };
-}
 
 pub(crate) fn set_hitbox_gizmo_depth_bias(mut config_store: ResMut<GizmoConfigStore>) {
 
@@ -508,116 +298,11 @@ pub(crate) fn draw_zombie_hitboxes(
     }
 }
 
-const FLINCH_DURATION: f32 = 0.26;
-const FLINCH_MAX_ANGLE_DEG: f32 = 42.0;
-const FLINCH_CHAIN_FALLOFF: [f32; 3] = [1.0, 0.42, 0.16];
-const FLINCH_HEAD_TO_CHEST: f32 = 0.3;
 
-#[derive(Component)]
-pub(crate) struct BoneFlinch {
-    world_axis: Vec3,
-    angle: f32,
-    remaining: f32,
-}
 
-fn flinch_chain(bones: &ZombieHitboxBones, hit: Entity) -> Vec<Entity> {
-    for limb in [&bones.left_arm, &bones.right_arm, &bones.left_leg, &bones.right_leg] {
-        if let Some(index) = limb.iter().position(|bone| *bone == Some(hit)) {
-            return limb[..=index].iter().rev().copied().flatten().collect();
-        }
-    }
-    if Some(hit) == bones.head {
-        return [Some(hit), bones.chest].into_iter().flatten().collect();
-    }
-    vec![hit]
-}
 
-fn spawn_bone_flinch(
-    commands: &mut Commands,
-    bones: &ZombieHitboxBones,
-    hit_bone: Entity,
-    impulse: Vec3,
-    damage: f32,
-    globals: &Query<&GlobalTransform>,
-    child_of: &Query<&ChildOf>,
-) {
-    let chain = flinch_chain(bones, hit_bone);
-    let Some(&first) = chain.first() else { return };
 
-    let bone_direction = child_of
-        .get(first)
-        .ok()
-        .and_then(|parent| globals.get(parent.0).ok().zip(globals.get(first).ok()))
-        .map(|(parent, bone)| (bone.translation() - parent.translation()).normalize_or_zero())
-        .unwrap_or(Vec3::Y);
 
-    let mut axis = bone_direction.cross(impulse).normalize_or_zero();
-    if axis == Vec3::ZERO {
-        axis = impulse.cross(Vec3::Y).normalize_or_zero();
-    }
-    if axis == Vec3::ZERO {
-        return;
-    }
-
-    let head_hit = Some(hit_bone) == bones.head;
-    let base = FLINCH_MAX_ANGLE_DEG.to_radians() * (damage / ZOMBIE_MAX_HEALTH).clamp(0.25, 1.0);
-
-    for (index, bone) in chain.into_iter().enumerate() {
-        let falloff = if head_hit && index > 0 {
-            FLINCH_HEAD_TO_CHEST
-        } else {
-            FLINCH_CHAIN_FALLOFF[index.min(FLINCH_CHAIN_FALLOFF.len() - 1)]
-        };
-        commands.entity(bone).insert(BoneFlinch {
-            world_axis: axis,
-            angle: base * falloff,
-            remaining: FLINCH_DURATION,
-        });
-    }
-}
-
-pub(crate) fn apply_bone_flinch(
-    time: Res<Time>,
-    mut commands: Commands,
-    child_of: Query<&ChildOf>,
-    globals: Query<&GlobalTransform>,
-    mut flinches: Query<(Entity, &mut BoneFlinch)>,
-    mut transforms: Query<&mut Transform>,
-) {
-    for (entity, mut flinch) in &mut flinches {
-        flinch.remaining -= time.delta_secs();
-        if flinch.remaining <= 0.0 {
-            commands.entity(entity).remove::<BoneFlinch>();
-            continue;
-        }
-        let decay = (flinch.remaining / FLINCH_DURATION).clamp(0.0, 1.0);
-        let angle = flinch.angle * decay * decay;
-        let parent_rotation = child_of
-            .get(entity)
-            .ok()
-            .and_then(|parent| globals.get(parent.0).ok())
-            .map(|global| global.rotation())
-            .unwrap_or(Quat::IDENTITY);
-        let world_rotation = Quat::from_axis_angle(flinch.world_axis, angle);
-        let local_rotation = parent_rotation.inverse() * world_rotation * parent_rotation;
-        let Ok(mut transform) = transforms.get_mut(entity) else { continue };
-        transform.rotation = local_rotation * transform.rotation;
-    }
-}
-
-pub(crate) fn nearest_zombie_bone(bones: &ZombieHitboxBones, point: Vec3, globals: &Query<&GlobalTransform>) -> Option<(Entity, GlobalTransform)> {
-    bones
-        .head
-        .into_iter()
-        .chain(bones.belly)
-        .chain(bones.chest)
-        .chain(bones.left_arm.into_iter().flatten())
-        .chain(bones.right_arm.into_iter().flatten())
-        .chain(bones.left_leg.into_iter().flatten())
-        .chain(bones.right_leg.into_iter().flatten())
-        .filter_map(|entity| globals.get(entity).ok().map(|g| (entity, *g)))
-        .min_by(|(_, a), (_, b)| a.translation().distance_squared(point).total_cmp(&b.translation().distance_squared(point)))
-}
 
 pub(crate) fn on_shot_fx(
     trigger: On<ShotFx>,
@@ -681,232 +366,12 @@ pub(crate) fn on_shot_fx(
     }
 }
 
-pub(crate) struct GunPoseTimings {
-    recoil_t: f32,
-    dip: f32,
-    bob_x: f32,
-    bob_y: f32,
-}
 
-pub(crate) fn gun_pose_timings(gun: &Gun) -> GunPoseTimings {
-    let recoil_t = gun.recoil / RECOIL_DURATION;
-    let reload_t = gun.reload_remaining / RELOAD_DURATION;
 
-    let dip = 4.0 * reload_t * (1.0 - reload_t);
-    let bob_aim_scale = 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER);
-    let bob_x = ops::sin(gun.bob_phase) * GUN_BOB_AMOUNT_X * gun.bob_blend * bob_aim_scale;
-    let bob_y = ops::sin(gun.bob_phase * 2.0).abs() * GUN_BOB_AMOUNT_Y * gun.bob_blend * bob_aim_scale;
-    GunPoseTimings { recoil_t, dip, bob_x, bob_y }
-}
 
-pub(crate) fn gun_recoil_sway_rotation(gun: &Gun, timings: &GunPoseTimings) -> Quat {
-    Quat::from_rotation_z(gun.look_sway_roll.to_radians())
-        * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
-        * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
-        * Quat::from_rotation_x((RELOAD_TILT_DEG * timings.dip + RECOIL_TILT_UP_DEG * timings.recoil_t).to_radians())
-}
 
-pub(crate) fn sync_scope_camera(
-    camera: Query<&Transform, (With<FpsCamera>, Without<ScopeCamera>, Without<Gun>)>,
-    gun: Query<(&Gun, &Transform), (Without<FpsCamera>, Without<ScopeCamera>)>,
-    mut scope_camera: Query<&mut Transform, (With<ScopeCamera>, Without<FpsCamera>, Without<Gun>)>,
-) {
-    let (Ok(camera_transform), Ok((gun, gun_transform)), Ok(mut scope_transform)) =
-        (camera.single(), gun.single(), scope_camera.single_mut())
-    else {
-        return;
-    };
-    *scope_transform = *camera_transform;
 
-    let local_to_world = |local: Vec3| {
-        camera_transform.right() * local.x + camera_transform.up() * local.y
-            - camera_transform.forward() * local.z
-    };
 
-    scope_transform.translation += local_to_world(gun_transform.translation)
-
-        + camera_transform.up() * (SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend) + SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend);
-
-    scope_transform.rotation *= gun_recoil_sway_rotation(gun, &gun_pose_timings(gun));
-}
-
-pub(crate) fn adjust_scope_zoom(
-    mut wheel: MessageReader<MouseWheel>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    touch_aiming: Res<TouchAiming>,
-    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    mut zoom: ResMut<ScopeZoom>,
-    camera: Query<&GlobalTransform, With<FpsCamera>>,
-    autopilot: Res<Autopilot>,
-    autopilot_state: Res<AutopilotState>,
-    zombies: Query<&Transform, With<Zombie>>,
-) {
-    let Ok(cursor) = cursor.single() else {
-        return;
-    };
-    if !is_aiming(cursor, &mouse, touch_aiming.0) {
-        wheel.clear();
-        return;
-    }
-
-    if autopilot.0 {
-        if let Some(target_entity) = autopilot_state.target {
-            if let (Ok(camera_global), Ok(zombie_transform)) =
-                (camera.single(), zombies.get(target_entity))
-            {
-                let distance = camera_global.translation().distance(zombie_transform.translation);
-                let t = ((distance - AUTO_ZOOM_NEAR_DISTANCE)
-                    / (AUTO_ZOOM_FAR_DISTANCE - AUTO_ZOOM_NEAR_DISTANCE))
-                    .clamp(0.0, 1.0);
-                zoom.0 = SCOPE_MIN_ZOOM + (SCOPE_MAX_ZOOM - SCOPE_MIN_ZOOM) * t;
-                wheel.clear();
-                return;
-            }
-        }
-    }
-    for event in wheel.read() {
-        zoom.0 = (zoom.0 * SCOPE_ZOOM_STEP_FACTOR.powf(event.y.signum()))
-            .clamp(SCOPE_MIN_ZOOM, SCOPE_MAX_ZOOM);
-    }
-}
-
-pub(crate) fn update_scope_lens(
-    gun: Query<&Gun>,
-    zoom: Res<ScopeZoom>,
-    scope_camera_enabled: Res<ScopeCameraEnabled>,
-    mut scope_camera: Query<(&mut Camera, &mut Projection), With<ScopeCamera>>,
-    mut lens: Query<(&mut Transform, &mut Visibility), (With<ScopeLens>, Without<ScopeReticle>)>,
-    mut reticle: Query<&mut Transform, (With<ScopeReticle>, Without<ScopeLens>)>,
-) {
-    let Ok(gun) = gun.single() else {
-        return;
-    };
-    let visible = scope_camera_enabled.0
-        && gun.ads_blend > SCOPE_ACTIVE_ADS_THRESHOLD
-        && gun.wall_raise < SCOPE_HIDDEN_WALL_RAISE_THRESHOLD;
-
-    if let Ok((mut camera, mut projection)) = scope_camera.single_mut() {
-        camera.is_active = visible;
-        if let Projection::Perspective(perspective) = projection.as_mut() {
-            perspective.fov = SCOPE_BASE_FOV / zoom.0;
-        }
-    }
-
-    if let Ok(mut reticle_transform) = reticle.single_mut() {
-        reticle_transform.scale = Vec3::splat(SCOPE_DEFAULT_ZOOM / zoom.0);
-    }
-
-    if let Ok((mut transform, mut visibility)) = lens.single_mut() {
-
-        let lens_x = GUN_OFFSET.x + (SCOPE_LENS_OFFSET.x - GUN_OFFSET.x) * gun.ads_blend;
-        let timings = gun_pose_timings(gun);
-        let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend) - RELOAD_LEFT_DIP * timings.dip + timings.bob_x;
-        let lens_y = SCOPE_LENS_OFFSET.y - SCOPE_LENS_HIDDEN_DROP * (1.0 - gun.ads_blend)
-            + SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend)
-            + RECOIL_KICK_UP * timings.recoil_t
-            - RELOAD_DIP * timings.dip
-            - timings.bob_y;
-        let lens_z = GUN_OFFSET.z + (SCOPE_LENS_OFFSET.z - GUN_OFFSET.z) * gun.ads_blend + RECOIL_KICK * timings.recoil_t;
-        transform.translation = Vec3::new(swapped_x, lens_y, lens_z);
-        transform.rotation = gun_recoil_sway_rotation(gun, &timings);
-        *visibility = if visible { Visibility::Visible } else { Visibility::Hidden };
-    }
-}
-
-pub(crate) fn gun_view_animation(
-    time: Res<Time>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    touch_aiming: Res<TouchAiming>,
-    game_over: Res<GameOver>,
-    look_delta: Res<MouseLookDelta>,
-    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    camera: Query<(&Transform, &Lean), (With<FpsCamera>, Without<Gun>)>,
-    spatial_query: SpatialQuery,
-    mut query: Query<(&mut Transform, &mut Gun), Without<FpsCamera>>,
-    local_moving: Res<LocalPlayerMoving>,
-) {
-    let camera_single = camera.single().ok();
-    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
-
-    let shoulder_target = if game_over.0 {
-        0.0
-    } else {
-        camera_single.is_some_and(|(_, lean)| lean.current < -0.5) as u8 as f32
-    };
-
-    let wall_target = camera_single.map_or(0.0, |(camera_transform, _)| {
-        let filter = SpatialQueryFilter::default();
-        spatial_query
-            .cast_ray(
-                camera_transform.translation,
-                camera_transform.forward(),
-                WALL_GUN_RAISE_DISTANCE,
-                true,
-                &filter,
-            )
-            .map_or(0.0, |hit| {
-                1.0 - (hit.distance / WALL_GUN_RAISE_DISTANCE).clamp(0.0, 1.0)
-            })
-    });
-    for (mut transform, mut gun) in &mut query {
-        if gun.recoil > 0.0 {
-            gun.recoil = (gun.recoil - time.delta_secs()).max(0.0);
-        }
-        if gun.reload_remaining > 0.0 {
-            gun.reload_remaining = (gun.reload_remaining - time.delta_secs()).max(0.0);
-            if gun.reload_remaining == 0.0 {
-                gun.ammo = MAGAZINE_SIZE;
-            }
-        }
-
-        let ads_target = if aiming { 1.0 } else { 0.0 };
-        let ads_step = (GUN_ADS_SPEED * time.delta_secs()).min(1.0);
-        gun.ads_blend += (ads_target - gun.ads_blend) * ads_step;
-
-        let wall_raise_step = (WALL_GUN_RAISE_SPEED * time.delta_secs()).min(1.0);
-        gun.wall_raise += (wall_target - gun.wall_raise) * wall_raise_step;
-
-        let shoulder_step = (LEAN_SPEED * time.delta_secs()).min(1.0);
-        gun.shoulder_blend += (shoulder_target - gun.shoulder_blend) * shoulder_step;
-
-        let moving = local_moving.0;
-        let bob_target = if moving { 1.0 } else { 0.0 };
-        let bob_blend_step = (GUN_BOB_BLEND_SPEED * time.delta_secs()).min(1.0);
-        gun.bob_blend += (bob_target - gun.bob_blend) * bob_blend_step;
-        if moving {
-            gun.bob_phase += GUN_BOB_SPEED * time.delta_secs();
-        }
-
-        let sway_target =
-            (look_delta.0.x * LOOK_SWAY_SENSITIVITY).clamp(-LOOK_SWAY_MAX_DEG, LOOK_SWAY_MAX_DEG);
-        let sway_step = (LOOK_SWAY_SPEED * time.delta_secs()).min(1.0);
-        gun.look_sway_roll += (sway_target - gun.look_sway_roll) * sway_step;
-
-        let timings = gun_pose_timings(&gun);
-
-        let base_pos = gun.base_offset.lerp(GUN_ADS_OFFSET, gun.ads_blend);
-
-        let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
-        transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)
-            + Vec3::new(
-                timings.bob_x,
-                RECOIL_KICK_UP * timings.recoil_t - RELOAD_DIP * timings.dip - timings.bob_y
-                    + WALL_GUN_RAISE_HEIGHT * gun.wall_raise,
-                RECOIL_KICK * timings.recoil_t,
-            );
-
-        let base_rotation = Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians())
-            * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip);
-
-        let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
-        transform.rotation = Quat::from_rotation_x(wall_raise_tilt)
-            * Quat::from_rotation_z(gun.look_sway_roll.to_radians())
-            * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
-            * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
-            * Quat::from_rotation_x(RECOIL_TILT_UP_DEG.to_radians() * timings.recoil_t)
-            * base_rotation;
-    }
-}
 
 pub(crate) fn despawn_hit_markers(
     mut commands: Commands,
@@ -961,73 +426,3 @@ pub(crate) fn update_smoke(mut commands: Commands, time: Res<Time>, mut query: Q
 }
 
 
-const ZOMBIE_HEAD_YAW_LIMIT_DEG: f32 = 72.0;
-const ZOMBIE_HEAD_PITCH_LIMIT_DEG: f32 = 32.0;
-const ZOMBIE_HEAD_TURN_RATE: f32 = 9.0;
-
-#[derive(Component, Default)]
-pub(crate) struct ZombieHeadLook {
-    yaw: f32,
-    pitch: f32,
-}
-
-pub(crate) fn aim_zombie_heads(
-    time: Res<Time>,
-    camera: Query<&GlobalTransform, With<FpsCamera>>,
-    mut zombies: Query<(&Transform, &ZombieHitboxBones, &mut ZombieHeadLook), With<Zombie>>,
-    child_of: Query<&ChildOf>,
-    globals: Query<&GlobalTransform>,
-    mut bone_transforms: Query<&mut Transform, Without<Zombie>>,
-) {
-    let Ok(camera_global) = camera.single() else {
-        return;
-    };
-    let target = camera_global.translation();
-    let blend = (ZOMBIE_HEAD_TURN_RATE * time.delta_secs()).min(1.0);
-    let yaw_limit = ZOMBIE_HEAD_YAW_LIMIT_DEG.to_radians();
-    let pitch_limit = ZOMBIE_HEAD_PITCH_LIMIT_DEG.to_radians();
-
-    for (body, bones, mut look) in &mut zombies {
-        let Some(head) = bones.head else {
-            continue;
-        };
-        let Ok(head_global) = globals.get(head) else {
-            continue;
-        };
-
-        let to_target = target - head_global.translation();
-        let flat = Vec3::new(to_target.x, 0.0, to_target.z);
-        let forward = body.rotation * Vec3::Z;
-        let forward_flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
-        if flat.length_squared() < 1e-6 || forward_flat == Vec3::ZERO {
-            continue;
-        }
-        let target_flat = flat.normalize();
-
-        let yaw = forward_flat
-            .cross(target_flat)
-            .dot(Vec3::Y)
-            .atan2(forward_flat.dot(target_flat))
-            .clamp(-yaw_limit, yaw_limit);
-        let pitch = to_target.y.atan2(flat.length()).clamp(-pitch_limit, pitch_limit);
-
-        look.yaw += (yaw - look.yaw) * blend;
-        look.pitch += (pitch - look.pitch) * blend;
-
-        let yaw_rotation = Quat::from_axis_angle(Vec3::Y, look.yaw);
-        let right = (yaw_rotation * forward_flat.cross(Vec3::Y)).normalize_or_zero();
-        let world_rotation = Quat::from_axis_angle(right, look.pitch) * yaw_rotation;
-
-        let parent_rotation = child_of
-            .get(head)
-            .ok()
-            .and_then(|parent| globals.get(parent.0).ok())
-            .map(|global| global.rotation())
-            .unwrap_or(Quat::IDENTITY);
-        let local_rotation = parent_rotation.inverse() * world_rotation * parent_rotation;
-        let Ok(mut transform) = bone_transforms.get_mut(head) else {
-            continue;
-        };
-        transform.rotation = local_rotation * transform.rotation;
-    }
-}
