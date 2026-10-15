@@ -16,16 +16,13 @@ use bevy::winit::{UpdateMode, WinitSettings};
 use shared::{
     ClearAllZombies, ClientInput, find_animation_root, FireShot, GameOver, GameStateEvent, Health,
     HEAD_DAMAGE, HITBOX_BELLY_MIN_Y, HITBOX_CHEST_MIN_Y, HITBOX_HEAD_MIN_Y, HITBOX_LIMB_LATERAL_MIN,
-    KnockbackVelocity, LastProcessedInput, NetPlayer, NetTransform, Player, PlayerDied,
+    KnockbackVelocity, NetPlayer, NetTransform, Player, PlayerDied,
     ZombieAnimationPlayer,
-    PlayerDiedFx, PlayerFiredFx,
     PlayerStance, RequestRestart, Scenario, SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount, ShotConfirmed, ShotFx,
     SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieKind, ZombieShowcaseClip, wire_zombie_hitbox_bones,
-    zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_anim_path,
-    INTERP_DELAY_SECS, MAX_SHOT_DISTANCE,
+    zombie_kind_clip_count, zombie_kind_mesh_path, zombie_kind_anim_path, MAX_SHOT_DISTANCE,
     HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
     resolve_bone_world_positions, zombie_hit_damage_ray,
-    PROTOCOL_ID,
     ZOMBIE_ATTACK_INTERVAL, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS,
     zombie_pose_for, ZombieAnim, ZombiePose, ZOMBIE_MAX_HEALTH, ZOMBIE_STOP_DISTANCE,
 };

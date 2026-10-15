@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy_landmass::prelude::*;
 use bevy_landmass::{Agent3d, ArchipelagoOptions, PointSampleDistance3d};
 use bevy_rerecast::prelude::*;
-use landmass_rerecast::{Island3dBundle, LandmassRerecastPlugin, NavMeshHandle3d};
+use landmass_rerecast::{Island3dBundle, NavMeshHandle3d};
 use shared::zombie::{ZOMBIE_REST_HEIGHT, ZOMBIE_RADIUS, ZOMBIE_RUN_SPEED, ZOMBIE_WALK_SPEED};
 use shared::Scenario;
 

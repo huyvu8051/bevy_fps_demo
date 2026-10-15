@@ -4,29 +4,22 @@ use bevy::prelude::*;
 use big_brain::prelude::*;
 use shared::movement::{blocked_horizontally, resolve_slope_hit, try_step_up};
 use shared::{
-    entity_phase, resolve_bone_world_positions, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, ClientInput, FireShot,
+    entity_phase, resolve_bone_world_positions, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, Chase, ClearAllZombies, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity,
-    NetTransform, Player, PlayerDied, PlayerDiedFx, PlayerFiredFx, PlayerStance, RequestRestart,
+    NetTransform, Player, PlayerDied, RequestRestart,
     SetAutoMaintainZombies, SetDamageMultiplier, SetFreezeZombies, SetZombieCount,
-    ShotConfirmed, ShotFx, SpawnMoreZombies, Zombie,
-    ZombieAnimationPlayer, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, find_animation_root, wire_zombie_hitbox_bones, zombie_pose_for, zombie_speed_for, 
+    ShotConfirmed, ShotFx, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, zombie_speed_for, 
     GRAVITY, KNOCKBACK_DECAY_RATE, KNOCKBACK_FORCE,
     MAX_SHOT_DISTANCE, Scenario,
     
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
     ZOMBIE_REST_HEIGHT, ZOMBIE_MAX_HEALTH, ZOMBIE_PATH_RECALC_INTERVAL,
-    PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY,
-    PROTOCOL_ID,
-    ZombieAnim, ZombieKind, zombie_kind_for_phase, ZOMBIE_KIND_WEIGHTS, zombie_kind_mesh_path, zombie_kind_anim_path,
+    PLAYER_THREAT_DECAY_RATE, PLAYER_THREAT_PER_SHOT, ZOMBIE_LOAD_BALANCE_PENALTY, zombie_kind_for_phase, ZOMBIE_KIND_WEIGHTS,
     ZOMBIE_MOVE_RADIUS, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RESPAWN_DELAY, ZOMBIE_RETARGET_INTERVAL, ZOMBIE_SEPARATION_RADIUS,
     ZOMBIE_SEPARATION_STRENGTH, ZOMBIE_STOP_DISTANCE, ZOMBIE_THREAT_DISTANCE_BONUS,
     ZOMBIE_TURN_RATE_DEG,
 };
 
-use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle};
-use bevy::animation::AnimationPlayer;
-use bevy::gltf::GltfAssetLabel;
-use bevy::pbr::StandardMaterial;
 
 pub(crate) struct SimPlugin;
 
@@ -694,7 +687,7 @@ fn handle_fire_shot(
 struct Dead;
 
 fn on_player_died(
-    trigger: On<PlayerDied>,
+    _trigger: On<PlayerDied>,
     mut commands: Commands,
     mut game_over: ResMut<GameOver>,
 
