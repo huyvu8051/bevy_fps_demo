@@ -34,6 +34,8 @@ pub(crate) struct AutopilotState {
     pub(crate) time_since_swap: f32,
 
     tap_fire_timer: f32,
+
+    travel_dir: Option<Vec3>,
 }
 
 #[derive(Resource, Default)]
@@ -88,6 +90,17 @@ const AUTOPILOT_DECISION_HZ: f32 = 20.0;
 
 const AUTOPILOT_TARGET_BEHIND_PENALTY: f32 = 0.6;
 
+fn has_line_of_sight(spatial_query: &SpatialQuery, eye: Vec3, point: Vec3) -> bool {
+    let delta = point - eye;
+    let distance = delta.length();
+    match Dir3::new(delta) {
+        Ok(direction) => spatial_query
+            .cast_ray(eye, direction, (distance - AUTOPILOT_LOS_SLACK).max(0.0), true, &SpatialQueryFilter::default())
+            .is_none(),
+        Err(_) => true,
+    }
+}
+
 pub(crate) fn autopilot_pick_target(
     time: Res<Time>,
     autopilot: Res<Autopilot>,
@@ -96,6 +109,7 @@ pub(crate) fn autopilot_pick_target(
     player: Query<&Transform, (With<Player>, Without<NetPlayer>)>,
     camera: Query<&GlobalTransform, With<FpsCamera>>,
     zombies: Query<(Entity, &Transform), With<Zombie>>,
+    spatial_query: SpatialQuery,
 ) {
     if !autopilot.0 && !look_only.0 {
         return;
@@ -114,6 +128,7 @@ pub(crate) fn autopilot_pick_target(
                 Vec2::new(f.x, f.z).normalize_or_zero()
             })
             .unwrap_or(Vec2::Y);
+        let eye = camera.single().map(|g| g.translation()).unwrap_or(player_transform.translation);
         let new_target = zombies
             .iter()
             .filter_map(|(zombie, transform)| {
@@ -128,10 +143,12 @@ pub(crate) fn autopilot_pick_target(
 
                 let behind = (1.0 - facing) * 0.5;
                 let weighted_distance = distance * (1.0 + behind * AUTOPILOT_TARGET_BEHIND_PENALTY);
-                Some((zombie, weighted_distance))
+                let occluded = !has_line_of_sight(&spatial_query, eye, transform.translation);
+                let rank = if occluded { distance } else { weighted_distance };
+                Some((zombie, occluded, rank))
             })
-            .min_by(|(_, a), (_, b)| a.total_cmp(b))
-            .map(|(zombie, _)| zombie);
+            .min_by(|(_, a_occluded, a), (_, b_occluded, b)| a_occluded.cmp(b_occluded).then(a.total_cmp(b)))
+            .map(|(zombie, ..)| zombie);
         if new_target != state.target {
 
             let base = (ops::sin(time.elapsed_secs() * 947.0) + 1.0) * 0.5;
@@ -208,17 +225,7 @@ pub(crate) fn autopilot_think(
 
     let horizontal_distance = Vec2::new(to_target.x, to_target.z).length();
 
-    let occ_filter = SpatialQueryFilter::default().with_excluded_entities(zombies.iter().map(|(e, _, _)| e));
-    let clear_to_aim_from = |eye: Vec3| -> bool {
-        let delta = aim_point - eye;
-        let dist = delta.length();
-        match Dir3::new(delta) {
-            Ok(dir) => spatial_query
-                .cast_ray(eye, dir, (dist - AUTOPILOT_LOS_SLACK).max(0.0), true, &occ_filter)
-                .is_none(),
-            Err(_) => true,
-        }
-    };
+    let clear_to_aim_from = |eye: Vec3| -> bool { has_line_of_sight(&spatial_query, eye, aim_point) };
     let straight_los = clear_to_aim_from(camera_position);
 
     let cam_right = Vec3::new(ops::cos(cam.yaw), 0.0, -ops::sin(cam.yaw));
@@ -249,10 +256,15 @@ pub(crate) fn autopilot_think(
     let turn_rate_scale = distance_scale * fade_in_scale;
     let turn_step = AUTOPILOT_TURN_RATE_DEG.to_radians() * turn_rate_scale * dt;
 
-    let wobbled_target = to_target;
+    let blind_approach = !straight_los && peek_dir == 0.0;
+    let aim_vector = if blind_approach { state.travel_dir.unwrap_or(to_target) } else { to_target };
 
-    let desired_yaw = (-wobbled_target.x).atan2(-wobbled_target.z);
-    let desired_pitch = wobbled_target.y.atan2(horizontal_distance.max(0.01)).clamp(-1.5, 1.5);
+    let desired_yaw = (-aim_vector.x).atan2(-aim_vector.z);
+    let desired_pitch = if blind_approach {
+        0.0
+    } else {
+        aim_vector.y.atan2(horizontal_distance.max(0.01)).clamp(-1.5, 1.5)
+    };
     cam.yaw = turn_towards_angle(cam.yaw, desired_yaw, turn_step);
     cam.pitch = turn_towards_angle(cam.pitch, desired_pitch, turn_step);
 
@@ -316,10 +328,10 @@ pub(crate) fn autopilot_think(
             &mut pathing,
             target_transform.translation - Vec3::Y * shared::ZOMBIE_REST_HEIGHT,
         );
-        yaw_relative_axis(
-            cam.yaw,
-            routed.unwrap_or_else(|| steer_toward(&spatial_query, camera_position, toward, &occ_filter)),
-        )
+        let world_dir =
+            routed.unwrap_or_else(|| steer_toward(&spatial_query, camera_position, toward, &SpatialQueryFilter::default()));
+        state.travel_dir = Some(world_dir);
+        yaw_relative_axis(cam.yaw, world_dir)
     } else if !straight_los {
 
         Vec2::ZERO
