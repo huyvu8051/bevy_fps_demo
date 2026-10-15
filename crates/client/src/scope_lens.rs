@@ -3,7 +3,7 @@ use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 
 
-const SCOPE_LENS_SHADER: &str = "shaders/scope_lens.wesl";
+const SCOPE_LENS_SHADER: &str = "shaders/scope_lens.wgsl";
 const SCOPE_BARREL_DISTORTION: f32 = 0.16;
 const SCOPE_VIGNETTE_START: f32 = 0.55;
 const SCOPE_CHROMATIC_FRINGE: f32 = 0.004;

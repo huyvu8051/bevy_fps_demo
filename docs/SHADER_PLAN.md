@@ -29,11 +29,16 @@ Prefer directive-free WGSL.
 **Tier 0 — no imports.** Fragment-only effects over a UI node. Declare the
 varyings struct locally instead of importing it. Survives the upgrade untouched.
 
-**Tier 1 — one import.** A 3D `Material` that overrides only the fragment
-shader still needs `VertexOutput`, whose fields are `#ifdef`-gated, so it must
-be imported rather than redeclared. Migration is a single line:
-`#import bevy_pbr::forward_io::VertexOutput` becomes
-`import bevy_pbr::render::forward_io::VertexOutput;`.
+**Tier 1 — directives, so the file must stay `.wgsl`.** A 3D `Material` that
+overrides only the fragment shader needs two things it cannot get any other
+way: `VertexOutput`, whose fields are `#ifdef`-gated and so cannot be
+redeclared locally, and the material bind group index, which Bevy substitutes
+as `#{MATERIAL_BIND_GROUP}` — hardcoding `2` fails validation because that
+group holds a storage buffer. Both are naga_oil syntax, so the file must be
+named `.wgsl`; naming it `.wesl` routes it to the WESL parser, which rejects
+both and panics the render thread. Migration to 0.20 is the import line, the
+`#{...}` substitutions becoming `constants::MATERIAL_BIND_GROUP`, and the
+rename back to `.wesl`.
 
 **Tier 2 — engine bindings.** Anything reading lights, view uniforms or the
 skinning pipeline. Several imports, paths all moved, and the surrounding
