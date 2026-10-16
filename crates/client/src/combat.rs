@@ -49,9 +49,8 @@ pub(crate) fn handle_fire_shot(
     info!("[shot] fired: origin={:.2?} direction={:.2?}", shot.origin, *direction);
 
     let filter = SpatialQueryFilter::default();
-    let wall_filter = SpatialQueryFilter::from_excluded_entities(zombies.iter().map(|(e, ..)| e));
     let wall_distance = spatial_query
-        .cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &wall_filter)
+        .cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &SpatialQueryFilter::default())
         .map(|hit| hit.distance);
 
     let cylinder = Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT);

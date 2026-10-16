@@ -723,9 +723,8 @@ pub(crate) fn shoot(
         },
     ));
 
-    let wall_filter = SpatialQueryFilter::from_excluded_entities(zombies.iter().map(|(e, ..)| e));
     let wall_distance = spatial_query
-        .cast_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, true, &wall_filter)
+        .cast_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, true, &SpatialQueryFilter::default())
         .map(|hit| hit.distance);
     let predicted_hit = zombies
         .iter()
