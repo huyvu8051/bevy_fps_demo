@@ -24,6 +24,28 @@ WESL itself is pre-1.0 and moved three minor versions between the two Bevy
 releases, so WESL-specific syntax written today is a guess at what 0.20 accepts.
 Prefer directive-free WGSL.
 
+## Staying on 0.19 for now
+
+Checked 2026-10-16. The upgrade is blocked upstream, not by our code:
+
+| crate | upstream | 0.20 status |
+|---|---|---|
+| `bevy_landmass`, `landmass_rerecast` | `andriyDev/landmass` | `bevy-0.20` branch exists |
+| `bevy_rerecast` | `janhohenheim/rerecast` | open PR bumping to 0.20.0-rc.2 |
+| `avian3d` | `avianphysics/avian` | nothing — highest branch is `bevy-0.18`, `main` is 0.19 |
+
+Avian is the blocker and it is 56k lines across 153 files, six times the size
+of this client, touching ECS, schedules, reflection and debug rendering.
+Forking it to bump Bevy ourselves would cost more than rewriting the game, and
+upstream would land their own bump in the meantime.
+
+Our own code is cheap to port by comparison: one shader (`scope_lens.wgsl`),
+`ExtractComponent` needing an `AppLabel`, and a deprecated `Interaction` that
+still compiles. Checked against all 75 of the 0.20 migration guides — `Val`,
+`BorderRadius`, `bevy_shape` and tonemapping all turned out not to apply here.
+
+Watch avian. When it ships 0.20 the rest follows.
+
 ## Coupling tiers
 
 **Tier 0 — no imports.** Fragment-only effects over a UI node. Declare the
