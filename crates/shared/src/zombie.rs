@@ -357,4 +357,4 @@ pub struct SetFreezeZombies(pub bool);
 
 pub const ZOMBIE_RESPAWN_DELAY: f32 = 1.0;
 
-pub const KNOCKBACK_FORCE: f32 = 8.75;
+pub const KNOCKBACK_FORCE: f32 = 4.375;

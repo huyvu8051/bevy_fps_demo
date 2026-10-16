@@ -428,8 +428,7 @@ fn move_zombies(
         }
         motion.vertical_velocity += GRAVITY * time.delta_secs();
 
-        let decay = (KNOCKBACK_DECAY_RATE * time.delta_secs()).min(1.0);
-        knockback.0 *= 1.0 - decay;
+        knockback.0 *= (-KNOCKBACK_DECAY_RATE * time.delta_secs()).exp();
 
         let velocity = horizontal_velocity + knockback.0 + Vec3::Y * motion.vertical_velocity;
 
