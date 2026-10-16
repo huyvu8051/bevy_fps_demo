@@ -65,7 +65,9 @@ mod map;
 mod screen_effects;
 use screen_effects::*;
 
+mod muzzle_smoke;
 mod scope_lens;
+use muzzle_smoke::*;
 use scope_lens::*;
 
 mod dissolve;
@@ -406,6 +408,7 @@ pub fn main() {
             MeshPickingPlugin,
             bevy::ui_render::prelude::UiMaterialPlugin::<DamageOverlayMaterial>::default(),
             MaterialPlugin::<ScopeLensMaterial>::default(),
+            MaterialPlugin::<MuzzleSmokeMaterial>::default(),
             bevy::core_pipeline::fullscreen_material::FullscreenMaterialPlugin::<ScreenEffects>::default(),
             PhysicsPlugins::default(),
             SimPlugin,
@@ -677,6 +680,7 @@ impl Plugin for GamePlugin {
                 update_smoke,
                 update_blood_particles,
                 update_blood_bursts,
+                update_muzzle_smoke,
                 update_spark_particles,
                 despawn_blood_stains,
             )

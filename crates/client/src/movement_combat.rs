@@ -615,6 +615,7 @@ pub(crate) fn shoot(
     spatial_query: SpatialQuery,
     touch_firing: Res<TouchFiring>,
     mut cooldown: Local<f32>,
+    mut smoke_materials: ResMut<Assets<MuzzleSmokeMaterial>>,
     (autopilot, intent, local_moving, local_sprinting, show_hit_markers, show_tracers): (
         Res<Autopilot>,
         Res<AutopilotIntent>,
@@ -712,7 +713,7 @@ pub(crate) fn shoot(
 
     commands.spawn((
         Mesh3d(vfx_assets.muzzle_fx.smoke_mesh.clone()),
-        MeshMaterial3d(vfx_assets.muzzle_fx.smoke_material.clone()),
+        MeshMaterial3d(smoke_materials.add(muzzle_smoke_material(time.elapsed_secs() * 173.0))),
         Transform::from_translation(muzzle_world_pos)
             .with_rotation(camera_transform.rotation)
             .with_scale(Vec3::splat(SMOKE_START_SCALE)),

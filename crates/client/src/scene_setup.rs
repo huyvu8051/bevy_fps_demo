@@ -82,14 +82,6 @@ pub(crate) fn setup_common(
             ..default()
         }),
         smoke_mesh: meshes.add(Rectangle::new(0.25, 0.25)),
-        smoke_material: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.75, 0.75, 0.75, 0.5),
-            base_color_texture: Some(asset_server.load("textures/smoke.png")),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            cull_mode: None,
-            ..default()
-        }),
     });
 
     commands.insert_resource(TracerAssets {

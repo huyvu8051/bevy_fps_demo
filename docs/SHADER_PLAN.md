@@ -80,6 +80,18 @@ skinning pipeline. Several imports, paths all moved, and the surrounding
   colour drains to grey as health drops. Measured: high-frequency energy in a
   flat region went from 0.006-0.010 to 0.022.
 
+- **Volumetric muzzle smoke** (tier 1) — `assets/shaders/muzzle_smoke.wgsl`.
+  Replaces the single `smoke.png` card with a raymarched puff: 40 steps through
+  a soft sphere, density from domain-warped fbm, eroded over the puff life so
+  it dissolves instead of fading flat. Each shot passes its own seed, so no two
+  puffs repeat. WGSL parses and validates under naga 29.0.4; the look itself
+  has not been checked by eye.
+
+  Soft particles (depth-buffer fade where the quad meets geometry) were
+  deliberately skipped: that is tier 2, it binds to 0.19 internals, and muzzle
+  smoke almost never intersects world geometry. It is worth it for ground smoke,
+  not for this.
+
 ## Next
 
 ### Light adaptation — not tier 0 after all
