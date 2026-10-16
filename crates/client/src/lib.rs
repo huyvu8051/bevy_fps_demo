@@ -163,15 +163,30 @@ const SMOKE_LIFETIME: f32 = 0.4;
 const SMOKE_START_SCALE: f32 = 0.35;
 const SMOKE_GROWTH_PER_SEC: f32 = 1.0;
 
-const BLOOD_PARTICLE_COUNT: usize = 5;
-const BLOOD_PARTICLE_SPEED: f32 = 2.0;
+const BLOOD_PARTICLE_COUNT: usize = 14;
+const BLOOD_PARTICLE_SPEED: f32 = 3.2;
 const BLOOD_PARTICLE_GRAVITY: f32 = -9.0;
 const BLOOD_PARTICLE_LIFETIME: f32 = 0.6;
-const BLOOD_PARTICLE_SIZE: f32 = 0.04;
+const BLOOD_PARTICLE_SIZE: f32 = 0.075;
 const BLOOD_STAIN_SIZE: f32 = 0.22;
 const BLOOD_FLOOR_STAIN_SIZE: f32 = 0.55;
 const BLOOD_STAIN_VARIANTS: usize = 4;
 const BLOOD_STAIN_LIFETIME: f32 = 12.0;
+
+const BLOOD_BURST_SIZE: f32 = 0.34;
+const BLOOD_BURST_LIFETIME: f32 = 0.22;
+const BLOOD_BURST_START_SCALE: f32 = 0.35;
+const BLOOD_BURST_END_SCALE: f32 = 1.7;
+const BLOOD_BURST_NORMAL_OFFSET: f32 = 0.05;
+
+const BLOOD_EXIT_PARTICLE_COUNT: usize = 11;
+const BLOOD_EXIT_SPEED: f32 = 6.0;
+const BLOOD_EXIT_CONE: f32 = 0.38;
+const BLOOD_EXIT_WOUND_OFFSET: f32 = 0.3;
+const BLOOD_WALL_RAYCAST_DISTANCE: f32 = 4.5;
+const BLOOD_WALL_STAIN_SIZE: f32 = 0.42;
+const BLOOD_WALL_STAIN_COUNT: usize = 3;
+const BLOOD_WALL_STAIN_SPREAD: f32 = 0.22;
 
 const BLOOD_FLOOR_RAYCAST_DISTANCE: f32 = 5.0;
 const BLOOD_FLOOR_STAIN_MIN: usize = 1;
@@ -661,6 +676,7 @@ impl Plugin for GamePlugin {
                 despawn_bullet_tracers,
                 update_smoke,
                 update_blood_particles,
+                update_blood_bursts,
                 update_spark_particles,
                 despawn_blood_stains,
             )

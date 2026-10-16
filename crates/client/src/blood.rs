@@ -20,6 +20,9 @@ pub(crate) struct BloodAssets {
     pub(crate) stain_mesh: Handle<Mesh>,
     pub(crate) floor_stain_mesh: Handle<Mesh>,
     pub(crate) stain_materials: Vec<Handle<StandardMaterial>>,
+    pub(crate) wall_stain_mesh: Handle<Mesh>,
+    pub(crate) burst_mesh: Handle<Mesh>,
+    pub(crate) burst_materials: Vec<Handle<StandardMaterial>>,
 }
 
 pub(crate) fn spawn_blood_effects(
@@ -31,7 +34,12 @@ pub(crate) fn spawn_blood_effects(
     hit_normal: Vec3,
     bone: Option<(Entity, &GlobalTransform)>,
     killed: bool,
+    materials: &mut Assets<StandardMaterial>,
+    shot_direction: Vec3,
 ) {
+    spawn_blood_burst(commands, blood_assets, materials, hit_point, hit_normal, time.elapsed_secs() * 311.0);
+    spawn_exit_wound(commands, blood_assets, materials, spatial_query, hit_point, shot_direction, time.elapsed_secs() * 541.0);
+
     for i in 0..BLOOD_PARTICLE_COUNT {
 
         let seed = time.elapsed_secs() * 977.0 + i as f32 * 131.7;
@@ -150,12 +158,22 @@ pub(crate) fn spawn_blood_stain_on_zombie(
 pub(crate) fn update_blood_particles(
     mut commands: Commands,
     time: Res<Time>,
+    camera: Query<&GlobalTransform, With<FpsCamera>>,
     mut query: Query<(Entity, &mut Transform, &mut BloodParticle)>,
 ) {
     let dt = time.delta_secs();
+    let eye = camera.single().ok().map(|global| global.translation());
     for (entity, mut transform, mut particle) in &mut query {
         particle.velocity.y += BLOOD_PARTICLE_GRAVITY * dt;
         transform.translation += particle.velocity * dt;
+
+        // the quad normal is +Z, so aim it at the eye or the sprite is seen edge-on
+        if let Some(eye) = eye {
+            let to_eye = (eye - transform.translation).normalize_or_zero();
+            if to_eye != Vec3::ZERO {
+                transform.rotation = Quat::from_rotation_arc(Vec3::Z, to_eye);
+            }
+        }
 
         particle.remaining -= dt;
         if particle.remaining <= 0.0 {
@@ -173,3 +191,119 @@ pub(crate) fn despawn_blood_stains(mut commands: Commands, time: Res<Time>, mut 
     }
 }
 
+
+#[derive(Component)]
+pub(crate) struct BloodBurst {
+    remaining: f32,
+    spin: f32,
+    material: Handle<StandardMaterial>,
+}
+
+fn spawn_blood_burst(
+    commands: &mut Commands,
+    blood_assets: &BloodAssets,
+    materials: &mut Assets<StandardMaterial>,
+    hit_point: Vec3,
+    hit_normal: Vec3,
+    seed: f32,
+) {
+    let variants = &blood_assets.burst_materials;
+    if variants.is_empty() {
+        return;
+    }
+    let index = ((ops::sin(seed).abs() * variants.len() as f32) as usize).min(variants.len() - 1);
+    let Some(source) = materials.get(&variants[index]).cloned() else {
+        return;
+    };
+    let material = materials.add(source);
+    commands.spawn((
+        Mesh3d(blood_assets.burst_mesh.clone()),
+        MeshMaterial3d(material.clone()),
+        Transform::from_translation(hit_point + hit_normal.normalize_or_zero() * BLOOD_BURST_NORMAL_OFFSET)
+            .with_scale(Vec3::splat(BLOOD_BURST_START_SCALE)),
+        BloodBurst { remaining: BLOOD_BURST_LIFETIME, spin: seed, material },
+    ));
+}
+
+pub(crate) fn update_blood_bursts(
+    mut commands: Commands,
+    time: Res<Time>,
+    camera: Query<&GlobalTransform, With<FpsCamera>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut query: Query<(Entity, &mut Transform, &mut BloodBurst)>,
+) {
+    let dt = time.delta_secs();
+    let eye = camera.single().ok().map(|global| global.translation());
+    for (entity, mut transform, mut burst) in &mut query {
+        burst.remaining -= dt;
+        if burst.remaining <= 0.0 {
+            commands.entity(entity).try_despawn();
+            continue;
+        }
+        let life = 1.0 - (burst.remaining / BLOOD_BURST_LIFETIME).clamp(0.0, 1.0);
+        // ease out: the splash snaps open on impact, then slows as it fades
+        let eased = 1.0 - (1.0 - life) * (1.0 - life);
+        transform.scale = Vec3::splat(BLOOD_BURST_START_SCALE + (BLOOD_BURST_END_SCALE - BLOOD_BURST_START_SCALE) * eased);
+
+        if let Some(eye) = eye {
+            let to_eye = (eye - transform.translation).normalize_or_zero();
+            if to_eye != Vec3::ZERO {
+                transform.rotation = Quat::from_rotation_arc(Vec3::Z, to_eye) * Quat::from_rotation_z(burst.spin);
+            }
+        }
+        if let Some(mut material) = materials.get_mut(&burst.material) {
+            material.base_color.set_alpha(1.0 - life);
+        }
+    }
+}
+
+/// Blood leaving the far side of the body: a tight cone along the bullet path,
+/// an exit burst a body-thickness downrange, and spatter on whatever is behind.
+fn spawn_exit_wound(
+    commands: &mut Commands,
+    blood_assets: &BloodAssets,
+    materials: &mut Assets<StandardMaterial>,
+    spatial_query: &SpatialQuery,
+    hit_point: Vec3,
+    shot_direction: Vec3,
+    seed_base: f32,
+) {
+    let Ok(forward) = Dir3::new(shot_direction) else {
+        return;
+    };
+    let lateral = forward.any_orthonormal_vector();
+    let other = forward.cross(lateral);
+
+    for i in 0..BLOOD_EXIT_PARTICLE_COUNT {
+        let seed = seed_base + i as f32 * 97.3;
+        let spread = (lateral * ops::sin(seed * 1.9) + other * ops::sin(seed * 2.7)) * BLOOD_EXIT_CONE;
+        let dir = (*forward + spread).normalize_or_zero();
+        let speed = BLOOD_EXIT_SPEED * (0.65 + ops::sin(seed * 3.3).abs() * 0.35);
+        commands.spawn((
+            Mesh3d(blood_assets.particle_mesh.clone()),
+            MeshMaterial3d(blood_assets.particle_material.clone()),
+            Transform::from_translation(hit_point),
+            BloodParticle {
+                velocity: dir * speed,
+                remaining: BLOOD_PARTICLE_LIFETIME,
+            },
+        ));
+    }
+
+    let exit_point = hit_point + *forward * BLOOD_EXIT_WOUND_OFFSET;
+    spawn_blood_burst(commands, blood_assets, materials, exit_point, *forward, seed_base * 1.7);
+
+    let filter = SpatialQueryFilter::default();
+    for i in 0..BLOOD_WALL_STAIN_COUNT {
+        let seed = seed_base + i as f32 * 263.1;
+        let jitter = (lateral * ops::sin(seed * 1.3) + other * ops::sin(seed * 2.1)) * BLOOD_WALL_STAIN_SPREAD;
+        let Ok(ray) = Dir3::new(*forward + jitter) else {
+            continue;
+        };
+        let Some(wall) = spatial_query.cast_ray(exit_point, ray, BLOOD_WALL_RAYCAST_DISTANCE, true, &filter) else {
+            continue;
+        };
+        let wall_point = exit_point + *ray * wall.distance;
+        spawn_blood_stain(commands, blood_assets, None, wall_point, wall.normal, seed, blood_assets.wall_stain_mesh.clone());
+    }
+}

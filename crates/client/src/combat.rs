@@ -107,7 +107,7 @@ pub(crate) fn handle_fire_shot(
                 knockback.0 += push;
             }
 
-            commands.trigger(ShotConfirmed { point: hit_point, normal, damage, killed });
+            commands.trigger(ShotConfirmed { origin: shot.origin, point: hit_point, normal, damage, killed });
         }
         return;
     }

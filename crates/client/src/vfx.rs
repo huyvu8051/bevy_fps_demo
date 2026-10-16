@@ -88,8 +88,9 @@ pub(crate) fn on_shot_confirmed(
     globals: Query<&GlobalTransform>,
     child_of: Query<&ChildOf>,
     show_floating_damage: Res<ShowFloatingDamage>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let ShotConfirmed { point, normal, damage, killed } = *trigger.event();
+    let ShotConfirmed { origin, point, normal, damage, killed } = *trigger.event();
     if damage > 0.0 {
         info!("[shot] server confirmed: inner bone capsule hit, damage={damage:.1} killed={killed}");
     } else {
@@ -110,7 +111,7 @@ pub(crate) fn on_shot_confirmed(
     }
 
     let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
-    spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0);
+    spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0, &mut materials, (point - origin).normalize_or_zero());
 }
 
 
@@ -315,6 +316,7 @@ pub(crate) fn on_shot_fx(
     show_hit_markers: Res<ShowHitMarkers>,
     show_tracers: Res<ShowBulletTracers>,
     show_floating_damage: Res<ShowFloatingDamage>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     match *trigger.event() {
         ShotFx::ZombieHit { origin, point, normal, damage, killed } => {
@@ -347,7 +349,7 @@ pub(crate) fn on_shot_fx(
                     .and_then(|(_, _, bones)| nearest_zombie_bone(bones, point, &globals))
             };
             let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
-            spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0);
+            spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0, &mut materials, (point - origin).normalize_or_zero());
         }
         ShotFx::SurfaceHit { origin, point, normal } => {
             if show_hit_markers.0 {

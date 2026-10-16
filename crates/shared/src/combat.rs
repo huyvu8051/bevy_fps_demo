@@ -28,6 +28,7 @@ pub enum ShotFx {
 
 #[derive(Event, Clone, Copy, Serialize, Deserialize)]
 pub struct ShotConfirmed {
+    pub origin: Vec3,
     pub point: Vec3,
     pub normal: Vec3,
     pub damage: f32,

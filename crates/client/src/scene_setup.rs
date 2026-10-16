@@ -105,7 +105,7 @@ pub(crate) fn setup_common(
     commands.insert_resource(BloodAssets {
         particle_mesh: meshes.add(Rectangle::new(BLOOD_PARTICLE_SIZE, BLOOD_PARTICLE_SIZE)),
         particle_material: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.45, 0.02, 0.02),
+            base_color: Color::srgb(0.85, 0.05, 0.04),
             unlit: true,
             cull_mode: None,
             ..default()
@@ -121,6 +121,20 @@ pub(crate) fn setup_common(
                     perceptual_roughness: 0.12,
                     metallic: 0.0,
                     reflectance: 0.75,
+                    cull_mode: None,
+                    ..default()
+                })
+            })
+            .collect(),
+        wall_stain_mesh: meshes.add(Rectangle::new(BLOOD_WALL_STAIN_SIZE, BLOOD_WALL_STAIN_SIZE)),
+        burst_mesh: meshes.add(Rectangle::new(BLOOD_BURST_SIZE, BLOOD_BURST_SIZE)),
+        burst_materials: (0..BLOOD_STAIN_VARIANTS)
+            .map(|i| {
+                materials.add(StandardMaterial {
+                    base_color: Color::srgba(1.0, 0.16, 0.12, 1.0),
+                    base_color_texture: Some(asset_server.load(format!("textures/blood/splatter_{i}.png"))),
+                    alpha_mode: AlphaMode::Blend,
+                    unlit: true,
                     cull_mode: None,
                     ..default()
                 })

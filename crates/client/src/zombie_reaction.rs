@@ -14,12 +14,14 @@ pub(crate) fn spawn_zombie_hit_feedback(
     bone_for_blood: Option<(Entity, &GlobalTransform)>,
     killed: bool,
     show_floating_damage: bool,
+    materials: &mut Assets<StandardMaterial>,
+    shot_direction: Vec3,
 ) {
     if damage > 0.0 {
         if show_floating_damage {
             spawn_floating_damage(commands, point, damage);
         }
-        spawn_blood_effects(commands, blood_assets, spatial_query, time, point, normal, bone_for_blood, killed);
+        spawn_blood_effects(commands, blood_assets, spatial_query, time, point, normal, bone_for_blood, killed, materials, shot_direction);
     } else {
         spawn_spark_effects(commands, spark_assets, time, point, normal);
     }
