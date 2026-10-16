@@ -5,7 +5,7 @@
 // x = life progress 0..1, y = per-puff seed, z = density, w = billow speed
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> settings: vec4<f32>;
 
-const STEPS: i32 = 40;
+const STEPS: i32 = 30;
 const SPHERE_RADIUS: f32 = 0.5;
 
 fn hash(p: vec3<f32>) -> f32 {
@@ -63,7 +63,7 @@ fn density_at(p: vec3<f32>, progress: f32, seed: f32, billow: f32) -> f32 {
     let noise = fbm(base + warp * 1.6);
 
     // erode the cloud over its life so it dissolves instead of fading flat
-    let erosion = mix(0.28, 0.78, progress);
+    let erosion = mix(0.22, 0.86, progress);
     return max(noise - erosion, 0.0) * falloff;
 }
 

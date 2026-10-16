@@ -65,9 +65,9 @@ mod map;
 mod screen_effects;
 use screen_effects::*;
 
-mod muzzle_smoke;
+mod muzzle_fx;
 mod scope_lens;
-use muzzle_smoke::*;
+use muzzle_fx::*;
 use scope_lens::*;
 
 mod dissolve;
@@ -152,8 +152,21 @@ const RELOAD_LEFT_DIP: f32 = 0.12;
 const MUZZLE_OFFSET: Vec3 = Vec3::new(0.2, -0.005, -1.2);
 
 const MUZZLE_FLASH_LIFETIME: f32 = 0.05;
-const MUZZLE_LIGHT_INTENSITY: f32 = 120_000.0;
-const MUZZLE_LIGHT_RANGE: f32 = 2.0;
+const FLASH_QUAD_SIZE: f32 = 0.32;
+// Deliberately below the wall-impact burst (4-9 sparks at 0.02, speed 3.0):
+// fewer, smaller, and thrown clear far faster, so the muzzle reads as a couple
+// of specks snapping away rather than a shower dribbling out.
+const MUZZLE_EMBER_COUNT: usize = 3;
+const MUZZLE_EMBER_SIZE: f32 = 0.009;
+const MUZZLE_EMBER_SPEED: f32 = 12.0;
+const MUZZLE_EMBER_CONE: f32 = 0.22;
+const MUZZLE_EMBER_LIFETIME: f32 = 0.13;
+
+const MUZZLE_BLADE_CHANCE: f32 = 0.5;
+const MUZZLE_BLADE_WIDTH: f32 = 0.55;
+const MUZZLE_BLADE_LENGTH: f32 = 1.9;
+const MUZZLE_LIGHT_INTENSITY: f32 = 210_000.0;
+const MUZZLE_LIGHT_RANGE: f32 = 3.2;
 
 const TRACER_CHANCE: f32 = 0.5;
 const TRACER_LIFETIME: f32 = 0.045;
@@ -161,9 +174,12 @@ const TRACER_RADIUS: f32 = 0.012;
 
 const TRACER_START_Y_OFFSET: f32 = -0.05;
 
-const SMOKE_LIFETIME: f32 = 0.4;
+const SMOKE_LIFETIME: f32 = 1.9;
 const SMOKE_START_SCALE: f32 = 0.35;
-const SMOKE_GROWTH_PER_SEC: f32 = 1.0;
+const SMOKE_GROWTH_PER_SEC: f32 = 1.25;
+const SMOKE_DRAG: f32 = 1.2;
+const SMOKE_MAX_PUFFS: usize = 9;
+const SMOKE_BUOYANCY: f32 = 0.22;
 
 const BLOOD_PARTICLE_COUNT: usize = 14;
 const BLOOD_PARTICLE_SPEED: f32 = 3.2;
@@ -409,6 +425,7 @@ pub fn main() {
             bevy::ui_render::prelude::UiMaterialPlugin::<DamageOverlayMaterial>::default(),
             MaterialPlugin::<ScopeLensMaterial>::default(),
             MaterialPlugin::<MuzzleSmokeMaterial>::default(),
+            MaterialPlugin::<MuzzleFlashMaterial>::default(),
             bevy::core_pipeline::fullscreen_material::FullscreenMaterialPlugin::<ScreenEffects>::default(),
             PhysicsPlugins::default(),
             SimPlugin,
@@ -680,7 +697,7 @@ impl Plugin for GamePlugin {
                 update_smoke,
                 update_blood_particles,
                 update_blood_bursts,
-                update_muzzle_smoke,
+                (update_muzzle_smoke, update_muzzle_flash),
                 update_spark_particles,
                 despawn_blood_stains,
             )

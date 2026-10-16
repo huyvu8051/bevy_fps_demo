@@ -71,16 +71,8 @@ pub(crate) fn setup_common(
     });
 
     commands.insert_resource(MuzzleFxAssets {
-        flash_mesh: meshes.add(Rectangle::new(0.18, 0.18)),
-        flash_material: materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.85, 0.5),
-            base_color_texture: Some(asset_server.load("textures/muzzle.png")),
-            emissive: LinearRgba::rgb(6.0, 3.5, 1.0),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            cull_mode: None,
-            ..default()
-        }),
+        flash_mesh: meshes.add(Rectangle::new(FLASH_QUAD_SIZE, FLASH_QUAD_SIZE)),
+        ember_mesh: meshes.add(Rectangle::new(MUZZLE_EMBER_SIZE, MUZZLE_EMBER_SIZE)),
         smoke_mesh: meshes.add(Rectangle::new(0.25, 0.25)),
     });
 

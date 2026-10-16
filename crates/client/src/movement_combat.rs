@@ -615,7 +615,10 @@ pub(crate) fn shoot(
     spatial_query: SpatialQuery,
     touch_firing: Res<TouchFiring>,
     mut cooldown: Local<f32>,
-    mut smoke_materials: ResMut<Assets<MuzzleSmokeMaterial>>,
+    (mut smoke_materials, mut flash_materials): (
+        ResMut<Assets<MuzzleSmokeMaterial>>,
+        ResMut<Assets<MuzzleFlashMaterial>>,
+    ),
     (autopilot, intent, local_moving, local_sprinting, show_hit_markers, show_tracers): (
         Res<Autopilot>,
         Res<AutopilotIntent>,
@@ -697,7 +700,7 @@ pub(crate) fn shoot(
 
     commands.spawn((
         Mesh3d(vfx_assets.muzzle_fx.flash_mesh.clone()),
-        MeshMaterial3d(vfx_assets.muzzle_fx.flash_material.clone()),
+        MeshMaterial3d(flash_materials.add(muzzle_flash_material(time.elapsed_secs() * 419.0))),
         Transform::from_translation(muzzle_world_pos).with_rotation(camera_transform.rotation),
         PointLight {
             intensity: MUZZLE_LIGHT_INTENSITY,
@@ -722,6 +725,44 @@ pub(crate) fn shoot(
             remaining: SMOKE_LIFETIME,
         },
     ));
+
+    let forward = *camera_transform.forward();
+    let right = *camera_transform.right();
+    let up = *camera_transform.up();
+
+    for i in 0..MUZZLE_EMBER_COUNT {
+        let seed = time.elapsed_secs() * 617.0 + i as f32 * 143.9;
+        let spread = (right * ops::sin(seed * 1.7) + up * ops::sin(seed * 2.9)) * MUZZLE_EMBER_CONE;
+        let dir = (forward + spread).normalize_or_zero();
+        let speed = MUZZLE_EMBER_SPEED * (0.7 + ops::sin(seed * 3.1).abs() * 0.3);
+        commands.spawn((
+            Mesh3d(vfx_assets.muzzle_fx.ember_mesh.clone()),
+            MeshMaterial3d(vfx_assets.sparks.material.clone()),
+            Transform::from_translation(muzzle_world_pos),
+            SparkParticle {
+                velocity: dir * speed,
+                remaining: MUZZLE_EMBER_LIFETIME,
+            },
+        ));
+    }
+
+    // Not every shot throws a visible tongue of flame; letting it miss half the
+    // time is what keeps consecutive shots from looking stamped out.
+    let blade_roll = ops::sin(time.elapsed_secs() * 733.0).abs();
+    if blade_roll < MUZZLE_BLADE_CHANCE {
+        let half_length = FLASH_QUAD_SIZE * MUZZLE_BLADE_LENGTH * 0.5;
+        commands.spawn((
+            Mesh3d(vfx_assets.muzzle_fx.flash_mesh.clone()),
+            MeshMaterial3d(flash_materials.add(muzzle_blade_material(time.elapsed_secs() * 283.0))),
+            Transform::from_translation(muzzle_world_pos + forward * half_length)
+                .with_scale(Vec3::new(MUZZLE_BLADE_WIDTH, MUZZLE_BLADE_LENGTH, 1.0)),
+            MuzzleBlade { axis: forward },
+            MuzzleFlash {
+                remaining: MUZZLE_FLASH_LIFETIME,
+            },
+        ));
+    }
+
 
     let wall_distance = spatial_query
         .cast_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, true, &SpatialQueryFilter::default())
