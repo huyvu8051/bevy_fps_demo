@@ -95,7 +95,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // leaving clean petals.
     let lobes = fbm(dir * ray_scale + vec2<f32>(seed * 11.0, seed * 5.0));
     let streaks = fbm(dir * (ray_scale * 3.6) + vec2<f32>(radius * 4.5 + seed * 3.0, seed * 7.0));
-    let rays = pow(clamp(lobes * 1.2 + streaks * 0.55 - 0.3, 0.0, 1.0), 2.0);
+    let rays = pow(clamp(lobes * 1.2 + streaks * 0.55 - 0.3, 0.0, 1.0), 2.4);
 
     // spikes stretch out, then the plume is pulled back in as it burns out
     let reach = mix(1.8, 6.8, progress);
