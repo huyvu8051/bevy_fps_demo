@@ -49,13 +49,11 @@ skinning pipeline. Several imports, paths all moved, and the surrounding
 - **Damage overlay** (tier 0) — `assets/shaders/damage_overlay.wesl`. Red
   vignette that tightens and pulses as health drops, plus a hit flash.
 
-## Next
+- **Scope lens** (tier 1) — `assets/shaders/scope_lens.wgsl`. Barrel
+  distortion, chromatic fringing and a vignette on the render-target image.
+  Pipeline validates; the look itself has not been checked by eye.
 
-### Scope lens — tier 1, recommended first
-The scope is a circle mesh showing a render-target texture, unlit and flat. A
-fragment material would add barrel distortion toward the rim, a dark vignette,
-and slight chromatic fringing. This is what the player stares at while aiming,
-so it carries the most visual weight per line of shader.
+## Next
 
 ### Film grain — tier 0
 A time-varying grain over the whole frame. The garage textures already carry
@@ -65,10 +63,11 @@ static noise; animated grain ties the image together.
 The two maps sit at opposite light levels. Easing exposure when moving between
 the dark garage and the bright desert street would sell the transition.
 
-### Wet blood — tier 2
-Blood decals now take real lighting, which gives a moving specular. A dedicated
-shader would go further: glossy pool interior, rough dried rim. Needs light
-bindings, so it waits for 0.20.
+### Wet blood, the rest of it — tier 2
+Decals now take real lighting, so there is already a specular that moves with
+the view — that part is done without a shader. What is left is control: a
+glossy pool interior against a rough dried rim, which needs a roughness map or
+a shader reading light bindings. Low priority now that the cheap half landed.
 
 ### Burn-away dissolve — tier 2
 Death currently sinks and fades the corpse, which needs no shader. A burn edge
