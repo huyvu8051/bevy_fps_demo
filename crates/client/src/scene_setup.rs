@@ -366,7 +366,6 @@ pub(crate) fn setup_gameplay(
     spawn_compass_ui(&mut commands);
     spawn_radar_ui(&mut commands);
     spawn_damage_overlay(&mut commands, &mut overlay_materials);
-    spawn_inspect_ui(&mut commands);
     spawn_settings_menu(&mut commands);
     spawn_settings_toggle_button(&mut commands);
     spawn_mouse_ui_lock_indicator(&mut commands);

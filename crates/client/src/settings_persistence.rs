@@ -30,7 +30,6 @@ pub(crate) struct PersistedSettings {
     pub(crate) show_floating_damage: Option<bool>,
     pub(crate) show_bullet_tracers: Option<bool>,
     pub(crate) autopilot: Option<bool>,
-    pub(crate) inspect_mode: Option<bool>,
     pub(crate) nav_debug_visible: Option<bool>,
 }
 
@@ -137,7 +136,6 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(show_floating_damage, ShowFloatingDamage);
     apply!(show_bullet_tracers, ShowBulletTracers);
     apply!(autopilot, Autopilot);
-    apply!(inspect_mode, InspectMode);
     apply!(nav_debug_visible, NavDebugVisible);
 }
 
@@ -193,7 +191,6 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(ShowFloatingDamage)
         || changed!(ShowBulletTracers)
         || changed!(Autopilot)
-        || changed!(InspectMode)
         || changed!(NavDebugVisible);
     if !any_changed {
         return;
@@ -230,7 +227,6 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         show_floating_damage: world.get_resource::<ShowFloatingDamage>().map(|r| r.0),
         show_bullet_tracers: world.get_resource::<ShowBulletTracers>().map(|r| r.0),
         autopilot: world.get_resource::<Autopilot>().map(|r| r.0),
-        inspect_mode: world.get_resource::<InspectMode>().map(|r| r.0),
         nav_debug_visible: world.get_resource::<NavDebugVisible>().map(|r| r.0),
     }
 }

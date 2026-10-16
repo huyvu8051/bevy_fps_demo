@@ -445,7 +445,6 @@ impl Plugin for GamePlugin {
         .add_plugins(navigation::ClientNavigationPlugin)
 
         .insert_resource(Noclip(false))
-        .init_resource::<InspectMode>()
         .init_resource::<HitFlash>()
         .init_resource::<Autopilot>()
         .init_resource::<AutopilotLookOnly>()
@@ -604,7 +603,6 @@ impl Plugin for GamePlugin {
 
                 (
                     count_local_kills,
-                    toggle_inspect_mode,
                     toggle_camera_mode,
                     sync_third_person_camera,
                 )
@@ -631,7 +629,6 @@ impl Plugin for GamePlugin {
                     update_local_player_model_animation,
                     apply_player_model_pose_override,
                     update_health_ui,
-                    update_inspect_ui,
                     update_compass_ui,
                     update_radar_ui,
                     update_zombie_health_bars,

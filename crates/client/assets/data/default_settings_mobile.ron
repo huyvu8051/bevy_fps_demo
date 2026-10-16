@@ -30,6 +30,5 @@
     show_floating_damage: Some(true),
     show_bullet_tracers: Some(true),
     autopilot: None,
-    inspect_mode: Some(false),
     nav_debug_visible: Some(false),
 )

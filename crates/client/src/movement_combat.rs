@@ -614,7 +614,6 @@ pub(crate) fn shoot(
     globals: Query<&GlobalTransform>,
     spatial_query: SpatialQuery,
     touch_firing: Res<TouchFiring>,
-    inspect_mode: Res<InspectMode>,
     mut cooldown: Local<f32>,
     (autopilot, intent, local_moving, local_sprinting, show_hit_markers, show_tracers): (
         Res<Autopilot>,
@@ -627,7 +626,7 @@ pub(crate) fn shoot(
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
 
-    if game_over.0 || inspect_mode.0 {
+    if game_over.0 {
         return;
     }
     let Ok(cursor) = cursor.single() else {

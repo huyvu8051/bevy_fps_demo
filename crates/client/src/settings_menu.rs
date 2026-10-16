@@ -396,7 +396,6 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "Noclip", CheatNoclipButton);
                         spawn_cheat_toggle_button(row, "God", CheatGodModeButton);
                         spawn_cheat_toggle_button(row, "Freeze", CheatFreezeButton);
-                        spawn_cheat_toggle_button(row, "Inspect", CheatInspectButton);
                     });
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
@@ -631,8 +630,6 @@ pub(crate) struct CheatGodModeButton;
 #[derive(Component)]
 pub(crate) struct CheatFreezeButton;
 #[derive(Component)]
-pub(crate) struct CheatInspectButton;
-#[derive(Component)]
 pub(crate) struct CheatGunButton;
 #[derive(Component)]
 pub(crate) struct CheatMsaaButton;
@@ -727,13 +724,11 @@ pub(crate) struct CheatNavDebugButton;
 pub(crate) fn cheat_toggle_buttons(
     mut commands: Commands,
     mut noclip: ResMut<Noclip>,
-    mut inspect: ResMut<InspectMode>,
     mut god_mode: ResMut<GodMode>,
     mut freeze: ResMut<FreezeZombies>,
     mut gun_visible: ResMut<GunVisible>,
     mut map_msaa: ResMut<MapMsaaOn>,
     noclip_btn: Query<&Interaction, (With<CheatNoclipButton>, Changed<Interaction>)>,
-    inspect_btn: Query<&Interaction, (With<CheatInspectButton>, Changed<Interaction>)>,
     god_btn: Query<&Interaction, (With<CheatGodModeButton>, Changed<Interaction>)>,
     freeze_btn: Query<&Interaction, (With<CheatFreezeButton>, Changed<Interaction>)>,
     gun_btn: Query<&Interaction, (With<CheatGunButton>, Changed<Interaction>)>,
@@ -743,11 +738,6 @@ pub(crate) fn cheat_toggle_buttons(
         noclip.0 = !noclip.0;
     }
 
-    if tapped(&inspect_btn) {
-        inspect.0 = !inspect.0;
-        noclip.0 = inspect.0;
-        gun_visible.0 = !inspect.0;
-    }
     if tapped(&god_btn) {
         god_mode.0 = !god_mode.0;
     }
@@ -964,7 +954,6 @@ pub(crate) fn update_extra_toggle_colors(
     show_floating_damage: Res<ShowFloatingDamage>,
     scope_camera: Res<ScopeCameraEnabled>,
     show_tracers: Res<ShowBulletTracers>,
-    inspect: Res<InspectMode>,
     mut buttons: Query<
         (
             &mut BackgroundColor,
@@ -976,7 +965,6 @@ pub(crate) fn update_extra_toggle_colors(
             Option<&CheatShowFloatingDamageButton>,
             Option<&CheatScopeCameraButton>,
             Option<&CheatShowTracersButton>,
-            Option<&CheatInspectButton>,
         ),
         Or<(
             With<AutopilotButton>,
@@ -987,12 +975,11 @@ pub(crate) fn update_extra_toggle_colors(
             With<CheatShowFloatingDamageButton>,
             With<CheatScopeCameraButton>,
             With<CheatShowTracersButton>,
-            With<CheatInspectButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, show_floating_damage_m, scope_camera_m, show_tracers_m, inspect_m) in &mut buttons {
+    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, show_floating_damage_m, scope_camera_m, show_tracers_m) in &mut buttons {
         let on = if auto_m.is_some() {
             autopilot.0
         } else if dof_m.is_some() {
@@ -1007,10 +994,8 @@ pub(crate) fn update_extra_toggle_colors(
             show_floating_damage.0
         } else if scope_camera_m.is_some() {
             scope_camera.0
-        } else if show_tracers_m.is_some() {
-            show_tracers.0
         } else {
-            inspect_m.is_some() && inspect.0
+            show_tracers_m.is_some() && show_tracers.0
         };
         *bg = BackgroundColor(color_for(on));
     }
