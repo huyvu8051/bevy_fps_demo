@@ -1,3 +1,5 @@
+use bevy::camera::primitives::Aabb;
+use bevy::light::NotShadowCaster;
 
 use bevy::prelude::*;
 use crate::*;
@@ -184,6 +186,8 @@ pub(crate) fn ambient_brightness() -> f32 {
 /// it, which makes every surface a mirror with no diffuse term — unlit by the
 /// sun and incapable of showing a shadow. Demote those on import; materials
 /// built in code already default to 0.0 and are left alone.
+const SHADOW_CASTER_SIZE_LIMIT: f32 = 60.0;
+
 pub(crate) fn demote_fully_metallic_imports(
     mut events: MessageReader<AssetEvent<StandardMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -197,6 +201,22 @@ pub(crate) fn demote_fully_metallic_imports(
         };
         if material.metallic >= 1.0 && material.metallic_roughness_texture.is_none() {
             material.metallic = 0.0;
+        }
+    }
+}
+
+/// Bevy fits the directional light's shadow depth range around every shadow
+/// caster in the scene. The maps ship a skybox-sized shell — the desert spans
+/// 1349 units across — which stretches that range a thousandfold and destroys
+/// the shadow map's depth precision, so nothing casts a visible shadow at all.
+/// Backdrop geometry that large has no business casting shadows anyway.
+pub(crate) fn exclude_oversized_shadow_casters(
+    mut commands: Commands,
+    meshes: Query<(Entity, &Aabb), (With<Mesh3d>, Without<NotShadowCaster>)>,
+) {
+    for (entity, aabb) in &meshes {
+        if aabb.half_extents.max_element() * 2.0 > SHADOW_CASTER_SIZE_LIMIT {
+            commands.entity(entity).insert(NotShadowCaster);
         }
     }
 }

@@ -641,6 +641,7 @@ impl Plugin for GamePlugin {
                     update_damage_overlay,
                     update_screen_effects,
                     demote_fully_metallic_imports,
+                    exclude_oversized_shadow_casters,
                     update_dissolve,
                 )
                     .chain(),
