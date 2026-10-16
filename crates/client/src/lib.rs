@@ -62,6 +62,9 @@ use gun_view::*;
 
 mod map;
 
+mod screen_effects;
+use screen_effects::*;
+
 mod scope_lens;
 use scope_lens::*;
 
@@ -388,6 +391,7 @@ pub fn main() {
             MeshPickingPlugin,
             bevy::ui_render::prelude::UiMaterialPlugin::<DamageOverlayMaterial>::default(),
             MaterialPlugin::<ScopeLensMaterial>::default(),
+            bevy::core_pipeline::fullscreen_material::FullscreenMaterialPlugin::<ScreenEffects>::default(),
             PhysicsPlugins::default(),
             SimPlugin,
             zombie_nav::ZombieNavmeshPlugin,
@@ -635,6 +639,7 @@ impl Plugin for GamePlugin {
                     play_footsteps,
                     play_zombie_footsteps,
                     update_damage_overlay,
+                    update_screen_effects,
                     update_dissolve,
                 )
                     .chain(),

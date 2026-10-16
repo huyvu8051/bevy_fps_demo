@@ -228,6 +228,7 @@ pub(crate) fn setup_gameplay(
             }),
             Transform::from_translation(player_spawn + Vec3::Y * EYE_HEIGHT_OFFSET),
             SpatialListener::default(),
+            ScreenEffects::default(),
             FpsCamera { yaw: review_yaw, pitch: review_pitch },
             ViewRecoil::default(),
             Lean::default(),

@@ -52,16 +52,19 @@ skinning pipeline. Several imports, paths all moved, and the surrounding
 - **Scope lens** (tier 1) — `assets/shaders/scope_lens.wgsl`. Barrel
   distortion, chromatic fringing and a vignette on the render-target image.
   Pipeline validates; the look itself has not been checked by eye.
+- **Film grain and low-health desaturation** (tier 0) —
+  `assets/shaders/screen_effects.wesl`, one post-process pass via
+  `FullscreenMaterial`. Grain reseeds per frame and biases toward shadows;
+  colour drains to grey as health drops. Measured: high-frequency energy in a
+  flat region went from 0.006-0.010 to 0.022.
 
 ## Next
 
-### Film grain — tier 0
-A time-varying grain over the whole frame. The garage textures already carry
-static noise; animated grain ties the image together.
-
-### Light adaptation — tier 0
-The two maps sit at opposite light levels. Easing exposure when moving between
-the dark garage and the bright desert street would sell the transition.
+### Light adaptation — not tier 0 after all
+Listed here as easy, which was wrong. Eye adaptation needs the average
+luminance of the frame, so it needs a downsample pass feeding back into
+exposure — multi-pass, not a single fragment shader. Bevy 0.19 ships no
+auto-exposure to lean on either. Worth doing, but it is not a cheap one.
 
 ### Wet blood, the rest of it — tier 2
 Decals now take real lighting, so there is already a specular that moves with
