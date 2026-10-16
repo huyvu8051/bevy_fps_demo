@@ -179,3 +179,24 @@ pub(crate) fn light_shadows_enabled() -> bool {
 pub(crate) fn ambient_brightness() -> f32 {
     if dynamic_lights_enabled() { 250.0 } else { 1800.0 }
 }
+
+/// glTF leaves metallicFactor at its spec default of 1.0 when an exporter omits
+/// it, which makes every surface a mirror with no diffuse term — unlit by the
+/// sun and incapable of showing a shadow. Demote those on import; materials
+/// built in code already default to 0.0 and are left alone.
+pub(crate) fn demote_fully_metallic_imports(
+    mut events: MessageReader<AssetEvent<StandardMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for event in events.read() {
+        let AssetEvent::Added { id } = event else {
+            continue;
+        };
+        let Some(mut material) = materials.get_mut(*id) else {
+            continue;
+        };
+        if material.metallic >= 1.0 && material.metallic_roughness_texture.is_none() {
+            material.metallic = 0.0;
+        }
+    }
+}

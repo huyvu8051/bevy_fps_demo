@@ -640,6 +640,7 @@ impl Plugin for GamePlugin {
                     play_zombie_footsteps,
                     update_damage_overlay,
                     update_screen_effects,
+                    demote_fully_metallic_imports,
                     update_dissolve,
                 )
                     .chain(),
