@@ -34,6 +34,20 @@ const BODY_YAW_DEG: f32 = 0.0;
 /// weighted to it down to a point — the standard headless first-person body.
 const HEAD_COLLAPSE_SCALE: f32 = 0.0001;
 
+/// Viewmodel arms are longer than real ones in every shooter, because the
+/// weapon is placed where it reads well on screen rather than where a person
+/// could hold it. This rig needs more help than most: its arms span 0.452m
+/// against roughly 0.59m on a person, while the support hand has to cross the
+/// body to a rifle held at x 0.22, which is 0.707m away.
+///
+/// Scaling the upper arm carries the whole chain, since the forearm hangs off
+/// it at a scaled offset and inherits the scale itself.
+const ARM_SCALE: f32 = 1.97;
+
+/// Cancels ARM_SCALE on the hands so they stay life-sized. Only the arms
+/// should look stretched; oversized hands read as a bug immediately.
+const HAND_SCALE: f32 = 1.0 / ARM_SCALE;
+
 /// Rifle carry, as deltas from the bind pose about each bone's own axes.
 ///
 /// Bones run along local +Y, so X swings the limb forward, Z swings it in
@@ -91,7 +105,7 @@ pub(crate) fn wire_viewmodel_body_meshes(
     }
 }
 
-pub(crate) fn collapse_viewmodel_head(
+pub(crate) fn shape_viewmodel_skeleton(
     bodies: Query<(&PlayerModelSkeletonBones, &GlobalTransform), With<ViewmodelBody>>,
     mut transforms: Query<&mut Transform>,
     mut logged: Local<bool>,
@@ -104,8 +118,19 @@ pub(crate) fn collapse_viewmodel_head(
         }
         return;
     };
-    let Ok(mut transform) = transforms.get_mut(head) else { return };
-    transform.scale = Vec3::splat(HEAD_COLLAPSE_SCALE);
+    if let Ok(mut transform) = transforms.get_mut(head) {
+        transform.scale = Vec3::splat(HEAD_COLLAPSE_SCALE);
+    }
+    for arm in [bones.right_arm, bones.left_arm] {
+        let Some(arm) = arm else { continue };
+        let Ok(mut transform) = transforms.get_mut(arm) else { continue };
+        transform.scale = Vec3::splat(ARM_SCALE);
+    }
+    for hand in [bones.right_hand, bones.left_hand] {
+        let Some(hand) = hand else { continue };
+        let Ok(mut transform) = transforms.get_mut(hand) else { continue };
+        transform.scale = Vec3::splat(HAND_SCALE);
+    }
     if !*logged {
         *logged = true;
         info!(
