@@ -45,9 +45,8 @@ pub(crate) struct HitMarkerAssets {
 #[derive(Resource)]
 pub(crate) struct MuzzleFxAssets {
     pub(crate) flash_mesh: Handle<Mesh>,
-    pub(crate) flash_material: Handle<StandardMaterial>,
+    pub(crate) ember_mesh: Handle<Mesh>,
     pub(crate) smoke_mesh: Handle<Mesh>,
-    pub(crate) smoke_material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource)]
@@ -88,8 +87,9 @@ pub(crate) fn on_shot_confirmed(
     globals: Query<&GlobalTransform>,
     child_of: Query<&ChildOf>,
     show_floating_damage: Res<ShowFloatingDamage>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let ShotConfirmed { point, normal, damage, killed } = *trigger.event();
+    let ShotConfirmed { origin, point, normal, damage, killed } = *trigger.event();
     if damage > 0.0 {
         info!("[shot] server confirmed: inner bone capsule hit, damage={damage:.1} killed={killed}");
     } else {
@@ -110,7 +110,7 @@ pub(crate) fn on_shot_confirmed(
     }
 
     let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
-    spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0);
+    spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0, &mut materials, (point - origin).normalize_or_zero());
 }
 
 
@@ -315,6 +315,7 @@ pub(crate) fn on_shot_fx(
     show_hit_markers: Res<ShowHitMarkers>,
     show_tracers: Res<ShowBulletTracers>,
     show_floating_damage: Res<ShowFloatingDamage>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     match *trigger.event() {
         ShotFx::ZombieHit { origin, point, normal, damage, killed } => {
@@ -347,7 +348,7 @@ pub(crate) fn on_shot_fx(
                     .and_then(|(_, _, bones)| nearest_zombie_bone(bones, point, &globals))
             };
             let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
-            spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0);
+            spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0, &mut materials, (point - origin).normalize_or_zero());
         }
         ShotFx::SurfaceHit { origin, point, normal } => {
             if show_hit_markers.0 {
@@ -415,11 +416,25 @@ pub(crate) fn despawn_bullet_tracers(
 pub(crate) fn update_smoke(mut commands: Commands, time: Res<Time>, mut query: Query<(Entity, &mut Transform, &mut Smoke)>) {
     let dt = time.delta_secs();
     for (entity, mut transform, mut smoke) in &mut query {
+        // the muzzle push bleeds off fast, then it is only buoyancy
+        smoke.velocity *= ops::exp(-SMOKE_DRAG * dt);
+        smoke.velocity.y += SMOKE_BUOYANCY * dt;
         transform.translation += smoke.velocity * dt;
         transform.scale *= 1.0 + SMOKE_GROWTH_PER_SEC * dt;
 
         smoke.remaining -= dt;
         if smoke.remaining <= 0.0 {
+            commands.entity(entity).try_despawn();
+        }
+    }
+
+    // At 10 shots/sec a 1.9s puff life stacks 19 raymarched quads over the same
+    // pixels. Retire the oldest instead of paying for all of them.
+    let live = query.iter().count();
+    if live > SMOKE_MAX_PUFFS {
+        let mut by_age: Vec<(Entity, f32)> = query.iter().map(|(entity, _, smoke)| (entity, smoke.remaining)).collect();
+        by_age.sort_by(|a, b| a.1.total_cmp(&b.1));
+        for (entity, _) in by_age.into_iter().take(live - SMOKE_MAX_PUFFS) {
             commands.entity(entity).try_despawn();
         }
     }

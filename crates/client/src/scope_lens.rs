@@ -5,9 +5,9 @@ use bevy::shader::ShaderRef;
 
 const SCOPE_LENS_SHADER: &str = "shaders/scope_lens.wgsl";
 const SCOPE_BARREL_DISTORTION: f32 = 0.16;
-const SCOPE_VIGNETTE_START: f32 = 0.55;
+const SCOPE_VIGNETTE_START: f32 = 0.72;
 const SCOPE_CHROMATIC_FRINGE: f32 = 0.004;
-const SCOPE_EDGE_DARKNESS: f32 = 0.85;
+const SCOPE_EDGE_DARKNESS: f32 = 0.45;
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
 pub(crate) struct ScopeLensMaterial {

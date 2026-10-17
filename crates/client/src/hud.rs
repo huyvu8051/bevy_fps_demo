@@ -5,8 +5,6 @@ use crate::*;
 #[derive(Component)]
 pub(crate) struct NativeUiRoot;
 
-#[derive(Resource, Default)]
-pub(crate) struct InspectMode(pub(crate) bool);
 
 #[derive(Resource, Default)]
 pub(crate) struct KillCount(pub(crate) u32);
@@ -37,8 +35,6 @@ pub(crate) fn count_local_kills(
 #[derive(Component)]
 pub(crate) struct HealthUi;
 
-#[derive(Component)]
-pub(crate) struct InspectUi;
 
 #[derive(Component)]
 pub(crate) struct FloatingDamageText {
@@ -142,53 +138,7 @@ pub(crate) fn update_health_ui(
     text.0 = format!("HP: {}", health.0.max(0.0).round() as i32);
 }
 
-pub(crate) fn spawn_inspect_ui(commands: &mut Commands) {
-    commands.spawn((
-        Text::new(""),
-        TextFont {
-            font_size: FontSize::Px(18.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.4, 1.0, 0.6)),
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(16.0),
-            bottom: Val::Px(16.0),
-            ..default()
-        },
-        GlobalZIndex(STATIC_UI_Z_INDEX),
-        Visibility::Hidden,
-        NativeUiRoot,
-        InspectUi,
-    ));
-}
 
-pub(crate) fn update_inspect_ui(
-    inspect: Res<InspectMode>,
-    camera: Query<(&Transform, &FpsCamera)>,
-    mut text: Query<(&mut Text, &mut Visibility), With<InspectUi>>,
-) {
-    let Ok((mut text, mut visibility)) = text.single_mut() else {
-        return;
-    };
-    if !inspect.0 {
-        *visibility = Visibility::Hidden;
-        return;
-    }
-    *visibility = Visibility::Visible;
-    let Ok((transform, cam)) = camera.single() else {
-        return;
-    };
-    let p = transform.translation;
-    text.0 = format!(
-        "INSPECT  x={:.2} y={:.2} z={:.2}  yaw={:.0} pitch={:.0}",
-        p.x,
-        p.y,
-        p.z,
-        cam.yaw.to_degrees(),
-        cam.pitch.to_degrees()
-    );
-}
 
 pub(crate) fn spawn_ammo_ui(commands: &mut Commands) {
     commands.spawn((
@@ -626,19 +576,6 @@ pub(crate) fn update_crosshair(
     }
 }
 
-pub(crate) fn toggle_inspect_mode(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut inspect: ResMut<InspectMode>,
-    mut noclip: ResMut<Noclip>,
-    mut gun_visible: ResMut<GunVisible>,
-) {
-    if !keys.just_pressed(KeyCode::KeyL) {
-        return;
-    }
-    inspect.0 = !inspect.0;
-    noclip.0 = inspect.0;
-    gun_visible.0 = !inspect.0;
-}
 
 #[allow(clippy::too_many_arguments)]
 
@@ -652,7 +589,6 @@ pub(crate) fn toggle_debug_flags(
     mut dof_focal_alt: ResMut<AimDofFocalDistanceAlt>,
     mut zombie_anim_disabled: ResMut<ZombieAnimDisabled>,
     mut zombie_health_bars_hidden: ResMut<ZombieHealthBarsHidden>,
-    mut player_model_visible: ResMut<PlayerModelVisible>,
     mut autopilot: ResMut<Autopilot>,
 ) {
     if keys.just_pressed(KeyCode::KeyF) {
@@ -677,9 +613,6 @@ pub(crate) fn toggle_debug_flags(
     }
     if keys.just_pressed(KeyCode::KeyJ) {
         zombie_health_bars_hidden.0 = !zombie_health_bars_hidden.0;
-    }
-    if keys.just_pressed(KeyCode::KeyT) {
-        player_model_visible.0 = !player_model_visible.0;
     }
 
     if keys.just_pressed(KeyCode::KeyI) {

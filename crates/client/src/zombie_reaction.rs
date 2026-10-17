@@ -14,20 +14,22 @@ pub(crate) fn spawn_zombie_hit_feedback(
     bone_for_blood: Option<(Entity, &GlobalTransform)>,
     killed: bool,
     show_floating_damage: bool,
+    materials: &mut Assets<StandardMaterial>,
+    shot_direction: Vec3,
 ) {
     if damage > 0.0 {
         if show_floating_damage {
             spawn_floating_damage(commands, point, damage);
         }
-        spawn_blood_effects(commands, blood_assets, spatial_query, time, point, normal, bone_for_blood, killed);
+        spawn_blood_effects(commands, blood_assets, spatial_query, time, point, normal, bone_for_blood, killed, materials, shot_direction);
     } else {
         spawn_spark_effects(commands, spark_assets, time, point, normal);
     }
 }
 
-const FLINCH_DURATION: f32 = 0.26;
-const FLINCH_MAX_ANGLE_DEG: f32 = 42.0;
-const FLINCH_CHAIN_FALLOFF: [f32; 3] = [1.0, 0.42, 0.16];
+const FLINCH_DURATION: f32 = 0.32;
+const FLINCH_MAX_ANGLE_DEG: f32 = 78.0;
+const FLINCH_CHAIN_FALLOFF: [f32; 3] = [1.0, 0.68, 0.38];
 const FLINCH_HEAD_TO_CHEST: f32 = 0.3;
 
 #[derive(Component)]
@@ -77,7 +79,8 @@ pub(crate) fn spawn_bone_flinch(
     }
 
     let head_hit = Some(hit_bone) == bones.head;
-    let base = FLINCH_MAX_ANGLE_DEG.to_radians() * (damage / ZOMBIE_MAX_HEALTH).clamp(0.25, 1.0);
+    // a kill skips the flinch entirely, so scale against the heaviest survivable hit, not max health
+    let base = FLINCH_MAX_ANGLE_DEG.to_radians() * (damage / shared::CHEST_DAMAGE).clamp(0.4, 1.0);
 
     for (index, bone) in chain.into_iter().enumerate() {
         let falloff = if head_hit && index > 0 {

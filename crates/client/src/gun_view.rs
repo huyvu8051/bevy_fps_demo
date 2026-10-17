@@ -238,7 +238,8 @@ pub(crate) fn gun_view_animation(
 
         let timings = gun_pose_timings(&gun);
 
-        let base_pos = gun.base_offset.lerp(GUN_ADS_OFFSET, gun.ads_blend);
+        let base_pos =
+            gun.base_offset.lerp(GUN_ADS_OFFSET, gun.ads_blend) - Vec3::Z * view_pullback();
 
         let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
         transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)

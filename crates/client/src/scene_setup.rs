@@ -71,25 +71,9 @@ pub(crate) fn setup_common(
     });
 
     commands.insert_resource(MuzzleFxAssets {
-        flash_mesh: meshes.add(Rectangle::new(0.18, 0.18)),
-        flash_material: materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.85, 0.5),
-            base_color_texture: Some(asset_server.load("textures/muzzle.png")),
-            emissive: LinearRgba::rgb(6.0, 3.5, 1.0),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            cull_mode: None,
-            ..default()
-        }),
+        flash_mesh: meshes.add(Rectangle::new(FLASH_QUAD_SIZE, FLASH_QUAD_SIZE)),
+        ember_mesh: meshes.add(Rectangle::new(MUZZLE_EMBER_SIZE, MUZZLE_EMBER_SIZE)),
         smoke_mesh: meshes.add(Rectangle::new(0.25, 0.25)),
-        smoke_material: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.75, 0.75, 0.75, 0.5),
-            base_color_texture: Some(asset_server.load("textures/smoke.png")),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            cull_mode: None,
-            ..default()
-        }),
     });
 
     commands.insert_resource(TracerAssets {
@@ -105,7 +89,7 @@ pub(crate) fn setup_common(
     commands.insert_resource(BloodAssets {
         particle_mesh: meshes.add(Rectangle::new(BLOOD_PARTICLE_SIZE, BLOOD_PARTICLE_SIZE)),
         particle_material: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.45, 0.02, 0.02),
+            base_color: Color::srgb(0.85, 0.05, 0.04),
             unlit: true,
             cull_mode: None,
             ..default()
@@ -121,6 +105,20 @@ pub(crate) fn setup_common(
                     perceptual_roughness: 0.12,
                     metallic: 0.0,
                     reflectance: 0.75,
+                    cull_mode: None,
+                    ..default()
+                })
+            })
+            .collect(),
+        wall_stain_mesh: meshes.add(Rectangle::new(BLOOD_WALL_STAIN_SIZE, BLOOD_WALL_STAIN_SIZE)),
+        burst_mesh: meshes.add(Rectangle::new(BLOOD_BURST_SIZE, BLOOD_BURST_SIZE)),
+        burst_materials: (0..BLOOD_STAIN_VARIANTS)
+            .map(|i| {
+                materials.add(StandardMaterial {
+                    base_color: Color::srgba(1.0, 0.16, 0.12, 1.0),
+                    base_color_texture: Some(asset_server.load(format!("textures/blood/splatter_{i}.png"))),
+                    alpha_mode: AlphaMode::Blend,
+                    unlit: true,
                     cull_mode: None,
                     ..default()
                 })
@@ -166,7 +164,6 @@ pub(crate) fn setup_gameplay(
     mut overlay_materials: ResMut<Assets<DamageOverlayMaterial>>,
     mut scope_lens_materials: ResMut<Assets<ScopeLensMaterial>>,
     touch_enabled: Res<TouchControlsEnabled>,
-    player_model_tuning: Res<PlayerModelTuning>,
     scene_target: Option<Res<SceneRenderTarget>>,
     mut pending: ResMut<MapSelectionPending>,
 ) {
@@ -205,16 +202,6 @@ pub(crate) fn setup_gameplay(
         Health(PLAYER_MAX_HEALTH),
         PlayerStance::default(),
         crate::sim::PlayerThreat::default(),
-    ));
-
-    commands.spawn((
-        Name::new("PlayerModel (local, debug — KeyT/CameraMode)"),
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(player_model_tuning.mesh.clone()))),
-        Transform::from_translation(player_spawn).with_scale(Vec3::splat(player_model_tuning.scale)),
-        Visibility::Hidden,
-        PlayerModel,
-        PlayerModelAnimRoot,
-        PlayerModelSkeletonBones::default(),
     ));
 
     let (review_yaw, review_pitch) = review_yaw_pitch();
@@ -268,23 +255,6 @@ pub(crate) fn setup_gameplay(
         ))
         .id();
     spawn_gun_mesh_parts(&mut commands, &asset_server, &mut materials, gun_entity);
-
-    commands.spawn((
-        Name::new("ThirdPersonCamera (KeyU, inactive until CameraMode::ThirdPerson)"),
-        Camera3d::default(),
-        Camera {
-            is_active: false,
-            ..default()
-        },
-        Projection::Perspective(PerspectiveProjection {
-            fov: BASE_FOV,
-            ..default()
-        }),
-        Transform::from_translation(player_spawn + Vec3::Y * EYE_HEIGHT_OFFSET),
-        ThirdPersonCamera,
-        RenderLayers::from_layers(&[WORLD_LAYER]),
-        RenderTarget::from(scene_target.0.clone()),
-    ));
 
     let scope_size = Extent3d {
         width: SCOPE_TEXTURE_SIZE,
@@ -366,7 +336,6 @@ pub(crate) fn setup_gameplay(
     spawn_compass_ui(&mut commands);
     spawn_radar_ui(&mut commands);
     spawn_damage_overlay(&mut commands, &mut overlay_materials);
-    spawn_inspect_ui(&mut commands);
     spawn_settings_menu(&mut commands);
     spawn_settings_toggle_button(&mut commands);
     spawn_mouse_ui_lock_indicator(&mut commands);

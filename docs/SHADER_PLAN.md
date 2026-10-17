@@ -80,6 +80,44 @@ skinning pipeline. Several imports, paths all moved, and the surrounding
   colour drains to grey as health drops. Measured: high-frequency energy in a
   flat region went from 0.006-0.010 to 0.022.
 
+- **Volumetric muzzle smoke** (tier 1) — `assets/shaders/muzzle_smoke.wgsl`.
+  Replaces the single `smoke.png` card with a raymarched puff: 40 steps through
+  a soft sphere, density from domain-warped fbm, eroded over the puff life so
+  it dissolves instead of fading flat. Each shot passes its own seed, so no two
+  puffs repeat. Puff life is 1.9s with drag and buoyancy, so the muzzle push
+  bleeds off and the cloud lingers. At 10 shots/sec that would stack 19
+  raymarched quads over the same pixels, so live puffs are capped at 9 (oldest
+  retired first) and the march is 30 steps. WGSL parses and validates under
+  naga 29.0.4; the look itself has not been checked by eye.
+
+  Soft particles (depth-buffer fade where the quad meets geometry) were
+  deliberately skipped: that is tier 2, it binds to 0.19 internals, and muzzle
+  smoke almost never intersects world geometry. It is worth it for ground smoke,
+  not for this.
+
+- **Procedural muzzle flash** (tier 1) — `assets/shaders/muzzle_flash.wgsl`.
+  Replaces `muzzle.png`. First attempt used angular harmonics and read as
+  cartoon: `sin(angle * n)` is a flower function, and the eye reads those even
+  lobes as drawn. Now the rays come from fbm sampled on the unit circle (so
+  there is no seam at +/-pi), with a second higher-frequency term that also
+  walks along the radius to tear the lobes into ragged streaks. Per-shot seed,
+  flicker rather than a smooth fade, deep red fringe through orange to a core
+  that blows out white. Additive blend, pushed past 1.0 so bloom catches the
+  core. Fourteen embers eject down a narrow cone, reusing SparkParticle.
+
+  Structure follows what practitioners describe on Real Time VFX: a camera-
+  facing core plus a separate directional tongue of flame along the bore. That
+  second quad is axis-locked and only spun about the bore, so looking down the
+  barrel shows it edge-on — the CPU measures how edge-on it is and passes that
+  as `shape.y`, giving a fresnel fade without needing engine view bindings. It
+  spawns on only half the shots, so consecutive shots are not stamped out.
+
+  Worth recording: AAA does NOT do this procedurally. The norm is hand-painted
+  or photographed flipbooks, 4-8 variants cycled at random, and smoke baked out
+  of Houdini/EmberGen rather than raymarched live. Our shaders cost more per
+  pixel; what that buys is unlimited variation and no texture authoring.
+  WGSL parses and validates under naga 29.0.4; not yet checked by eye.
+
 ## Next
 
 ### Light adaptation — not tier 0 after all

@@ -65,7 +65,13 @@ mod map;
 mod screen_effects;
 use screen_effects::*;
 
+mod grip_ik;
+mod muzzle_fx;
+mod viewmodel_body;
 mod scope_lens;
+use grip_ik::*;
+use muzzle_fx::*;
+use viewmodel_body::*;
 use scope_lens::*;
 
 mod dissolve;
@@ -109,7 +115,16 @@ use settings_persistence::*;
 mod splash_screen;
 use splash_screen::*;
 
-const GUN_OFFSET: Vec3 = Vec3::new(0.22, -0.28, -0.65);
+// Placed where a 0.452m arm can actually hold it, not purely for composition:
+// at x 0.22 the sideways gap from the left shoulder alone was 0.42m, eating the
+// whole reach before the hand moved forward at all.
+const GUN_OFFSET: Vec3 = Vec3::new(0.22, -0.28, -0.56);
+
+/// Metres to slide the eye backwards for debugging, cancelled by the gun and the
+/// body so only the viewpoint moves. Zero in normal play.
+pub(crate) fn view_pullback() -> f32 {
+    std::env::var("VIEW_PULLBACK").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0)
+}
 
 const GUN_ADS_OFFSET: Vec3 = Vec3::new(0.0, -0.307, -0.35);
 const GUN_ADS_SPEED: f32 = 10.0;
@@ -147,11 +162,34 @@ const RELOAD_TILT_DEG: f32 = 25.0;
 
 const RELOAD_LEFT_DIP: f32 = 0.12;
 
-const MUZZLE_OFFSET: Vec3 = Vec3::new(0.2, -0.005, -1.2);
+// Tracks GUN_OFFSET: the muzzle is a fixed point on the mesh, so it has to
+// move by the same delta or the flash floats off the end of the barrel.
+/// The muzzle at rest, in camera space — the value that has always looked
+/// right while hip firing, left exactly as it was.
+///
+/// It is NOT re-derived from the mesh. Converting it into gun-local units puts
+/// it at y 275 where the mesh is 45 wide, so something about how that model is
+/// turned is not what it appears, and guessing at it broke the hip case that
+/// used to work. What the gun does instead is carry the muzzle by however far
+/// it has moved from rest, which is what ADS needed and costs no assumption.
+const MUZZLE_OFFSET: Vec3 = Vec3::new(0.2, -0.005, -1.11);
 
 const MUZZLE_FLASH_LIFETIME: f32 = 0.05;
-const MUZZLE_LIGHT_INTENSITY: f32 = 120_000.0;
-const MUZZLE_LIGHT_RANGE: f32 = 2.0;
+const FLASH_QUAD_SIZE: f32 = 0.32;
+// Deliberately below the wall-impact burst (4-9 sparks at 0.02, speed 3.0):
+// fewer, smaller, and thrown clear far faster, so the muzzle reads as a couple
+// of specks snapping away rather than a shower dribbling out.
+const MUZZLE_EMBER_COUNT: usize = 3;
+const MUZZLE_EMBER_SIZE: f32 = 0.009;
+const MUZZLE_EMBER_SPEED: f32 = 12.0;
+const MUZZLE_EMBER_CONE: f32 = 0.22;
+const MUZZLE_EMBER_LIFETIME: f32 = 0.13;
+
+const MUZZLE_BLADE_CHANCE: f32 = 0.5;
+const MUZZLE_BLADE_WIDTH: f32 = 0.55;
+const MUZZLE_BLADE_LENGTH: f32 = 1.9;
+const MUZZLE_LIGHT_INTENSITY: f32 = 210_000.0;
+const MUZZLE_LIGHT_RANGE: f32 = 3.2;
 
 const TRACER_CHANCE: f32 = 0.5;
 const TRACER_LIFETIME: f32 = 0.045;
@@ -159,19 +197,37 @@ const TRACER_RADIUS: f32 = 0.012;
 
 const TRACER_START_Y_OFFSET: f32 = -0.05;
 
-const SMOKE_LIFETIME: f32 = 0.4;
+const SMOKE_LIFETIME: f32 = 1.9;
 const SMOKE_START_SCALE: f32 = 0.35;
-const SMOKE_GROWTH_PER_SEC: f32 = 1.0;
+const SMOKE_GROWTH_PER_SEC: f32 = 1.25;
+const SMOKE_DRAG: f32 = 1.2;
+const SMOKE_MAX_PUFFS: usize = 9;
+const SMOKE_BUOYANCY: f32 = 0.22;
 
-const BLOOD_PARTICLE_COUNT: usize = 5;
-const BLOOD_PARTICLE_SPEED: f32 = 2.0;
+const BLOOD_PARTICLE_COUNT: usize = 14;
+const BLOOD_PARTICLE_SPEED: f32 = 3.2;
 const BLOOD_PARTICLE_GRAVITY: f32 = -9.0;
 const BLOOD_PARTICLE_LIFETIME: f32 = 0.6;
-const BLOOD_PARTICLE_SIZE: f32 = 0.04;
+const BLOOD_PARTICLE_SIZE: f32 = 0.075;
 const BLOOD_STAIN_SIZE: f32 = 0.22;
 const BLOOD_FLOOR_STAIN_SIZE: f32 = 0.55;
 const BLOOD_STAIN_VARIANTS: usize = 4;
 const BLOOD_STAIN_LIFETIME: f32 = 12.0;
+
+const BLOOD_BURST_SIZE: f32 = 0.34;
+const BLOOD_BURST_LIFETIME: f32 = 0.22;
+const BLOOD_BURST_START_SCALE: f32 = 0.35;
+const BLOOD_BURST_END_SCALE: f32 = 1.7;
+const BLOOD_BURST_NORMAL_OFFSET: f32 = 0.05;
+
+const BLOOD_EXIT_PARTICLE_COUNT: usize = 11;
+const BLOOD_EXIT_SPEED: f32 = 6.0;
+const BLOOD_EXIT_CONE: f32 = 0.38;
+const BLOOD_EXIT_WOUND_OFFSET: f32 = 0.3;
+const BLOOD_WALL_RAYCAST_DISTANCE: f32 = 4.5;
+const BLOOD_WALL_STAIN_SIZE: f32 = 0.42;
+const BLOOD_WALL_STAIN_COUNT: usize = 3;
+const BLOOD_WALL_STAIN_SPREAD: f32 = 0.22;
 
 const BLOOD_FLOOR_RAYCAST_DISTANCE: f32 = 5.0;
 const BLOOD_FLOOR_STAIN_MIN: usize = 1;
@@ -188,6 +244,8 @@ const SPARK_PARTICLE_SIZE: f32 = 0.02;
 const FIRE_RATE: f32 = 0.1;
 
 const RECOIL_PITCH_KICK: f32 = 0.022;
+const RECOIL_PUSH_BACK: f32 = 0.018;
+const RECOIL_PUSH_BACK_MAX: f32 = 0.07;
 const RECOIL_PITCH_KICK_MAX: f32 = 0.16;
 const RECOIL_YAW_JITTER: f32 = 0.012;
 const RECOIL_RECOVERY_SPEED: f32 = 5.0;
@@ -298,15 +356,6 @@ const EYE_HEIGHT_OFFSET: f32 = 0.65;
 const CROUCH_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.55;
 const PRONE_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.15;
 
-const THIRD_PERSON_DISTANCE: f32 = 2.6;
-const THIRD_PERSON_HEIGHT_OFFSET: f32 = 0.35;
-const THIRD_PERSON_COLLISION_MARGIN: f32 = 0.3;
-
-const THIRD_PERSON_SIDE_OFFSET: f32 = 0.9;
-const THIRD_PERSON_SHOULDER_BIAS: f32 = 0.4;
-
-const THIRD_PERSON_LOOK_AHEAD_DISTANCE: f32 = 8.0;
-
 const HIT_MARKER_LIFETIME: f32 = 3.0;
 
 const PLAYER_MAX_HEALTH: f32 = 100.0;
@@ -391,6 +440,8 @@ pub fn main() {
             MeshPickingPlugin,
             bevy::ui_render::prelude::UiMaterialPlugin::<DamageOverlayMaterial>::default(),
             MaterialPlugin::<ScopeLensMaterial>::default(),
+            MaterialPlugin::<MuzzleSmokeMaterial>::default(),
+            MaterialPlugin::<MuzzleFlashMaterial>::default(),
             bevy::core_pipeline::fullscreen_material::FullscreenMaterialPlugin::<ScreenEffects>::default(),
             PhysicsPlugins::default(),
             SimPlugin,
@@ -445,7 +496,6 @@ impl Plugin for GamePlugin {
         .add_plugins(navigation::ClientNavigationPlugin)
 
         .insert_resource(Noclip(false))
-        .init_resource::<InspectMode>()
         .init_resource::<HitFlash>()
         .init_resource::<Autopilot>()
         .init_resource::<AutopilotLookOnly>()
@@ -471,8 +521,6 @@ impl Plugin for GamePlugin {
         .init_resource::<PerfTimings>()
         .init_resource::<ZombieAnimDisabled>()
         .init_resource::<ZombieHealthBarsHidden>()
-        .init_resource::<PlayerModelVisible>()
-        .init_resource::<CameraMode>()
         .init_resource::<PlayerModelTuning>()
         .init_resource::<GunVisible>()
         .init_resource::<MapMsaaOn>()
@@ -501,6 +549,7 @@ impl Plugin for GamePlugin {
         .init_resource::<MapSelectionPending>()
         .init_resource::<RecentlyHitZombies>()
         .add_systems(Startup, (apply_persisted_settings, setup_common, force_game_over_on_start).chain())
+        .add_systems(Startup, spawn_pole_targets)
         .add_systems(OnEnter(AppState::Menu), enter_menu)
         .add_systems(OnExit(AppState::Menu), exit_menu)
         .add_systems(OnEnter(AppState::InGame), setup_gameplay);
@@ -597,18 +646,11 @@ impl Plugin for GamePlugin {
                     apply_aim_dof,
                     send_player_input.run_if(map::world_ready),
                     sync_camera_to_player,
-                    sync_player_model,
                     zombies_damage_player,
                 )
                     .chain(),
 
-                (
-                    count_local_kills,
-                    toggle_inspect_mode,
-                    toggle_camera_mode,
-                    sync_third_person_camera,
-                )
-                    .chain(),
+                (count_local_kills,).chain(),
             )
                 .chain()
                 .run_if(in_state(AppState::InGame)),
@@ -627,11 +669,12 @@ impl Plugin for GamePlugin {
 
                 (
                     wire_player_model_scene_nodes,
+                    (spawn_viewmodel_body, wire_viewmodel_body_meshes),
+                    spawn_grip_sockets,
                     wire_player_model_animations,
                     update_local_player_model_animation,
                     apply_player_model_pose_override,
                     update_health_ui,
-                    update_inspect_ui,
                     update_compass_ui,
                     update_radar_ui,
                     update_zombie_health_bars,
@@ -640,6 +683,8 @@ impl Plugin for GamePlugin {
                     play_zombie_footsteps,
                     update_damage_overlay,
                     update_screen_effects,
+                    demote_fully_metallic_imports,
+                    exclude_oversized_shadow_casters,
                     update_dissolve,
                 )
                     .chain(),
@@ -662,6 +707,8 @@ impl Plugin for GamePlugin {
                 despawn_bullet_tracers,
                 update_smoke,
                 update_blood_particles,
+                update_blood_bursts,
+                (update_muzzle_smoke, update_muzzle_flash),
                 update_spark_particles,
                 despawn_blood_stains,
             )
@@ -672,9 +719,35 @@ impl Plugin for GamePlugin {
 
     app.add_systems(
         PostUpdate,
-        (apply_player_model_travel_twist, aim_zombie_heads, apply_bone_flinch)
+        (
+            pose_viewmodel_arms,
+            shape_viewmodel_skeleton,
+            aim_zombie_heads,
+            apply_bone_flinch,
+        )
             .after(AnimationSystems)
             .before(TransformSystems::Propagate)
+            .run_if(in_state(AppState::InGame)),
+    );
+
+    // Grip IK runs AFTER propagation, unlike the pose above. The solver works
+    // entirely through GlobalTransform — target, chain and pole are all read as
+    // world positions — and every one of those entities hangs off the camera.
+    // Run it before propagation and it solves against last frame camera
+    // orientation, then propagation applies the result to this frame one, so
+    // the hands land wrong by an amount proportional to how fast the view is
+    // turning. It writes GlobalTransform back for the chain itself, which is
+    // what lets it run this late, but only for the bones it rotates, which is why
+    // propagate_constrained_bones has to refresh the hand itself.
+    app.add_systems(
+        PostUpdate,
+        (
+            update_pole_targets,
+            solve_grip_ik,
+        )
+            .chain()
+            .after(TransformSystems::Propagate)
+            .run_if(grip_ik_enabled)
             .run_if(in_state(AppState::InGame)),
     );
     }

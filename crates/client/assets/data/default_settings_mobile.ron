@@ -20,7 +20,6 @@
     aim_blur_enabled: Some(true),
     zombie_anim_disabled: Some(false),
     zombie_health_bars_hidden: Some(false),
-    player_model_visible: Some(false),
     gun_visible: Some(true),
     cars_visible: Some(true),
     aim_dof_focal_distance_alt: Some(false),
@@ -30,6 +29,5 @@
     show_floating_damage: Some(true),
     show_bullet_tracers: Some(true),
     autopilot: None,
-    inspect_mode: Some(false),
     nav_debug_visible: Some(false),
 )

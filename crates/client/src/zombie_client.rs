@@ -9,12 +9,6 @@ pub(crate) struct ZombieAnimDisabled(pub(crate) bool);
 #[derive(Resource, Default)]
 pub(crate) struct ZombieHealthBarsHidden(pub(crate) bool);
 
-#[derive(Resource, Default)]
-pub(crate) struct PlayerModelVisible(pub(crate) bool);
-
-#[derive(Component)]
-pub(crate) struct PlayerModel;
-
 #[derive(Component)]
 pub(crate) struct PlayerModelAnimRoot;
 
@@ -25,6 +19,14 @@ pub(crate) struct PlayerModelAnimationPlayer(pub(crate) Entity);
 pub(crate) struct PlayerModelSkeletonBones {
     pub(crate) left_upper_leg: Option<Entity>,
     pub(crate) right_upper_leg: Option<Entity>,
+    pub(crate) right_arm: Option<Entity>,
+    pub(crate) right_fore_arm: Option<Entity>,
+    pub(crate) right_hand: Option<Entity>,
+    pub(crate) left_arm: Option<Entity>,
+    pub(crate) left_fore_arm: Option<Entity>,
+    pub(crate) left_hand: Option<Entity>,
+    pub(crate) head: Option<Entity>,
+    pub(crate) hips: Option<Entity>,
 }
 
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq, Reflect)]
@@ -398,22 +400,38 @@ pub(crate) fn wire_player_model_scene_nodes(
     child_of: Query<&ChildOf>,
     children: Query<&Children>,
     names: Query<&Name>,
+    transforms: Query<&Transform>,
     mut roots: Query<&mut PlayerModelSkeletonBones, With<PlayerModelAnimRoot>>,
     new_names: Query<Entity, Added<Name>>,
 ) {
     for entity in &new_names {
         let Ok(name) = names.get(entity) else { continue };
         match name.as_str() {
-            "LeftUpLeg" | "RightUpLeg" => {
+            "LeftUpLeg" | "RightUpLeg" | "RightArm" | "RightForeArm" | "RightHand" | "LeftArm"
+            | "LeftForeArm" | "LeftHand" | "Head" | "Hips" => {
                 let Some(root) = find_animation_root(entity, &child_of, |e| roots.contains(e)) else {
                     continue;
                 };
                 let Ok(mut bones) = roots.get_mut(root) else { continue };
-                if name.as_str() == "LeftUpLeg" {
-                    bones.left_upper_leg = Some(entity);
-                } else {
-                    bones.right_upper_leg = Some(entity);
+                // Capture the bind rotation here, not later: this function is what
+                // attaches the AnimationPlayer, so nothing has posed the bone yet.
+                if let Ok(transform) = transforms.get(entity) {
+                    commands.entity(entity).try_insert(BoneRest(transform.rotation));
                 }
+                // this rig carries Mixamo bone names without the mixamorig: prefix
+                match name.as_str() {
+                    "LeftUpLeg" => bones.left_upper_leg = Some(entity),
+                    "RightUpLeg" => bones.right_upper_leg = Some(entity),
+                    "RightArm" => bones.right_arm = Some(entity),
+                    "RightForeArm" => bones.right_fore_arm = Some(entity),
+                    "RightHand" => bones.right_hand = Some(entity),
+                    "LeftArm" => bones.left_arm = Some(entity),
+                    "LeftHand" => bones.left_hand = Some(entity),
+                    "Head" => bones.head = Some(entity),
+                    "Hips" => bones.hips = Some(entity),
+                    _ => bones.left_fore_arm = Some(entity),
+                }
+
             }
             PLAYER_MODEL_SCENE_ROOT_NAME => {
 
@@ -451,12 +469,20 @@ pub(crate) fn wire_player_model_animations(
     anim: Res<PlayerModelAnim>,
     child_of: Query<&ChildOf>,
     roots: Query<(), With<PlayerModelAnimRoot>>,
+    viewmodel: Query<(), With<ViewmodelBody>>,
     mut new_players: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
 ) {
     for (player_entity, mut player) in &mut new_players {
         let Some(root) = find_animation_root(player_entity, &child_of, |e| roots.contains(e)) else {
             continue;
         };
+        // The viewmodel body needs the root marker so its bones get wired, but
+        // not the clip: a walk cycle rewriting the arms every frame fights the
+        // grip IK, which showed up as the arm span jittering between 0.18 and
+        // 0.41m instead of settling.
+        if viewmodel.contains(root) {
+            continue;
+        }
         commands
             .entity(player_entity)
             .try_insert(AnimationGraphHandle(anim.graph.clone()));
@@ -473,7 +499,7 @@ pub(crate) fn update_local_player_model_animation(
     moving: Res<LocalPlayerMoving>,
     sprinting: Res<LocalPlayerSprinting>,
     move_axis: Res<LocalPlayerMoveAxis>,
-    mut roots: Query<(&PlayerModelAnimationPlayer, &mut PlayerModelPose), (With<PlayerModelAnimRoot>, With<PlayerModel>)>,
+    mut roots: Query<(&PlayerModelAnimationPlayer, &mut PlayerModelPose), (With<PlayerModelAnimRoot>, With<ViewmodelBody>)>,
     anim: Res<PlayerModelAnim>,
     mut players: Query<&mut AnimationPlayer>,
 

@@ -8,16 +8,6 @@ pub(crate) struct FpsCamera {
     pub(crate) pitch: f32,
 }
 
-#[derive(Resource, Default, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum CameraMode {
-    #[default]
-    FirstPerson,
-    ThirdPerson,
-}
-
-#[derive(Component)]
-pub(crate) struct ThirdPersonCamera;
-
 pub(crate) fn is_aiming(cursor: &CursorOptions, mouse: &ButtonInput<MouseButton>, touch_aiming: bool) -> bool {
     (cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Right)) || touch_aiming
 }
@@ -48,6 +38,7 @@ pub(crate) fn current_bullet_spread(pitch_kick: f32, aiming: bool, moving: bool,
 pub(crate) struct ViewRecoil {
     pub(crate) pitch_kick: f32,
     pub(crate) yaw_kick: f32,
+    pub(crate) push_back: f32,
 }
 
 #[derive(Component, Default)]
@@ -187,9 +178,10 @@ pub(crate) fn apply_view_recoil(
     mut query: Query<(&mut Transform, &FpsCamera, &mut ViewRecoil, &Lean)>,
 ) {
     for (mut transform, cam, mut recoil, lean) in &mut query {
-        let decay = (RECOIL_RECOVERY_SPEED * time.delta_secs()).min(1.0);
-        recoil.pitch_kick *= 1.0 - decay;
-        recoil.yaw_kick *= 1.0 - decay;
+        let remaining = ops::exp(-RECOIL_RECOVERY_SPEED * time.delta_secs());
+        recoil.pitch_kick *= remaining;
+        recoil.yaw_kick *= remaining;
+        recoil.push_back *= remaining;
 
         let pitch = (cam.pitch + recoil.pitch_kick).clamp(-1.54, 1.54);
         let yaw = cam.yaw + recoil.yaw_kick;
@@ -290,69 +282,7 @@ pub(crate) fn toggle_noclip(keys: Res<ButtonInput<KeyCode>>, mut noclip: ResMut<
     }
 }
 
-pub(crate) fn toggle_camera_mode(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut mode: ResMut<CameraMode>,
-    mut player_model_visible: ResMut<PlayerModelVisible>,
-    mut fps_camera: Query<&mut Camera, (With<FpsCamera>, Without<ThirdPersonCamera>)>,
-    mut third_person_camera: Query<&mut Camera, (With<ThirdPersonCamera>, Without<FpsCamera>)>,
-) {
-    if !keys.just_pressed(KeyCode::KeyU) {
-        return;
-    }
-    *mode = match *mode {
-        CameraMode::FirstPerson => CameraMode::ThirdPerson,
-        CameraMode::ThirdPerson => CameraMode::FirstPerson,
-    };
-    let third_person = *mode == CameraMode::ThirdPerson;
-    if let Ok(mut camera) = fps_camera.single_mut() {
-        camera.is_active = !third_person;
-    }
-    if let Ok(mut camera) = third_person_camera.single_mut() {
-        camera.is_active = third_person;
-    }
-    player_model_visible.0 = third_person;
-}
 
-pub(crate) fn sync_third_person_camera(
-    mode: Res<CameraMode>,
-    spatial_query: SpatialQuery,
-    eye: Query<(Entity, &Transform, &FpsCamera, &Lean), Without<ThirdPersonCamera>>,
-    mut camera: Query<&mut Transform, (With<ThirdPersonCamera>, Without<FpsCamera>)>,
-) {
-    if *mode != CameraMode::ThirdPerson {
-        return;
-    }
-    let Ok((eye_entity, eye_transform, cam, lean)) = eye.single() else {
-        return;
-    };
-    let Ok(mut camera_transform) = camera.single_mut() else {
-        return;
-    };
-    let yaw_only = Quat::from_rotation_y(cam.yaw);
-    let horizontal_forward = yaw_only * Vec3::NEG_Z;
-    let horizontal_right = yaw_only * Vec3::X;
-
-    let side_offset = THIRD_PERSON_SIDE_OFFSET * (lean.current + THIRD_PERSON_SHOULDER_BIAS).clamp(-1.0, 1.0);
-    let desired = eye_transform.translation - horizontal_forward * THIRD_PERSON_DISTANCE
-        + horizontal_right * side_offset
-        + Vec3::Y * THIRD_PERSON_HEIGHT_OFFSET;
-    let offset = desired - eye_transform.translation;
-    let distance = offset.length();
-    let Ok(direction) = Dir3::new(offset) else {
-        return;
-    };
-    let filter = SpatialQueryFilter::from_excluded_entities([eye_entity]);
-    let safe_distance = spatial_query
-        .cast_ray(eye_transform.translation, direction, distance, true, &filter)
-        .map(|hit| (hit.distance - THIRD_PERSON_COLLISION_MARGIN).max(0.0))
-        .unwrap_or(distance);
-    camera_transform.translation = eye_transform.translation + direction * safe_distance;
-
-    let aim_dir = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0) * Vec3::NEG_Z;
-    let look_target = eye_transform.translation + aim_dir * THIRD_PERSON_LOOK_AHEAD_DISTANCE;
-    camera_transform.look_at(look_target, Vec3::Y);
-}
 
 pub(crate) fn toggle_player_stance(keys: Res<ButtonInput<KeyCode>>, mut player: Query<&mut PlayerStance>) {
     let Ok(mut stance) = player.single_mut() else {
@@ -463,12 +393,12 @@ pub(crate) fn send_player_input(
 
 pub(crate) fn sync_camera_to_player(
     player_query: Query<(&Transform, &PlayerStance), (With<Player>, Without<FpsCamera>)>,
-    mut camera_query: Query<(&mut Transform, &Lean), With<FpsCamera>>,
+    mut camera_query: Query<(&mut Transform, &Lean, &ViewRecoil), With<FpsCamera>>,
 ) {
     let Ok((player_transform, stance)) = player_query.single() else {
         return;
     };
-    let Ok((mut camera_transform, lean)) = camera_query.single_mut() else {
+    let Ok((mut camera_transform, lean, recoil)) = camera_query.single_mut() else {
         return;
     };
     let eye_height_offset = match stance {
@@ -480,74 +410,16 @@ pub(crate) fn sync_camera_to_player(
     let eye = player_transform.translation + Vec3::Y * eye_height_offset;
 
     let side_offset = *camera_transform.right() * LEAN_SIDE_OFFSET * lean.current;
-    camera_transform.translation = eye + side_offset;
+    // Debug pullback: slides the eye straight backwards so the viewmodel can be
+    // watched from outside. The gun and the body cancel it in their own local
+    // offsets, so everything stays put in the world and only the eye moves.
+    let pullback = *camera_transform.back() * view_pullback();
+    let kick_back = *camera_transform.back() * recoil.push_back;
+    camera_transform.translation = eye + side_offset + pullback + kick_back;
 }
 
-pub(crate) fn sync_player_model(
-    visible: Res<PlayerModelVisible>,
-    tuning: Res<PlayerModelTuning>,
-    player: Query<&Transform, (With<Player>, Without<PlayerModel>)>,
-    camera: Query<&FpsCamera>,
-    mut model: Query<(&mut Transform, &mut Visibility), (With<PlayerModel>, Without<Player>)>,
-) {
-    let Ok((mut transform, mut visibility)) = model.single_mut() else {
-        return;
-    };
-    *visibility = if visible.0 { Visibility::Visible } else { Visibility::Hidden };
-    if !visible.0 {
-        return;
-    }
-    let Ok(player_transform) = player.single() else {
-        return;
-    };
-    let yaw = camera.single().map(|cam| cam.yaw).unwrap_or(0.0);
 
-    transform.scale = Vec3::splat(tuning.scale);
-    transform.translation = player_transform.translation + Vec3::Y * tuning.y_offset;
 
-    transform.rotation = Quat::from_rotation_y(yaw + tuning.facing_deg.to_radians());
-}
-
-fn local_yaw_correction(parent_rotation: Quat, world_angle: f32) -> Quat {
-    let world_yaw = Quat::from_rotation_y(world_angle);
-    parent_rotation.inverse() * world_yaw * parent_rotation
-}
-
-fn wrap_to_pi(angle: f32) -> f32 {
-    let two_pi = std::f32::consts::TAU;
-    let wrapped = (angle + std::f32::consts::PI).rem_euclid(two_pi) - std::f32::consts::PI;
-    wrapped
-}
-
-pub(crate) fn apply_player_model_travel_twist(
-    move_axis: Res<LocalPlayerMoveAxis>,
-    sprinting: Res<LocalPlayerSprinting>,
-    bones: Query<&PlayerModelSkeletonBones, With<PlayerModel>>,
-    child_of: Query<&ChildOf>,
-    globals: Query<&GlobalTransform>,
-    mut transforms: Query<&mut Transform>,
-) {
-    let Ok(bones) = bones.single() else {
-        return;
-    };
-    let axis = move_axis.0;
-    if axis == Vec2::ZERO {
-        return;
-    }
-
-    let angle = -axis.x.atan2(axis.y);
-
-    let running_backward = sprinting.0 && axis.y < 0.0;
-    let angle = if running_backward { wrap_to_pi(angle - std::f32::consts::PI) } else { angle };
-
-    for bone in [bones.left_upper_leg, bones.right_upper_leg] {
-        let Some(bone) = bone else { continue };
-        let Ok(parent) = child_of.get(bone) else { continue };
-        let Ok(parent_global) = globals.get(parent.0) else { continue };
-        let Ok(mut t) = transforms.get_mut(bone) else { continue };
-        t.rotation = local_yaw_correction(parent_global.rotation(), angle) * t.rotation;
-    }
-}
 
 pub(crate) fn nudge_player_model_tuning(keys: Res<ButtonInput<KeyCode>>, mut tuning: ResMut<PlayerModelTuning>) {
     const SCALE_STEP: f32 = 0.02;
@@ -608,14 +480,17 @@ pub(crate) fn shoot(
     touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut camera: Query<(&Transform, &mut ViewRecoil), With<FpsCamera>>,
-    mut gun: Query<&mut Gun>,
+    mut gun: Query<(&mut Gun, &Transform), Without<FpsCamera>>,
     mut vfx_assets: VfxAssets,
     zombies: Query<(Entity, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
     spatial_query: SpatialQuery,
     touch_firing: Res<TouchFiring>,
-    inspect_mode: Res<InspectMode>,
     mut cooldown: Local<f32>,
+    (mut smoke_materials, mut flash_materials): (
+        ResMut<Assets<MuzzleSmokeMaterial>>,
+        ResMut<Assets<MuzzleFlashMaterial>>,
+    ),
     (autopilot, intent, local_moving, local_sprinting, show_hit_markers, show_tracers): (
         Res<Autopilot>,
         Res<AutopilotIntent>,
@@ -627,7 +502,7 @@ pub(crate) fn shoot(
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
 
-    if game_over.0 || inspect_mode.0 {
+    if game_over.0 {
         return;
     }
     let Ok(cursor) = cursor.single() else {
@@ -642,7 +517,7 @@ pub(crate) fn shoot(
     if !firing || *cooldown > 0.0 {
         return;
     }
-    let Ok(mut gun) = gun.single_mut() else {
+    let Ok((mut gun, gun_transform)) = gun.single_mut() else {
         return;
     };
 
@@ -669,6 +544,7 @@ pub(crate) fn shoot(
 
     let jitter = ops::sin(time.elapsed_secs() * 977.0);
     recoil.yaw_kick += jitter * RECOIL_YAW_JITTER;
+    recoil.push_back = (recoil.push_back + RECOIL_PUSH_BACK).min(RECOIL_PUSH_BACK_MAX);
 
     let stance = vfx_assets.stance.single().copied().unwrap_or_default();
 
@@ -686,18 +562,16 @@ pub(crate) fn shoot(
         + *camera_transform.up() * spread_y;
     let direction = Dir3::new(spread_dir).unwrap_or(camera_transform.forward());
 
-    let swapped_muzzle_offset = Vec3::new(
-        MUZZLE_OFFSET.x * (1.0 - 2.0 * gun.shoulder_blend),
-        MUZZLE_OFFSET.y,
-        MUZZLE_OFFSET.z,
-    );
-
-    let muzzle_world_pos =
-        camera_transform.translation + camera_transform.rotation * swapped_muzzle_offset;
+    // Hip rest is MUZZLE_OFFSET, unchanged. Add however far the gun has drifted
+    // from its own rest position and the muzzle follows the ADS pull, the bob,
+    // the recoil kick and the shoulder swap without re-deriving anything.
+    let gun_drift = gun_transform.translation - gun.base_offset;
+    let muzzle_world_pos = camera_transform.translation
+        + camera_transform.rotation * (MUZZLE_OFFSET + gun_drift);
 
     commands.spawn((
         Mesh3d(vfx_assets.muzzle_fx.flash_mesh.clone()),
-        MeshMaterial3d(vfx_assets.muzzle_fx.flash_material.clone()),
+        MeshMaterial3d(flash_materials.add(muzzle_flash_material(time.elapsed_secs() * 419.0))),
         Transform::from_translation(muzzle_world_pos).with_rotation(camera_transform.rotation),
         PointLight {
             intensity: MUZZLE_LIGHT_INTENSITY,
@@ -713,7 +587,7 @@ pub(crate) fn shoot(
 
     commands.spawn((
         Mesh3d(vfx_assets.muzzle_fx.smoke_mesh.clone()),
-        MeshMaterial3d(vfx_assets.muzzle_fx.smoke_material.clone()),
+        MeshMaterial3d(smoke_materials.add(muzzle_smoke_material(time.elapsed_secs() * 173.0))),
         Transform::from_translation(muzzle_world_pos)
             .with_rotation(camera_transform.rotation)
             .with_scale(Vec3::splat(SMOKE_START_SCALE)),
@@ -723,9 +597,46 @@ pub(crate) fn shoot(
         },
     ));
 
-    let wall_filter = SpatialQueryFilter::from_excluded_entities(zombies.iter().map(|(e, ..)| e));
+    let forward = *camera_transform.forward();
+    let right = *camera_transform.right();
+    let up = *camera_transform.up();
+
+    for i in 0..MUZZLE_EMBER_COUNT {
+        let seed = time.elapsed_secs() * 617.0 + i as f32 * 143.9;
+        let spread = (right * ops::sin(seed * 1.7) + up * ops::sin(seed * 2.9)) * MUZZLE_EMBER_CONE;
+        let dir = (forward + spread).normalize_or_zero();
+        let speed = MUZZLE_EMBER_SPEED * (0.7 + ops::sin(seed * 3.1).abs() * 0.3);
+        commands.spawn((
+            Mesh3d(vfx_assets.muzzle_fx.ember_mesh.clone()),
+            MeshMaterial3d(vfx_assets.sparks.material.clone()),
+            Transform::from_translation(muzzle_world_pos),
+            SparkParticle {
+                velocity: dir * speed,
+                remaining: MUZZLE_EMBER_LIFETIME,
+            },
+        ));
+    }
+
+    // Not every shot throws a visible tongue of flame; letting it miss half the
+    // time is what keeps consecutive shots from looking stamped out.
+    let blade_roll = ops::sin(time.elapsed_secs() * 733.0).abs();
+    if blade_roll < MUZZLE_BLADE_CHANCE {
+        let half_length = FLASH_QUAD_SIZE * MUZZLE_BLADE_LENGTH * 0.5;
+        commands.spawn((
+            Mesh3d(vfx_assets.muzzle_fx.flash_mesh.clone()),
+            MeshMaterial3d(flash_materials.add(muzzle_blade_material(time.elapsed_secs() * 283.0))),
+            Transform::from_translation(muzzle_world_pos + forward * half_length)
+                .with_scale(Vec3::new(MUZZLE_BLADE_WIDTH, MUZZLE_BLADE_LENGTH, 1.0)),
+            MuzzleBlade { axis: forward },
+            MuzzleFlash {
+                remaining: MUZZLE_FLASH_LIFETIME,
+            },
+        ));
+    }
+
+
     let wall_distance = spatial_query
-        .cast_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, true, &wall_filter)
+        .cast_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, true, &SpatialQueryFilter::default())
         .map(|hit| hit.distance);
     let predicted_hit = zombies
         .iter()

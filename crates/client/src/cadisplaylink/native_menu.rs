@@ -125,7 +125,6 @@ bool_toggle!(show_hitboxes, set_show_hitboxes, crate::ShowHitboxes, false);
 bool_toggle!(aim_blur_enabled, set_aim_blur_enabled, crate::AimBlurEnabled, true);
 bool_toggle!(zombie_anim_disabled, set_zombie_anim_disabled, crate::ZombieAnimDisabled, false);
 bool_toggle!(zombie_health_bars_hidden, set_zombie_health_bars_hidden, crate::ZombieHealthBarsHidden, false);
-bool_toggle!(player_model_visible, set_player_model_visible, crate::PlayerModelVisible, false);
 bool_toggle!(show_autopilot_target, set_show_autopilot_target, crate::ShowAutopilotTarget, false);
 bool_toggle!(show_hit_markers, set_show_hit_markers, crate::ShowHitMarkers, true);
 

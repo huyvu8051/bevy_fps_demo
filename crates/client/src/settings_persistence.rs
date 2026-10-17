@@ -21,7 +21,6 @@ pub(crate) struct PersistedSettings {
     pub(crate) aim_blur_enabled: Option<bool>,
     pub(crate) zombie_anim_disabled: Option<bool>,
     pub(crate) zombie_health_bars_hidden: Option<bool>,
-    pub(crate) player_model_visible: Option<bool>,
     pub(crate) gun_visible: Option<bool>,
     pub(crate) aim_dof_focal_distance_alt: Option<bool>,
     pub(crate) autopilot_look_only: Option<bool>,
@@ -30,7 +29,6 @@ pub(crate) struct PersistedSettings {
     pub(crate) show_floating_damage: Option<bool>,
     pub(crate) show_bullet_tracers: Option<bool>,
     pub(crate) autopilot: Option<bool>,
-    pub(crate) inspect_mode: Option<bool>,
     pub(crate) nav_debug_visible: Option<bool>,
 }
 
@@ -128,7 +126,6 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(aim_blur_enabled, AimBlurEnabled);
     apply!(zombie_anim_disabled, ZombieAnimDisabled);
     apply!(zombie_health_bars_hidden, ZombieHealthBarsHidden);
-    apply!(player_model_visible, PlayerModelVisible);
     apply!(gun_visible, GunVisible);
     apply!(aim_dof_focal_distance_alt, AimDofFocalDistanceAlt);
     apply!(autopilot_look_only, AutopilotLookOnly);
@@ -137,7 +134,6 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(show_floating_damage, ShowFloatingDamage);
     apply!(show_bullet_tracers, ShowBulletTracers);
     apply!(autopilot, Autopilot);
-    apply!(inspect_mode, InspectMode);
     apply!(nav_debug_visible, NavDebugVisible);
 }
 
@@ -184,7 +180,6 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(AimBlurEnabled)
         || changed!(ZombieAnimDisabled)
         || changed!(ZombieHealthBarsHidden)
-        || changed!(PlayerModelVisible)
         || changed!(GunVisible)
         || changed!(AimDofFocalDistanceAlt)
         || changed!(AutopilotLookOnly)
@@ -193,7 +188,6 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(ShowFloatingDamage)
         || changed!(ShowBulletTracers)
         || changed!(Autopilot)
-        || changed!(InspectMode)
         || changed!(NavDebugVisible);
     if !any_changed {
         return;
@@ -221,7 +215,6 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         aim_blur_enabled: world.get_resource::<AimBlurEnabled>().map(|r| r.0),
         zombie_anim_disabled: world.get_resource::<ZombieAnimDisabled>().map(|r| r.0),
         zombie_health_bars_hidden: world.get_resource::<ZombieHealthBarsHidden>().map(|r| r.0),
-        player_model_visible: world.get_resource::<PlayerModelVisible>().map(|r| r.0),
         gun_visible: world.get_resource::<GunVisible>().map(|r| r.0),
         aim_dof_focal_distance_alt: world.get_resource::<AimDofFocalDistanceAlt>().map(|r| r.0),
         autopilot_look_only: world.get_resource::<AutopilotLookOnly>().map(|r| r.0),
@@ -230,7 +223,6 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         show_floating_damage: world.get_resource::<ShowFloatingDamage>().map(|r| r.0),
         show_bullet_tracers: world.get_resource::<ShowBulletTracers>().map(|r| r.0),
         autopilot: world.get_resource::<Autopilot>().map(|r| r.0),
-        inspect_mode: world.get_resource::<InspectMode>().map(|r| r.0),
         nav_debug_visible: world.get_resource::<NavDebugVisible>().map(|r| r.0),
     }
 }
