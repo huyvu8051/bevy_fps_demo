@@ -288,7 +288,6 @@ pub(crate) fn autopilot_think(
     } else {
         want_fire
     };
-    // ADS halves move speed, so only pay that cost when the zombie is actually in sight
     intent.aim = straight_los
         && horizontal_distance <= AUTOPILOT_ENGAGE_RANGE + 1.0
         && horizontal_distance > AUTOPILOT_ADS_MIN_DISTANCE;

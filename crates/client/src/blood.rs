@@ -167,7 +167,6 @@ pub(crate) fn update_blood_particles(
         particle.velocity.y += BLOOD_PARTICLE_GRAVITY * dt;
         transform.translation += particle.velocity * dt;
 
-        // the quad normal is +Z, so aim it at the eye or the sprite is seen edge-on
         if let Some(eye) = eye {
             let to_eye = (eye - transform.translation).normalize_or_zero();
             if to_eye != Vec3::ZERO {
@@ -241,9 +240,8 @@ pub(crate) fn update_blood_bursts(
             continue;
         }
         let life = 1.0 - (burst.remaining / BLOOD_BURST_LIFETIME).clamp(0.0, 1.0);
-        // ease out: the splash snaps open on impact, then slows as it fades
-        let eased = 1.0 - (1.0 - life) * (1.0 - life);
-        transform.scale = Vec3::splat(BLOOD_BURST_START_SCALE + (BLOOD_BURST_END_SCALE - BLOOD_BURST_START_SCALE) * eased);
+        let eased_out = 1.0 - (1.0 - life) * (1.0 - life);
+        transform.scale = Vec3::splat(BLOOD_BURST_START_SCALE + (BLOOD_BURST_END_SCALE - BLOOD_BURST_START_SCALE) * eased_out);
 
         if let Some(eye) = eye {
             let to_eye = (eye - transform.translation).normalize_or_zero();
@@ -257,8 +255,6 @@ pub(crate) fn update_blood_bursts(
     }
 }
 
-/// Blood leaving the far side of the body: a tight cone along the bullet path,
-/// an exit burst a body-thickness downrange, and spatter on whatever is behind.
 fn spawn_exit_wound(
     commands: &mut Commands,
     blood_assets: &BloodAssets,

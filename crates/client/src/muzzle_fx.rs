@@ -8,11 +8,29 @@ const MUZZLE_SMOKE_SHADER: &str = "shaders/muzzle_smoke.wgsl";
 const MUZZLE_SMOKE_DENSITY: f32 = 4.7;
 const MUZZLE_SMOKE_BILLOW: f32 = 1.1;
 
+const MUZZLE_FLASH_SHADER: &str = "shaders/muzzle_flash.wgsl";
+const MUZZLE_FLASH_RAY_SCALE: f32 = 2.6;
+const MUZZLE_FLASH_CORE_SIZE: f32 = 0.32;
+
+const SHAPE_RADIAL_CORE: f32 = 0.0;
+const SHAPE_DIRECTIONAL_BLADE: f32 = 1.0;
+
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
 pub(crate) struct MuzzleSmokeMaterial {
-    /// x = life progress 0..1, y = per-puff seed, z = density, w = billow speed
     #[uniform(0)]
     settings: Vec4,
+}
+
+impl MuzzleSmokeMaterial {
+    fn new(seed: f32) -> Self {
+        Self {
+            settings: Vec4::new(0.0, seed, MUZZLE_SMOKE_DENSITY, MUZZLE_SMOKE_BILLOW),
+        }
+    }
+
+    fn set_life_progress(&mut self, progress: f32) {
+        self.settings.x = progress;
+    }
 }
 
 impl Material for MuzzleSmokeMaterial {
@@ -26,51 +44,42 @@ impl Material for MuzzleSmokeMaterial {
 }
 
 pub(crate) fn muzzle_smoke_material(seed: f32) -> MuzzleSmokeMaterial {
-    MuzzleSmokeMaterial {
-        settings: Vec4::new(0.0, seed, MUZZLE_SMOKE_DENSITY, MUZZLE_SMOKE_BILLOW),
-    }
+    MuzzleSmokeMaterial::new(seed)
 }
 
-/// Feeds each puff's own material its life progress, and keeps the quad facing
-/// the eye — the raymarch assumes the slab is perpendicular to the view.
-pub(crate) fn update_muzzle_smoke(
-    camera: Query<&GlobalTransform, With<FpsCamera>>,
-    mut materials: ResMut<Assets<MuzzleSmokeMaterial>>,
-    mut query: Query<(&mut Transform, &Smoke, &MeshMaterial3d<MuzzleSmokeMaterial>)>,
-) {
-    let eye = camera.single().ok().map(|global| global.translation());
-    for (mut transform, smoke, handle) in &mut query {
-        if let Some(mut material) = materials.get_mut(&handle.0) {
-            material.settings.x = 1.0 - (smoke.remaining / SMOKE_LIFETIME).clamp(0.0, 1.0);
-        }
-        if let Some(eye) = eye {
-            let to_eye = (eye - transform.translation).normalize_or_zero();
-            if to_eye != Vec3::ZERO {
-                transform.rotation = Quat::from_rotation_arc(Vec3::Z, to_eye);
-            }
-        }
-    }
-}
-
-const MUZZLE_FLASH_SHADER: &str = "shaders/muzzle_flash.wgsl";
-const MUZZLE_FLASH_RAY_SCALE: f32 = 2.6;
-const MUZZLE_FLASH_CORE_SIZE: f32 = 0.32;
-
-/// The tongue of flame along the bore. Its quad is locked to the barrel axis
-/// and only spun about it to face the eye, so it needs the axis kept around.
 #[derive(Component)]
 pub(crate) struct MuzzleBlade {
-    pub(crate) axis: Vec3,
+    pub(crate) bore_axis: Vec3,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
 pub(crate) struct MuzzleFlashMaterial {
-    /// x = life progress 0..1, y = seed, z = ray scale, w = core size
     #[uniform(0)]
     settings: Vec4,
-    /// x = 0 radial core / 1 directional blade, y = facing (CPU-side fresnel)
     #[uniform(1)]
     shape: Vec4,
+}
+
+impl MuzzleFlashMaterial {
+    fn new(seed: f32, shape_kind: f32) -> Self {
+        Self {
+            settings: Vec4::new(
+                0.0,
+                seed.fract(),
+                MUZZLE_FLASH_RAY_SCALE,
+                MUZZLE_FLASH_CORE_SIZE,
+            ),
+            shape: Vec4::new(shape_kind, 1.0, 0.0, 0.0),
+        }
+    }
+
+    fn set_life_progress(&mut self, progress: f32) {
+        self.settings.x = progress;
+    }
+
+    fn set_how_squarely_it_faces_the_eye(&mut self, facing: f32) {
+        self.shape.y = facing;
+    }
 }
 
 impl Material for MuzzleFlashMaterial {
@@ -84,52 +93,79 @@ impl Material for MuzzleFlashMaterial {
 }
 
 pub(crate) fn muzzle_flash_material(seed: f32) -> MuzzleFlashMaterial {
-    MuzzleFlashMaterial {
-        settings: Vec4::new(0.0, seed.fract(), MUZZLE_FLASH_RAY_SCALE, MUZZLE_FLASH_CORE_SIZE),
-        shape: Vec4::new(0.0, 1.0, 0.0, 0.0),
-    }
+    MuzzleFlashMaterial::new(seed, SHAPE_RADIAL_CORE)
 }
 
 pub(crate) fn muzzle_blade_material(seed: f32) -> MuzzleFlashMaterial {
-    MuzzleFlashMaterial {
-        settings: Vec4::new(0.0, seed.fract(), MUZZLE_FLASH_RAY_SCALE, MUZZLE_FLASH_CORE_SIZE),
-        shape: Vec4::new(1.0, 1.0, 0.0, 0.0),
+    MuzzleFlashMaterial::new(seed, SHAPE_DIRECTIONAL_BLADE)
+}
+
+fn elapsed_fraction_of(remaining: f32, lifetime: f32) -> f32 {
+    1.0 - (remaining / lifetime).clamp(0.0, 1.0)
+}
+
+fn component_perpendicular_to(vector: Vec3, axis: Vec3) -> Vec3 {
+    vector - axis * vector.dot(axis)
+}
+
+fn facing_the_eye(position: Vec3, eye: Vec3) -> Option<Vec3> {
+    let to_eye = (eye - position).normalize_or_zero();
+    (to_eye != Vec3::ZERO).then_some(to_eye)
+}
+
+pub(crate) fn update_muzzle_smoke(
+    camera: Query<&GlobalTransform, With<FpsCamera>>,
+    mut materials: ResMut<Assets<MuzzleSmokeMaterial>>,
+    mut query: Query<(&mut Transform, &Smoke, &MeshMaterial3d<MuzzleSmokeMaterial>)>,
+) {
+    let eye = camera.single().ok().map(|global| global.translation());
+    for (mut transform, smoke, handle) in &mut query {
+        if let Some(mut material) = materials.get_mut(&handle.0) {
+            material.set_life_progress(elapsed_fraction_of(smoke.remaining, SMOKE_LIFETIME));
+        }
+        let Some(eye) = eye else { continue };
+        if let Some(to_eye) = facing_the_eye(transform.translation, eye) {
+            transform.rotation = Quat::from_rotation_arc(Vec3::Z, to_eye);
+        }
     }
 }
 
-/// Drives each flash through its (very short) life, and orients it: the core
-/// quad faces the eye outright, the blade may only spin about the bore axis.
 pub(crate) fn update_muzzle_flash(
     camera: Query<&GlobalTransform, With<FpsCamera>>,
     mut materials: ResMut<Assets<MuzzleFlashMaterial>>,
-    mut query: Query<(&mut Transform, &MuzzleFlash, &MeshMaterial3d<MuzzleFlashMaterial>, Option<&MuzzleBlade>)>,
+    mut query: Query<(
+        &mut Transform,
+        &MuzzleFlash,
+        &MeshMaterial3d<MuzzleFlashMaterial>,
+        Option<&MuzzleBlade>,
+    )>,
 ) {
     let eye = camera.single().ok().map(|global| global.translation());
     for (mut transform, flash, handle, blade) in &mut query {
         let mut facing = 1.0;
         if let Some(eye) = eye {
-            let to_eye = (eye - transform.translation).normalize_or_zero();
-            match blade {
-                Some(blade) => {
-                    // strip the component along the bore: what is left is how much
-                    // of the quad we can ever turn toward the eye
-                    let normal = to_eye - blade.axis * to_eye.dot(blade.axis);
-                    facing = normal.length();
+            match (blade, facing_the_eye(transform.translation, eye)) {
+                (Some(blade), Some(to_eye)) => {
+                    let across_bore = component_perpendicular_to(to_eye, blade.bore_axis);
+                    facing = across_bore.length();
                     if facing > 1e-3 {
-                        let z = normal / facing;
-                        let y = blade.axis;
+                        let z = across_bore / facing;
+                        let y = blade.bore_axis;
                         transform.rotation = Quat::from_mat3(&Mat3::from_cols(y.cross(z), y, z));
                     }
                 }
-                None if to_eye != Vec3::ZERO => {
+                (None, Some(to_eye)) => {
                     transform.rotation = Quat::from_rotation_arc(Vec3::Z, to_eye);
                 }
-                None => {}
+                _ => {}
             }
         }
         if let Some(mut material) = materials.get_mut(&handle.0) {
-            material.settings.x = 1.0 - (flash.remaining / MUZZLE_FLASH_LIFETIME).clamp(0.0, 1.0);
-            material.shape.y = facing;
+            material.set_life_progress(elapsed_fraction_of(
+                flash.remaining,
+                MUZZLE_FLASH_LIFETIME,
+            ));
+            material.set_how_squarely_it_faces_the_eye(facing);
         }
     }
 }

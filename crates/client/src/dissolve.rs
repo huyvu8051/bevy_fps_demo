@@ -56,7 +56,6 @@ pub(crate) fn update_dissolve(
         }
 
         let elapsed = 1.0 - (dissolving.remaining / DISSOLVE_DURATION).clamp(0.0, 1.0);
-        // hold the corpse briefly so the kill reads, then sink and fade
         let progress = ((elapsed - DISSOLVE_HOLD_FRACTION) / (1.0 - DISSOLVE_HOLD_FRACTION)).clamp(0.0, 1.0);
 
         transform.translation.y = dissolving.start_y - progress * progress * DISSOLVE_SINK_DISTANCE;

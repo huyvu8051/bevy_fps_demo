@@ -410,9 +410,6 @@ pub(crate) fn sync_camera_to_player(
     let eye = player_transform.translation + Vec3::Y * eye_height_offset;
 
     let side_offset = *camera_transform.right() * LEAN_SIDE_OFFSET * lean.current;
-    // Debug pullback: slides the eye straight backwards so the viewmodel can be
-    // watched from outside. The gun and the body cancel it in their own local
-    // offsets, so everything stays put in the world and only the eye moves.
     let pullback = *camera_transform.back() * view_pullback();
     let kick_back = *camera_transform.back() * recoil.push_back;
     camera_transform.translation = eye + side_offset + pullback + kick_back;
@@ -562,12 +559,9 @@ pub(crate) fn shoot(
         + *camera_transform.up() * spread_y;
     let direction = Dir3::new(spread_dir).unwrap_or(camera_transform.forward());
 
-    // Hip rest is MUZZLE_OFFSET, unchanged. Add however far the gun has drifted
-    // from its own rest position and the muzzle follows the ADS pull, the bob,
-    // the recoil kick and the shoulder swap without re-deriving anything.
     let gun_drift = gun_transform.translation - gun.base_offset;
     let muzzle_world_pos = camera_transform.translation
-        + camera_transform.rotation * (MUZZLE_OFFSET + gun_drift);
+        + camera_transform.rotation * (MUZZLE_OFFSET_AT_REST + gun_drift);
 
     commands.spawn((
         Mesh3d(vfx_assets.muzzle_fx.flash_mesh.clone()),
@@ -617,17 +611,16 @@ pub(crate) fn shoot(
         ));
     }
 
-    // Not every shot throws a visible tongue of flame; letting it miss half the
-    // time is what keeps consecutive shots from looking stamped out.
-    let blade_roll = ops::sin(time.elapsed_secs() * 733.0).abs();
-    if blade_roll < MUZZLE_BLADE_CHANCE {
+    let shot_shows_flame_blade =
+        ops::sin(time.elapsed_secs() * 733.0).abs() < MUZZLE_BLADE_CHANCE;
+    if shot_shows_flame_blade {
         let half_length = FLASH_QUAD_SIZE * MUZZLE_BLADE_LENGTH * 0.5;
         commands.spawn((
             Mesh3d(vfx_assets.muzzle_fx.flash_mesh.clone()),
             MeshMaterial3d(flash_materials.add(muzzle_blade_material(time.elapsed_secs() * 283.0))),
             Transform::from_translation(muzzle_world_pos + forward * half_length)
                 .with_scale(Vec3::new(MUZZLE_BLADE_WIDTH, MUZZLE_BLADE_LENGTH, 1.0)),
-            MuzzleBlade { axis: forward },
+            MuzzleBlade { bore_axis: forward },
             MuzzleFlash {
                 remaining: MUZZLE_FLASH_LIFETIME,
             },

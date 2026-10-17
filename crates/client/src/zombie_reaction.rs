@@ -79,7 +79,6 @@ pub(crate) fn spawn_bone_flinch(
     }
 
     let head_hit = Some(hit_bone) == bones.head;
-    // a kill skips the flinch entirely, so scale against the heaviest survivable hit, not max health
     let base = FLINCH_MAX_ANGLE_DEG.to_radians() * (damage / shared::CHEST_DAMAGE).clamp(0.4, 1.0);
 
     for (index, bone) in chain.into_iter().enumerate() {

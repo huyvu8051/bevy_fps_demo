@@ -115,13 +115,8 @@ use settings_persistence::*;
 mod splash_screen;
 use splash_screen::*;
 
-// Placed where a 0.452m arm can actually hold it, not purely for composition:
-// at x 0.22 the sideways gap from the left shoulder alone was 0.42m, eating the
-// whole reach before the hand moved forward at all.
 const GUN_OFFSET: Vec3 = Vec3::new(0.22, -0.28, -0.56);
 
-/// Metres to slide the eye backwards for debugging, cancelled by the gun and the
-/// body so only the viewpoint moves. Zero in normal play.
 pub(crate) fn view_pullback() -> f32 {
     std::env::var("VIEW_PULLBACK").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0)
 }
@@ -162,23 +157,10 @@ const RELOAD_TILT_DEG: f32 = 25.0;
 
 const RELOAD_LEFT_DIP: f32 = 0.12;
 
-// Tracks GUN_OFFSET: the muzzle is a fixed point on the mesh, so it has to
-// move by the same delta or the flash floats off the end of the barrel.
-/// The muzzle at rest, in camera space — the value that has always looked
-/// right while hip firing, left exactly as it was.
-///
-/// It is NOT re-derived from the mesh. Converting it into gun-local units puts
-/// it at y 275 where the mesh is 45 wide, so something about how that model is
-/// turned is not what it appears, and guessing at it broke the hip case that
-/// used to work. What the gun does instead is carry the muzzle by however far
-/// it has moved from rest, which is what ADS needed and costs no assumption.
-const MUZZLE_OFFSET: Vec3 = Vec3::new(0.2, -0.005, -1.11);
+const MUZZLE_OFFSET_AT_REST: Vec3 = Vec3::new(0.2, -0.005, -1.11);
 
 const MUZZLE_FLASH_LIFETIME: f32 = 0.05;
 const FLASH_QUAD_SIZE: f32 = 0.32;
-// Deliberately below the wall-impact burst (4-9 sparks at 0.02, speed 3.0):
-// fewer, smaller, and thrown clear far faster, so the muzzle reads as a couple
-// of specks snapping away rather than a shower dribbling out.
 const MUZZLE_EMBER_COUNT: usize = 3;
 const MUZZLE_EMBER_SIZE: f32 = 0.009;
 const MUZZLE_EMBER_SPEED: f32 = 12.0;
@@ -730,15 +712,6 @@ impl Plugin for GamePlugin {
             .run_if(in_state(AppState::InGame)),
     );
 
-    // Grip IK runs AFTER propagation, unlike the pose above. The solver works
-    // entirely through GlobalTransform — target, chain and pole are all read as
-    // world positions — and every one of those entities hangs off the camera.
-    // Run it before propagation and it solves against last frame camera
-    // orientation, then propagation applies the result to this frame one, so
-    // the hands land wrong by an amount proportional to how fast the view is
-    // turning. It writes GlobalTransform back for the chain itself, which is
-    // what lets it run this late, but only for the bones it rotates, which is why
-    // propagate_constrained_bones has to refresh the hand itself.
     app.add_systems(
         PostUpdate,
         (

@@ -413,12 +413,9 @@ pub(crate) fn wire_player_model_scene_nodes(
                     continue;
                 };
                 let Ok(mut bones) = roots.get_mut(root) else { continue };
-                // Capture the bind rotation here, not later: this function is what
-                // attaches the AnimationPlayer, so nothing has posed the bone yet.
                 if let Ok(transform) = transforms.get(entity) {
                     commands.entity(entity).try_insert(BoneRest(transform.rotation));
                 }
-                // this rig carries Mixamo bone names without the mixamorig: prefix
                 match name.as_str() {
                     "LeftUpLeg" => bones.left_upper_leg = Some(entity),
                     "RightUpLeg" => bones.right_upper_leg = Some(entity),
@@ -476,11 +473,8 @@ pub(crate) fn wire_player_model_animations(
         let Some(root) = find_animation_root(player_entity, &child_of, |e| roots.contains(e)) else {
             continue;
         };
-        // The viewmodel body needs the root marker so its bones get wired, but
-        // not the clip: a walk cycle rewriting the arms every frame fights the
-        // grip IK, which showed up as the arm span jittering between 0.18 and
-        // 0.41m instead of settling.
-        if viewmodel.contains(root) {
+        let grip_ik_owns_these_arms = viewmodel.contains(root);
+        if grip_ik_owns_these_arms {
             continue;
         }
         commands

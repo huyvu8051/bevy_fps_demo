@@ -56,11 +56,10 @@ pub(crate) fn format_character_ron(c: &CharacterRon) -> String {
          // \"Scale and origin\" section for why this can't just trust the mesh's native\n\
          // scale/pivot.\n\
          //\n\
-         // scale/y_offset/facing_deg are F9-tunable (EDITOR=1): third-person (KeyU),\n\
-         // Comma/Period nudges scale, Minus/Equal nudges y_offset — see\n\
-         // nudge_player_model_tuning/save_player_model_tuning\n\
-         // (crates/client/src/movement_combat.rs). `animations` isn't nudge-able,\n\
-         // only hand-edited.\n\
+         // scale and y_offset are F9-tunable (EDITOR=1): Comma/Period nudges\n\
+         // scale, Minus/Equal nudges y_offset — see nudge_player_model_tuning\n\
+         // and save_player_model_tuning (crates/client/src/movement_combat.rs).\n\
+         // animations and facing_deg are hand-edited only.\n\
          (\n\
          \u{20}   id: \"{id}\",\n\
          \u{20}   display_name: \"{display_name}\",\n\

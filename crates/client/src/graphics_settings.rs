@@ -182,10 +182,6 @@ pub(crate) fn ambient_brightness() -> f32 {
     if dynamic_lights_enabled() { 250.0 } else { 1800.0 }
 }
 
-/// glTF leaves metallicFactor at its spec default of 1.0 when an exporter omits
-/// it, which makes every surface a mirror with no diffuse term — unlit by the
-/// sun and incapable of showing a shadow. Demote those on import; materials
-/// built in code already default to 0.0 and are left alone.
 const SHADOW_CASTER_SIZE_LIMIT: f32 = 60.0;
 
 pub(crate) fn demote_fully_metallic_imports(
@@ -205,11 +201,6 @@ pub(crate) fn demote_fully_metallic_imports(
     }
 }
 
-/// Bevy fits the directional light's shadow depth range around every shadow
-/// caster in the scene. The maps ship a skybox-sized shell — the desert spans
-/// 1349 units across — which stretches that range a thousandfold and destroys
-/// the shadow map's depth precision, so nothing casts a visible shadow at all.
-/// Backdrop geometry that large has no business casting shadows anyway.
 pub(crate) fn exclude_oversized_shadow_casters(
     mut commands: Commands,
     meshes: Query<(Entity, &Aabb), (With<Mesh3d>, Without<NotShadowCaster>)>,

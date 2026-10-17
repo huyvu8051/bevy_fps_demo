@@ -416,7 +416,6 @@ pub(crate) fn despawn_bullet_tracers(
 pub(crate) fn update_smoke(mut commands: Commands, time: Res<Time>, mut query: Query<(Entity, &mut Transform, &mut Smoke)>) {
     let dt = time.delta_secs();
     for (entity, mut transform, mut smoke) in &mut query {
-        // the muzzle push bleeds off fast, then it is only buoyancy
         smoke.velocity *= ops::exp(-SMOKE_DRAG * dt);
         smoke.velocity.y += SMOKE_BUOYANCY * dt;
         transform.translation += smoke.velocity * dt;
@@ -428,8 +427,6 @@ pub(crate) fn update_smoke(mut commands: Commands, time: Res<Time>, mut query: Q
         }
     }
 
-    // At 10 shots/sec a 1.9s puff life stacks 19 raymarched quads over the same
-    // pixels. Retire the oldest instead of paying for all of them.
     let live = query.iter().count();
     if live > SMOKE_MAX_PUFFS {
         let mut by_age: Vec<(Entity, f32)> = query.iter().map(|(entity, _, smoke)| (entity, smoke.remaining)).collect();
