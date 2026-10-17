@@ -9,7 +9,6 @@ pub(crate) struct BoneRest(pub(crate) Quat);
 pub(crate) struct ViewmodelBody;
 
 const BODY_OFFSET_FROM_EYE: Vec3 = Vec3::new(0.0, -1.471, 0.0);
-const BODY_YAW_DEG: f32 = 0.0;
 
 const HEAD_COLLAPSE_SCALE: f32 = 0.0001;
 const ARM_SCALE: f32 = 2.07;
@@ -39,7 +38,7 @@ pub(crate) fn spawn_viewmodel_body(
         Name::new("ViewmodelBody (first-person, headless)"),
         WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(tuning.mesh.clone()))),
         Transform::from_translation(BODY_OFFSET_FROM_EYE - Vec3::Z * view_pullback())
-            .with_rotation(Quat::from_rotation_y(BODY_YAW_DEG.to_radians()))
+            .with_rotation(Quat::from_rotation_y(tuning.facing_deg.to_radians()))
             .with_scale(Vec3::splat(tuning.scale)),
         ViewmodelBody,
         PlayerModelAnimRoot,

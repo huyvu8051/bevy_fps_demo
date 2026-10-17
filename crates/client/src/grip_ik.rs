@@ -31,7 +31,7 @@ pub(crate) struct RightPoleTarget;
 pub(crate) struct LeftPoleTarget;
 
 fn grip_markers_enabled() -> bool {
-    std::env::var("GRIP_MARKERS").map(|value| value != "0").unwrap_or(true)
+    std::env::var("GRIP_MARKERS").map(|value| value == "1").unwrap_or(false)
 }
 
 fn grip_test_targets_enabled() -> bool {

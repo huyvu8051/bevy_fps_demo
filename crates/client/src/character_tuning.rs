@@ -59,7 +59,9 @@ pub(crate) fn format_character_ron(c: &CharacterRon) -> String {
          // scale and y_offset are F9-tunable (EDITOR=1): Comma/Period nudges\n\
          // scale, Minus/Equal nudges y_offset — see nudge_player_model_tuning\n\
          // and save_player_model_tuning (crates/client/src/movement_combat.rs).\n\
-         // animations and facing_deg are hand-edited only.\n\
+         // animations and facing_deg are hand-edited only. facing_deg turns the\n\
+         // model to face the way the camera looks, so a model authored facing\n\
+         // the other way is corrected here rather than in code.\n\
          (\n\
          \u{20}   id: \"{id}\",\n\
          \u{20}   display_name: \"{display_name}\",\n\
