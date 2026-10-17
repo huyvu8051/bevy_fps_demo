@@ -164,6 +164,14 @@ const RELOAD_LEFT_DIP: f32 = 0.12;
 
 // Tracks GUN_OFFSET: the muzzle is a fixed point on the mesh, so it has to
 // move by the same delta or the flash floats off the end of the barrel.
+/// The muzzle at rest, in camera space — the value that has always looked
+/// right while hip firing, left exactly as it was.
+///
+/// It is NOT re-derived from the mesh. Converting it into gun-local units puts
+/// it at y 275 where the mesh is 45 wide, so something about how that model is
+/// turned is not what it appears, and guessing at it broke the hip case that
+/// used to work. What the gun does instead is carry the muzzle by however far
+/// it has moved from rest, which is what ADS needed and costs no assumption.
 const MUZZLE_OFFSET: Vec3 = Vec3::new(0.2, -0.005, -1.11);
 
 const MUZZLE_FLASH_LIFETIME: f32 = 0.05;

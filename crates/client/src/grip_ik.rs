@@ -148,6 +148,7 @@ pub(crate) fn spawn_grip_sockets(
     info!("[grip] sockets under {parent:?} (test_targets={testing}, markers={})", grip_markers_enabled());
 }
 
+
 pub(crate) fn spawn_pole_targets(mut commands: Commands) {
     commands.spawn((Name::new("RightPoleTarget"), Transform::default(), RightPoleTarget));
     commands.spawn((Name::new("LeftPoleTarget"), Transform::default(), LeftPoleTarget));

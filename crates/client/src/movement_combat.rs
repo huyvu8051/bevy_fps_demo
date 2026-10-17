@@ -477,7 +477,7 @@ pub(crate) fn shoot(
     touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut camera: Query<(&Transform, &mut ViewRecoil), With<FpsCamera>>,
-    mut gun: Query<&mut Gun>,
+    mut gun: Query<(&mut Gun, &Transform), Without<FpsCamera>>,
     mut vfx_assets: VfxAssets,
     zombies: Query<(Entity, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
@@ -514,7 +514,7 @@ pub(crate) fn shoot(
     if !firing || *cooldown > 0.0 {
         return;
     }
-    let Ok(mut gun) = gun.single_mut() else {
+    let Ok((mut gun, gun_transform)) = gun.single_mut() else {
         return;
     };
 
@@ -558,14 +558,12 @@ pub(crate) fn shoot(
         + *camera_transform.up() * spread_y;
     let direction = Dir3::new(spread_dir).unwrap_or(camera_transform.forward());
 
-    let swapped_muzzle_offset = Vec3::new(
-        MUZZLE_OFFSET.x * (1.0 - 2.0 * gun.shoulder_blend),
-        MUZZLE_OFFSET.y,
-        MUZZLE_OFFSET.z,
-    );
-
-    let muzzle_world_pos =
-        camera_transform.translation + camera_transform.rotation * swapped_muzzle_offset;
+    // Hip rest is MUZZLE_OFFSET, unchanged. Add however far the gun has drifted
+    // from its own rest position and the muzzle follows the ADS pull, the bob,
+    // the recoil kick and the shoulder swap without re-deriving anything.
+    let gun_drift = gun_transform.translation - gun.base_offset;
+    let muzzle_world_pos = camera_transform.translation
+        + camera_transform.rotation * (MUZZLE_OFFSET + gun_drift);
 
     commands.spawn((
         Mesh3d(vfx_assets.muzzle_fx.flash_mesh.clone()),
