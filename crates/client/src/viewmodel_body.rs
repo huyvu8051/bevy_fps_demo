@@ -25,7 +25,7 @@ pub(crate) struct ViewmodelBody;
 /// the rifle sits at +0.12, putting the trigger hand on the far side of the
 /// body. That costs 0.547m of reach against a 0.452m arm. Unturned, the same
 /// shoulder lands at +0.17 and the distance falls to 0.466m.
-const BODY_OFFSET: Vec3 = Vec3::new(0.0, -1.41, 0.0);
+const BODY_OFFSET: Vec3 = Vec3::new(0.0, -1.471, 0.0);
 const BODY_YAW_DEG: f32 = 0.0;
 
 /// The mesh is a single skinned primitive, so there is no submesh to hide. The
@@ -41,11 +41,11 @@ const HEAD_COLLAPSE_SCALE: f32 = 0.0001;
 ///
 /// Scaling the upper arm carries the whole chain, since the forearm hangs off
 /// it at a scaled offset and inherits the scale itself.
-const ARM_SCALE: f32 = 1.76;
+const ARM_SCALE: f32 = 2.07;
 
 /// Turn of the hips, degrees. Negative swings the left shoulder forward, which
 /// is the one that has to cross the body to the handguard.
-const HIP_BLADE_DEG: f32 = -45.0;
+const HIP_BLADE_DEG: f32 = -30.0;
 
 /// Cancels ARM_SCALE on the hands so they stay life-sized. Only the arms
 /// should look stretched; oversized hands read as a bug immediately.

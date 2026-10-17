@@ -6,11 +6,20 @@ use crate::*;
 /// no bend plane left, so the elbow is free to flip anywhere.
 const MAX_EXTENSION: f32 = 0.995;
 
-/// Where the hands grab, as metres from the gun's own origin, measured the way
-/// GUN_OFFSET and MUZZLE_OFFSET are: -Z points down the barrel. Converted into
-/// the gun's local space on spawn, which is why GUN_SCALE shows up there.
-const TRIGGER_GRIP_FROM_GUN: Vec3 = Vec3::new(0.0, 0.015, 0.06);
-const FORE_GRIP_FROM_GUN: Vec3 = Vec3::new(0.0, 0.02, -0.14);
+/// Where the hands grab, in the gun mesh own coordinates — which is exactly
+/// what a socket parented to the gun lives in, so nothing has to be converted
+/// and no assumption about which way the model is turned can go wrong.
+///
+/// Read off the mesh bounds: X runs -671 at the muzzle to +299 at the butt,
+/// Y is the 86-unit width, Z is height from -117 at the magazine floor to +269
+/// at the top of the optic. Material_38 sits at z 178..253, forward of centre
+/// and highest of anything on the gun, which is what identifies it as the
+/// scope and settles which axis is up.
+///
+/// Pistol grip: behind the magazine well, under the receiver.
+const TRIGGER_GRIP_MESH: Vec3 = Vec3::new(160.0, 80.0, -130.0);
+/// Wooden handguard: ahead of the magazine, under the barrel line.
+const FORE_GRIP_MESH: Vec3 = Vec3::new(-50.0, 160.0, 100.0);
 
 /// Pole targets steer which way the elbows break. Values carried over from the
 /// grip_ik tuning in project-alpha, where they were dialled in by eye.
@@ -35,6 +44,14 @@ pub(crate) struct LeftPoleTarget;
 /// Visible while the grip is being dialled in: without them the socket is an
 /// invisible point and the only feedback is a distance in the log.
 const GRIP_MARKER_RADIUS: f32 = 0.022;
+
+/// Axis gizmo on each socket, in gun mesh units so the arrows read in the same
+/// numbers the grip constants are written in. Red/green/blue = +X/+Y/+Z, the
+/// usual convention, and deliberately not the red/green of the two socket
+/// spheres: those are round and mark which hand, these are long and mark which
+/// way the numbers move.
+const AXIS_LENGTH: f32 = 150.0;
+const AXIS_THICKNESS: f32 = 8.0;
 
 fn grip_markers_enabled() -> bool {
     std::env::var("GRIP_MARKERS").map(|value| value != "0").unwrap_or(true)
@@ -69,10 +86,7 @@ pub(crate) fn spawn_grip_sockets(
     let Ok(parent) = (if testing { camera.single() } else { gun.single() }) else {
         return;
     };
-    let to_gun_local = Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians()).inverse();
-    let local = |offset: Vec3| {
-        Transform::from_translation(if testing { offset } else { to_gun_local * offset / GUN_SCALE })
-    };
+    let local = Transform::from_translation;
     let marker_scale = if testing { 1.0 } else { 1.0 / GUN_SCALE };
     let (trigger_at, fore_at) = if testing {
         // These hang off the camera, so a debug pullback drags them backwards
@@ -81,7 +95,7 @@ pub(crate) fn spawn_grip_sockets(
         let fix = Vec3::Z * view_pullback();
         (TEST_TARGET_RIGHT - fix, TEST_TARGET_LEFT - fix)
     } else {
-        (TRIGGER_GRIP_FROM_GUN, FORE_GRIP_FROM_GUN)
+        (TRIGGER_GRIP_MESH, FORE_GRIP_MESH)
     };
 
     let markers = grip_markers_enabled().then(|| {
@@ -114,6 +128,7 @@ pub(crate) fn spawn_grip_sockets(
     if let Some((mesh, red, _)) = &markers {
         trigger.insert((Mesh3d(mesh.clone()), MeshMaterial3d(red.clone()), RenderLayers::layer(VIEWMODEL_LAYER)));
     }
+    let trigger_entity = trigger.id();
 
     let mut fore = commands.spawn((
         Name::new("ForeGripSocket"),
@@ -123,6 +138,12 @@ pub(crate) fn spawn_grip_sockets(
     ));
     if let Some((mesh, _, green)) = &markers {
         fore.insert((Mesh3d(mesh.clone()), MeshMaterial3d(green.clone()), RenderLayers::layer(VIEWMODEL_LAYER)));
+    }
+    let fore_entity = fore.id();
+
+    if markers.is_some() {
+        spawn_axis_gizmo(&mut commands, &mut meshes, &mut materials, trigger_entity);
+        spawn_axis_gizmo(&mut commands, &mut meshes, &mut materials, fore_entity);
     }
     info!("[grip] sockets under {parent:?} (test_targets={testing}, markers={})", grip_markers_enabled());
 }
@@ -330,5 +351,40 @@ pub(crate) fn solve_grip_ik(
             right.map(|d| format!("{d:.4}m")),
             left.map(|d| format!("{d:.4}m")),
         );
+    }
+}
+
+
+/// Hangs a red/green/blue axis cross off a socket so the grip constants can be
+/// nudged by eye: each bar shows which way that component of the Vec3 grows.
+fn spawn_axis_gizmo(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    parent: Entity,
+) {
+    let bar = meshes.add(Cuboid::new(AXIS_THICKNESS, AXIS_THICKNESS, AXIS_LENGTH));
+    let half = AXIS_LENGTH * 0.5;
+    let axes = [
+        ("+X", Vec3::X * half, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), LinearRgba::rgb(8.0, 0.2, 0.2)),
+        ("+Y", Vec3::Y * half, Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), LinearRgba::rgb(0.2, 8.0, 0.2)),
+        ("+Z", Vec3::Z * half, Quat::IDENTITY, LinearRgba::rgb(0.3, 0.4, 9.0)),
+    ];
+    for (name, offset, rotation, glow) in axes {
+        let material = materials.add(StandardMaterial {
+            base_color: Color::linear_rgb(glow.red.min(1.0), glow.green.min(1.0), glow.blue.min(1.0)),
+            emissive: glow,
+            unlit: true,
+            depth_bias: 1000.0,
+            ..default()
+        });
+        commands.spawn((
+            Name::new(format!("GripAxis {name}")),
+            Mesh3d(bar.clone()),
+            MeshMaterial3d(material),
+            Transform::from_translation(offset).with_rotation(rotation),
+            RenderLayers::layer(VIEWMODEL_LAYER),
+            ChildOf(parent),
+        ));
     }
 }
