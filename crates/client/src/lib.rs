@@ -65,9 +65,13 @@ mod map;
 mod screen_effects;
 use screen_effects::*;
 
+mod grip_ik;
 mod muzzle_fx;
+mod viewmodel_body;
 mod scope_lens;
+use grip_ik::*;
 use muzzle_fx::*;
+use viewmodel_body::*;
 use scope_lens::*;
 
 mod dissolve;
@@ -111,7 +115,16 @@ use settings_persistence::*;
 mod splash_screen;
 use splash_screen::*;
 
-const GUN_OFFSET: Vec3 = Vec3::new(0.22, -0.28, -0.65);
+// Placed where a 0.452m arm can actually hold it, not purely for composition:
+// at x 0.22 the sideways gap from the left shoulder alone was 0.42m, eating the
+// whole reach before the hand moved forward at all.
+const GUN_OFFSET: Vec3 = Vec3::new(0.04, -0.33, -0.38);
+
+/// Metres to slide the eye backwards for debugging, cancelled by the gun and the
+/// body so only the viewpoint moves. Zero in normal play.
+pub(crate) fn view_pullback() -> f32 {
+    std::env::var("VIEW_PULLBACK").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0)
+}
 
 const GUN_ADS_OFFSET: Vec3 = Vec3::new(0.0, -0.307, -0.35);
 const GUN_ADS_SPEED: f32 = 10.0;
@@ -149,7 +162,9 @@ const RELOAD_TILT_DEG: f32 = 25.0;
 
 const RELOAD_LEFT_DIP: f32 = 0.12;
 
-const MUZZLE_OFFSET: Vec3 = Vec3::new(0.2, -0.005, -1.2);
+// Tracks GUN_OFFSET: the muzzle is a fixed point on the mesh, so it has to
+// move by the same delta or the flash floats off the end of the barrel.
+const MUZZLE_OFFSET: Vec3 = Vec3::new(0.02, -0.055, -0.93);
 
 const MUZZLE_FLASH_LIFETIME: f32 = 0.05;
 const FLASH_QUAD_SIZE: f32 = 0.32;
@@ -331,15 +346,6 @@ const EYE_HEIGHT_OFFSET: f32 = 0.65;
 const CROUCH_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.55;
 const PRONE_EYE_HEIGHT_OFFSET: f32 = EYE_HEIGHT_OFFSET * 0.15;
 
-const THIRD_PERSON_DISTANCE: f32 = 2.6;
-const THIRD_PERSON_HEIGHT_OFFSET: f32 = 0.35;
-const THIRD_PERSON_COLLISION_MARGIN: f32 = 0.3;
-
-const THIRD_PERSON_SIDE_OFFSET: f32 = 0.9;
-const THIRD_PERSON_SHOULDER_BIAS: f32 = 0.4;
-
-const THIRD_PERSON_LOOK_AHEAD_DISTANCE: f32 = 8.0;
-
 const HIT_MARKER_LIFETIME: f32 = 3.0;
 
 const PLAYER_MAX_HEALTH: f32 = 100.0;
@@ -505,8 +511,6 @@ impl Plugin for GamePlugin {
         .init_resource::<PerfTimings>()
         .init_resource::<ZombieAnimDisabled>()
         .init_resource::<ZombieHealthBarsHidden>()
-        .init_resource::<PlayerModelVisible>()
-        .init_resource::<CameraMode>()
         .init_resource::<PlayerModelTuning>()
         .init_resource::<GunVisible>()
         .init_resource::<MapMsaaOn>()
@@ -535,6 +539,7 @@ impl Plugin for GamePlugin {
         .init_resource::<MapSelectionPending>()
         .init_resource::<RecentlyHitZombies>()
         .add_systems(Startup, (apply_persisted_settings, setup_common, force_game_over_on_start).chain())
+        .add_systems(Startup, spawn_pole_targets)
         .add_systems(OnEnter(AppState::Menu), enter_menu)
         .add_systems(OnExit(AppState::Menu), exit_menu)
         .add_systems(OnEnter(AppState::InGame), setup_gameplay);
@@ -631,17 +636,11 @@ impl Plugin for GamePlugin {
                     apply_aim_dof,
                     send_player_input.run_if(map::world_ready),
                     sync_camera_to_player,
-                    sync_player_model,
                     zombies_damage_player,
                 )
                     .chain(),
 
-                (
-                    count_local_kills,
-                    toggle_camera_mode,
-                    sync_third_person_camera,
-                )
-                    .chain(),
+                (count_local_kills,).chain(),
             )
                 .chain()
                 .run_if(in_state(AppState::InGame)),
@@ -660,6 +659,8 @@ impl Plugin for GamePlugin {
 
                 (
                     wire_player_model_scene_nodes,
+                    (spawn_viewmodel_body, wire_viewmodel_body_meshes),
+                    spawn_grip_sockets,
                     wire_player_model_animations,
                     update_local_player_model_animation,
                     apply_player_model_pose_override,
@@ -708,9 +709,35 @@ impl Plugin for GamePlugin {
 
     app.add_systems(
         PostUpdate,
-        (apply_player_model_travel_twist, aim_zombie_heads, apply_bone_flinch)
+        (
+            pose_viewmodel_arms,
+            collapse_viewmodel_head,
+            aim_zombie_heads,
+            apply_bone_flinch,
+        )
             .after(AnimationSystems)
             .before(TransformSystems::Propagate)
+            .run_if(in_state(AppState::InGame)),
+    );
+
+    // Grip IK runs AFTER propagation, unlike the pose above. The solver works
+    // entirely through GlobalTransform — target, chain and pole are all read as
+    // world positions — and every one of those entities hangs off the camera.
+    // Run it before propagation and it solves against last frame camera
+    // orientation, then propagation applies the result to this frame one, so
+    // the hands land wrong by an amount proportional to how fast the view is
+    // turning. It writes GlobalTransform back for the chain itself, which is
+    // what lets it run this late, but only for the bones it rotates, which is why
+    // propagate_constrained_bones has to refresh the hand itself.
+    app.add_systems(
+        PostUpdate,
+        (
+            update_pole_targets,
+            solve_grip_ik,
+        )
+            .chain()
+            .after(TransformSystems::Propagate)
+            .run_if(grip_ik_enabled)
             .run_if(in_state(AppState::InGame)),
     );
     }

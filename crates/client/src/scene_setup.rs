@@ -164,7 +164,6 @@ pub(crate) fn setup_gameplay(
     mut overlay_materials: ResMut<Assets<DamageOverlayMaterial>>,
     mut scope_lens_materials: ResMut<Assets<ScopeLensMaterial>>,
     touch_enabled: Res<TouchControlsEnabled>,
-    player_model_tuning: Res<PlayerModelTuning>,
     scene_target: Option<Res<SceneRenderTarget>>,
     mut pending: ResMut<MapSelectionPending>,
 ) {
@@ -203,16 +202,6 @@ pub(crate) fn setup_gameplay(
         Health(PLAYER_MAX_HEALTH),
         PlayerStance::default(),
         crate::sim::PlayerThreat::default(),
-    ));
-
-    commands.spawn((
-        Name::new("PlayerModel (local, debug — KeyT/CameraMode)"),
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(player_model_tuning.mesh.clone()))),
-        Transform::from_translation(player_spawn).with_scale(Vec3::splat(player_model_tuning.scale)),
-        Visibility::Hidden,
-        PlayerModel,
-        PlayerModelAnimRoot,
-        PlayerModelSkeletonBones::default(),
     ));
 
     let (review_yaw, review_pitch) = review_yaw_pitch();
@@ -266,23 +255,6 @@ pub(crate) fn setup_gameplay(
         ))
         .id();
     spawn_gun_mesh_parts(&mut commands, &asset_server, &mut materials, gun_entity);
-
-    commands.spawn((
-        Name::new("ThirdPersonCamera (KeyU, inactive until CameraMode::ThirdPerson)"),
-        Camera3d::default(),
-        Camera {
-            is_active: false,
-            ..default()
-        },
-        Projection::Perspective(PerspectiveProjection {
-            fov: BASE_FOV,
-            ..default()
-        }),
-        Transform::from_translation(player_spawn + Vec3::Y * EYE_HEIGHT_OFFSET),
-        ThirdPersonCamera,
-        RenderLayers::from_layers(&[WORLD_LAYER]),
-        RenderTarget::from(scene_target.0.clone()),
-    ));
 
     let scope_size = Extent3d {
         width: SCOPE_TEXTURE_SIZE,

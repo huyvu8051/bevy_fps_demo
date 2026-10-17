@@ -414,7 +414,6 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     .with_children(|row| {
                         spawn_cheat_toggle_button(row, "Hitboxes", CheatHitboxesButton);
                         spawn_cheat_toggle_button(row, "AimBlur", CheatAimBlurButton);
-                        spawn_cheat_toggle_button(row, "PlayerMdl", CheatPlayerModelButton);
                     });
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
@@ -689,8 +688,6 @@ pub(crate) struct CheatZombieAnimButton;
 #[derive(Component)]
 pub(crate) struct CheatZombieHealthBarsButton;
 #[derive(Component)]
-pub(crate) struct CheatPlayerModelButton;
-#[derive(Component)]
 pub(crate) struct CheatDofAltButton;
 
 #[derive(Component)]
@@ -806,12 +803,10 @@ pub(crate) fn cheat_toggle_buttons_2(
     mut aim_blur: ResMut<AimBlurEnabled>,
     mut zombie_anim: ResMut<ZombieAnimDisabled>,
     mut zombie_health_bars: ResMut<ZombieHealthBarsHidden>,
-    mut player_model: ResMut<PlayerModelVisible>,
     hitboxes_btn: Query<&Interaction, (With<CheatHitboxesButton>, Changed<Interaction>)>,
     aim_blur_btn: Query<&Interaction, (With<CheatAimBlurButton>, Changed<Interaction>)>,
     zombie_anim_btn: Query<&Interaction, (With<CheatZombieAnimButton>, Changed<Interaction>)>,
     zombie_health_bars_btn: Query<&Interaction, (With<CheatZombieHealthBarsButton>, Changed<Interaction>)>,
-    player_model_btn: Query<&Interaction, (With<CheatPlayerModelButton>, Changed<Interaction>)>,
 ) {
     if tapped(&hitboxes_btn) {
         show_hitboxes.0 = !show_hitboxes.0;
@@ -824,9 +819,6 @@ pub(crate) fn cheat_toggle_buttons_2(
     }
     if tapped(&zombie_health_bars_btn) {
         zombie_health_bars.0 = !zombie_health_bars.0;
-    }
-    if tapped(&player_model_btn) {
-        player_model.0 = !player_model.0;
     }
 }
 
@@ -884,7 +876,6 @@ pub(crate) fn update_cheat_toggle_colors(
     aim_blur: Res<AimBlurEnabled>,
     zombie_anim: Res<ZombieAnimDisabled>,
     zombie_health_bars: Res<ZombieHealthBarsHidden>,
-    player_model: Res<PlayerModelVisible>,
     gun_visible: Res<GunVisible>,
     map_msaa: Res<MapMsaaOn>,
     mut buttons: Query<
@@ -897,7 +888,6 @@ pub(crate) fn update_cheat_toggle_colors(
             Option<&CheatAimBlurButton>,
             Option<&CheatZombieAnimButton>,
             Option<&CheatZombieHealthBarsButton>,
-            Option<&CheatPlayerModelButton>,
             Option<&CheatGunButton>,
             Option<&CheatMsaaButton>,
         ),
@@ -909,14 +899,13 @@ pub(crate) fn update_cheat_toggle_colors(
             With<CheatAimBlurButton>,
             With<CheatZombieAnimButton>,
             With<CheatZombieHealthBarsButton>,
-            With<CheatPlayerModelButton>,
             With<CheatGunButton>,
             With<CheatMsaaButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, player_model_m, gun_m, msaa_m) in
+    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, gun_m, msaa_m) in
         &mut buttons
     {
         let on = if noclip_m.is_some() {
@@ -933,8 +922,6 @@ pub(crate) fn update_cheat_toggle_colors(
             zombie_anim.0
         } else if zombie_hp_m.is_some() {
             zombie_health_bars.0
-        } else if player_model_m.is_some() {
-            player_model.0
         } else if gun_m.is_some() {
             gun_visible.0
         } else {

@@ -8,16 +8,6 @@ pub(crate) struct FpsCamera {
     pub(crate) pitch: f32,
 }
 
-#[derive(Resource, Default, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum CameraMode {
-    #[default]
-    FirstPerson,
-    ThirdPerson,
-}
-
-#[derive(Component)]
-pub(crate) struct ThirdPersonCamera;
-
 pub(crate) fn is_aiming(cursor: &CursorOptions, mouse: &ButtonInput<MouseButton>, touch_aiming: bool) -> bool {
     (cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Right)) || touch_aiming
 }
@@ -290,69 +280,7 @@ pub(crate) fn toggle_noclip(keys: Res<ButtonInput<KeyCode>>, mut noclip: ResMut<
     }
 }
 
-pub(crate) fn toggle_camera_mode(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut mode: ResMut<CameraMode>,
-    mut player_model_visible: ResMut<PlayerModelVisible>,
-    mut fps_camera: Query<&mut Camera, (With<FpsCamera>, Without<ThirdPersonCamera>)>,
-    mut third_person_camera: Query<&mut Camera, (With<ThirdPersonCamera>, Without<FpsCamera>)>,
-) {
-    if !keys.just_pressed(KeyCode::KeyU) {
-        return;
-    }
-    *mode = match *mode {
-        CameraMode::FirstPerson => CameraMode::ThirdPerson,
-        CameraMode::ThirdPerson => CameraMode::FirstPerson,
-    };
-    let third_person = *mode == CameraMode::ThirdPerson;
-    if let Ok(mut camera) = fps_camera.single_mut() {
-        camera.is_active = !third_person;
-    }
-    if let Ok(mut camera) = third_person_camera.single_mut() {
-        camera.is_active = third_person;
-    }
-    player_model_visible.0 = third_person;
-}
 
-pub(crate) fn sync_third_person_camera(
-    mode: Res<CameraMode>,
-    spatial_query: SpatialQuery,
-    eye: Query<(Entity, &Transform, &FpsCamera, &Lean), Without<ThirdPersonCamera>>,
-    mut camera: Query<&mut Transform, (With<ThirdPersonCamera>, Without<FpsCamera>)>,
-) {
-    if *mode != CameraMode::ThirdPerson {
-        return;
-    }
-    let Ok((eye_entity, eye_transform, cam, lean)) = eye.single() else {
-        return;
-    };
-    let Ok(mut camera_transform) = camera.single_mut() else {
-        return;
-    };
-    let yaw_only = Quat::from_rotation_y(cam.yaw);
-    let horizontal_forward = yaw_only * Vec3::NEG_Z;
-    let horizontal_right = yaw_only * Vec3::X;
-
-    let side_offset = THIRD_PERSON_SIDE_OFFSET * (lean.current + THIRD_PERSON_SHOULDER_BIAS).clamp(-1.0, 1.0);
-    let desired = eye_transform.translation - horizontal_forward * THIRD_PERSON_DISTANCE
-        + horizontal_right * side_offset
-        + Vec3::Y * THIRD_PERSON_HEIGHT_OFFSET;
-    let offset = desired - eye_transform.translation;
-    let distance = offset.length();
-    let Ok(direction) = Dir3::new(offset) else {
-        return;
-    };
-    let filter = SpatialQueryFilter::from_excluded_entities([eye_entity]);
-    let safe_distance = spatial_query
-        .cast_ray(eye_transform.translation, direction, distance, true, &filter)
-        .map(|hit| (hit.distance - THIRD_PERSON_COLLISION_MARGIN).max(0.0))
-        .unwrap_or(distance);
-    camera_transform.translation = eye_transform.translation + direction * safe_distance;
-
-    let aim_dir = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0) * Vec3::NEG_Z;
-    let look_target = eye_transform.translation + aim_dir * THIRD_PERSON_LOOK_AHEAD_DISTANCE;
-    camera_transform.look_at(look_target, Vec3::Y);
-}
 
 pub(crate) fn toggle_player_stance(keys: Res<ButtonInput<KeyCode>>, mut player: Query<&mut PlayerStance>) {
     let Ok(mut stance) = player.single_mut() else {
@@ -480,74 +408,15 @@ pub(crate) fn sync_camera_to_player(
     let eye = player_transform.translation + Vec3::Y * eye_height_offset;
 
     let side_offset = *camera_transform.right() * LEAN_SIDE_OFFSET * lean.current;
-    camera_transform.translation = eye + side_offset;
+    // Debug pullback: slides the eye straight backwards so the viewmodel can be
+    // watched from outside. The gun and the body cancel it in their own local
+    // offsets, so everything stays put in the world and only the eye moves.
+    let pullback = *camera_transform.back() * view_pullback();
+    camera_transform.translation = eye + side_offset + pullback;
 }
 
-pub(crate) fn sync_player_model(
-    visible: Res<PlayerModelVisible>,
-    tuning: Res<PlayerModelTuning>,
-    player: Query<&Transform, (With<Player>, Without<PlayerModel>)>,
-    camera: Query<&FpsCamera>,
-    mut model: Query<(&mut Transform, &mut Visibility), (With<PlayerModel>, Without<Player>)>,
-) {
-    let Ok((mut transform, mut visibility)) = model.single_mut() else {
-        return;
-    };
-    *visibility = if visible.0 { Visibility::Visible } else { Visibility::Hidden };
-    if !visible.0 {
-        return;
-    }
-    let Ok(player_transform) = player.single() else {
-        return;
-    };
-    let yaw = camera.single().map(|cam| cam.yaw).unwrap_or(0.0);
 
-    transform.scale = Vec3::splat(tuning.scale);
-    transform.translation = player_transform.translation + Vec3::Y * tuning.y_offset;
 
-    transform.rotation = Quat::from_rotation_y(yaw + tuning.facing_deg.to_radians());
-}
-
-fn local_yaw_correction(parent_rotation: Quat, world_angle: f32) -> Quat {
-    let world_yaw = Quat::from_rotation_y(world_angle);
-    parent_rotation.inverse() * world_yaw * parent_rotation
-}
-
-fn wrap_to_pi(angle: f32) -> f32 {
-    let two_pi = std::f32::consts::TAU;
-    let wrapped = (angle + std::f32::consts::PI).rem_euclid(two_pi) - std::f32::consts::PI;
-    wrapped
-}
-
-pub(crate) fn apply_player_model_travel_twist(
-    move_axis: Res<LocalPlayerMoveAxis>,
-    sprinting: Res<LocalPlayerSprinting>,
-    bones: Query<&PlayerModelSkeletonBones, With<PlayerModel>>,
-    child_of: Query<&ChildOf>,
-    globals: Query<&GlobalTransform>,
-    mut transforms: Query<&mut Transform>,
-) {
-    let Ok(bones) = bones.single() else {
-        return;
-    };
-    let axis = move_axis.0;
-    if axis == Vec2::ZERO {
-        return;
-    }
-
-    let angle = -axis.x.atan2(axis.y);
-
-    let running_backward = sprinting.0 && axis.y < 0.0;
-    let angle = if running_backward { wrap_to_pi(angle - std::f32::consts::PI) } else { angle };
-
-    for bone in [bones.left_upper_leg, bones.right_upper_leg] {
-        let Some(bone) = bone else { continue };
-        let Ok(parent) = child_of.get(bone) else { continue };
-        let Ok(parent_global) = globals.get(parent.0) else { continue };
-        let Ok(mut t) = transforms.get_mut(bone) else { continue };
-        t.rotation = local_yaw_correction(parent_global.rotation(), angle) * t.rotation;
-    }
-}
 
 pub(crate) fn nudge_player_model_tuning(keys: Res<ButtonInput<KeyCode>>, mut tuning: ResMut<PlayerModelTuning>) {
     const SCALE_STEP: f32 = 0.02;
