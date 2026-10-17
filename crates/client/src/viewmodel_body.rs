@@ -2,59 +2,24 @@ use bevy::prelude::*;
 
 use crate::*;
 
-/// A bone's local rotation as the rig authored it, captured before any clip has
-/// touched it. Poses below are applied as a delta ON TOP of this: overwriting
-/// the rotation outright would throw away the bind orientation and fold the
-/// arm into nonsense.
-// Captured at wire time and kept even though the aim-based pose below does not
-// read it: it is the only chance to record a bind rotation before a clip poses
-// the bone, and getting it back later means re-threading the wiring.
 #[derive(Component)]
 pub(crate) struct BoneRest(pub(crate) Quat);
 
-/// The player's own body, drawn only for the first-person camera.
 #[derive(Component)]
 pub(crate) struct ViewmodelBody;
 
-/// Where the body sits relative to the eye. The camera rides EYE_HEIGHT_OFFSET
-/// (0.65) above the player origin and the rig stands y_offset (-0.76) below it,
-/// so the body origin belongs 1.41 under the eye.
-///
-/// Yaw is 0, settled by measurement rather than by reasoning about the rig:
-/// with the half turn applied, the RightArm bone logged at camera x -0.17 while
-/// the rifle sits at +0.12, putting the trigger hand on the far side of the
-/// body. That costs 0.547m of reach against a 0.452m arm. Unturned, the same
-/// shoulder lands at +0.17 and the distance falls to 0.466m.
-const BODY_OFFSET: Vec3 = Vec3::new(0.0, -1.471, 0.0);
+const BODY_OFFSET_FROM_EYE: Vec3 = Vec3::new(0.0, -1.471, 0.0);
 const BODY_YAW_DEG: f32 = 0.0;
 
-/// The mesh is a single skinned primitive, so there is no submesh to hide. The
-/// head is a skin joint though, so collapsing that bone pulls every vertex
-/// weighted to it down to a point — the standard headless first-person body.
 const HEAD_COLLAPSE_SCALE: f32 = 0.0001;
-
-/// Viewmodel arms are longer than real ones in every shooter, because the
-/// weapon is placed where it reads well on screen rather than where a person
-/// could hold it. This rig needs more help than most: its arms span 0.452m
-/// against roughly 0.59m on a person, while the support hand has to cross the
-/// body to a rifle held at x 0.22, which is 0.707m away.
-///
-/// Scaling the upper arm carries the whole chain, since the forearm hangs off
-/// it at a scaled offset and inherits the scale itself.
 const ARM_SCALE: f32 = 2.07;
-
-/// Turn of the hips, degrees. Negative swings the left shoulder forward, which
-/// is the one that has to cross the body to the handguard.
+const HAND_SCALE_CANCELLING_ARM_SCALE: f32 = 1.0 / ARM_SCALE;
 const HIP_BLADE_DEG: f32 = -30.0;
 
-/// Cancels ARM_SCALE on the hands so they stay life-sized. Only the arms
-/// should look stretched; oversized hands read as a bug immediately.
-const HAND_SCALE: f32 = 1.0 / ARM_SCALE;
+const UPPER_ARM_AIM_IN_BODY_FRAME: Vec3 = Vec3::new(0.0, -0.45, -1.0);
+const FORE_ARM_AIM_IN_BODY_FRAME: Vec3 = Vec3::new(0.0, -0.10, -1.0);
 
-/// Rifle carry, as deltas from the bind pose about each bone's own axes.
-///
-/// Bones run along local +Y, so X swings the limb forward, Z swings it in
-/// toward the body, Y twists it about its own length.
+const MAX_BONE_DEPTH: usize = 20;
 
 pub(crate) fn spawn_viewmodel_body(
     mut commands: Commands,
@@ -73,7 +38,7 @@ pub(crate) fn spawn_viewmodel_body(
     commands.spawn((
         Name::new("ViewmodelBody (first-person, headless)"),
         WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(tuning.mesh.clone()))),
-        Transform::from_translation(BODY_OFFSET - Vec3::Z * view_pullback())
+        Transform::from_translation(BODY_OFFSET_FROM_EYE - Vec3::Z * view_pullback())
             .with_rotation(Quat::from_rotation_y(BODY_YAW_DEG.to_radians()))
             .with_scale(Vec3::splat(tuning.scale)),
         ViewmodelBody,
@@ -81,25 +46,19 @@ pub(crate) fn spawn_viewmodel_body(
         PlayerModelSkeletonBones::default(),
         ChildOf(camera),
     ));
-    info!("[viewmodel] body spawned under FpsCamera={camera:?}");
 }
 
-/// RenderLayers does not reach descendants on its own — `wire_gun_mesh` stamps
-/// the gun's meshes the same way.
 pub(crate) fn wire_viewmodel_body_meshes(
     mut commands: Commands,
     child_of: Query<&ChildOf>,
     body: Query<(), With<ViewmodelBody>>,
     new_meshes: Query<Entity, Added<Mesh3d>>,
-    mut stamped: Local<usize>,
 ) {
     for mesh_entity in &new_meshes {
         let mut current = mesh_entity;
-        for _ in 0..20 {
+        for _ in 0..MAX_BONE_DEPTH {
             if body.contains(current) {
                 commands.entity(mesh_entity).insert(RenderLayers::layer(VIEWMODEL_LAYER));
-                *stamped += 1;
-                info!("[viewmodel] mesh {mesh_entity:?} -> VIEWMODEL_LAYER (total {})", *stamped);
                 break;
             }
             let Ok(parent) = child_of.get(current) else { break };
@@ -108,77 +67,6 @@ pub(crate) fn wire_viewmodel_body_meshes(
     }
 }
 
-pub(crate) fn shape_viewmodel_skeleton(
-    bodies: Query<(Entity, &PlayerModelSkeletonBones, &GlobalTransform), With<ViewmodelBody>>,
-    rests: Query<&BoneRest>,
-    child_of: Query<&ChildOf>,
-    mut transforms: Query<&mut Transform>,
-    mut logged: Local<bool>,
-) {
-    let Ok((root, bones, global)) = bodies.single() else { return };
-    let Some(head) = bones.head else {
-        if !*logged {
-            *logged = true;
-            info!("[viewmodel] Head bone NOT wired — head will block the view");
-        }
-        return;
-    };
-    if let Ok(mut transform) = transforms.get_mut(head) {
-        transform.scale = Vec3::splat(HEAD_COLLAPSE_SCALE);
-    }
-    // Blade the stance the way a shooter actually stands, instead of facing
-    // square on. What limits the support hand is the 0.41m sideways gap to a
-    // rifle held on the right, and turning the hips swings the left shoulder
-    // forward into that gap: measured, it drops the reach needed from 0.852m
-    // to 0.716m, which is 0.34 off ARM_SCALE for free.
-    if let Some(hips) = bones.hips {
-        // The turn has to be about the body vertical, and that is NOT the
-        // parent frame +Y here: the exported scene root carries a Z-up to Y-up
-        // rotation, so its local +Y points horizontally and rotating about it
-        // tips the body forward instead of turning it. Work the axis out from
-        // the chain each frame rather than hardcoding one the asset can change.
-        let axis = child_of
-            .get(hips)
-            .ok()
-            .and_then(|parent| rotation_from_root(parent.0, root, &child_of, &transforms))
-            .map(|rotation| rotation.inverse() * Vec3::Y);
-        if let (Some(axis), Ok(rest)) = (axis, rests.get(hips)) {
-            if let Ok(mut transform) = transforms.get_mut(hips) {
-                transform.rotation =
-                    Quat::from_axis_angle(axis, HIP_BLADE_DEG.to_radians()) * rest.0;
-            }
-        }
-    }
-    for arm in [bones.right_arm, bones.left_arm] {
-        let Some(arm) = arm else { continue };
-        let Ok(mut transform) = transforms.get_mut(arm) else { continue };
-        transform.scale = Vec3::splat(ARM_SCALE);
-    }
-    for hand in [bones.right_hand, bones.left_hand] {
-        let Some(hand) = hand else { continue };
-        let Ok(mut transform) = transforms.get_mut(hand) else { continue };
-        transform.scale = Vec3::splat(HAND_SCALE);
-    }
-    if !*logged {
-        *logged = true;
-        info!(
-            "[viewmodel] head collapsed; body world pos {:.2?} scale {:.3}",
-            global.translation(),
-            global.scale().x
-        );
-    }
-}
-
-/// Aim directions in the body root frame. The body is parented to the camera
-/// with zero yaw, so its axes ARE the camera axes: -Z is straight ahead.
-const UPPER_ARM_AIM: Vec3 = Vec3::new(0.0, -0.45, -1.0);
-const FORE_ARM_AIM: Vec3 = Vec3::new(0.0, -0.10, -1.0);
-
-/// Accumulated rotation from the body root down to (and including) `bone`,
-/// built from local transforms rather than GlobalTransform on purpose: this
-/// system runs before transform propagation, so the globals are a frame stale
-/// and would lag the pose by a frame every time the camera turns — exactly the
-/// artefact being investigated.
 fn rotation_from_root(
     bone: Entity,
     root: Entity,
@@ -198,40 +86,72 @@ fn rotation_from_root(
     Some(rotation)
 }
 
-/// Points each arm bone along a chosen direction instead of nudging it by hand-
-/// picked Euler angles. The angles were guesswork; this is solved.
+fn body_vertical_in_parent_frame_of(
+    bone: Entity,
+    root: Entity,
+    child_of: &Query<&ChildOf>,
+    transforms: &Query<&mut Transform>,
+) -> Option<Vec3> {
+    let parent = child_of.get(bone).ok()?.0;
+    let parent_rotation = rotation_from_root(parent, root, child_of, transforms)?;
+    Some(parent_rotation.inverse() * Vec3::Y)
+}
+
+fn set_scale(bone: Option<Entity>, scale: f32, transforms: &mut Query<&mut Transform>) {
+    let Some(bone) = bone else { return };
+    let Ok(mut transform) = transforms.get_mut(bone) else { return };
+    transform.scale = Vec3::splat(scale);
+}
+
+pub(crate) fn shape_viewmodel_skeleton(
+    bodies: Query<(Entity, &PlayerModelSkeletonBones), With<ViewmodelBody>>,
+    rests: Query<&BoneRest>,
+    child_of: Query<&ChildOf>,
+    mut transforms: Query<&mut Transform>,
+) {
+    let Ok((root, bones)) = bodies.single() else { return };
+
+    if bones.head.is_none() {
+        warn_once!("[viewmodel] Head bone not wired, the head will block the view");
+    }
+    set_scale(bones.head, HEAD_COLLAPSE_SCALE, &mut transforms);
+    set_scale(bones.right_arm, ARM_SCALE, &mut transforms);
+    set_scale(bones.left_arm, ARM_SCALE, &mut transforms);
+    set_scale(bones.right_hand, HAND_SCALE_CANCELLING_ARM_SCALE, &mut transforms);
+    set_scale(bones.left_hand, HAND_SCALE_CANCELLING_ARM_SCALE, &mut transforms);
+
+    if let Some(hips) = bones.hips {
+        let axis = body_vertical_in_parent_frame_of(hips, root, &child_of, &transforms);
+        if let (Some(axis), Ok(rest)) = (axis, rests.get(hips)) {
+            if let Ok(mut transform) = transforms.get_mut(hips) {
+                transform.rotation =
+                    Quat::from_axis_angle(axis, HIP_BLADE_DEG.to_radians()) * rest.0;
+            }
+        }
+    }
+}
+
 pub(crate) fn pose_viewmodel_arms(
     bodies: Query<(Entity, &PlayerModelSkeletonBones), With<ViewmodelBody>>,
     child_of: Query<&ChildOf>,
     mut transforms: Query<&mut Transform>,
-    mut last_applied: Local<Option<usize>>,
 ) {
     let Ok((root, bones)) = bodies.single() else { return };
 
-    let mut applied = 0;
     for (bone, aim) in [
-        (bones.right_arm, UPPER_ARM_AIM),
-        (bones.right_fore_arm, FORE_ARM_AIM),
-        (bones.left_arm, UPPER_ARM_AIM),
-        (bones.left_fore_arm, FORE_ARM_AIM),
+        (bones.right_arm, UPPER_ARM_AIM_IN_BODY_FRAME),
+        (bones.right_fore_arm, FORE_ARM_AIM_IN_BODY_FRAME),
+        (bones.left_arm, UPPER_ARM_AIM_IN_BODY_FRAME),
+        (bones.left_fore_arm, FORE_ARM_AIM_IN_BODY_FRAME),
     ] {
         let Some(bone) = bone else { continue };
         let Ok(parent) = child_of.get(bone) else { continue };
-        let Some(parent_rotation) = rotation_from_root(parent.0, root, &child_of, &transforms) else {
+        let Some(parent_rotation) = rotation_from_root(parent.0, root, &child_of, &transforms)
+        else {
             continue;
         };
-        // bones run along their own +Y, so turn +Y onto the aim expressed in
-        // the parent frame
         let aim_in_parent = parent_rotation.inverse() * aim.normalize_or_zero();
         let Ok(mut transform) = transforms.get_mut(bone) else { continue };
         transform.rotation = Quat::from_rotation_arc(Vec3::Y, aim_in_parent);
-        applied += 1;
-    }
-    if *last_applied != Some(applied) {
-        *last_applied = Some(applied);
-        info!("[viewmodel] arm aim applied to {applied}/4 bones");
     }
 }
-
-
-

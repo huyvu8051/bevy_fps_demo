@@ -38,6 +38,7 @@ pub(crate) fn current_bullet_spread(pitch_kick: f32, aiming: bool, moving: bool,
 pub(crate) struct ViewRecoil {
     pub(crate) pitch_kick: f32,
     pub(crate) yaw_kick: f32,
+    pub(crate) push_back: f32,
 }
 
 #[derive(Component, Default)]
@@ -177,9 +178,10 @@ pub(crate) fn apply_view_recoil(
     mut query: Query<(&mut Transform, &FpsCamera, &mut ViewRecoil, &Lean)>,
 ) {
     for (mut transform, cam, mut recoil, lean) in &mut query {
-        let decay = (RECOIL_RECOVERY_SPEED * time.delta_secs()).min(1.0);
-        recoil.pitch_kick *= 1.0 - decay;
-        recoil.yaw_kick *= 1.0 - decay;
+        let remaining = ops::exp(-RECOIL_RECOVERY_SPEED * time.delta_secs());
+        recoil.pitch_kick *= remaining;
+        recoil.yaw_kick *= remaining;
+        recoil.push_back *= remaining;
 
         let pitch = (cam.pitch + recoil.pitch_kick).clamp(-1.54, 1.54);
         let yaw = cam.yaw + recoil.yaw_kick;
@@ -391,12 +393,12 @@ pub(crate) fn send_player_input(
 
 pub(crate) fn sync_camera_to_player(
     player_query: Query<(&Transform, &PlayerStance), (With<Player>, Without<FpsCamera>)>,
-    mut camera_query: Query<(&mut Transform, &Lean), With<FpsCamera>>,
+    mut camera_query: Query<(&mut Transform, &Lean, &ViewRecoil), With<FpsCamera>>,
 ) {
     let Ok((player_transform, stance)) = player_query.single() else {
         return;
     };
-    let Ok((mut camera_transform, lean)) = camera_query.single_mut() else {
+    let Ok((mut camera_transform, lean, recoil)) = camera_query.single_mut() else {
         return;
     };
     let eye_height_offset = match stance {
@@ -412,7 +414,8 @@ pub(crate) fn sync_camera_to_player(
     // watched from outside. The gun and the body cancel it in their own local
     // offsets, so everything stays put in the world and only the eye moves.
     let pullback = *camera_transform.back() * view_pullback();
-    camera_transform.translation = eye + side_offset + pullback;
+    let kick_back = *camera_transform.back() * recoil.push_back;
+    camera_transform.translation = eye + side_offset + pullback + kick_back;
 }
 
 
@@ -541,6 +544,7 @@ pub(crate) fn shoot(
 
     let jitter = ops::sin(time.elapsed_secs() * 977.0);
     recoil.yaw_kick += jitter * RECOIL_YAW_JITTER;
+    recoil.push_back = (recoil.push_back + RECOIL_PUSH_BACK).min(RECOIL_PUSH_BACK_MAX);
 
     let stance = vfx_assets.stance.single().copied().unwrap_or_default();
 

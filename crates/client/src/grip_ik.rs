@@ -2,29 +2,21 @@ use bevy::prelude::*;
 
 use crate::*;
 
-/// Never let the triangle collapse into a straight line: a locked-out arm has
-/// no bend plane left, so the elbow is free to flip anywhere.
 const MAX_EXTENSION: f32 = 0.995;
 
-/// Where the hands grab, in the gun mesh own coordinates — which is exactly
-/// what a socket parented to the gun lives in, so nothing has to be converted
-/// and no assumption about which way the model is turned can go wrong.
-///
-/// Read off the mesh bounds: X runs -671 at the muzzle to +299 at the butt,
-/// Y is the 86-unit width, Z is height from -117 at the magazine floor to +269
-/// at the top of the optic. Material_38 sits at z 178..253, forward of centre
-/// and highest of anything on the gun, which is what identifies it as the
-/// scope and settles which axis is up.
-///
-/// Pistol grip: behind the magazine well, under the receiver.
-const TRIGGER_GRIP_MESH: Vec3 = Vec3::new(160.0, 80.0, -130.0);
-/// Wooden handguard: ahead of the magazine, under the barrel line.
-const FORE_GRIP_MESH: Vec3 = Vec3::new(-50.0, 160.0, 100.0);
+const TRIGGER_GRIP_IN_GUN_MESH: Vec3 = Vec3::new(160.0, 80.0, -130.0);
+const FORE_GRIP_IN_GUN_MESH: Vec3 = Vec3::new(-50.0, 160.0, 100.0);
 
-/// Pole targets steer which way the elbows break. Values carried over from the
-/// grip_ik tuning in project-alpha, where they were dialled in by eye.
-const POLE_DOWN_OFFSET: f32 = 0.3;
-const POLE_OUTWARD_OFFSET: f32 = 0.4;
+const POLE_DROP_BELOW_SHOULDER: f32 = 0.3;
+const POLE_OUT_ALONG_SHOULDER_LINE: f32 = 0.4;
+
+const MARKER_RADIUS_METRES: f32 = 0.022;
+const DRAW_OVER_SOLID_GEOMETRY_BIAS: f32 = 1000.0;
+const AXIS_BAR_LENGTH: f32 = 150.0;
+const AXIS_BAR_THICKNESS: f32 = 8.0;
+
+const TEST_TARGET_RIGHT_FROM_EYE: Vec3 = Vec3::new(0.16, -0.10, -0.32);
+const TEST_TARGET_LEFT_FROM_EYE: Vec3 = Vec3::new(-0.16, -0.10, -0.32);
 
 #[derive(Component)]
 pub(crate) struct TriggerGripSocket;
@@ -38,34 +30,26 @@ pub(crate) struct RightPoleTarget;
 #[derive(Component)]
 pub(crate) struct LeftPoleTarget;
 
-/// Sockets ride on the gun so they inherit every bit of recoil, sway and the
-/// ADS pull for free — that is the whole point of hanging them off it rather
-/// than recomputing hand targets each frame.
-/// Visible while the grip is being dialled in: without them the socket is an
-/// invisible point and the only feedback is a distance in the log.
-const GRIP_MARKER_RADIUS: f32 = 0.022;
-
-/// Axis gizmo on each socket, in gun mesh units so the arrows read in the same
-/// numbers the grip constants are written in. Red/green/blue = +X/+Y/+Z, the
-/// usual convention, and deliberately not the red/green of the two socket
-/// spheres: those are round and mark which hand, these are long and mark which
-/// way the numbers move.
-const AXIS_LENGTH: f32 = 150.0;
-const AXIS_THICKNESS: f32 = 8.0;
-
 fn grip_markers_enabled() -> bool {
     std::env::var("GRIP_MARKERS").map(|value| value != "0").unwrap_or(true)
 }
 
-/// Debug rig: park the targets in clear air in front of the eye instead of on
-/// the rifle, so "is the solver working" can be answered without "can the arm
-/// reach the gun" clouding it. Sat at 76% of arm reach, so the elbow stays
-/// visibly bent, and 17 degrees below centre so both stay on screen.
-const TEST_TARGET_RIGHT: Vec3 = Vec3::new(0.16, -0.10, -0.32);
-const TEST_TARGET_LEFT: Vec3 = Vec3::new(-0.16, -0.10, -0.32);
-
 fn grip_test_targets_enabled() -> bool {
     std::env::var("GRIP_TEST").map(|value| value != "0").unwrap_or(false)
+}
+
+pub(crate) fn grip_ik_enabled() -> bool {
+    std::env::var("GRIP_IK").map(|value| value != "0").unwrap_or(true)
+}
+
+fn glowing_unlit_material(colour: Color, glow: LinearRgba) -> StandardMaterial {
+    StandardMaterial {
+        base_color: colour,
+        emissive: glow,
+        unlit: true,
+        depth_bias: DRAW_OVER_SOLID_GEOMETRY_BIAS,
+        ..default()
+    }
 }
 
 pub(crate) fn spawn_grip_sockets(
@@ -80,64 +64,62 @@ pub(crate) fn spawn_grip_sockets(
         return;
     }
     let testing = grip_test_targets_enabled();
-    // In test mode the targets hang off the camera, which has no scale of its
-    // own, so the offsets are plain metres. On the gun they have to be undone
-    // through its resting yaw and GUN_SCALE first.
     let Ok(parent) = (if testing { camera.single() } else { gun.single() }) else {
         return;
     };
-    let local = Transform::from_translation;
-    let marker_scale = if testing { 1.0 } else { 1.0 / GUN_SCALE };
-    let (trigger_at, fore_at) = if testing {
-        // These hang off the camera, so a debug pullback drags them backwards
-        // while the gun and body stay put. Cancel it the same way they do, or
-        // the arms end up reaching for targets left behind the shoulders.
-        let fix = Vec3::Z * view_pullback();
-        (TEST_TARGET_RIGHT - fix, TEST_TARGET_LEFT - fix)
+
+    let (trigger_at, fore_at, metres_to_parent_units) = if testing {
+        let cancel_debug_pullback = Vec3::Z * view_pullback();
+        (
+            TEST_TARGET_RIGHT_FROM_EYE - cancel_debug_pullback,
+            TEST_TARGET_LEFT_FROM_EYE - cancel_debug_pullback,
+            1.0,
+        )
     } else {
-        (TRIGGER_GRIP_MESH, FORE_GRIP_MESH)
+        (TRIGGER_GRIP_IN_GUN_MESH, FORE_GRIP_IN_GUN_MESH, 1.0 / GUN_SCALE)
     };
 
     let markers = grip_markers_enabled().then(|| {
-        // the socket inherits GUN_SCALE, so undo it or the sphere is a speck
-        let mesh = meshes.add(Sphere::new(GRIP_MARKER_RADIUS * marker_scale));
-        let mut paint = |colour: Color, glow: LinearRgba| {
-            materials.add(StandardMaterial {
-                base_color: colour,
-                emissive: glow,
-                unlit: true,
-                // the socket sits where a hand grips, which is inside the solid
-                // receiver — without the bias the marker is buried in the rifle
-                depth_bias: 1000.0,
-                ..default()
-            })
-        };
         (
-            mesh,
-            paint(Color::srgb(1.0, 0.25, 0.2), LinearRgba::rgb(6.0, 0.6, 0.4)),
-            paint(Color::srgb(0.25, 1.0, 0.4), LinearRgba::rgb(0.5, 6.0, 1.2)),
+            meshes.add(Sphere::new(MARKER_RADIUS_METRES * metres_to_parent_units)),
+            materials.add(glowing_unlit_material(
+                Color::srgb(1.0, 0.25, 0.2),
+                LinearRgba::rgb(6.0, 0.6, 0.4),
+            )),
+            materials.add(glowing_unlit_material(
+                Color::srgb(0.25, 1.0, 0.4),
+                LinearRgba::rgb(0.5, 6.0, 1.2),
+            )),
         )
     });
 
     let mut trigger = commands.spawn((
         Name::new("TriggerGripSocket"),
-        local(trigger_at),
+        Transform::from_translation(trigger_at),
         TriggerGripSocket,
         ChildOf(parent),
     ));
     if let Some((mesh, red, _)) = &markers {
-        trigger.insert((Mesh3d(mesh.clone()), MeshMaterial3d(red.clone()), RenderLayers::layer(VIEWMODEL_LAYER)));
+        trigger.insert((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(red.clone()),
+            RenderLayers::layer(VIEWMODEL_LAYER),
+        ));
     }
     let trigger_entity = trigger.id();
 
     let mut fore = commands.spawn((
         Name::new("ForeGripSocket"),
-        local(fore_at),
+        Transform::from_translation(fore_at),
         ForeGripSocket,
         ChildOf(parent),
     ));
     if let Some((mesh, _, green)) = &markers {
-        fore.insert((Mesh3d(mesh.clone()), MeshMaterial3d(green.clone()), RenderLayers::layer(VIEWMODEL_LAYER)));
+        fore.insert((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(green.clone()),
+            RenderLayers::layer(VIEWMODEL_LAYER),
+        ));
     }
     let fore_entity = fore.id();
 
@@ -145,26 +127,53 @@ pub(crate) fn spawn_grip_sockets(
         spawn_axis_gizmo(&mut commands, &mut meshes, &mut materials, trigger_entity);
         spawn_axis_gizmo(&mut commands, &mut meshes, &mut materials, fore_entity);
     }
-    info!("[grip] sockets under {parent:?} (test_targets={testing}, markers={})", grip_markers_enabled());
+    info!("[grip] sockets under {parent:?} (test_targets={testing})");
 }
 
+fn spawn_axis_gizmo(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    parent: Entity,
+) {
+    let bar = meshes.add(Cuboid::new(AXIS_BAR_THICKNESS, AXIS_BAR_THICKNESS, AXIS_BAR_LENGTH));
+    let half = AXIS_BAR_LENGTH * 0.5;
+    let quarter_turn = std::f32::consts::FRAC_PI_2;
+    let axes = [
+        ("+X", Vec3::X * half, Quat::from_rotation_y(quarter_turn), LinearRgba::rgb(8.0, 0.2, 0.2)),
+        ("+Y", Vec3::Y * half, Quat::from_rotation_x(-quarter_turn), LinearRgba::rgb(0.2, 8.0, 0.2)),
+        ("+Z", Vec3::Z * half, Quat::IDENTITY, LinearRgba::rgb(0.3, 0.4, 9.0)),
+    ];
+    for (name, offset, rotation, glow) in axes {
+        let colour = Color::linear_rgb(
+            glow.red.min(1.0),
+            glow.green.min(1.0),
+            glow.blue.min(1.0),
+        );
+        commands.spawn((
+            Name::new(format!("GripAxis {name}")),
+            Mesh3d(bar.clone()),
+            MeshMaterial3d(materials.add(glowing_unlit_material(colour, glow))),
+            Transform::from_translation(offset).with_rotation(rotation),
+            RenderLayers::layer(VIEWMODEL_LAYER),
+            ChildOf(parent),
+        ));
+    }
+}
 
 pub(crate) fn spawn_pole_targets(mut commands: Commands) {
     commands.spawn((Name::new("RightPoleTarget"), Transform::default(), RightPoleTarget));
     commands.spawn((Name::new("LeftPoleTarget"), Transform::default(), LeftPoleTarget));
 }
 
-/// The elbow should swing away from the chest, so the pole sits below the
-/// shoulder and out along the shoulder line.
-fn shoulder_outward(left: Vec3, right: Vec3) -> Vec3 {
-    (right - left).normalize_or_zero()
-}
-
 pub(crate) fn update_pole_targets(
     bones: Query<&PlayerModelSkeletonBones, With<ViewmodelBody>>,
     globals: Query<&GlobalTransform, (Without<RightPoleTarget>, Without<LeftPoleTarget>)>,
     mut right: Query<(&mut Transform, &mut GlobalTransform), With<RightPoleTarget>>,
-    mut left: Query<(&mut Transform, &mut GlobalTransform), (With<LeftPoleTarget>, Without<RightPoleTarget>)>,
+    mut left: Query<
+        (&mut Transform, &mut GlobalTransform),
+        (With<LeftPoleTarget>, Without<RightPoleTarget>),
+    >,
 ) {
     let Ok(bones) = bones.single() else { return };
     let (Some(right_arm), Some(left_arm)) = (bones.right_arm, bones.left_arm) else {
@@ -173,56 +182,22 @@ pub(crate) fn update_pole_targets(
     let (Ok(right_arm), Ok(left_arm)) = (globals.get(right_arm), globals.get(left_arm)) else {
         return;
     };
-    let outward = shoulder_outward(left_arm.translation(), right_arm.translation());
+    let away_from_chest =
+        (right_arm.translation() - left_arm.translation()).normalize_or_zero();
 
     if let Ok((mut transform, mut global)) = right.single_mut() {
-        transform.translation =
-            right_arm.translation() - Vec3::Y * POLE_DOWN_OFFSET + outward * POLE_OUTWARD_OFFSET;
+        transform.translation = right_arm.translation() - Vec3::Y * POLE_DROP_BELOW_SHOULDER
+            + away_from_chest * POLE_OUT_ALONG_SHOULDER_LINE;
         *global = GlobalTransform::from(*transform);
     }
     if let Ok((mut transform, mut global)) = left.single_mut() {
-        transform.translation =
-            left_arm.translation() - Vec3::Y * POLE_DOWN_OFFSET - outward * POLE_OUTWARD_OFFSET;
+        transform.translation = left_arm.translation() - Vec3::Y * POLE_DROP_BELOW_SHOULDER
+            - away_from_chest * POLE_OUT_ALONG_SHOULDER_LINE;
         *global = GlobalTransform::from(*transform);
     }
 }
 
-/// Default off while the static arm pose is being checked: two systems both
-/// writing the arm bones makes it impossible to tell whose result you are
-/// looking at.
-pub(crate) fn grip_ik_enabled() -> bool {
-    std::env::var("GRIP_IK").map(|value| value != "0").unwrap_or(true)
-}
-
-
-
-/// The point of using IK here is that correctness becomes a number instead of
-/// something only a human can judge, so report that number.
-
-/// Measures the quantities the solver gets wrong when a rig carries scale.
-///
-/// `bevy_mod_inverse_kinematics` mixes a bone local offset straight into world
-/// coordinates (`target - rotation * normal`), which only holds if the skeleton
-/// sits at scale 1. This rig is authored in centimetres and scaled down by
-/// `target_character`, so every length it derives is out by that factor. These
-/// numbers say by how much, and whether the one bone it does turn ends up
-/// aimed where it should be.
-
-/// Refreshes the GlobalTransform of every constrained bone after a solve.
-///
-/// The solver only touches the bones it rotates — with a one-bone chain that
-/// is the forearm alone, leaving the hand holding the GlobalTransform that
-/// propagation computed before IK ran. Since this runs after propagation,
-/// nothing else will fix it, and skinning reads exactly that transform: the
-/// forearm swings while the hand stays behind.
-
-/// Orients a bone so its +Y runs along `along`, with the twist pinned by the
-/// bend-plane normal.
-///
-/// `Quat::from_rotation_arc` also aims a bone, but it returns the minimal arc,
-/// which leaves the twist about that axis undefined — it then flips as the aim
-/// sweeps past, and the wrist spins with it. That is the "strange rule".
-fn bone_orientation(along: Vec3, plane_normal: Vec3) -> Quat {
+fn bone_orientation_with_twist_pinned_to(along: Vec3, plane_normal: Vec3) -> Quat {
     let y = along;
     let x = y.cross(plane_normal).normalize_or_zero();
     if x == Vec3::ZERO {
@@ -231,18 +206,43 @@ fn bone_orientation(along: Vec3, plane_normal: Vec3) -> Quat {
     Quat::from_mat3(&Mat3::from_cols(x, y, x.cross(y)))
 }
 
-/// Analytic two-bone IK: law of cosines for the elbow angle, a pole hint for
-/// the plane it bends in.
-///
-/// Hand-written rather than taken from the crate because of two things that
-/// crate gets wrong on a scaled rig. Every length here is measured straight out
-/// of GlobalTransform, so the 0.0104 the rig carries is already in the numbers
-/// instead of being assumed away. And every parent rotation is read through
-/// `GlobalTransform::rotation`, which decomposes the scale off first, where
-/// `Quat::from_affine3a` on the same matrix returns a rotation that is simply
-/// wrong once the matrix is not orthonormal.
-///
-/// Returns the leftover distance from hand to target.
+fn elbow_bend_plane_normal(shoulder_to_target: Vec3, shoulder_to_pole: Vec3) -> Vec3 {
+    shoulder_to_target
+        .cross(shoulder_to_pole)
+        .try_normalize()
+        .unwrap_or_else(|| shoulder_to_target.any_orthonormal_vector())
+}
+
+fn shoulder_angle_from_law_of_cosines(upper_len: f32, lower_len: f32, span: f32) -> f32 {
+    (((upper_len * upper_len + span * span - lower_len * lower_len)
+        / (2.0 * upper_len * span))
+        .clamp(-1.0, 1.0))
+    .acos()
+}
+
+fn set_bone_world_rotation(
+    bone: Entity,
+    parent_global: GlobalTransform,
+    world_rotation: Quat,
+    transforms: &mut Query<(&mut Transform, &mut GlobalTransform)>,
+) -> Option<GlobalTransform> {
+    let (mut transform, mut global) = transforms.get_mut(bone).ok()?;
+    transform.rotation = parent_global.rotation().inverse() * world_rotation;
+    *global = parent_global.mul_transform(*transform);
+    Some(*global)
+}
+
+fn recompute_global_from(
+    bone: Entity,
+    parent_global: GlobalTransform,
+    transforms: &mut Query<(&mut Transform, &mut GlobalTransform)>,
+) -> Option<Vec3> {
+    let (transform, mut global) = transforms.get_mut(bone).ok()?;
+    let local = *transform;
+    *global = parent_global.mul_transform(local);
+    Some(global.translation())
+}
+
 fn solve_arm(
     arm: Entity,
     fore_arm: Entity,
@@ -264,55 +264,36 @@ fn solve_arm(
         return None;
     }
 
-    let axis = (target_pos - shoulder).try_normalize()?;
+    let toward_target = (target_pos - shoulder).try_normalize()?;
     let span = shoulder.distance(target_pos).clamp(
         (upper_len - lower_len).abs() + 1e-4,
         (upper_len + lower_len) * MAX_EXTENSION,
     );
-    let cos_shoulder = ((upper_len * upper_len + span * span - lower_len * lower_len)
-        / (2.0 * upper_len * span))
-        .clamp(-1.0, 1.0);
+    let shoulder_angle = shoulder_angle_from_law_of_cosines(upper_len, lower_len, span);
 
-    // Turning `axis` about this normal by +angle swings it toward the pole,
-    // since normal x axis is the pole direction with the axis part removed.
-    let pole_dir = (pole_pos - shoulder).try_normalize().unwrap_or(Vec3::Y);
-    let plane_normal = axis
-        .cross(pole_dir)
-        .try_normalize()
-        .unwrap_or_else(|| axis.any_orthonormal_vector());
+    let toward_pole = (pole_pos - shoulder).try_normalize().unwrap_or(Vec3::Y);
+    let bend_plane = elbow_bend_plane_normal(toward_target, toward_pole);
 
-    let upper_dir = Quat::from_axis_angle(plane_normal, cos_shoulder.acos()) * axis;
-    let new_elbow = shoulder + upper_dir * upper_len;
-    let lower_dir = (target_pos - new_elbow).try_normalize()?;
+    let upper_dir = Quat::from_axis_angle(bend_plane, shoulder_angle) * toward_target;
+    let bent_elbow = shoulder + upper_dir * upper_len;
+    let lower_dir = (target_pos - bent_elbow).try_normalize()?;
 
-    let arm_world = bone_orientation(upper_dir, plane_normal);
-    let fore_world = bone_orientation(lower_dir, plane_normal);
+    let arm_parent_global = *transforms.get(child_of.get(arm).ok()?.0).ok()?.1;
+    let arm_global = set_bone_world_rotation(
+        arm,
+        arm_parent_global,
+        bone_orientation_with_twist_pinned_to(upper_dir, bend_plane),
+        transforms,
+    )?;
+    let fore_global = set_bone_world_rotation(
+        fore_arm,
+        arm_global,
+        bone_orientation_with_twist_pinned_to(lower_dir, bend_plane),
+        transforms,
+    )?;
+    let hand_pos = recompute_global_from(hand, fore_global, transforms)?;
 
-    let arm_parent = child_of.get(arm).ok()?.0;
-    let arm_parent_global = *transforms.get(arm_parent).ok()?.1;
-    {
-        let (mut transform, mut global) = transforms.get_mut(arm).ok()?;
-        transform.rotation = arm_parent_global.rotation().inverse() * arm_world;
-        *global = arm_parent_global.mul_transform(*transform);
-    }
-
-    let arm_global = *transforms.get(arm).ok()?.1;
-    {
-        let (mut transform, mut global) = transforms.get_mut(fore_arm).ok()?;
-        transform.rotation = arm_global.rotation().inverse() * fore_world;
-        *global = arm_global.mul_transform(*transform);
-    }
-
-    // The hand is not rotated, but its world transform still has to follow the
-    // forearm or the skinned mesh keeps drawing it where it used to be.
-    let fore_global = *transforms.get(fore_arm).ok()?.1;
-    {
-        let (transform, mut global) = transforms.get_mut(hand).ok()?;
-        let local = *transform;
-        *global = fore_global.mul_transform(local);
-    }
-
-    Some(transforms.get(hand).ok()?.1.translation().distance(target_pos))
+    Some(hand_pos.distance(target_pos))
 }
 
 pub(crate) fn solve_grip_ik(
@@ -352,40 +333,5 @@ pub(crate) fn solve_grip_ik(
             right.map(|d| format!("{d:.4}m")),
             left.map(|d| format!("{d:.4}m")),
         );
-    }
-}
-
-
-/// Hangs a red/green/blue axis cross off a socket so the grip constants can be
-/// nudged by eye: each bar shows which way that component of the Vec3 grows.
-fn spawn_axis_gizmo(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    parent: Entity,
-) {
-    let bar = meshes.add(Cuboid::new(AXIS_THICKNESS, AXIS_THICKNESS, AXIS_LENGTH));
-    let half = AXIS_LENGTH * 0.5;
-    let axes = [
-        ("+X", Vec3::X * half, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), LinearRgba::rgb(8.0, 0.2, 0.2)),
-        ("+Y", Vec3::Y * half, Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), LinearRgba::rgb(0.2, 8.0, 0.2)),
-        ("+Z", Vec3::Z * half, Quat::IDENTITY, LinearRgba::rgb(0.3, 0.4, 9.0)),
-    ];
-    for (name, offset, rotation, glow) in axes {
-        let material = materials.add(StandardMaterial {
-            base_color: Color::linear_rgb(glow.red.min(1.0), glow.green.min(1.0), glow.blue.min(1.0)),
-            emissive: glow,
-            unlit: true,
-            depth_bias: 1000.0,
-            ..default()
-        });
-        commands.spawn((
-            Name::new(format!("GripAxis {name}")),
-            Mesh3d(bar.clone()),
-            MeshMaterial3d(material),
-            Transform::from_translation(offset).with_rotation(rotation),
-            RenderLayers::layer(VIEWMODEL_LAYER),
-            ChildOf(parent),
-        ));
     }
 }
