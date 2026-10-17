@@ -26,6 +26,7 @@ pub(crate) struct PlayerModelSkeletonBones {
     pub(crate) left_fore_arm: Option<Entity>,
     pub(crate) left_hand: Option<Entity>,
     pub(crate) head: Option<Entity>,
+    pub(crate) hips: Option<Entity>,
 }
 
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq, Reflect)]
@@ -407,7 +408,7 @@ pub(crate) fn wire_player_model_scene_nodes(
         let Ok(name) = names.get(entity) else { continue };
         match name.as_str() {
             "LeftUpLeg" | "RightUpLeg" | "RightArm" | "RightForeArm" | "RightHand" | "LeftArm"
-            | "LeftForeArm" | "LeftHand" | "Head" => {
+            | "LeftForeArm" | "LeftHand" | "Head" | "Hips" => {
                 let Some(root) = find_animation_root(entity, &child_of, |e| roots.contains(e)) else {
                     continue;
                 };
@@ -427,6 +428,7 @@ pub(crate) fn wire_player_model_scene_nodes(
                     "LeftArm" => bones.left_arm = Some(entity),
                     "LeftHand" => bones.left_hand = Some(entity),
                     "Head" => bones.head = Some(entity),
+                    "Hips" => bones.hips = Some(entity),
                     _ => bones.left_fore_arm = Some(entity),
                 }
 

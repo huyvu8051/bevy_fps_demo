@@ -118,7 +118,7 @@ use splash_screen::*;
 // Placed where a 0.452m arm can actually hold it, not purely for composition:
 // at x 0.22 the sideways gap from the left shoulder alone was 0.42m, eating the
 // whole reach before the hand moved forward at all.
-const GUN_OFFSET: Vec3 = Vec3::new(0.22, -0.28, -0.50);
+const GUN_OFFSET: Vec3 = Vec3::new(0.22, -0.28, -0.56);
 
 /// Metres to slide the eye backwards for debugging, cancelled by the gun and the
 /// body so only the viewpoint moves. Zero in normal play.
@@ -164,7 +164,7 @@ const RELOAD_LEFT_DIP: f32 = 0.12;
 
 // Tracks GUN_OFFSET: the muzzle is a fixed point on the mesh, so it has to
 // move by the same delta or the flash floats off the end of the barrel.
-const MUZZLE_OFFSET: Vec3 = Vec3::new(0.2, -0.005, -1.05);
+const MUZZLE_OFFSET: Vec3 = Vec3::new(0.2, -0.005, -1.11);
 
 const MUZZLE_FLASH_LIFETIME: f32 = 0.05;
 const FLASH_QUAD_SIZE: f32 = 0.32;

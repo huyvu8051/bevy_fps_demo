@@ -10,7 +10,6 @@ use crate::*;
 // read it: it is the only chance to record a bind rotation before a clip poses
 // the bone, and getting it back later means re-threading the wiring.
 #[derive(Component)]
-#[allow(dead_code)]
 pub(crate) struct BoneRest(pub(crate) Quat);
 
 /// The player's own body, drawn only for the first-person camera.
@@ -42,7 +41,11 @@ const HEAD_COLLAPSE_SCALE: f32 = 0.0001;
 ///
 /// Scaling the upper arm carries the whole chain, since the forearm hangs off
 /// it at a scaled offset and inherits the scale itself.
-const ARM_SCALE: f32 = 1.97;
+const ARM_SCALE: f32 = 1.76;
+
+/// Turn of the hips, degrees. Negative swings the left shoulder forward, which
+/// is the one that has to cross the body to the handguard.
+const HIP_BLADE_DEG: f32 = -45.0;
 
 /// Cancels ARM_SCALE on the hands so they stay life-sized. Only the arms
 /// should look stretched; oversized hands read as a bug immediately.
@@ -106,11 +109,13 @@ pub(crate) fn wire_viewmodel_body_meshes(
 }
 
 pub(crate) fn shape_viewmodel_skeleton(
-    bodies: Query<(&PlayerModelSkeletonBones, &GlobalTransform), With<ViewmodelBody>>,
+    bodies: Query<(Entity, &PlayerModelSkeletonBones, &GlobalTransform), With<ViewmodelBody>>,
+    rests: Query<&BoneRest>,
+    child_of: Query<&ChildOf>,
     mut transforms: Query<&mut Transform>,
     mut logged: Local<bool>,
 ) {
-    let Ok((bones, global)) = bodies.single() else { return };
+    let Ok((root, bones, global)) = bodies.single() else { return };
     let Some(head) = bones.head else {
         if !*logged {
             *logged = true;
@@ -120,6 +125,29 @@ pub(crate) fn shape_viewmodel_skeleton(
     };
     if let Ok(mut transform) = transforms.get_mut(head) {
         transform.scale = Vec3::splat(HEAD_COLLAPSE_SCALE);
+    }
+    // Blade the stance the way a shooter actually stands, instead of facing
+    // square on. What limits the support hand is the 0.41m sideways gap to a
+    // rifle held on the right, and turning the hips swings the left shoulder
+    // forward into that gap: measured, it drops the reach needed from 0.852m
+    // to 0.716m, which is 0.34 off ARM_SCALE for free.
+    if let Some(hips) = bones.hips {
+        // The turn has to be about the body vertical, and that is NOT the
+        // parent frame +Y here: the exported scene root carries a Z-up to Y-up
+        // rotation, so its local +Y points horizontally and rotating about it
+        // tips the body forward instead of turning it. Work the axis out from
+        // the chain each frame rather than hardcoding one the asset can change.
+        let axis = child_of
+            .get(hips)
+            .ok()
+            .and_then(|parent| rotation_from_root(parent.0, root, &child_of, &transforms))
+            .map(|rotation| rotation.inverse() * Vec3::Y);
+        if let (Some(axis), Ok(rest)) = (axis, rests.get(hips)) {
+            if let Ok(mut transform) = transforms.get_mut(hips) {
+                transform.rotation =
+                    Quat::from_axis_angle(axis, HIP_BLADE_DEG.to_radians()) * rest.0;
+            }
+        }
     }
     for arm in [bones.right_arm, bones.left_arm] {
         let Some(arm) = arm else { continue };
