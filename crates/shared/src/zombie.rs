@@ -148,7 +148,7 @@ pub enum ZombieKind {
     Female,
 }
 
-pub const ZOMBIE_KIND_WEIGHTS: [f32; 3] = [1.0, 1.0, 1.0];
+pub const ZOMBIE_KIND_WEIGHTS: [f32; 3] = [1.0, 0.0, 0.0];
 
 pub fn zombie_kind_for_phase(phase: f32, weights: [f32; 3]) -> ZombieKind {
     let total: f32 = weights.iter().sum();
@@ -191,11 +191,29 @@ pub fn zombie_kind_mesh_path(kind: ZombieKind) -> &'static str {
 
 pub fn zombie_kind_clip_count(kind: ZombieKind) -> usize {
     match kind {
-        ZombieKind::Classic => 21,
+        ZombieKind::Classic => 47,
         ZombieKind::Soldier => 3,
         ZombieKind::Female => 4,
     }
 }
+
+pub fn zombie_kind_death_clips(kind: ZombieKind) -> &'static [(usize, f32)] {
+    match kind {
+        ZombieKind::Classic => &[
+            (21, 3.0),
+            (22, 3.0),
+            (23, 3.0),
+            (24, 4.0),
+            (25, 3.0),
+            (26, 3.0),
+            (27, 3.0),
+            (28, 3.0),
+        ],
+        ZombieKind::Soldier | ZombieKind::Female => &[(2, 1.0)],
+    }
+}
+
+pub const ZOMBIE_LIE_STILL_SECONDS: f32 = 3.0;
 
 pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; ZombiePose::COUNT] {
     match kind {
@@ -252,11 +270,16 @@ impl ZombiePose {
 pub struct ZombieKindAnim {
     pub graph: Handle<AnimationGraph>,
     poses: [AnimationNodeIndex; ZombiePose::COUNT],
+    deaths: Vec<(AnimationNodeIndex, f32)>,
 }
 
 impl ZombieKindAnim {
     pub fn node(&self, pose: ZombiePose) -> AnimationNodeIndex {
         self.poses[pose.clip_slot()]
+    }
+
+    pub fn death(&self, seed: usize) -> (AnimationNodeIndex, f32) {
+        self.deaths[seed % self.deaths.len()]
     }
 
     pub fn idle(&self) -> AnimationNodeIndex {
@@ -289,7 +312,11 @@ impl ZombieAnim {
             let root = graph.root;
             let poses = zombie_kind_pose_clips(kind)
                 .map(|index| graph.add_clip(load_clip(kind, index), 1.0, root));
-            ZombieKindAnim { graph: graphs.add(graph), poses }
+            let deaths = zombie_kind_death_clips(kind)
+                .iter()
+                .map(|&(index, seconds)| (graph.add_clip(load_clip(kind, index), 1.0, root), seconds))
+                .collect();
+            ZombieKindAnim { graph: graphs.add(graph), poses, deaths }
         };
         Self {
             classic: build_kind(ZombieKind::Classic),

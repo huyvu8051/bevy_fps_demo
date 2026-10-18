@@ -1,14 +1,15 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::dissolve::begin_dissolve;
+use crate::dissolve::begin_death;
 use crate::map::*;
 use crate::sim::*;
 use shared::{
     resolve_bone_world_positions, zombie_hit_damage_ray, zombie_hit_nearest_region, BoneWorldPositions, FireShot,
     GameOver, GameStateEvent, Health, KnockbackVelocity,
     Player, PlayerDied, RequestRestart, SetDamageMultiplier,
-    ShotConfirmed, ShotFx, Zombie, ZombieHitboxBones, KNOCKBACK_FORCE,
+    ShotConfirmed, ShotFx, Zombie, ZombieAnim, ZombieAnimationPlayer, ZombieHitboxBones, ZombieKind,
+    KNOCKBACK_FORCE,
     MAX_SHOT_DISTANCE, Scenario,
     ZOMBIE_REST_HEIGHT, PLAYER_THREAT_PER_SHOT, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS, ZOMBIE_RESPAWN_DELAY,
 };
@@ -30,13 +31,23 @@ pub(crate) fn handle_fire_shot(
     mut commands: Commands,
     spatial_query: SpatialQuery,
     bone_globals: Query<&GlobalTransform>,
-    mut zombies: Query<(Entity, &Transform, &ZombieHitboxBones, &mut Health, &mut KnockbackVelocity), With<Zombie>>,
+    mut zombies: Query<
+        (
+            Entity,
+            &Transform,
+            &ZombieHitboxBones,
+            &mut Health,
+            &mut KnockbackVelocity,
+            Option<&ZombieKind>,
+            Option<&ZombieAnimationPlayer>,
+        ),
+        With<Zombie>,
+    >,
+    anim: Res<ZombieAnim>,
+    mut anim_players: Query<&mut AnimationPlayer>,
     mut respawns: ResMut<PendingRespawns>,
     mut threats: Query<&mut PlayerThreat>,
     damage_multiplier: Res<DamageMultiplierServer>,
-    children: Query<&Children>,
-    mesh_materials: Query<&MeshMaterial3d<StandardMaterial>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for mut threat in &mut threats {
         threat.0 += PLAYER_THREAT_PER_SHOT;
@@ -57,7 +68,7 @@ pub(crate) fn handle_fire_shot(
 
     let mut candidates: Vec<(f32, Entity, BoneWorldPositions)> = zombies
         .iter()
-        .filter_map(|(entity, transform, bones, _, _)| {
+        .filter_map(|(entity, transform, bones, _, _, _, _)| {
             let (distance, _outer_normal) =
                 cylinder.cast_ray(transform.translation, transform.rotation, shot.origin, *direction, MAX_SHOT_DISTANCE, true)?;
             let resolved = resolve_bone_world_positions(bones, |bone| bone_globals.get(bone).ok().map(|g| g.translation()));
@@ -95,12 +106,18 @@ pub(crate) fn handle_fire_shot(
             continue;
         }
         info!("[shot] inner bone capsule hit: zombie={entity} damage={damage:.1}");
-        if let Ok((_, zombie_transform, _, mut health, mut knockback)) = zombies.get_mut(entity) {
+        if let Ok((_, _, _, mut health, mut knockback, kind, link)) = zombies.get_mut(entity) {
             health.0 -= damage;
             let killed = health.0 <= 0.0;
             if killed {
-                let start_y = zombie_transform.translation.y;
-                begin_dissolve(&mut commands, entity, start_y, &children, &mesh_materials, &mut materials);
+                begin_death(
+                    &mut commands,
+                    entity,
+                    kind.copied().unwrap_or_default(),
+                    &anim,
+                    link,
+                    &mut anim_players,
+                );
                 respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
             } else {
                 let push = Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero() * KNOCKBACK_FORCE;

@@ -1,9 +1,57 @@
 use bevy::prelude::*;
 
 use crate::*;
-use shared::Chase;
+use shared::{Chase, ZOMBIE_LIE_STILL_SECONDS};
 
 const DISSOLVE_DURATION: f32 = 1.1;
+
+#[derive(Component)]
+pub(crate) struct PlayingDeath {
+    remaining: f32,
+}
+
+pub(crate) fn begin_death(
+    commands: &mut Commands,
+    entity: Entity,
+    kind: ZombieKind,
+    anim: &ZombieAnim,
+    link: Option<&ZombieAnimationPlayer>,
+    players: &mut Query<&mut AnimationPlayer>,
+) {
+    let (clip, clip_seconds) = anim.slot(kind).death(entity.to_bits() as usize);
+    if let Some(link) = link {
+        if let Ok(mut player) = players.get_mut(link.0) {
+            player.stop_all();
+            player.play(clip);
+        }
+    }
+    commands
+        .entity(entity)
+        .remove::<Zombie>()
+        .remove::<Chase>()
+        .insert(PlayingDeath {
+            remaining: clip_seconds + ZOMBIE_LIE_STILL_SECONDS,
+        });
+}
+
+pub(crate) fn update_death(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut dying: Query<(Entity, &mut PlayingDeath, &Transform)>,
+    children: Query<&Children>,
+    mesh_materials: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (entity, mut death, transform) in &mut dying {
+        death.remaining -= time.delta_secs();
+        if death.remaining > 0.0 {
+            continue;
+        }
+        let start_y = transform.translation.y;
+        commands.entity(entity).remove::<PlayingDeath>();
+        begin_dissolve(&mut commands, entity, start_y, &children, &mesh_materials, &mut materials);
+    }
+}
 const DISSOLVE_SINK_DISTANCE: f32 = 0.55;
 const DISSOLVE_HOLD_FRACTION: f32 = 0.25;
 

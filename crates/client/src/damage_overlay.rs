@@ -7,6 +7,7 @@ use crate::*;
 const DAMAGE_OVERLAY_SHADER: &str = "shaders/damage_overlay.wesl";
 const HIT_FLASH_DURATION: f32 = 0.35;
 const HURT_EASE_RATE: f32 = 6.0;
+const HURT_VISIBLE_BELOW_HEALTH: f32 = 20.0;
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
 pub(crate) struct DamageOverlayMaterial {
@@ -59,7 +60,7 @@ pub(crate) fn update_damage_overlay(
     };
 
     let health = player.single().map(|h| h.0).unwrap_or(PLAYER_MAX_HEALTH);
-    let hurt = 1.0 - (health / PLAYER_MAX_HEALTH).clamp(0.0, 1.0);
+    let hurt = ((HURT_VISIBLE_BELOW_HEALTH - health) / HURT_VISIBLE_BELOW_HEALTH).clamp(0.0, 1.0);
     let blend = (HURT_EASE_RATE * time.delta_secs()).min(1.0);
     *eased_hurt += (hurt - *eased_hurt) * blend;
 
