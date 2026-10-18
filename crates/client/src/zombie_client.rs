@@ -200,6 +200,7 @@ pub(crate) fn zombie_cosmetic_bundle() -> impl Bundle {
         KnockbackVelocity::default(),
         ZombieAttackTimer::default(),
         ZombiePose::default(),
+        ZombieWalkVariant::default(),
     )
 }
 
@@ -592,7 +593,16 @@ pub(crate) fn update_zombie_animation(
     player: Query<&Transform, With<Player>>,
 
     mut zombies: Query<
-        (&Transform, &ZombieMotion, &Health, &ZombieAnimationPlayer, Option<&ZombieKind>, &mut ZombiePose),
+        (
+            Entity,
+            &Transform,
+            &ZombieMotion,
+            &Health,
+            &ZombieAnimationPlayer,
+            Option<&ZombieKind>,
+            &mut ZombiePose,
+            &mut ZombieWalkVariant,
+        ),
         (With<Zombie>, Without<ZombieShowcaseClip>),
     >,
     mut players: Query<&mut AnimationPlayer>,
@@ -600,17 +610,21 @@ pub(crate) fn update_zombie_animation(
     let Ok(player_transform) = player.single() else {
         return;
     };
-    for (zombie_transform, net_transform, health, link, kind, mut pose) in &mut zombies {
+    for (entity, zombie_transform, net_transform, health, link, kind, mut pose, mut walk) in &mut zombies {
         let distance = zombie_transform.translation.distance(player_transform.translation);
-        let new_pose = zombie_pose_for(distance, health.0 / ZOMBIE_MAX_HEALTH, net_transform.moving);
-        if new_pose == *pose {
+        let health_fraction = health.0 / ZOMBIE_MAX_HEALTH;
+        let new_pose = zombie_pose_for(distance, health_fraction, net_transform.moving);
+        let slot = anim.slot(kind.copied().unwrap_or_default());
+        let new_walk = (new_pose == ZombiePose::Walk)
+            .then(|| slot.walk(entity.to_bits() as usize, health_fraction));
+        if new_pose == *pose && new_walk == walk.0 {
             continue;
         }
         *pose = new_pose;
+        walk.0 = new_walk;
         if let Ok(mut player) = players.get_mut(link.0) {
-            let slot = anim.slot(kind.copied().unwrap_or_default());
             player.stop_all();
-            player.play(slot.node(new_pose)).repeat();
+            player.play(new_walk.unwrap_or_else(|| slot.node(new_pose))).repeat();
         }
     }
 }

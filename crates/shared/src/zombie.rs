@@ -197,6 +197,25 @@ pub fn zombie_kind_clip_count(kind: ZombieKind) -> usize {
     }
 }
 
+pub const ZOMBIE_LIMP_HEALTH_FRACTION: f32 = 0.6;
+
+#[derive(Component, Default)]
+pub struct ZombieWalkVariant(pub Option<AnimationNodeIndex>);
+
+pub fn zombie_kind_healthy_walk_clips(kind: ZombieKind) -> &'static [usize] {
+    match kind {
+        ZombieKind::Classic => &[37, 38, 43, 44, 45, 46],
+        ZombieKind::Soldier | ZombieKind::Female => &[1],
+    }
+}
+
+pub fn zombie_kind_limping_walk_clips(kind: ZombieKind) -> &'static [usize] {
+    match kind {
+        ZombieKind::Classic => &[39, 40, 41, 42],
+        ZombieKind::Soldier | ZombieKind::Female => &[1],
+    }
+}
+
 pub fn zombie_kind_death_clips(kind: ZombieKind) -> &'static [(usize, f32)] {
     match kind {
         ZombieKind::Classic => &[
@@ -271,6 +290,8 @@ pub struct ZombieKindAnim {
     pub graph: Handle<AnimationGraph>,
     poses: [AnimationNodeIndex; ZombiePose::COUNT],
     deaths: Vec<(AnimationNodeIndex, f32)>,
+    healthy_walks: Vec<AnimationNodeIndex>,
+    limping_walks: Vec<AnimationNodeIndex>,
 }
 
 impl ZombieKindAnim {
@@ -280,6 +301,15 @@ impl ZombieKindAnim {
 
     pub fn death(&self, seed: usize) -> (AnimationNodeIndex, f32) {
         self.deaths[seed % self.deaths.len()]
+    }
+
+    pub fn walk(&self, seed: usize, health_fraction: f32) -> AnimationNodeIndex {
+        let pool = if health_fraction <= ZOMBIE_LIMP_HEALTH_FRACTION {
+            &self.limping_walks
+        } else {
+            &self.healthy_walks
+        };
+        pool[seed % pool.len()]
     }
 
     pub fn idle(&self) -> AnimationNodeIndex {
@@ -316,7 +346,12 @@ impl ZombieAnim {
                 .iter()
                 .map(|&(index, seconds)| (graph.add_clip(load_clip(kind, index), 1.0, root), seconds))
                 .collect();
-            ZombieKindAnim { graph: graphs.add(graph), poses, deaths }
+            let mut add_walks = |clips: &[usize]| -> Vec<AnimationNodeIndex> {
+                clips.iter().map(|&index| graph.add_clip(load_clip(kind, index), 1.0, root)).collect()
+            };
+            let healthy_walks = add_walks(zombie_kind_healthy_walk_clips(kind));
+            let limping_walks = add_walks(zombie_kind_limping_walk_clips(kind));
+            ZombieKindAnim { graph: graphs.add(graph), poses, deaths, healthy_walks, limping_walks }
         };
         Self {
             classic: build_kind(ZombieKind::Classic),

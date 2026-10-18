@@ -9,7 +9,7 @@ use shared::{
     entity_phase, Chase, ClearAllZombies,
     GameOver, Health, KnockbackVelocity,
     Player,
-    SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, zombie_speed_for, 
+    SetAutoMaintainZombies, SetFreezeZombies, SetZombieCount, SpawnMoreZombies, Zombie, ZombieAttackTimer, ZombieHitboxBones, ZombieMotion, ZombiePose, ZombieWalkVariant, zombie_speed_for, 
     GRAVITY, KNOCKBACK_DECAY_RATE, Scenario,
     
     ZOMBIE_AI_ENABLED, ZOMBIE_AVOID_ANGLES_DEG, ZOMBIE_AVOID_PROBE_DISTANCE, ZOMBIE_CHASE_RANGE,
@@ -180,6 +180,7 @@ fn spawn_zombie(commands: &mut Commands, position: Vec3, yaw: f32, ai_enabled: b
         crate::zombie_reaction::ZombieHeadLook::default(),
 
         ZombiePose::default(),
+        ZombieWalkVariant::default(),
 
         Visibility::default(),
     ));
