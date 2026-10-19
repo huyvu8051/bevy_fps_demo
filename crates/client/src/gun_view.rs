@@ -191,7 +191,12 @@ pub(crate) fn gun_view_animation(
     let leaning = camera_single
         .is_some_and(|(_, lean)| lean.target.abs() > GUN_READY_LEAN_CUTOFF);
 
-    let shoulder_blend = camera_single.map_or(0.0, |(_, lean)| (-lean.current).clamp(0.0, 1.0));
+    // Keyed off the requested lean, not the eased camera value. The swap only
+    // uses the negative half of the range, so coming out of a right lean it
+    // stays pinned at zero until the camera crosses the middle and then picks
+    // up on the slowest part of the camera ease. That is the gun lagging the
+    // press. Reading the input instead starts both at the same instant.
+    let shoulder_target = camera_single.map_or(0.0, |(_, lean)| (-lean.target).clamp(0.0, 1.0));
 
     let wall_target = camera_single.map_or(0.0, |(camera_transform, _)| {
         let filter = SpatialQueryFilter::default();
@@ -260,7 +265,8 @@ pub(crate) fn gun_view_animation(
         let wall_raise_step = (WALL_GUN_RAISE_SPEED * time.delta_secs()).min(1.0);
         gun.wall_raise += (wall_target - gun.wall_raise) * wall_raise_step;
 
-        gun.shoulder_blend = shoulder_blend;
+        let shoulder_step = (GUN_SHOULDER_SPEED * time.delta_secs()).min(1.0);
+        gun.shoulder_blend += (shoulder_target - gun.shoulder_blend) * shoulder_step;
 
         let moving = local_moving.0;
         let bob_target = if moving { 1.0 } else { 0.0 };
