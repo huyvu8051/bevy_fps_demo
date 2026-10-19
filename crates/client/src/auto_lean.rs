@@ -1,13 +1,13 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::autopilot::has_line_of_sight;
 use crate::*;
 
-const AUTO_LEAN_RANGE: f32 = 26.0;
-const AUTO_LEAN_MIN_RANGE: f32 = 2.5;
-const AUTO_LEAN_FORWARD_DOT: f32 = 0.35;
-const AUTO_LEAN_HOLD_SECONDS: f32 = 0.35;
+const COVER_RANGE: f32 = 1.3;
+const OPENED_RANGE: f32 = 5.0;
+const PEEK_OFFSET: f32 = LEAN_SIDE_OFFSET;
+const ADS_THRESHOLD: f32 = 0.5;
+const HOLD_SECONDS: f32 = 0.3;
 
 #[derive(Resource, Default)]
 pub(crate) struct AutoLean {
@@ -15,69 +15,56 @@ pub(crate) struct AutoLean {
     hold: f32,
 }
 
-fn aim_height(point: Vec3) -> Vec3 {
-    point + Vec3::Y * (ZOMBIE_OUTER_HEIGHT * 0.65)
+fn blocked_within(spatial_query: &SpatialQuery, from: Vec3, facing: Dir3, range: f32) -> bool {
+    spatial_query
+        .cast_ray(from, facing, range, true, &SpatialQueryFilter::default())
+        .is_some()
 }
 
-/// Looks for a zombie the player cannot see from where they stand but could
-/// see by leaning, and offers that direction. Only ever a suggestion: pressing
-/// Q or E overrides it, so the assist never takes the lean away from you.
+/// Leans out around cover the player is pressed against, the way Call of Duty
+/// does: driven by the geometry in front of the gun, not by where an enemy is.
+///
+/// The test is asymmetry. If the shot is blocked from here but clear from an
+/// eye shifted sideways, then an edge is being hugged and leaning that way
+/// opens the angle. Blocked both ways is a flat wall, and nothing to peek.
 pub(crate) fn suggest_auto_lean(
     time: Res<Time>,
     autopilot: Res<Autopilot>,
     game_over: Res<GameOver>,
     spatial_query: SpatialQuery,
     camera: Query<(&GlobalTransform, &FpsCamera)>,
-    zombies: Query<&Transform, With<Zombie>>,
+    gun: Query<&Gun>,
     mut auto: ResMut<AutoLean>,
 ) {
-    if autopilot.0 || game_over.0 {
+    let aiming = gun.single().map(|g| g.ads_blend >= ADS_THRESHOLD).unwrap_or(false);
+    if autopilot.0 || game_over.0 || !aiming {
         auto.suggestion = 0.0;
         auto.hold = 0.0;
         return;
     }
-    let Ok((eye_global, cam)) = camera.single() else {
-        auto.suggestion = 0.0;
-        return;
-    };
+    let Ok((eye_global, cam)) = camera.single() else { return };
     let eye = eye_global.translation();
-    let forward = *eye_global.forward();
+    let Ok(facing) = Dir3::new(*eye_global.forward()) else { return };
     let sideways = Vec3::new(ops::cos(cam.yaw), 0.0, -ops::sin(cam.yaw));
 
-    let mut best: Option<(f32, f32)> = None;
-    for zombie in &zombies {
-        let target = aim_height(zombie.translation);
-        let delta = target - eye;
-        let distance = delta.length();
-        if !(AUTO_LEAN_MIN_RANGE..AUTO_LEAN_RANGE).contains(&distance) {
-            continue;
-        }
-        if delta.normalize_or_zero().dot(forward) < AUTO_LEAN_FORWARD_DOT {
-            continue;
-        }
-        if has_line_of_sight(&spatial_query, eye, target) {
-            continue;
-        }
-        let direction = if has_line_of_sight(&spatial_query, eye + sideways * LEAN_SIDE_OFFSET, target) {
-            1.0
-        } else if has_line_of_sight(&spatial_query, eye - sideways * LEAN_SIDE_OFFSET, target) {
-            -1.0
-        } else {
-            continue;
-        };
-        if best.is_none_or(|(closest, _)| distance < closest) {
-            best = Some((distance, direction));
-        }
-    }
+    let direction = if !blocked_within(&spatial_query, eye, facing, COVER_RANGE) {
+        None
+    } else if !blocked_within(&spatial_query, eye + sideways * PEEK_OFFSET, facing, OPENED_RANGE) {
+        Some(1.0)
+    } else if !blocked_within(&spatial_query, eye - sideways * PEEK_OFFSET, facing, OPENED_RANGE) {
+        Some(-1.0)
+    } else {
+        None
+    };
 
-    match best {
-        Some((_, direction)) => {
-            auto.suggestion = direction;
-            auto.hold = AUTO_LEAN_HOLD_SECONDS;
+    match direction {
+        Some(side) => {
+            auto.suggestion = side;
+            auto.hold = HOLD_SECONDS;
         }
-        // Hold the last suggestion briefly. Peeking usually reveals the zombie,
-        // which removes the reason to peek, and without this the lean snaps
-        // straight back and oscillates.
+        // Held briefly on the way out. Leaning moves the eye past the edge,
+        // which clears the very probe that asked for the lean, so without this
+        // it would snap back and oscillate on the corner.
         None => {
             auto.hold -= time.delta_secs();
             if auto.hold <= 0.0 {

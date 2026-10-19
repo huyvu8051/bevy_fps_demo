@@ -90,7 +90,7 @@ const AUTOPILOT_DECISION_HZ: f32 = 20.0;
 
 const AUTOPILOT_TARGET_BEHIND_PENALTY: f32 = 0.6;
 
-pub(crate) fn has_line_of_sight(spatial_query: &SpatialQuery, eye: Vec3, point: Vec3) -> bool {
+fn has_line_of_sight(spatial_query: &SpatialQuery, eye: Vec3, point: Vec3) -> bool {
     let delta = point - eye;
     let distance = delta.length();
     match Dir3::new(delta) {
