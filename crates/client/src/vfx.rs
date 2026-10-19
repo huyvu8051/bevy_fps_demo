@@ -364,6 +364,9 @@ pub(crate) fn on_shot_fx(
             spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 619.0 + point.x * 13.7 + point.z * 7.3, origin, point, show_tracers.0);
             spawn_spark_effects(&mut commands, &vfx_assets.sparks, &time, point, normal);
         }
+        ShotFx::Penetrated { point, normal } => {
+            spawn_spark_effects(&mut commands, &vfx_assets.sparks, &time, point, normal);
+        }
     }
 }
 
