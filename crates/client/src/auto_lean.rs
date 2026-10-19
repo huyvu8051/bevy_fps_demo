@@ -10,7 +10,7 @@ const ADS_THRESHOLD: f32 = 0.5;
 /// How far out to try, smallest first. Both the roll and the sideways shift
 /// scale off the same value, so a fraction here is a genuinely shallower lean
 /// rather than a rounded-off full one.
-const PEEK_STEPS: [f32; 4] = [0.3, 0.55, 0.8, 1.0];
+const PEEK_STEPS: [f32; 5] = [0.25, 0.45, 0.65, 0.85, 1.0];
 const HOLD_SECONDS: f32 = 0.3;
 
 #[derive(Resource, Default)]
@@ -57,15 +57,17 @@ pub(crate) fn suggest_auto_lean(
     // back, and the corner starts over — which is the judder.
     let eye = eye_global.translation() - sideways * LEAN_SIDE_OFFSET * lean.current;
 
-    // Smallest lean that clears the edge wins, so a shallow corner gets a
-    // shallow lean instead of throwing the whole body out for no extra angle.
+    // The smallest step that clears only grazes the edge: enough to see a
+    // sliver past it, not enough to aim through it. Take the next step out so
+    // the peek is actually usable, which is what the corner is for.
     let mut direction = None;
     if blocked_within(&spatial_query, eye, facing, COVER_RANGE) {
-        'search: for amount in PEEK_STEPS {
+        'search: for (step, amount) in PEEK_STEPS.iter().enumerate() {
             for side in [1.0, -1.0] {
                 let probe = eye + sideways * side * LEAN_SIDE_OFFSET * amount;
                 if !blocked_within(&spatial_query, probe, facing, OPENED_RANGE) {
-                    direction = Some(side * amount);
+                    let clear = PEEK_STEPS[(step + 1).min(PEEK_STEPS.len() - 1)];
+                    direction = Some(side * clear);
                     break 'search;
                 }
             }
