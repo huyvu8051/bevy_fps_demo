@@ -246,6 +246,7 @@ pub(crate) fn autopilot_think(
 
     if autopilot.0 {
         if let Ok(mut lean) = lean_query.single_mut() {
+            lean.target = peek_dir;
             let step = (AUTOPILOT_LEAN_SPEED * dt).min(1.0);
             lean.current += (peek_dir - lean.current) * step;
         }

@@ -183,14 +183,13 @@ pub(crate) fn gun_view_animation(
     let camera_single = camera.single().ok();
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
 
+    // Reads the requested lean, not the eased camera value: keying off the
+    // eased one makes the gun wait for the camera to settle before it starts
+    // moving, instead of travelling alongside it.
     let leaning = camera_single
-        .is_some_and(|(_, lean)| lean.current.abs() > GUN_READY_LEAN_CUTOFF);
+        .is_some_and(|(_, lean)| lean.target.abs() > GUN_READY_LEAN_CUTOFF);
 
-    let shoulder_target = if game_over.0 {
-        0.0
-    } else {
-        camera_single.is_some_and(|(_, lean)| lean.current < -0.5) as u8 as f32
-    };
+    let shoulder_blend = camera_single.map_or(0.0, |(_, lean)| (-lean.current).clamp(0.0, 1.0));
 
     let wall_target = camera_single.map_or(0.0, |(camera_transform, _)| {
         let filter = SpatialQueryFilter::default();
@@ -241,8 +240,7 @@ pub(crate) fn gun_view_animation(
         let wall_raise_step = (WALL_GUN_RAISE_SPEED * time.delta_secs()).min(1.0);
         gun.wall_raise += (wall_target - gun.wall_raise) * wall_raise_step;
 
-        let shoulder_step = (LEAN_SPEED * time.delta_secs()).min(1.0);
-        gun.shoulder_blend += (shoulder_target - gun.shoulder_blend) * shoulder_step;
+        gun.shoulder_blend = shoulder_blend;
 
         let moving = local_moving.0;
         let bob_target = if moving { 1.0 } else { 0.0 };

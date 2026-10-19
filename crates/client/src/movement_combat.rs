@@ -45,6 +45,7 @@ pub(crate) struct ViewRecoil {
 pub(crate) struct Lean {
 
     pub(crate) current: f32,
+    pub(crate) target: f32,
 }
 
 #[derive(Resource, Default)]
@@ -217,6 +218,7 @@ pub(crate) fn apply_lean_input(
     };
     for mut lean in &mut query {
 
+        lean.target = target;
         let t = (LEAN_SPEED * time.delta_secs()).min(1.0);
         lean.current += (target - lean.current) * t;
     }
