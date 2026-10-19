@@ -4296,6 +4296,7 @@ dependencies = [
 [[package]]
 name = "metal_renderer"
 version = "0.1.0"
+source = "git+https://github.com/huyvu8051/metal_renderer#9f5f41f9037861009bfacb9b870e08926f5fe913"
 dependencies = [
  "bevy",
  "core-graphics 0.25.0",
