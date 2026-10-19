@@ -155,6 +155,8 @@ pub(crate) fn setup_common(
         mesh: meshes.add(Rectangle::new(SPARK_PARTICLE_SIZE, SPARK_PARTICLE_SIZE)),
         material: materials.add(StandardMaterial {
             base_color: Color::linear_rgb(25.0, 12.0, 1.5),
+            base_color_texture: Some(images.add(droplet_image(BLOOD_DROPLET_TEXTURE_SIZE))),
+            alpha_mode: AlphaMode::Blend,
             unlit: true,
             cull_mode: None,
             ..default()

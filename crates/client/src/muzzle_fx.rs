@@ -172,6 +172,8 @@ pub(crate) fn update_muzzle_flash(
 }
 
 
+const RIBBON_COLUMNS: usize = 3;
+
 struct TrailPoint {
     position: Vec3,
     age: f32,
@@ -201,11 +203,23 @@ pub(crate) fn note_shot_for_barrel_smoke(_: On<FireShot>, mut barrel: ResMut<Bar
 /// different vertex count every frame frees slab entries the render world is
 /// still pointing at, which Bevy reports as a use-after-free.
 pub(crate) fn empty_ribbon_mesh() -> Mesh {
-    let rows = BARREL_TRAIL_MAX_POINTS * 2;
-    let mut indices = Vec::with_capacity((BARREL_TRAIL_MAX_POINTS - 1) * 6);
+    let rows = BARREL_TRAIL_MAX_POINTS * RIBBON_COLUMNS;
+    let mut indices = Vec::with_capacity((BARREL_TRAIL_MAX_POINTS - 1) * 12);
     for index in 0..BARREL_TRAIL_MAX_POINTS - 1 {
-        let base = (index * 2) as u32;
-        indices.extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);
+        let here = (index * RIBBON_COLUMNS) as u32;
+        let next = ((index + 1) * RIBBON_COLUMNS) as u32;
+        // two strips: outer edge to centre on each side, so alpha can fall off
+        // across the width instead of ending at a hard cut
+        for side in 0..2u32 {
+            indices.extend_from_slice(&[
+                here + side,
+                here + side + 1,
+                next + side,
+                here + side + 1,
+                next + side + 1,
+                next + side,
+            ]);
+        }
     }
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; rows])
@@ -258,7 +272,7 @@ pub(crate) fn update_barrel_smoke(
 }
 
 fn write_ribbon(points: &[TrailPoint], eye: Vec3, mesh: &mut Mesh) {
-    let rows = BARREL_TRAIL_MAX_POINTS * 2;
+    let rows = BARREL_TRAIL_MAX_POINTS * RIBBON_COLUMNS;
     let mut positions = vec![[0.0f32; 3]; rows];
     let mut normals = vec![[0.0, 0.0, 1.0f32]; rows];
     let mut uvs = vec![[0.0f32; 2]; rows];
@@ -283,24 +297,27 @@ fn write_ribbon(points: &[TrailPoint], eye: Vec3, mesh: &mut Mesh) {
         // squared so the column holds together off the muzzle and thins high up
         let alpha = BARREL_TRAIL_ALPHA * (1.0 - life) * (1.0 - life);
 
-        let left = index * 2;
-        positions[left] = (point.position - side * half).to_array();
-        positions[left + 1] = (point.position + side * half).to_array();
-        normals[left] = to_eye.to_array();
-        normals[left + 1] = to_eye.to_array();
-        uvs[left] = [0.0, life];
-        uvs[left + 1] = [1.0, life];
-        colors[left] = [1.0, 1.0, 1.0, alpha];
-        colors[left + 1] = [1.0, 1.0, 1.0, alpha];
+        // Edge columns carry no alpha, so the ribbon fades out sideways rather
+        // than ending on a cut line and reading as a paper streamer.
+        let row = index * RIBBON_COLUMNS;
+        for (column, (offset, weight)) in
+            [(-half, 0.0), (0.0, 1.0), (half, 0.0)].into_iter().enumerate()
+        {
+            positions[row + column] = (point.position + side * offset).to_array();
+            normals[row + column] = to_eye.to_array();
+            uvs[row + column] = [column as f32 * 0.5, life];
+            colors[row + column] = [1.0, 1.0, 1.0, alpha * weight];
+        }
     }
 
     // Unused rows collapse onto the oldest live point with no alpha, keeping
     // the buffer length constant instead of resizing it.
     let tail = points.get(live.saturating_sub(1)).map_or(Vec3::ZERO, |point| point.position);
     for index in live..BARREL_TRAIL_MAX_POINTS {
-        let left = index * 2;
-        positions[left] = tail.to_array();
-        positions[left + 1] = tail.to_array();
+        let row = index * RIBBON_COLUMNS;
+        for column in 0..RIBBON_COLUMNS {
+            positions[row + column] = tail.to_array();
+        }
     }
 
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
