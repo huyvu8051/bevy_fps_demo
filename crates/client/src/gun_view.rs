@@ -239,8 +239,7 @@ pub(crate) fn gun_view_animation(
         let ready_step = (GUN_READY_SPEED * time.delta_secs()).min(1.0);
         gun.ready_blend += (ready_target - gun.ready_blend) * ready_step;
 
-        // Rolled while the gun is away from its resting pose, never while it
-        // sits there: picked on arrival instead and the pose would twitch.
+        // One roll per disturbance, so each return lands somewhere new.
         let disturbed = aiming || leaning || local_sprinting.0;
         if disturbed {
             if !gun.settle_rolled {
@@ -250,6 +249,13 @@ pub(crate) fn gun_view_animation(
         } else {
             gun.settle_rolled = false;
         }
+
+        // Chased rather than used raw. The offset lands straight on the final
+        // translation with nothing else smoothing it, so swapping the value in
+        // one frame moves the gun in one frame.
+        let settle_step = (GUN_SETTLE_SPEED * time.delta_secs()).min(1.0);
+        let settle_gap = gun.settle_jitter - gun.settle_current;
+        gun.settle_current += settle_gap * settle_step;
 
         let wall_raise_step = (WALL_GUN_RAISE_SPEED * time.delta_secs()).min(1.0);
         gun.wall_raise += (wall_target - gun.wall_raise) * wall_raise_step;
@@ -271,7 +277,7 @@ pub(crate) fn gun_view_animation(
 
         let timings = gun_pose_timings(&gun);
 
-        let resting = gun.base_offset.lerp(GUN_READY_OFFSET, gun.ready_blend) + gun.settle_jitter;
+        let resting = gun.base_offset.lerp(GUN_READY_OFFSET, gun.ready_blend) + gun.settle_current;
         let base_pos = resting.lerp(GUN_ADS_OFFSET, gun.ads_blend) - Vec3::Z * view_pullback();
 
         let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);

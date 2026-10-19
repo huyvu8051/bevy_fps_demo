@@ -271,6 +271,7 @@ pub(crate) fn setup_gameplay(
             Gun {
                 base_offset: GUN_OFFSET,
                 settle_jitter: Vec3::ZERO,
+                settle_current: Vec3::ZERO,
                 settle_rolled: false,
                 recoil: 0.0,
                 ammo: MAGAZINE_SIZE,

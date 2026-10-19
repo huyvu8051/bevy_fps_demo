@@ -141,6 +141,7 @@ const GUN_READY_OFFSET: Vec3 = Vec3::new(0.055, -0.40, -0.47);
 const GUN_READY_SPEED: f32 = 7.0;
 const GUN_READY_LEAN_CUTOFF: f32 = 0.12;
 const GUN_SETTLE_JITTER: Vec3 = Vec3::new(0.016, 0.013, 0.011);
+const GUN_SETTLE_SPEED: f32 = 3.0;
 const GUN_ADS_SPEED: f32 = 10.0;
 const GUN_SCALE: f32 = 0.001;
 const GUN_ROTATION_Y_DEG: f32 = -90.0;
