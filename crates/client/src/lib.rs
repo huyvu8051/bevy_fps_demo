@@ -67,10 +67,12 @@ use screen_effects::*;
 
 mod grip_ik;
 mod muzzle_fx;
+mod ragdoll;
 mod viewmodel_body;
 mod scope_lens;
 use grip_ik::*;
 use muzzle_fx::*;
+use ragdoll::*;
 use viewmodel_body::*;
 use scope_lens::*;
 
@@ -667,7 +669,7 @@ impl Plugin for GamePlugin {
                     update_screen_effects,
                     demote_fully_metallic_imports,
                     exclude_oversized_shadow_casters,
-                    update_death,
+                    (update_death, spawn_what_was_armed_last_frame, arm_ragdoll, settle_corpse).chain(),
                 update_dissolve,
                 )
                     .chain(),
@@ -705,6 +707,7 @@ impl Plugin for GamePlugin {
         (
             pose_viewmodel_arms,
             shape_viewmodel_skeleton,
+            drive_skeleton_from_ragdoll,
             aim_zombie_heads,
             apply_bone_flinch,
         )
