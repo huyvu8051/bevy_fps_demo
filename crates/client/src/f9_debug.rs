@@ -6,6 +6,14 @@ pub(crate) struct F9DebugPlugin;
 
 impl Plugin for F9DebugPlugin {
     fn build(&self, app: &mut App) {
+        if let Ok(path) = std::env::var("CAPTURE_SCREENSHOT_TO") {
+            let after = std::env::var("CAPTURE_SCREENSHOT_AFTER")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8.0);
+            app.insert_resource(PendingCapture { countdown: after, path })
+                .add_systems(Update, capture_screenshot_when_due);
+        }
         if std::env::var("EDITOR").is_ok() {
             app.init_resource::<F9SaveToast>()
                 .add_systems(Startup, spawn_f9_toast_ui)
@@ -105,4 +113,28 @@ fn tick_f9_toast(
     } else if *vis != Visibility::Hidden {
         *vis = Visibility::Hidden;
     }
+}
+
+#[derive(Resource)]
+struct PendingCapture {
+    countdown: f32,
+    path: String,
+}
+
+fn capture_screenshot_when_due(
+    time: Res<Time>,
+    mut commands: Commands,
+    pending: Option<ResMut<PendingCapture>>,
+) {
+    let Some(mut pending) = pending else { return };
+    pending.countdown -= time.delta_secs();
+    if pending.countdown > 0.0 {
+        return;
+    }
+    let path = pending.path.clone();
+    commands
+        .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
+        .observe(bevy::render::view::screenshot::save_to_disk(path.clone()));
+    commands.remove_resource::<PendingCapture>();
+    info!("[capture] wrote {path}");
 }
