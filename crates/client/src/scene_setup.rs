@@ -113,6 +113,8 @@ pub(crate) fn setup_common(
         particle_mesh: meshes.add(Rectangle::new(BLOOD_PARTICLE_SIZE, BLOOD_PARTICLE_SIZE)),
         particle_material: materials.add(StandardMaterial {
             base_color: Color::srgb(0.85, 0.05, 0.04),
+            base_color_texture: Some(images.add(droplet_image(BLOOD_DROPLET_TEXTURE_SIZE))),
+            alpha_mode: AlphaMode::Blend,
             unlit: true,
             cull_mode: None,
             ..default()

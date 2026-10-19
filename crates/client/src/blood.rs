@@ -303,3 +303,28 @@ fn spawn_exit_wound(
         spawn_blood_stain(commands, blood_assets, None, wall_point, wall.normal, seed, blood_assets.wall_stain_mesh.clone());
     }
 }
+
+/// A round droplet with a soft rim, generated rather than shipped: the
+/// particle quad was drawn with flat colour and no alpha, so every droplet
+/// was a hard red square.
+pub(crate) fn droplet_image(size: u32) -> Image {
+    let centre = (size as f32 - 1.0) * 0.5;
+    let mut data = Vec::with_capacity((size * size * 4) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let dx = (x as f32 - centre) / centre;
+            let dy = (y as f32 - centre) / centre;
+            let edge = (1.0 - (dx * dx + dy * dy).sqrt()).clamp(0.0, 1.0);
+            // cubed keeps a solid core and spends the falloff near the rim
+            let alpha = edge * edge * edge;
+            data.extend_from_slice(&[255, 255, 255, (alpha * 255.0) as u8]);
+        }
+    }
+    Image::new(
+        Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
