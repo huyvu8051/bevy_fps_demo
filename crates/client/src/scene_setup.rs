@@ -87,6 +87,7 @@ pub(crate) fn setup_common(
     });
 
     commands.insert_resource(build_bullet_hole_assets(&asset_server, &mut meshes, &mut materials));
+    commands.insert_resource(build_casing_assets(&mut meshes, &mut materials));
 
     commands.insert_resource(BloodAssets {
         particle_mesh: meshes.add(Rectangle::new(BLOOD_PARTICLE_SIZE, BLOOD_PARTICLE_SIZE)),
@@ -226,8 +227,12 @@ pub(crate) fn setup_gameplay(
                 brightness: ambient_brightness(),
                 ..default()
             },
-            Bloom::default(),
-            Msaa::Off,
+            (
+                Bloom::default(),
+                Msaa::Off,
+                bevy::core_pipeline::prepass::DepthPrepass,
+                distance_fog_for(scenario),
+            ),
             RenderLayers::from_layers(&[WORLD_LAYER, VIEWMODEL_LAYER]),
             RenderTarget::from(scene_target.0.clone()),
         ))

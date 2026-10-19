@@ -483,7 +483,7 @@ pub(crate) fn shoot(
     zombies: Query<(Entity, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
     spatial_query: SpatialQuery,
-    touch_firing: Res<TouchFiring>,
+    (touch_firing, casings): (Res<TouchFiring>, Res<CasingAssets>),
     mut cooldown: Local<f32>,
     (mut smoke_materials, mut flash_materials): (
         ResMut<Assets<MuzzleSmokeMaterial>>,
@@ -611,6 +611,15 @@ pub(crate) fn shoot(
             },
         ));
     }
+
+    eject_casing(
+        &mut commands,
+        &casings,
+        camera_transform,
+        gun_transform,
+        Vec3::ZERO,
+        time.elapsed_secs() * 311.0,
+    );
 
     let shot_shows_flame_blade =
         ops::sin(time.elapsed_secs() * 733.0).abs() < MUZZLE_BLADE_CHANCE;

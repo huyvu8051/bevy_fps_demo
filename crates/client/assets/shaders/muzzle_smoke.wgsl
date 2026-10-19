@@ -1,11 +1,18 @@
 // Kept as .wgsl, not .wesl: the WESL parser rejects naga_oil's #import and the
 // #{...} substitution below. See scope_lens.wgsl for the same constraint.
 #import bevy_pbr::forward_io::VertexOutput
+#import bevy_pbr::prepass_utils::prepass_depth
+#import bevy_pbr::view_transformations::depth_ndc_to_view_z
 
 // x = life progress 0..1, y = per-puff seed, z = density, w = billow speed
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> settings: vec4<f32>;
 
 const STEPS: i32 = 30;
+
+/// Over how many metres of depth difference the quad fades out where it meets
+/// solid geometry. Without this a puff against a wall shows the hard line of
+/// the quad cutting into it.
+const SOFT_FADE_METRES: f32 = 0.35;
 const SPHERE_RADIUS: f32 = 0.5;
 
 fn hash(p: vec3<f32>) -> f32 {
@@ -99,7 +106,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         position = position + step;
     }
 
-    let alpha = (1.0 - transmittance) * (1.0 - progress * progress);
+    // How far the solid world is behind this fragment. Both are negative
+    // (view -z is forward), so the subtraction gives a positive gap.
+    let scene_z = depth_ndc_to_view_z(prepass_depth(in.position, 0u));
+    let quad_z = depth_ndc_to_view_z(in.position.z);
+    let gap = clamp((quad_z - scene_z) / SOFT_FADE_METRES, 0.0, 1.0);
+
+    let alpha = (1.0 - transmittance) * (1.0 - progress * progress) * gap;
     if (alpha <= 0.001) {
         discard;
     }

@@ -97,7 +97,9 @@ mod graphics_settings;
 use graphics_settings::*;
 
 mod scene_setup;
+mod shell_casings;
 use scene_setup::*;
+use shell_casings::*;
 
 mod game_flow;
 use game_flow::*;
@@ -696,7 +698,7 @@ impl Plugin for GamePlugin {
                 despawn_bullet_tracers,
                 update_smoke,
                 update_blood_particles,
-                (update_blood_bursts, update_bullet_holes, update_impact_dust),
+                (update_blood_bursts, update_bullet_holes, update_impact_dust, update_casings),
                 (update_muzzle_smoke, update_muzzle_flash),
                 update_spark_particles,
                 despawn_blood_stains,
