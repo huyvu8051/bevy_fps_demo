@@ -52,8 +52,7 @@ pub(crate) fn setup_common(
     commands.insert_resource(HitMarkerAssets {
         mesh: meshes.add(Sphere::new(0.03)),
         material: materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.15, 0.1),
-            emissive: LinearRgba::rgb(4.0, 0.3, 0.2),
+            base_color: Color::linear_rgb(4.0, 0.3, 0.2),
             unlit: true,
             ..default()
         }),
@@ -79,8 +78,7 @@ pub(crate) fn setup_common(
     commands.insert_resource(TracerAssets {
         mesh: meshes.add(Cylinder::new(1.0, 1.0)),
         material: materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.85, 0.3),
-            emissive: LinearRgba::rgb(10.0, 6.0, 1.0),
+            base_color: Color::linear_rgb(10.0, 6.0, 1.0),
             unlit: true,
             ..default()
         }),
@@ -132,8 +130,7 @@ pub(crate) fn setup_common(
     commands.insert_resource(SparkAssets {
         mesh: meshes.add(Rectangle::new(SPARK_PARTICLE_SIZE, SPARK_PARTICLE_SIZE)),
         material: materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.75, 0.2),
-            emissive: LinearRgba::rgb(25.0, 12.0, 1.5),
+            base_color: Color::linear_rgb(25.0, 12.0, 1.5),
             unlit: true,
             cull_mode: None,
             ..default()
@@ -319,8 +316,7 @@ pub(crate) fn setup_gameplay(
             .mesh(),
         )),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.0, 0.0),
-            emissive: LinearRgba::rgb(35.0, 0.0, 0.0),
+            base_color: Color::linear_rgb(35.0, 0.0, 0.0),
             unlit: true,
             ..default()
         })),
