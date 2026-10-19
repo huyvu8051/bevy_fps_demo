@@ -70,6 +70,11 @@ const AUTOPILOT_TURN_FADE_IN_DURATION: f32 = 0.4;
 
 const AUTOPILOT_FIRE_AIM_TOLERANCE_DEG: f32 = 12.0;
 const AUTOPILOT_SPRINT_APPROACH_DISTANCE: f32 = 22.0;
+
+/// How far a blind approach has to be before it is worth sprinting. Pathing
+/// around a corner to something 15m away is a walk; the old threshold was the
+/// retreat range, so any detour past 5m broke into a run.
+const AUTOPILOT_SPRINT_PATHING_DISTANCE: f32 = 15.0;
 const AUTOPILOT_LOW_HEALTH_FRACTION: f32 = 0.3;
 const AUTOPILOT_LOW_HEALTH_RETREAT_BONUS: f32 = 4.0;
 const AUTOPILOT_IDLE_SCAN_DEG_PER_SEC: f32 = 20.0;
@@ -353,7 +358,9 @@ pub(crate) fn autopilot_think(
     intent.move_axis = move_axis;
     intent.sprint = nearby.is_empty()
         && (horizontal_distance > AUTOPILOT_SPRINT_APPROACH_DISTANCE
-            || (!straight_los && peek_dir == 0.0 && horizontal_distance > AUTOPILOT_RETREAT_RANGE));
+            || (!straight_los
+                && peek_dir == 0.0
+                && horizontal_distance > AUTOPILOT_SPRINT_PATHING_DISTANCE));
 }
 fn path_direction(
     archipelagos: &Query<&bevy_landmass::prelude::Archipelago3d>,

@@ -183,6 +183,9 @@ pub(crate) fn gun_view_animation(
     let camera_single = camera.single().ok();
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
 
+    let leaning = camera_single
+        .is_some_and(|(_, lean)| lean.current.abs() > GUN_READY_LEAN_CUTOFF);
+
     let shoulder_target = if game_over.0 {
         0.0
     } else {
@@ -227,7 +230,11 @@ pub(crate) fn gun_view_animation(
         } else if local_sprinting.0 || game_over.0 {
             gun.ready_armed = false;
         }
-        let ready_target = if gun.ready_armed && !aiming { 1.0 } else { 0.0 };
+        // Leaning takes the gun back to its shoulder: the swap is a deliberate
+        // move to the other side of cover, and a centred ready pose has nothing
+        // to swap. Releasing the lean settles back to ready.
+        let ready_target =
+            if gun.ready_armed && !aiming && !leaning { 1.0 } else { 0.0 };
         let ready_step = (GUN_READY_SPEED * time.delta_secs()).min(1.0);
         gun.ready_blend += (ready_target - gun.ready_blend) * ready_step;
 
