@@ -24,8 +24,9 @@ const EJECT_UP: f32 = 0.55;
 const EJECT_SCATTER: f32 = 0.22;
 const EJECT_SPIN: f32 = 26.0;
 
-const CASING_LIFETIME: f32 = 9.0;
-const MAX_CASINGS: usize = 24;
+const CASING_LIFETIME: f32 = 25.0;
+/// A magazine is 50 rounds, so a budget under that threw brass away mid-burst.
+const MAX_CASINGS: usize = 60;
 
 #[derive(Resource)]
 pub(crate) struct CasingAssets {
@@ -97,6 +98,11 @@ pub(crate) fn eject_casing(
         RigidBody::Dynamic,
         Collider::cylinder(CASING_RADIUS, CASING_LENGTH),
         ColliderDensity(CASING_DENSITY),
+        // Map geometry is a trimesh, which has no thickness, and a 5mm casing
+        // covers 8cm in a physics step once gravity has it. Without swept
+        // collision it passes straight through the floor and is never seen
+        // landing.
+        SweptCcd::default(),
         LinearVelocity(away * EJECT_SPEED + player_velocity),
         AngularVelocity(scatter(seed * 1.9) * EJECT_SPIN),
         ShellCasing { remaining: CASING_LIFETIME },
@@ -112,7 +118,6 @@ pub(crate) fn eject_casing(
             PortSmoke { velocity: drift * PORT_SMOKE_SPEED, remaining: PORT_SMOKE_LIFETIME },
         ));
     }
-    info!("[casing] ejected at {port:.2?}");
 }
 
 pub(crate) fn update_port_smoke(
@@ -151,12 +156,13 @@ pub(crate) fn update_casings(
     mut commands: Commands,
     mut casings: Query<(Entity, &mut ShellCasing)>,
 ) {
+    // Shorten the oldest instead of despawning outright: brass vanishing from
+    // under your feet mid-burst is more noticeable than brass fading early.
     let mut over_budget = casings.iter().len().saturating_sub(MAX_CASINGS);
     for (entity, mut casing) in &mut casings {
-        if over_budget > 0 {
+        if over_budget > 0 && casing.remaining > 1.0 {
             over_budget -= 1;
-            commands.entity(entity).despawn();
-            continue;
+            casing.remaining = 1.0;
         }
         casing.remaining -= time.delta_secs();
         if casing.remaining <= 0.0 {
