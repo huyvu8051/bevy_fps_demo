@@ -197,6 +197,7 @@ pub(crate) fn apply_lean_input(
     touch_lean: Res<TouchLeanHeld>,
     game_over: Res<GameOver>,
     autopilot: Res<Autopilot>,
+    auto_lean: Res<AutoLean>,
     mut query: Query<&mut Lean>,
 ) {
 
@@ -211,7 +212,7 @@ pub(crate) fn apply_lean_input(
         match (left, right) {
             (true, false) => -1.0,
             (false, true) => 1.0,
-            _ => 0.0,
+            _ => auto_lean.suggestion,
         }
     };
     for mut lean in &mut query {
