@@ -36,7 +36,7 @@ pub(crate) fn suggest_auto_lean(
     autopilot: Res<Autopilot>,
     game_over: Res<GameOver>,
     spatial_query: SpatialQuery,
-    camera: Query<(&GlobalTransform, &FpsCamera)>,
+    camera: Query<(&GlobalTransform, &FpsCamera, &Lean)>,
     gun: Query<&Gun>,
     mut auto: ResMut<AutoLean>,
 ) {
@@ -46,10 +46,16 @@ pub(crate) fn suggest_auto_lean(
         auto.hold = 0.0;
         return;
     }
-    let Ok((eye_global, cam)) = camera.single() else { return };
-    let eye = eye_global.translation();
+    let Ok((eye_global, cam, lean)) = camera.single() else { return };
     let Ok(facing) = Dir3::new(*eye_global.forward()) else { return };
     let sideways = Vec3::new(ops::cos(cam.yaw), 0.0, -ops::sin(cam.yaw));
+
+    // Probe from where the eye would be standing straight, not from where it
+    // currently is. The camera position already carries the lean this system
+    // asked for, so testing from it means a successful lean clears the very
+    // cover check that requested it, the suggestion drops, the body swings
+    // back, and the corner starts over — which is the judder.
+    let eye = eye_global.translation() - sideways * LEAN_SIDE_OFFSET * lean.current;
 
     // Smallest lean that clears the edge wins, so a shallow corner gets a
     // shallow lean instead of throwing the whole body out for no extra angle.
