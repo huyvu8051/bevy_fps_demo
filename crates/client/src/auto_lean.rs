@@ -5,8 +5,12 @@ use crate::*;
 
 const COVER_RANGE: f32 = 1.3;
 const OPENED_RANGE: f32 = 5.0;
-const PEEK_OFFSET: f32 = LEAN_SIDE_OFFSET;
 const ADS_THRESHOLD: f32 = 0.5;
+
+/// How far out to try, smallest first. Both the roll and the sideways shift
+/// scale off the same value, so a fraction here is a genuinely shallower lean
+/// rather than a rounded-off full one.
+const PEEK_STEPS: [f32; 4] = [0.3, 0.55, 0.8, 1.0];
 const HOLD_SECONDS: f32 = 0.3;
 
 #[derive(Resource, Default)]
@@ -47,15 +51,20 @@ pub(crate) fn suggest_auto_lean(
     let Ok(facing) = Dir3::new(*eye_global.forward()) else { return };
     let sideways = Vec3::new(ops::cos(cam.yaw), 0.0, -ops::sin(cam.yaw));
 
-    let direction = if !blocked_within(&spatial_query, eye, facing, COVER_RANGE) {
-        None
-    } else if !blocked_within(&spatial_query, eye + sideways * PEEK_OFFSET, facing, OPENED_RANGE) {
-        Some(1.0)
-    } else if !blocked_within(&spatial_query, eye - sideways * PEEK_OFFSET, facing, OPENED_RANGE) {
-        Some(-1.0)
-    } else {
-        None
-    };
+    // Smallest lean that clears the edge wins, so a shallow corner gets a
+    // shallow lean instead of throwing the whole body out for no extra angle.
+    let mut direction = None;
+    if blocked_within(&spatial_query, eye, facing, COVER_RANGE) {
+        'search: for amount in PEEK_STEPS {
+            for side in [1.0, -1.0] {
+                let probe = eye + sideways * side * LEAN_SIDE_OFFSET * amount;
+                if !blocked_within(&spatial_query, probe, facing, OPENED_RANGE) {
+                    direction = Some(side * amount);
+                    break 'search;
+                }
+            }
+        }
+    }
 
     match direction {
         Some(side) => {
