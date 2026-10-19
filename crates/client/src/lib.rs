@@ -192,8 +192,12 @@ const MUZZLE_LIGHT_INTENSITY: f32 = 210_000.0;
 const MUZZLE_LIGHT_RANGE: f32 = 3.2;
 
 const TRACER_CHANCE: f32 = 0.5;
-const TRACER_LIFETIME: f32 = 0.045;
-const TRACER_RADIUS: f32 = 0.012;
+const TRACER_SPEED: f32 = 300.0;
+const TRACER_STREAK_LENGTH: f32 = 7.0;
+const TRACER_WIDTH: f32 = 0.024;
+const TRACER_MIN_PIXELS: f32 = 2.0;
+const TRACER_NEAR_SKIP: f32 = 3.0;
+const TRACER_FADE_STEPS: usize = 5;
 
 const TRACER_START_Y_OFFSET: f32 = -0.05;
 
@@ -716,7 +720,7 @@ impl Plugin for GamePlugin {
                 update_splash_screen,
                 despawn_hit_markers,
                 despawn_muzzle_flashes,
-                despawn_bullet_tracers,
+                update_bullet_tracers,
                 update_smoke,
                 update_blood_particles,
                 (update_blood_bursts, update_bullet_holes, update_impact_dust, update_casings, update_port_smoke),

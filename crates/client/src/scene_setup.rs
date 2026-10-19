@@ -76,12 +76,19 @@ pub(crate) fn setup_common(
     });
 
     commands.insert_resource(TracerAssets {
-        mesh: meshes.add(Cylinder::new(1.0, 1.0)),
-        material: materials.add(StandardMaterial {
-            base_color: Color::linear_rgb(10.0, 6.0, 1.0),
-            unlit: true,
-            ..default()
-        }),
+        mesh: meshes.add(Rectangle::new(1.0, 1.0)),
+        fade_steps: (0..TRACER_FADE_STEPS)
+            .map(|step| {
+                let fade = 1.0 - step as f32 / TRACER_FADE_STEPS as f32;
+                materials.add(StandardMaterial {
+                    base_color: Color::LinearRgba(LinearRgba::new(10.0, 6.0, 1.0, fade)),
+                    alpha_mode: AlphaMode::Blend,
+                    unlit: true,
+                    cull_mode: None,
+                    ..default()
+                })
+            })
+            .collect(),
     });
 
     commands.insert_resource(build_bullet_hole_assets(&asset_server, &mut meshes, &mut materials));

@@ -25,7 +25,10 @@ pub(crate) struct Smoke {
 
 #[derive(Component)]
 pub(crate) struct BulletTracer {
-    pub(crate) remaining: f32,
+    start: Vec3,
+    along: Vec3,
+    total: f32,
+    travelled: f32,
 }
 
 
@@ -52,7 +55,7 @@ pub(crate) struct MuzzleFxAssets {
 #[derive(Resource)]
 pub(crate) struct TracerAssets {
     pub(crate) mesh: Handle<Mesh>,
-    pub(crate) material: Handle<StandardMaterial>,
+    pub(crate) fade_steps: Vec<Handle<StandardMaterial>>,
 }
 
 
@@ -149,20 +152,21 @@ pub(crate) fn spawn_bullet_tracer(commands: &mut Commands, tracer_assets: &Trace
         return;
     }
     let delta = end - start;
-    let length = delta.length();
-    if length < f32::EPSILON {
+    let Some(along) = delta.try_normalize() else { return };
+    // Starts clear of the muzzle. Right at it the quad is only centimetres
+    // from the eye, where it widens into a band across the screen and draws
+    // over the gun it just left.
+    let total = delta.length() - TRACER_NEAR_SKIP;
+    if total <= 0.0 {
         return;
     }
-    let rotation = Quat::from_rotation_arc(Vec3::Y, delta / length);
+    let start = start + along * TRACER_NEAR_SKIP;
+    let Some(brightest) = tracer_assets.fade_steps.first() else { return };
     commands.spawn((
         Mesh3d(tracer_assets.mesh.clone()),
-        MeshMaterial3d(tracer_assets.material.clone()),
-        Transform::from_translation(start + delta * 0.5)
-            .with_rotation(rotation)
-            .with_scale(Vec3::new(TRACER_RADIUS, length, TRACER_RADIUS)),
-        BulletTracer {
-            remaining: TRACER_LIFETIME,
-        },
+        MeshMaterial3d(brightest.clone()),
+        Transform::from_translation(start),
+        BulletTracer { start, along, total, travelled: 0.0 },
     ));
 }
 
@@ -406,15 +410,66 @@ pub(crate) fn despawn_muzzle_flashes(
     }
 }
 
-pub(crate) fn despawn_bullet_tracers(
+pub(crate) fn update_bullet_tracers(
     mut commands: Commands,
     time: Res<Time>,
-    mut query: Query<(Entity, &mut BulletTracer)>,
+    assets: Res<TracerAssets>,
+    camera: Query<(&GlobalTransform, &Camera, &Projection), With<FpsCamera>>,
+    mut tracers: Query<(Entity, &mut Transform, &mut MeshMaterial3d<StandardMaterial>, &mut BulletTracer)>,
 ) {
-    for (entity, mut tracer) in &mut query {
-        tracer.remaining -= time.delta_secs();
-        if tracer.remaining <= 0.0 {
+    let Ok((eye_global, camera, projection)) = camera.single() else {
+        return;
+    };
+    let eye = eye_global.translation();
+
+    // World size one pixel covers per metre of distance. A 2cm streak is
+    // thinner than a pixel well before it reaches the far end of the map, and
+    // sub-pixel geometry flickers rather than fades.
+    let per_pixel = match projection {
+        Projection::Perspective(perspective) => {
+            let height = camera.logical_viewport_size().map(|size| size.y).unwrap_or(1080.0);
+            2.0 * ops::tan(perspective.fov * 0.5) / height
+        }
+        _ => 0.0,
+    };
+
+    let dt = time.delta_secs();
+    for (entity, mut transform, mut material, mut tracer) in &mut tracers {
+        tracer.travelled += TRACER_SPEED * dt;
+
+        // The head stops at the impact point while the tail keeps going, so
+        // the streak collapses into the hit instead of blinking out mid-air.
+        let head = tracer.travelled.min(tracer.total);
+        let tail = (tracer.travelled - TRACER_STREAK_LENGTH).max(0.0);
+        if tail >= tracer.total {
             commands.entity(entity).try_despawn();
+            continue;
+        }
+
+        let span = head - tail;
+        let centre = tracer.start + tracer.along * (tail + span * 0.5);
+        let to_eye = eye - centre;
+        let Some(side) = tracer.along.cross(to_eye).try_normalize() else {
+            continue;
+        };
+
+        // Quad lies in local XY with its normal on +Z: width across the
+        // streak, length along it, normal turned to the eye.
+        let facing = side.cross(tracer.along);
+        transform.translation = centre;
+        transform.rotation = Quat::from_mat3(&Mat3::from_cols(side, tracer.along, facing));
+        transform.scale = Vec3::new(
+            TRACER_WIDTH.max(to_eye.length() * per_pixel * TRACER_MIN_PIXELS),
+            span,
+            1.0,
+        );
+
+        let flown = (tracer.travelled / tracer.total.max(0.01)).clamp(0.0, 1.0);
+        let step = ((flown * TRACER_FADE_STEPS as f32) as usize).min(TRACER_FADE_STEPS - 1);
+        if let Some(faded) = assets.fade_steps.get(step) {
+            if material.0 != *faded {
+                material.0 = faded.clone();
+            }
         }
     }
 }
