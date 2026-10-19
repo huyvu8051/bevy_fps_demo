@@ -52,7 +52,9 @@ mod audio;
 use audio::*;
 
 mod blood;
+mod bullet_holes;
 use blood::*;
+use bullet_holes::*;
 
 mod zombie_reaction;
 use zombie_reaction::*;
@@ -690,7 +692,7 @@ impl Plugin for GamePlugin {
                 despawn_bullet_tracers,
                 update_smoke,
                 update_blood_particles,
-                update_blood_bursts,
+                (update_blood_bursts, update_bullet_holes, update_impact_dust),
                 (update_muzzle_smoke, update_muzzle_flash),
                 update_spark_particles,
                 despawn_blood_stains,
