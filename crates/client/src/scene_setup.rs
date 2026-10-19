@@ -306,6 +306,10 @@ pub(crate) fn setup_gameplay(
                 ..default()
             },
             Msaa::Off,
+            // Soft particles sample the depth prepass. Without it the scope
+            // view specialises muzzle_smoke.wgsl with no prepass_depth in
+            // scope and the shader fails to build for this camera.
+            bevy::core_pipeline::prepass::DepthPrepass,
             RenderLayers::from_layers(&[WORLD_LAYER, SCOPE_RETICLE_LAYER]),
             distance_fog_for(scenario),
             Bloom::default(),
