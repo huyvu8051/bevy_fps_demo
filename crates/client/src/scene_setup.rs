@@ -224,8 +224,12 @@ pub(crate) fn setup_gameplay(
                 brightness: ambient_brightness(),
                 ..default()
             },
-            Bloom::default(),
-            Msaa::Off,
+            (
+                Bloom::default(),
+                Msaa::Off,
+                bevy::core_pipeline::prepass::DepthPrepass,
+                distance_fog_for(scenario),
+            ),
             RenderLayers::from_layers(&[WORLD_LAYER, VIEWMODEL_LAYER]),
             RenderTarget::from(scene_target.0.clone()),
         ))

@@ -211,3 +211,27 @@ pub(crate) fn exclude_oversized_shadow_casters(
         }
     }
 }
+
+const DESERT_VISIBILITY: f32 = 95.0;
+const GARAGE_VISIBILITY: f32 = 38.0;
+
+/// Depth fog, tuned per map. Visibility is the distance at which a dark object
+/// stops being distinguishable from the haze, which is the number the
+/// Koschmieder falloff is derived from, so it reads directly as "how far can
+/// you see here".
+pub(crate) fn distance_fog_for(scenario: Scenario) -> DistanceFog {
+    match scenario {
+        Scenario::Desert => DistanceFog {
+            color: Color::srgb(0.74, 0.66, 0.54),
+            directional_light_color: Color::srgb(1.0, 0.92, 0.76),
+            directional_light_exponent: 24.0,
+            falloff: FogFalloff::from_visibility(DESERT_VISIBILITY),
+        },
+        Scenario::Garage => DistanceFog {
+            color: Color::srgb(0.10, 0.11, 0.13),
+            directional_light_color: Color::srgb(0.4, 0.42, 0.5),
+            directional_light_exponent: 8.0,
+            falloff: FogFalloff::from_visibility(GARAGE_VISIBILITY),
+        },
+    }
+}
