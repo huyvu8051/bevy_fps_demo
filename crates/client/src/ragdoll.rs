@@ -15,13 +15,11 @@ const LEAF_BONE_LENGTH: f32 = 0.12;
 
 const SWING_LIMIT_SPINE: f32 = 0.5;
 const SWING_LIMIT_SHOULDER: f32 = 1.6;
-const SWING_LIMIT_ELBOW: f32 = 0.1;
+const SWING_LIMIT_ELBOW: f32 = 1.3;
 const SWING_LIMIT_HIP: f32 = 1.2;
-const SWING_LIMIT_KNEE: f32 = 0.1;
+const SWING_LIMIT_KNEE: f32 = 1.3;
 const TWIST_LIMIT: f32 = 0.4;
-
-const ELBOW_RANGE: (f32, f32) = (-2.4, 0.0);
-const KNEE_RANGE: (f32, f32) = (0.0, 2.4);
+const TWIST_LIMIT_HINGE: f32 = 0.08;
 
 #[derive(Component)]
 pub(crate) struct RagdollArming {
@@ -38,13 +36,13 @@ impl RagdollArming {
 
 #[derive(Component)]
 pub(crate) struct Ragdolling {
-    bodies: Vec<(Entity, Entity)>,
+    bodies: Vec<(Entity, Entity, Quat)>,
     settled_for: f32,
     elapsed: f32,
 }
 
 impl Ragdolling {
-    pub(crate) fn bodies(&self) -> &[(Entity, Entity)] {
+    pub(crate) fn bodies(&self) -> &[(Entity, Entity, Quat)] {
         &self.bodies
     }
 }
@@ -174,13 +172,23 @@ pub(crate) fn spawn_what_was_armed_last_frame(
             let position = global.translation();
             let rotation = global.rotation();
 
-            let length = links
+            let tail = links
                 .iter()
                 .find(|child| child.parent_slot == Some(slot))
                 .and_then(|child| globals.get(child.bone).ok())
-                .map(|child| child.translation().distance(position))
-                .unwrap_or(LEAF_BONE_LENGTH)
-                .max(MIN_BONE_LENGTH);
+                .map(|child| child.translation())
+                .unwrap_or_else(|| position + rotation * Vec3::Y * LEAF_BONE_LENGTH);
+            let span = tail - position;
+            let length = span.length().max(MIN_BONE_LENGTH);
+            let along = span.try_normalize().unwrap_or(rotation * Vec3::Y);
+
+            // The capsule spans the bone rather than straddling its head, and
+            // its local Y runs down the limb. That puts the mass where the limb
+            // is, and makes the joint twist axis the limb axis, so a twist limit
+            // actually limits twist instead of some arbitrary bone axis.
+            let centre = position + along * (length * 0.5);
+            let facing = Quat::from_rotation_arc(Vec3::Y, along);
+            let bone_from_body = facing.inverse() * rotation;
 
             let (velocity, spin) = armed
                 .captured
@@ -204,20 +212,21 @@ pub(crate) fn spawn_what_was_armed_last_frame(
                     RigidBody::Dynamic,
                     Collider::capsule(link.radius, length),
                     ColliderDensity(BONE_DENSITY),
-                    Transform::from_translation(position).with_rotation(rotation),
+                    Transform::from_translation(centre).with_rotation(facing),
                     LinearVelocity(velocity),
                     AngularVelocity(spin),
                     RagdollBody,
                 ))
                 .id();
             bodies[slot] = Some(body);
-            pairs.push((link.bone, body));
+            pairs.push((link.bone, body, bone_from_body));
         }
 
         for (slot, link) in links.iter().enumerate() {
             let (Some(body), Some(parent_slot)) = (bodies[slot], link.parent_slot) else { continue };
             let Some(parent_body) = bodies[parent_slot] else { continue };
-            commands.spawn((joint_for(link.joint, parent_body, body), JointCollisionDisabled));
+            let Ok(pivot) = globals.get(link.bone).map(|g| g.translation()) else { continue };
+            commands.spawn((joint_for(link.joint, parent_body, body, pivot), JointCollisionDisabled));
         }
 
 
@@ -229,15 +238,21 @@ pub(crate) fn spawn_what_was_armed_last_frame(
     }
 }
 
-fn joint_for(kind: JointKind, parent: Entity, child: Entity) -> SphericalJoint {
+fn joint_for(kind: JointKind, parent: Entity, child: Entity, pivot: Vec3) -> SphericalJoint {
     let (swing, twist) = match kind {
         JointKind::Spine => (SWING_LIMIT_SPINE, TWIST_LIMIT),
         JointKind::Shoulder => (SWING_LIMIT_SHOULDER, TWIST_LIMIT),
-        JointKind::Elbow => (SWING_LIMIT_ELBOW, ELBOW_RANGE.1 - ELBOW_RANGE.0),
+        JointKind::Elbow => (SWING_LIMIT_ELBOW, TWIST_LIMIT_HINGE),
         JointKind::Hip => (SWING_LIMIT_HIP, TWIST_LIMIT),
-        JointKind::Knee => (SWING_LIMIT_KNEE, KNEE_RANGE.1 - KNEE_RANGE.0),
+        JointKind::Knee => (SWING_LIMIT_KNEE, TWIST_LIMIT_HINGE),
     };
+    // Both bodies anchor on the joint they share. Left at the default both
+    // anchors sit at their own origin, so the solver drags the two bone
+    // centres onto one point and the skeleton tears itself apart.
+    let shared = JointFrame { anchor: JointAnchor::FromGlobal(pivot), basis: JointBasis::IDENTITY };
     SphericalJoint {
+        frame1: shared,
+        frame2: shared,
         swing_limit: Some(AngleLimit { min: -swing, max: swing }),
         twist_limit: Some(AngleLimit { min: -twist, max: twist }),
         ..SphericalJoint::new(parent, child)
@@ -260,7 +275,7 @@ pub(crate) fn drive_skeleton_from_ragdoll(
         ragdoll.elapsed += time.delta_secs();
 
         let mut fastest: f32 = 0.0;
-        for &(bone, body) in &ragdoll.bodies {
+        for &(bone, body, bone_from_body) in &ragdoll.bodies {
             if let Ok((linear, angular)) = speeds.get(body) {
                 fastest = fastest.max(linear.0.length()).max(angular.0.length() * 0.2);
             }
@@ -269,10 +284,11 @@ pub(crate) fn drive_skeleton_from_ragdoll(
             };
             let Ok(parent_global) = globals.get(parent.0) else { continue };
             let Ok(mut transform) = bones.get_mut(bone) else { continue };
-            transform.rotation = parent_global.rotation().inverse() * body_global.rotation();
+            transform.rotation =
+                parent_global.rotation().inverse() * body_global.rotation() * bone_from_body;
         }
 
-        if let Some(&(_, root_body)) = ragdoll.bodies.first() {
+        if let Some(&(_, root_body, _)) = ragdoll.bodies.first() {
             if let Ok(global) = globals.get(root_body) {
                 root.translation = global.translation();
             }
@@ -285,7 +301,7 @@ pub(crate) fn drive_skeleton_from_ragdoll(
         };
 
         if ragdoll.settled_for >= SETTLE_HOLD_SECONDS || ragdoll.elapsed >= MAX_RAGDOLL_SECONDS {
-            for &(_, body) in &ragdoll.bodies {
+            for &(_, body, _) in &ragdoll.bodies {
                 commands.entity(body).despawn();
             }
             commands.entity(entity).remove::<Ragdolling>().insert(CorpseSettled);

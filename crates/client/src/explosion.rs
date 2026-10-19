@@ -89,7 +89,7 @@ pub(crate) fn apply_pending_blast(
     mut bodies: Query<(&Transform, &mut LinearVelocity, &mut AngularVelocity), With<RagdollBody>>,
 ) {
     for (entity, ragdoll, blast) in &corpses {
-        for (index, &(_, body)) in ragdoll.bodies().iter().enumerate() {
+        for (index, &(_, body, _)) in ragdoll.bodies().iter().enumerate() {
             let Ok((transform, mut velocity, mut spin)) = bodies.get_mut(body) else { continue };
             let Some(push) = blast_at(transform.translation, blast) else { continue };
             let seed = body.to_bits() as f32 * 0.37 + index as f32;
