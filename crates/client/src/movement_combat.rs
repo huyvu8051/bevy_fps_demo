@@ -192,6 +192,11 @@ pub(crate) fn apply_view_recoil(
     }
 }
 
+fn lean_logging() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LEAN_LOG").is_ok())
+}
+
 pub(crate) fn apply_lean_input(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -220,7 +225,18 @@ pub(crate) fn apply_lean_input(
 
         lean.target = target;
         let t = (LEAN_SPEED * time.delta_secs()).min(1.0);
+        let before = lean.current;
         lean.current += (target - lean.current) * t;
+        if lean_logging() && (target != 0.0 || lean.current.abs() > 0.001) {
+            let dt = time.delta_secs().max(1e-5);
+            info!(
+                "[lean] target={:+.2} current={:+.4} rate={:6.2}/s roll={:+6.1}deg",
+                target,
+                lean.current,
+                (lean.current - before) / dt,
+                -LEAN_ROLL_DEG * lean.current,
+            );
+        }
     }
 }
 
