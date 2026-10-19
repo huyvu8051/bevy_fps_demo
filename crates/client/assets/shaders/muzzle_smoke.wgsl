@@ -7,7 +7,7 @@
 // x = life progress 0..1, y = per-puff seed, z = density, w = billow speed
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> settings: vec4<f32>;
 
-const STEPS: i32 = 30;
+const STEPS: i32 = 16;
 
 /// Over how many metres of depth difference the quad fades out where it meets
 /// solid geometry. Without this a puff against a wall shows the hard line of

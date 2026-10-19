@@ -204,16 +204,20 @@ const TRACER_START_Y_OFFSET: f32 = -0.05;
 
 const SMOKE_LIFETIME: f32 = 1.9;
 const SMOKE_START_SCALE: f32 = 0.52;
-const SMOKE_GROWTH_PER_SEC: f32 = 2.1;
+const SMOKE_GROWTH_PER_SEC: f32 = 1.5;
 const SMOKE_DRAG: f32 = 1.2;
-const SMOKE_MAX_PUFFS: usize = 16;
+const SMOKE_MAX_PUFFS: usize = 9;
 const SMOKE_BUOYANCY: f32 = 0.22;
 
-const BARREL_SMOKE_WINDOW: f32 = 1.5;
-const BARREL_SMOKE_INTERVAL: f32 = 0.19;
-const BARREL_SMOKE_SCALE: f32 = 0.26;
-const BARREL_SMOKE_RISE: f32 = 0.42;
-const BARREL_SMOKE_WANDER: f32 = 0.06;
+const BARREL_SMOKE_WINDOW: f32 = 1.6;
+const BARREL_TRAIL_MAX_POINTS: usize = 26;
+const BARREL_TRAIL_INTERVAL: f32 = 0.045;
+const BARREL_TRAIL_LIFETIME: f32 = 2.4;
+const BARREL_TRAIL_RISE: f32 = 0.34;
+const BARREL_TRAIL_SWAY: f32 = 0.12;
+const BARREL_TRAIL_WIDTH: f32 = 0.011;
+const BARREL_TRAIL_SPREAD: f32 = 0.085;
+const BARREL_TRAIL_ALPHA: f32 = 0.55;
 
 const BLOOD_PARTICLE_COUNT: usize = 14;
 const BLOOD_PARTICLE_SPEED: f32 = 3.2;
@@ -733,7 +737,7 @@ impl Plugin for GamePlugin {
                 update_smoke,
                 update_blood_particles,
                 (update_blood_bursts, update_bullet_holes, update_impact_dust, update_casings, update_port_smoke),
-                (update_muzzle_smoke, update_muzzle_flash, emit_barrel_smoke),
+                (update_muzzle_smoke, update_muzzle_flash, update_barrel_smoke),
                 update_spark_particles,
                 despawn_blood_stains,
             )

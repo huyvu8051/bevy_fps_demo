@@ -91,6 +91,21 @@ pub(crate) fn setup_common(
             .collect(),
     });
 
+    let barrel_ribbon = meshes.add(empty_ribbon_mesh());
+    commands.insert_resource(BarrelSmokeRibbon { mesh: barrel_ribbon.clone() });
+    commands.spawn((
+        Name::new("BarrelSmokeRibbon"),
+        Mesh3d(barrel_ribbon),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.70, 0.69, 0.67),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            cull_mode: None,
+            ..default()
+        })),
+        Transform::default(),
+    ));
+
     commands.insert_resource(build_bullet_hole_assets(&asset_server, &mut meshes, &mut materials));
     commands.insert_resource(build_casing_assets(&mut meshes, &mut materials));
 

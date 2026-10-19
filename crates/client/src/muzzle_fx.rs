@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 
@@ -170,51 +171,140 @@ pub(crate) fn update_muzzle_flash(
     }
 }
 
-/// Smoke keeps curling off a hot barrel after the shooting stops.
+
+struct TrailPoint {
+    position: Vec3,
+    age: f32,
+    sway_seed: f32,
+}
+
+/// One continuous ribbon rising off a hot barrel, the way a stick of incense
+/// smokes. Separate puffs read as lumps, and each puff cost a raymarch; the
+/// whole stream here is a single unlit mesh.
 #[derive(Resource, Default)]
 pub(crate) struct BarrelSmoke {
     since_shot: f32,
-    next_puff: f32,
+    next_point: f32,
+    points: Vec<TrailPoint>,
+}
+
+#[derive(Resource)]
+pub(crate) struct BarrelSmokeRibbon {
+    pub(crate) mesh: Handle<Mesh>,
 }
 
 pub(crate) fn note_shot_for_barrel_smoke(_: On<FireShot>, mut barrel: ResMut<BarrelSmoke>) {
     barrel.since_shot = 0.0;
 }
 
-pub(crate) fn emit_barrel_smoke(
+/// Allocated once at full length and never resized. Rewriting a mesh with a
+/// different vertex count every frame frees slab entries the render world is
+/// still pointing at, which Bevy reports as a use-after-free.
+pub(crate) fn empty_ribbon_mesh() -> Mesh {
+    let rows = BARREL_TRAIL_MAX_POINTS * 2;
+    let mut indices = Vec::with_capacity((BARREL_TRAIL_MAX_POINTS - 1) * 6);
+    for index in 0..BARREL_TRAIL_MAX_POINTS - 1 {
+        let base = (index * 2) as u32;
+        indices.extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);
+    }
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; rows])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0f32]; rows])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; rows])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; rows])
+        .with_inserted_indices(Indices::U32(indices))
+}
+
+pub(crate) fn update_barrel_smoke(
     time: Res<Time>,
-    mut commands: Commands,
     mut barrel: ResMut<BarrelSmoke>,
-    muzzle_assets: Res<MuzzleFxAssets>,
-    mut materials: ResMut<Assets<MuzzleSmokeMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    ribbon: Res<BarrelSmokeRibbon>,
     camera: Query<&Transform, With<FpsCamera>>,
     gun: Query<(&Transform, &Gun), Without<FpsCamera>>,
 ) {
     let dt = time.delta_secs();
     barrel.since_shot += dt;
-    barrel.next_puff -= dt;
-    if barrel.since_shot > BARREL_SMOKE_WINDOW || barrel.next_puff > 0.0 {
-        return;
+    barrel.next_point -= dt;
+
+    for point in &mut barrel.points {
+        point.age += dt;
+        let drift = Vec3::new(
+            ops::sin(point.sway_seed + point.age * 1.7),
+            0.0,
+            ops::cos(point.sway_seed * 1.3 + point.age * 1.4),
+        );
+        point.position += (Vec3::Y * BARREL_TRAIL_RISE + drift * BARREL_TRAIL_SWAY) * dt;
     }
-    barrel.next_puff = BARREL_SMOKE_INTERVAL;
+    barrel.points.retain(|point| point.age < BARREL_TRAIL_LIFETIME);
 
-    let (Ok(eye), Ok((gun_transform, gun))) = (camera.single(), gun.single()) else {
-        return;
-    };
-    let drift = gun_transform.translation - gun.base_offset;
-    let muzzle = eye.translation + eye.rotation * (MUZZLE_OFFSET_AT_REST + drift);
+    let Ok(eye) = camera.single() else { return };
+    if barrel.since_shot <= BARREL_SMOKE_WINDOW && barrel.next_point <= 0.0 {
+        barrel.next_point = BARREL_TRAIL_INTERVAL;
+        if let Ok((gun_transform, gun)) = gun.single() {
+            let gun_drift = gun_transform.translation - gun.base_offset;
+            let muzzle = eye.translation + eye.rotation * (MUZZLE_OFFSET_AT_REST + gun_drift);
+            // newest first, so index order runs muzzle upward
+            barrel.points.insert(
+                0,
+                TrailPoint { position: muzzle, age: 0.0, sway_seed: time.elapsed_secs() * 7.3 },
+            );
+            barrel.points.truncate(BARREL_TRAIL_MAX_POINTS);
+        }
+    }
 
-    // Thinner and slower than the firing puff, and it only drifts upward: this
-    // is the barrel venting, not the shot itself.
-    let seed = time.elapsed_secs() * 311.0;
-    let wander = Vec3::new(ops::sin(seed), 0.0, ops::cos(seed * 1.3)) * BARREL_SMOKE_WANDER;
-    commands.spawn((
-        Mesh3d(muzzle_assets.smoke_mesh.clone()),
-        MeshMaterial3d(materials.add(muzzle_smoke_material(seed))),
-        Transform::from_translation(muzzle).with_scale(Vec3::splat(BARREL_SMOKE_SCALE)),
-        Smoke {
-            velocity: Vec3::Y * BARREL_SMOKE_RISE + wander,
-            remaining: SMOKE_LIFETIME,
-        },
-    ));
+    let Some(mut mesh) = meshes.get_mut(&ribbon.mesh) else { return };
+    write_ribbon(&barrel.points, eye.translation, &mut mesh);
+}
+
+fn write_ribbon(points: &[TrailPoint], eye: Vec3, mesh: &mut Mesh) {
+    let rows = BARREL_TRAIL_MAX_POINTS * 2;
+    let mut positions = vec![[0.0f32; 3]; rows];
+    let mut normals = vec![[0.0, 0.0, 1.0f32]; rows];
+    let mut uvs = vec![[0.0f32; 2]; rows];
+    let mut colors = vec![[0.0f32; 4]; rows];
+
+    let live = points.len().min(BARREL_TRAIL_MAX_POINTS);
+    for index in 0..live {
+        let point = &points[index];
+        let span = if index + 1 < live {
+            points[index + 1].position - point.position
+        } else if index > 0 {
+            point.position - points[index - 1].position
+        } else {
+            Vec3::Y
+        };
+        let along = span.try_normalize().unwrap_or(Vec3::Y);
+        let to_eye = (eye - point.position).try_normalize().unwrap_or(Vec3::Z);
+        let side = along.cross(to_eye).try_normalize().unwrap_or(Vec3::X);
+
+        let life = (point.age / BARREL_TRAIL_LIFETIME).clamp(0.0, 1.0);
+        let half = (BARREL_TRAIL_WIDTH + point.age * BARREL_TRAIL_SPREAD) * 0.5;
+        // squared so the column holds together off the muzzle and thins high up
+        let alpha = BARREL_TRAIL_ALPHA * (1.0 - life) * (1.0 - life);
+
+        let left = index * 2;
+        positions[left] = (point.position - side * half).to_array();
+        positions[left + 1] = (point.position + side * half).to_array();
+        normals[left] = to_eye.to_array();
+        normals[left + 1] = to_eye.to_array();
+        uvs[left] = [0.0, life];
+        uvs[left + 1] = [1.0, life];
+        colors[left] = [1.0, 1.0, 1.0, alpha];
+        colors[left + 1] = [1.0, 1.0, 1.0, alpha];
+    }
+
+    // Unused rows collapse onto the oldest live point with no alpha, keeping
+    // the buffer length constant instead of resizing it.
+    let tail = points.get(live.saturating_sub(1)).map_or(Vec3::ZERO, |point| point.position);
+    for index in live..BARREL_TRAIL_MAX_POINTS {
+        let left = index * 2;
+        positions[left] = tail.to_array();
+        positions[left + 1] = tail.to_array();
+    }
+
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
 }
