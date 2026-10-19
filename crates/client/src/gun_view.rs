@@ -271,20 +271,11 @@ pub(crate) fn gun_view_animation(
                 RECOIL_KICK * timings.recoil_t,
             );
 
-        // Fades with the ADS blend as well as the ready blend: raising the
-        // sights has to level the muzzle even while the ready pose is still
-        // easing out, or the gun comes up crooked.
-        let ready_tilt = GUN_READY_TILT_DEG.to_radians() * gun.ready_blend * (1.0 - gun.ads_blend);
         let base_rotation = Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians())
             * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip);
 
         let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
-        // Applied out here, not folded into base_rotation. Inside it the X
-        // rotation lands in the mesh own frame, where X runs down the barrel,
-        // so it rolls the gun and lays the sight over on its side. Out here the
-        // axis is the camera horizontal, which is what drops the muzzle — the
-        // same place wall_raise_tilt sits for the same reason.
-        transform.rotation = Quat::from_rotation_x(wall_raise_tilt - ready_tilt)
+        transform.rotation = Quat::from_rotation_x(wall_raise_tilt)
             * Quat::from_rotation_z(gun.look_sway_roll.to_radians())
             * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
             * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)

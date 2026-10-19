@@ -137,8 +137,7 @@ const GUN_ADS_OFFSET: Vec3 = Vec3::new(0.0, -0.307, -0.35);
 /// coming back onto the sights is a short move instead of a full swing across
 /// the body. Sits just right of centre, on the firing-hand side, and
 /// muzzle-down, which is where a rifle hangs when its owner is waiting.
-const GUN_READY_OFFSET: Vec3 = Vec3::new(0.055, -0.355, -0.47);
-const GUN_READY_TILT_DEG: f32 = 13.0;
+const GUN_READY_OFFSET: Vec3 = Vec3::new(0.055, -0.40, -0.47);
 const GUN_READY_SPEED: f32 = 7.0;
 const GUN_READY_LEAN_CUTOFF: f32 = 0.12;
 const GUN_ADS_SPEED: f32 = 10.0;
