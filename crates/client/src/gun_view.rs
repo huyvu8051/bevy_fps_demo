@@ -239,6 +239,18 @@ pub(crate) fn gun_view_animation(
         let ready_step = (GUN_READY_SPEED * time.delta_secs()).min(1.0);
         gun.ready_blend += (ready_target - gun.ready_blend) * ready_step;
 
+        // Rolled while the gun is away from its resting pose, never while it
+        // sits there: picked on arrival instead and the pose would twitch.
+        let disturbed = aiming || leaning || local_sprinting.0;
+        if disturbed {
+            if !gun.settle_rolled {
+                gun.settle_rolled = true;
+                gun.settle_jitter = settle_jitter(time.elapsed_secs());
+            }
+        } else {
+            gun.settle_rolled = false;
+        }
+
         let wall_raise_step = (WALL_GUN_RAISE_SPEED * time.delta_secs()).min(1.0);
         gun.wall_raise += (wall_target - gun.wall_raise) * wall_raise_step;
 
@@ -259,7 +271,7 @@ pub(crate) fn gun_view_animation(
 
         let timings = gun_pose_timings(&gun);
 
-        let resting = gun.base_offset.lerp(GUN_READY_OFFSET, gun.ready_blend);
+        let resting = gun.base_offset.lerp(GUN_READY_OFFSET, gun.ready_blend) + gun.settle_jitter;
         let base_pos = resting.lerp(GUN_ADS_OFFSET, gun.ads_blend) - Vec3::Z * view_pullback();
 
         let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
@@ -284,3 +296,15 @@ pub(crate) fn gun_view_animation(
     }
 }
 
+
+/// Where the gun settles, nudged a little each time. Coming to rest on the
+/// exact same millimetre after every aim is what makes the pose read as a
+/// still image rather than a held weapon.
+fn settle_jitter(seed: f32) -> Vec3 {
+    let axis = |salt: f32| (ops::sin(seed * salt) * 43758.547).fract().abs() * 2.0 - 1.0;
+    Vec3::new(
+        axis(12.9898) * GUN_SETTLE_JITTER.x,
+        axis(78.233) * GUN_SETTLE_JITTER.y,
+        axis(37.719) * GUN_SETTLE_JITTER.z,
+    )
+}

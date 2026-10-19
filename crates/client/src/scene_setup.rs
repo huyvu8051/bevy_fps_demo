@@ -270,6 +270,8 @@ pub(crate) fn setup_gameplay(
             Visibility::default(),
             Gun {
                 base_offset: GUN_OFFSET,
+                settle_jitter: Vec3::ZERO,
+                settle_rolled: false,
                 recoil: 0.0,
                 ammo: MAGAZINE_SIZE,
                 reload_remaining: 0.0,
