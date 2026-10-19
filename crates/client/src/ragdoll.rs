@@ -28,11 +28,25 @@ pub(crate) struct RagdollArming {
     captured: Vec<(Entity, Vec3, Quat)>,
 }
 
+impl RagdollArming {
+    /// No captured motion: used when a blast takes over, where the throw
+    /// dwarfs whatever the body was already doing.
+    pub(crate) fn empty() -> Self {
+        Self { captured: Vec::new() }
+    }
+}
+
 #[derive(Component)]
 pub(crate) struct Ragdolling {
     bodies: Vec<(Entity, Entity)>,
     settled_for: f32,
     elapsed: f32,
+}
+
+impl Ragdolling {
+    pub(crate) fn bodies(&self) -> &[(Entity, Entity)] {
+        &self.bodies
+    }
 }
 
 #[derive(Component)]
@@ -132,7 +146,7 @@ pub(crate) fn spawn_what_was_armed_last_frame(
         Entity,
         &ZombieHitboxBones,
         &RagdollArming,
-        &DeathImpulse,
+        Option<&DeathImpulse>,
         Option<&ZombieAnimationPlayer>,
     )>,
     mut players: Query<&mut AnimationPlayer>,
@@ -181,7 +195,8 @@ pub(crate) fn spawn_what_was_armed_last_frame(
 
             // Avian 0.7 has no impulse component, so the shot rides in as extra
             // starting velocity on the torso.
-            let velocity = if slot == 0 { velocity + impulse.push } else { velocity };
+            let shove = impulse.map(|i| i.push).unwrap_or(Vec3::ZERO);
+            let velocity = if slot == 0 { velocity + shove } else { velocity };
 
             let body = commands
                 .spawn((
