@@ -367,6 +367,9 @@ pub(crate) fn on_shot_fx(
             spawn_spark_effects(&mut commands, &vfx_assets.sparks, &time, point, normal);
             spawn_bullet_hole(&mut commands, &holes, &mut materials, point, normal, seed);
         }
+        ShotFx::Penetrated { point, normal } => {
+            spawn_spark_effects(&mut commands, &vfx_assets.sparks, &time, point, normal);
+        }
     }
 }
 

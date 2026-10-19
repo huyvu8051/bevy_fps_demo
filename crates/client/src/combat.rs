@@ -60,9 +60,12 @@ pub(crate) fn handle_fire_shot(
     info!("[shot] fired: origin={:.2?} direction={:.2?}", shot.origin, *direction);
 
     let filter = SpatialQueryFilter::default();
-    let wall_distance = spatial_query
-        .cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &SpatialQueryFilter::default())
-        .map(|hit| hit.distance);
+    let path = trace_shot_path(&spatial_query, shot.origin, direction, &filter);
+    let wall_distance = path.blocking_distance();
+    for wall in &path.through {
+        commands.trigger(ShotFx::Penetrated { point: wall.entry, normal: wall.normal });
+        commands.trigger(ShotFx::Penetrated { point: wall.exit, normal: -wall.normal });
+    }
 
     let cylinder = Collider::cylinder(ZOMBIE_OUTER_RADIUS, ZOMBIE_OUTER_HEIGHT);
 
@@ -94,7 +97,8 @@ pub(crate) fn handle_fire_shot(
             }
             continue;
         };
-        let damage = damage * damage_multiplier.0;
+        let damage = damage * damage_multiplier.0
+            * path.damage_scale_at(shot.origin, shot.origin.distance(hit_point));
 
         let hit_distance = shot.origin.distance(hit_point);
         if wall_distance.is_some_and(|w| w < hit_distance - 0.1) {
@@ -208,3 +212,83 @@ pub(crate) fn on_request_restart(
     commands.trigger(GameStateEvent::Restarted);
 }
 
+
+const MAX_PENETRATIONS: usize = 2;
+const MAX_WALL_THICKNESS: f32 = 0.35;
+const PENETRATION_DAMAGE_SCALE: f32 = 0.55;
+const PENETRATION_STEP_OFF: f32 = 0.02;
+
+pub(crate) struct Penetration {
+    pub(crate) entry: Vec3,
+    pub(crate) normal: Vec3,
+    pub(crate) exit: Vec3,
+}
+
+pub(crate) struct ShotPath {
+    pub(crate) through: Vec<Penetration>,
+    pub(crate) blocked_at: Option<(f32, Vec3, Vec3)>,
+}
+
+impl ShotPath {
+    pub(crate) fn blocking_distance(&self) -> Option<f32> {
+        self.blocked_at.map(|(distance, _, _)| distance)
+    }
+
+    pub(crate) fn damage_scale_at(&self, origin: Vec3, distance: f32) -> f32 {
+        let passed = self
+            .through
+            .iter()
+            .filter(|wall| origin.distance(wall.entry) < distance)
+            .count();
+        PENETRATION_DAMAGE_SCALE.powi(passed as i32)
+    }
+}
+
+/// Measures how thick the surface at `entry` is by probing back toward it from
+/// beyond. Casting forward from inside the wall would need the ray to report
+/// back faces; coming the other way, the first thing hit is the far side.
+fn exit_point(
+    spatial_query: &SpatialQuery,
+    entry: Vec3,
+    direction: Dir3,
+    filter: &SpatialQueryFilter,
+) -> Option<Vec3> {
+    let beyond = entry + *direction * MAX_WALL_THICKNESS;
+    let back = Dir3::new(-*direction).ok()?;
+    let hit = spatial_query.cast_ray(beyond, back, MAX_WALL_THICKNESS, true, filter)?;
+    let thickness = MAX_WALL_THICKNESS - hit.distance;
+    (thickness > 0.0).then(|| entry + *direction * thickness)
+}
+
+/// Walks the shot forward through anything thin enough to punch through,
+/// stopping at the first wall that is not.
+pub(crate) fn trace_shot_path(
+    spatial_query: &SpatialQuery,
+    origin: Vec3,
+    direction: Dir3,
+    filter: &SpatialQueryFilter,
+) -> ShotPath {
+    let mut through = Vec::new();
+    let mut from = origin;
+
+    loop {
+        let remaining = MAX_SHOT_DISTANCE - origin.distance(from);
+        if remaining <= 0.0 {
+            return ShotPath { through, blocked_at: None };
+        }
+        let Some(hit) = spatial_query.cast_ray(from, direction, remaining, true, filter) else {
+            return ShotPath { through, blocked_at: None };
+        };
+        let entry = from + *direction * hit.distance;
+        let entry_distance = origin.distance(entry);
+
+        if through.len() >= MAX_PENETRATIONS {
+            return ShotPath { through, blocked_at: Some((entry_distance, entry, hit.normal)) };
+        }
+        let Some(exit) = exit_point(spatial_query, entry, direction, filter) else {
+            return ShotPath { through, blocked_at: Some((entry_distance, entry, hit.normal)) };
+        };
+        through.push(Penetration { entry, normal: hit.normal, exit });
+        from = exit + *direction * PENETRATION_STEP_OFF;
+    }
+}

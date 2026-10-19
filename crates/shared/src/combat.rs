@@ -24,6 +24,9 @@ pub struct PlayerDiedFx {
 pub enum ShotFx {
     ZombieHit { origin: Vec3, point: Vec3, normal: Vec3, damage: f32, killed: bool },
     SurfaceHit { origin: Vec3, point: Vec3, normal: Vec3 },
+    /// A wall the bullet went through. Same impact marks as a surface hit, but
+    /// no tracer: one shot draws one tracer, however many walls it crosses.
+    Penetrated { point: Vec3, normal: Vec3 },
 }
 
 #[derive(Event, Clone, Copy, Serialize, Deserialize)]
