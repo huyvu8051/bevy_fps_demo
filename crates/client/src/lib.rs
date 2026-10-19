@@ -30,7 +30,9 @@ use shared::{
 #[cfg(target_os = "ios")]
 pub mod cadisplaylink;
 
+mod auto_lean;
 mod autopilot;
+use auto_lean::*;
 use autopilot::{autopilot_pick_target, autopilot_think, Autopilot, AutopilotIntent, AutopilotLookOnly, AutopilotState};
 
 mod touch_input;
@@ -503,6 +505,7 @@ impl Plugin for GamePlugin {
         .init_resource::<PerfTimings>()
         .init_resource::<ZombieAnimDisabled>()
         .init_resource::<ZombieHealthBarsHidden>()
+        .init_resource::<AutoLean>()
         .init_resource::<PlayerModelTuning>()
         .init_resource::<GunVisible>()
         .init_resource::<MapMsaaOn>()
@@ -622,6 +625,7 @@ impl Plugin for GamePlugin {
                     mouse_look,
                     shoot,
                     reload_gun,
+                    suggest_auto_lean,
                     apply_lean_input,
                     apply_view_recoil,
                     apply_aim_zoom,
