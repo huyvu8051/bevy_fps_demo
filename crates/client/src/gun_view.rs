@@ -49,7 +49,9 @@ pub(crate) fn gun_pose_timings(gun: &Gun) -> GunPoseTimings {
     let dip = 4.0 * reload_t * (1.0 - reload_t);
     let bob_aim_scale = 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER);
     let bob_x = ops::sin(gun.bob_phase) * GUN_BOB_AMOUNT_X * gun.bob_blend * bob_aim_scale;
-    let bob_y = ops::sin(gun.bob_phase * 2.0).abs() * GUN_BOB_AMOUNT_Y * gun.bob_blend * bob_aim_scale;
+    // abs() already doubles the rate: |sin| repeats every pi, not every tau.
+    // One dip per footfall, against a full sway every two.
+    let bob_y = ops::sin(gun.bob_phase).abs() * GUN_BOB_AMOUNT_Y * gun.bob_blend * bob_aim_scale;
     GunPoseTimings { recoil_t, dip, bob_x, bob_y }
 }
 

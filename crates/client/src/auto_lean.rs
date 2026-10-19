@@ -3,7 +3,7 @@ use bevy::prelude::*;
 
 use crate::*;
 
-const COVER_RANGE: f32 = 1.3;
+const COVER_RANGE: f32 = 2.6;
 const OPENED_RANGE: f32 = 5.0;
 const ADS_THRESHOLD: f32 = 0.5;
 
