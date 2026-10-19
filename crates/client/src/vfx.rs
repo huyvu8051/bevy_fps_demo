@@ -1,5 +1,6 @@
 
 use bevy::prelude::*;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use crate::*;
 
 
@@ -499,3 +500,39 @@ pub(crate) fn update_smoke(mut commands: Commands, time: Res<Time>, mut query: Q
 }
 
 
+
+/// A lens outline: widest at the middle, tapering to a point at each end.
+/// A plain quad leaves the streak with two blunt square ends.
+pub(crate) fn spindle_mesh(segments: usize) -> Mesh {
+    let mut positions = Vec::with_capacity(segments * 2);
+    let mut normals = Vec::with_capacity(segments * 2);
+    let mut uvs = Vec::with_capacity(segments * 2);
+    let mut indices = Vec::with_capacity((segments - 1) * 6);
+
+    for step in 0..segments {
+        let along = step as f32 / (segments - 1) as f32;
+        // sin falls to zero at both ends; the exponent holds the body full so
+        // the shape reads as a point on the tip rather than a thinner streak.
+        // max before powf: sin(PI) lands at -8.7e-8 in f32, and a negative base
+        // with a fractional exponent is NaN, which poisons the mesh bounds and
+        // culls the whole tracer.
+        let taper = ops::sin(along * std::f32::consts::PI).max(0.0);
+        let half = 0.5 * ops::powf(taper, 0.55);
+        positions.push([-half, along - 0.5, 0.0]);
+        positions.push([half, along - 0.5, 0.0]);
+        normals.push([0.0, 0.0, 1.0]);
+        normals.push([0.0, 0.0, 1.0]);
+        uvs.push([0.0, along]);
+        uvs.push([1.0, along]);
+    }
+    for step in 0..segments - 1 {
+        let base = (step * 2) as u32;
+        indices.extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);
+    }
+
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices))
+}

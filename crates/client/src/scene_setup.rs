@@ -76,7 +76,7 @@ pub(crate) fn setup_common(
     });
 
     commands.insert_resource(TracerAssets {
-        mesh: meshes.add(Rectangle::new(1.0, 1.0)),
+        mesh: meshes.add(spindle_mesh(TRACER_SEGMENTS)),
         fade_steps: (0..TRACER_FADE_STEPS)
             .map(|step| {
                 let fade = 1.0 - step as f32 / TRACER_FADE_STEPS as f32;

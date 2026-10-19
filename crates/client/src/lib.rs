@@ -198,6 +198,7 @@ const TRACER_WIDTH: f32 = 0.035;
 const TRACER_MIN_PIXELS: f32 = 3.0;
 const TRACER_NEAR_SKIP: f32 = 3.0;
 const TRACER_FADE_STEPS: usize = 5;
+const TRACER_SEGMENTS: usize = 14;
 
 const TRACER_START_Y_OFFSET: f32 = -0.05;
 
