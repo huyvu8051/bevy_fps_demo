@@ -132,6 +132,14 @@ pub(crate) fn view_pullback() -> f32 {
 }
 
 const GUN_ADS_OFFSET: Vec3 = Vec3::new(0.0, -0.307, -0.35);
+
+/// Low ready: held near the middle and a little forward of the hip rest, so
+/// coming back onto the sights is a short move instead of a full swing across
+/// the body. Sits slightly left of centre and muzzle-down, the way a rifle
+/// actually hangs when the shooter is waiting rather than carrying.
+const GUN_READY_OFFSET: Vec3 = Vec3::new(-0.04, -0.355, -0.47);
+const GUN_READY_TILT_DEG: f32 = 13.0;
+const GUN_READY_SPEED: f32 = 7.0;
 const GUN_ADS_SPEED: f32 = 10.0;
 const GUN_SCALE: f32 = 0.001;
 const GUN_ROTATION_Y_DEG: f32 = -90.0;

@@ -253,6 +253,8 @@ pub(crate) fn setup_gameplay(
                 ads_blend: 0.0,
                 wall_raise: 0.0,
                 shoulder_blend: 0.0,
+                ready_blend: 0.0,
+                ready_armed: false,
                 recoil_roll: 0.0,
                 bob_phase: 0.0,
                 bob_blend: 0.0,

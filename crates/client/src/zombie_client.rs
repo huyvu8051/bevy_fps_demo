@@ -64,6 +64,9 @@ pub(crate) struct Gun {
 
     pub(crate) shoulder_blend: f32,
 
+    pub(crate) ready_blend: f32,
+    pub(crate) ready_armed: bool,
+
     pub(crate) recoil_roll: f32,
 
     pub(crate) bob_phase: f32,

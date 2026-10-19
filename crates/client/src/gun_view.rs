@@ -178,6 +178,7 @@ pub(crate) fn gun_view_animation(
     spatial_query: SpatialQuery,
     mut query: Query<(&mut Transform, &mut Gun), Without<FpsCamera>>,
     local_moving: Res<LocalPlayerMoving>,
+    local_sprinting: Res<LocalPlayerSprinting>,
 ) {
     let camera_single = camera.single().ok();
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
@@ -217,6 +218,19 @@ pub(crate) fn gun_view_animation(
         let ads_step = (GUN_ADS_SPEED * time.delta_secs()).min(1.0);
         gun.ads_blend += (ads_target - gun.ads_blend) * ads_step;
 
+        // Having aimed once means the player is working a sight line and will
+        // likely aim again, so the gun waits near the middle instead of
+        // swinging all the way back to the hip. Breaking into a sprint says
+        // they are done with that sight line, so it drops to the normal rest.
+        if aiming {
+            gun.ready_armed = true;
+        } else if local_sprinting.0 || game_over.0 {
+            gun.ready_armed = false;
+        }
+        let ready_target = if gun.ready_armed && !aiming { 1.0 } else { 0.0 };
+        let ready_step = (GUN_READY_SPEED * time.delta_secs()).min(1.0);
+        gun.ready_blend += (ready_target - gun.ready_blend) * ready_step;
+
         let wall_raise_step = (WALL_GUN_RAISE_SPEED * time.delta_secs()).min(1.0);
         gun.wall_raise += (wall_target - gun.wall_raise) * wall_raise_step;
 
@@ -238,8 +252,8 @@ pub(crate) fn gun_view_animation(
 
         let timings = gun_pose_timings(&gun);
 
-        let base_pos =
-            gun.base_offset.lerp(GUN_ADS_OFFSET, gun.ads_blend) - Vec3::Z * view_pullback();
+        let resting = gun.base_offset.lerp(GUN_READY_OFFSET, gun.ready_blend);
+        let base_pos = resting.lerp(GUN_ADS_OFFSET, gun.ads_blend) - Vec3::Z * view_pullback();
 
         let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
         transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)
@@ -250,8 +264,12 @@ pub(crate) fn gun_view_animation(
                 RECOIL_KICK * timings.recoil_t,
             );
 
+        // Tilt fades with the ADS blend, not just the ready blend: raising the
+        // sights has to level the muzzle even while the ready pose is still
+        // easing out, or the gun comes up tilted.
+        let ready_tilt = GUN_READY_TILT_DEG.to_radians() * gun.ready_blend * (1.0 - gun.ads_blend);
         let base_rotation = Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians())
-            * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip);
+            * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip - ready_tilt);
 
         let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
         transform.rotation = Quat::from_rotation_x(wall_raise_tilt)
