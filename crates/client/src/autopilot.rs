@@ -69,6 +69,7 @@ const AUTOPILOT_TURN_FAR_DISTANCE: f32 = 55.0;
 const AUTOPILOT_TURN_FADE_IN_DURATION: f32 = 0.4;
 
 const AUTOPILOT_FIRE_AIM_TOLERANCE_DEG: f32 = 12.0;
+const AUTOPILOT_ADS_AIM_TOLERANCE_DEG: f32 = 35.0;
 const AUTOPILOT_SPRINT_APPROACH_DISTANCE: f32 = 22.0;
 
 /// How far a blind approach has to be before it is worth sprinting. Pathing
@@ -294,9 +295,13 @@ pub(crate) fn autopilot_think(
     } else {
         want_fire
     };
+    // Also waits until the swing is nearly on target. Raising the sights the
+    // instant a target is picked means riding an iron sight through a 180,
+    // which no player would do and which hides most of the turn.
     intent.aim = straight_los
         && horizontal_distance <= AUTOPILOT_ENGAGE_RANGE + 1.0
-        && horizontal_distance > AUTOPILOT_ADS_MIN_DISTANCE;
+        && horizontal_distance > AUTOPILOT_ADS_MIN_DISTANCE
+        && aim_error < AUTOPILOT_ADS_AIM_TOLERANCE_DEG.to_radians();
     if autopilot.0 {
         touch_aiming.0 = intent.aim;
     }
