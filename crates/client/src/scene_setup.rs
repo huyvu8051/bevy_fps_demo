@@ -301,6 +301,7 @@ pub(crate) fn setup_gameplay(
             },
             Msaa::Off,
             RenderLayers::from_layers(&[WORLD_LAYER, SCOPE_RETICLE_LAYER]),
+            distance_fog_for(scenario),
             Bloom::default(),
             ScopeCamera,
         ))

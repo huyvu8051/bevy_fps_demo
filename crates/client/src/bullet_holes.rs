@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::*;
 
 const HOLE_VARIANTS: usize = 4;
-const HOLE_SIZE: f32 = 0.085;
+const HOLE_SIZE: f32 = 0.14;
 const HOLE_LIFETIME: f32 = 45.0;
 const HOLE_FADE_SECONDS: f32 = 4.0;
 const HOLE_SURFACE_OFFSET: f32 = 0.006;
