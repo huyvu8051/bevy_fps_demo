@@ -71,10 +71,14 @@ use screen_effects::*;
 
 mod grip_ik;
 mod muzzle_fx;
+mod explosion;
+mod ragdoll;
 mod viewmodel_body;
 mod scope_lens;
 use grip_ik::*;
 use muzzle_fx::*;
+use explosion::*;
+use ragdoll::*;
 use viewmodel_body::*;
 use scope_lens::*;
 
@@ -478,6 +482,7 @@ impl Plugin for GamePlugin {
         .add_observer(on_zombie_replicated)
         .add_observer(on_zombie_kind_replicated)
         .add_observer(on_shot_fx)
+        .add_observer(on_explosion)
         .add_observer(on_shot_confirmed)
         .add_observer(on_game_state_event)
         .add_plugins(F9DebugPlugin)
@@ -675,7 +680,15 @@ impl Plugin for GamePlugin {
                     update_screen_effects,
                     demote_fully_metallic_imports,
                     exclude_oversized_shadow_casters,
+                    (
+                    test_blast_key.run_if(debug_keys_allowed),
                     update_death,
+                    spawn_what_was_armed_last_frame,
+                    apply_pending_blast,
+                    arm_ragdoll,
+                    settle_corpse,
+                )
+                    .chain(),
                 update_dissolve,
                 )
                     .chain(),
@@ -713,6 +726,7 @@ impl Plugin for GamePlugin {
         (
             pose_viewmodel_arms,
             shape_viewmodel_skeleton,
+            drive_skeleton_from_ragdoll,
             aim_zombie_heads,
             apply_bone_flinch,
         )

@@ -2,6 +2,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use crate::dissolve::begin_death;
+use crate::ragdoll::DEATH_PUSH_SPEED;
 use crate::map::*;
 use crate::sim::*;
 use shared::{
@@ -121,6 +122,8 @@ pub(crate) fn handle_fire_shot(
                     &anim,
                     link,
                     &mut anim_players,
+                    Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero()
+                        * DEATH_PUSH_SPEED,
                 );
                 respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
             } else {

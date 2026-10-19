@@ -7,6 +7,11 @@ const DISSOLVE_DURATION: f32 = 1.1;
 
 #[derive(Component)]
 pub(crate) struct PlayingDeath {
+    until_handoff: f32,
+}
+
+#[derive(Component)]
+pub(crate) struct LyingStill {
     remaining: f32,
 }
 
@@ -17,8 +22,9 @@ pub(crate) fn begin_death(
     anim: &ZombieAnim,
     link: Option<&ZombieAnimationPlayer>,
     players: &mut Query<&mut AnimationPlayer>,
+    push: Vec3,
 ) {
-    let (clip, clip_seconds) = anim.slot(kind).death(entity.to_bits() as usize);
+    let (clip, _) = anim.slot(kind).death(entity.to_bits() as usize);
     if let Some(link) = link {
         if let Ok(mut player) = players.get_mut(link.0) {
             player.stop_all();
@@ -29,26 +35,49 @@ pub(crate) fn begin_death(
         .entity(entity)
         .remove::<Zombie>()
         .remove::<Chase>()
-        .insert(PlayingDeath {
-            remaining: clip_seconds + ZOMBIE_LIE_STILL_SECONDS,
-        });
+        .insert((
+            PlayingDeath { until_handoff: RAGDOLL_HANDOFF_SECONDS },
+            DeathClipPlaying,
+            DeathImpulse { push },
+        ));
 }
 
+/// The clip gets the first moments — the stagger, the knee buckle — then
+/// physics takes the fall, so the body lands on whatever is actually there
+/// instead of clipping through a stair or a wall.
 pub(crate) fn update_death(
     time: Res<Time>,
     mut commands: Commands,
-    mut dying: Query<(Entity, &mut PlayingDeath, &Transform)>,
+    mut dying: Query<(Entity, &mut PlayingDeath)>,
+) {
+    for (entity, mut death) in &mut dying {
+        death.until_handoff -= time.delta_secs();
+        if death.until_handoff > 0.0 {
+            continue;
+        }
+        commands.entity(entity).remove::<PlayingDeath>().insert(ReadyToRagdoll);
+    }
+}
+
+pub(crate) fn settle_corpse(
+    time: Res<Time>,
+    mut commands: Commands,
+    newly_settled: Query<Entity, (With<CorpseSettled>, Without<LyingStill>)>,
+    mut lying: Query<(Entity, &mut LyingStill, &Transform)>,
     children: Query<&Children>,
     mesh_materials: Query<&MeshMaterial3d<StandardMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (entity, mut death, transform) in &mut dying {
-        death.remaining -= time.delta_secs();
-        if death.remaining > 0.0 {
+    for entity in &newly_settled {
+        commands.entity(entity).insert(LyingStill { remaining: ZOMBIE_LIE_STILL_SECONDS });
+    }
+    for (entity, mut lying, transform) in &mut lying {
+        lying.remaining -= time.delta_secs();
+        if lying.remaining > 0.0 {
             continue;
         }
         let start_y = transform.translation.y;
-        commands.entity(entity).remove::<PlayingDeath>();
+        commands.entity(entity).remove::<LyingStill>().remove::<CorpseSettled>();
         begin_dissolve(&mut commands, entity, start_y, &children, &mesh_materials, &mut materials);
     }
 }
