@@ -202,11 +202,17 @@ const TRACER_FADE_STEPS: usize = 5;
 const TRACER_START_Y_OFFSET: f32 = -0.05;
 
 const SMOKE_LIFETIME: f32 = 1.9;
-const SMOKE_START_SCALE: f32 = 0.35;
-const SMOKE_GROWTH_PER_SEC: f32 = 1.25;
+const SMOKE_START_SCALE: f32 = 0.52;
+const SMOKE_GROWTH_PER_SEC: f32 = 2.1;
 const SMOKE_DRAG: f32 = 1.2;
-const SMOKE_MAX_PUFFS: usize = 9;
+const SMOKE_MAX_PUFFS: usize = 16;
 const SMOKE_BUOYANCY: f32 = 0.22;
+
+const BARREL_SMOKE_WINDOW: f32 = 1.5;
+const BARREL_SMOKE_INTERVAL: f32 = 0.19;
+const BARREL_SMOKE_SCALE: f32 = 0.26;
+const BARREL_SMOKE_RISE: f32 = 0.42;
+const BARREL_SMOKE_WANDER: f32 = 0.06;
 
 const BLOOD_PARTICLE_COUNT: usize = 14;
 const BLOOD_PARTICLE_SPEED: f32 = 3.2;
@@ -494,6 +500,7 @@ impl Plugin for GamePlugin {
         .add_observer(on_zombie_replicated)
         .add_observer(on_zombie_kind_replicated)
         .add_observer(on_shot_fx)
+        .add_observer(note_shot_for_barrel_smoke)
         .add_observer(on_explosion)
         .add_observer(on_shot_confirmed)
         .add_observer(on_game_state_event)
@@ -515,6 +522,7 @@ impl Plugin for GamePlugin {
         .init_resource::<ShowHitMarkers>()
         .init_resource::<ShowFloatingDamage>()
         .init_resource::<ShowBulletTracers>()
+        .init_resource::<BarrelSmoke>()
         .init_resource::<SettingsMenuVisible>()
         .init_resource::<SettingsMenuScrollState>()
         .init_resource::<SettingsMenuPageIndex>()
@@ -724,7 +732,7 @@ impl Plugin for GamePlugin {
                 update_smoke,
                 update_blood_particles,
                 (update_blood_bursts, update_bullet_holes, update_impact_dust, update_casings, update_port_smoke),
-                (update_muzzle_smoke, update_muzzle_flash),
+                (update_muzzle_smoke, update_muzzle_flash, emit_barrel_smoke),
                 update_spark_particles,
                 despawn_blood_stains,
             )

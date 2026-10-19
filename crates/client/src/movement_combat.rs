@@ -617,6 +617,7 @@ pub(crate) fn shoot(
     eject_casing(
         &mut commands,
         &casings,
+        &mut smoke_materials,
         camera_transform,
         gun_transform,
         Vec3::ZERO,

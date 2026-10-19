@@ -6,7 +6,7 @@ use crate::*;
 
 const MUZZLE_SMOKE_SHADER: &str = "shaders/muzzle_smoke.wgsl";
 const MUZZLE_SMOKE_DENSITY: f32 = 4.7;
-const MUZZLE_SMOKE_BILLOW: f32 = 1.1;
+const MUZZLE_SMOKE_BILLOW: f32 = 1.5;
 
 const MUZZLE_FLASH_SHADER: &str = "shaders/muzzle_flash.wgsl";
 const MUZZLE_FLASH_RAY_SCALE: f32 = 2.6;
@@ -28,7 +28,7 @@ impl MuzzleSmokeMaterial {
         }
     }
 
-    fn set_life_progress(&mut self, progress: f32) {
+    pub(crate) fn set_life_progress(&mut self, progress: f32) {
         self.settings.x = progress;
     }
 }
@@ -100,7 +100,7 @@ pub(crate) fn muzzle_blade_material(seed: f32) -> MuzzleFlashMaterial {
     MuzzleFlashMaterial::new(seed, SHAPE_DIRECTIONAL_BLADE)
 }
 
-fn elapsed_fraction_of(remaining: f32, lifetime: f32) -> f32 {
+pub(crate) fn elapsed_fraction_of(remaining: f32, lifetime: f32) -> f32 {
     1.0 - (remaining / lifetime).clamp(0.0, 1.0)
 }
 
@@ -168,4 +168,53 @@ pub(crate) fn update_muzzle_flash(
             material.set_how_squarely_it_faces_the_eye(facing);
         }
     }
+}
+
+/// Smoke keeps curling off a hot barrel after the shooting stops.
+#[derive(Resource, Default)]
+pub(crate) struct BarrelSmoke {
+    since_shot: f32,
+    next_puff: f32,
+}
+
+pub(crate) fn note_shot_for_barrel_smoke(_: On<FireShot>, mut barrel: ResMut<BarrelSmoke>) {
+    barrel.since_shot = 0.0;
+}
+
+pub(crate) fn emit_barrel_smoke(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut barrel: ResMut<BarrelSmoke>,
+    muzzle_assets: Res<MuzzleFxAssets>,
+    mut materials: ResMut<Assets<MuzzleSmokeMaterial>>,
+    camera: Query<&Transform, With<FpsCamera>>,
+    gun: Query<(&Transform, &Gun), Without<FpsCamera>>,
+) {
+    let dt = time.delta_secs();
+    barrel.since_shot += dt;
+    barrel.next_puff -= dt;
+    if barrel.since_shot > BARREL_SMOKE_WINDOW || barrel.next_puff > 0.0 {
+        return;
+    }
+    barrel.next_puff = BARREL_SMOKE_INTERVAL;
+
+    let (Ok(eye), Ok((gun_transform, gun))) = (camera.single(), gun.single()) else {
+        return;
+    };
+    let drift = gun_transform.translation - gun.base_offset;
+    let muzzle = eye.translation + eye.rotation * (MUZZLE_OFFSET_AT_REST + drift);
+
+    // Thinner and slower than the firing puff, and it only drifts upward: this
+    // is the barrel venting, not the shot itself.
+    let seed = time.elapsed_secs() * 311.0;
+    let wander = Vec3::new(ops::sin(seed), 0.0, ops::cos(seed * 1.3)) * BARREL_SMOKE_WANDER;
+    commands.spawn((
+        Mesh3d(muzzle_assets.smoke_mesh.clone()),
+        MeshMaterial3d(materials.add(muzzle_smoke_material(seed))),
+        Transform::from_translation(muzzle).with_scale(Vec3::splat(BARREL_SMOKE_SCALE)),
+        Smoke {
+            velocity: Vec3::Y * BARREL_SMOKE_RISE + wander,
+            remaining: SMOKE_LIFETIME,
+        },
+    ));
 }
