@@ -184,7 +184,7 @@ pub(crate) fn sever_limbs(
                 let state = if alive.contains(entity) { "ALIVE" } else { "dead" };
                 info!("[dismember] {state} zombie={entity} lost {:?} at joint {}", cut.part, cut.cut_at);
                 spray(&mut commands, &blood, at, along, BURST_COUNT, BURST_SPEED, at.x * 31.7 + at.z * 13.1);
-                throw_part(&mut commands, &gore, at, along, length, at.x * 17.3 + at.z * 29.1);
+                throw_part(&mut commands, &gore, cut.part, at, along, length, at.x * 17.3 + at.z * 29.1);
             }
 
             if cut.bleed <= 0.0 {
@@ -217,10 +217,14 @@ pub(crate) fn forget_gone_zombies(mut removed: RemovedComponents<Zombie>, mut li
     }
 }
 
+const HEAD_GORE_RADIUS: f32 = 0.105;
+
 #[derive(Resource)]
 pub(crate) struct GoreAssets {
-    mesh: Handle<Mesh>,
-    material: Handle<StandardMaterial>,
+    limb_mesh: Handle<Mesh>,
+    head_mesh: Handle<Mesh>,
+    limb_material: Handle<StandardMaterial>,
+    head_material: Handle<StandardMaterial>,
 }
 
 #[derive(Component)]
@@ -233,42 +237,67 @@ pub(crate) struct GorePiece {
     next_drop: f32,
 }
 
+/// Both textures are deliberately generic -- muscle and a bloodied skull --
+/// so one set serves every zombie kind and nobody can tell which body a part
+/// came off.
 pub(crate) fn build_gore_assets(
+    asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) -> GoreAssets {
+    let flesh = |texture: &str| StandardMaterial {
+        base_color_texture: Some(asset_server.load(texture.to_string())),
+        perceptual_roughness: 0.45,
+        ..default()
+    };
     GoreAssets {
-        mesh: meshes.add(Capsule3d::new(GORE_RADIUS, GORE_BASE_LENGTH)),
-        material: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.42, 0.29, 0.25),
-            perceptual_roughness: 0.85,
-            ..default()
-        }),
+        limb_mesh: meshes.add(Capsule3d::new(GORE_RADIUS, GORE_BASE_LENGTH)),
+        head_mesh: meshes.add(Sphere::new(HEAD_GORE_RADIUS)),
+        limb_material: materials.add(flesh("textures/gore/limb.png")),
+        head_material: materials.add(flesh("textures/gore/head.png")),
     }
 }
 
 /// A stand-in for the part that was just hidden. The body is one skinned mesh,
 /// so there is no real arm to throw; this is a capsule roughly its size, which
 /// reads as a limb at the speed it leaves at.
-fn throw_part(commands: &mut Commands, gore: &GoreAssets, from: Vec3, along: Vec3, length: f32, seed: f32) {
+fn throw_part(commands: &mut Commands, gore: &GoreAssets, part: ZombiePart, from: Vec3, along: Vec3, length: f32, seed: f32) {
     let length = length.max(GORE_BASE_LENGTH * 0.5);
+    let head = part == ZombiePart::Head;
+    let (mesh, material, collider, scale, half_length) = if head {
+        (
+            gore.head_mesh.clone(),
+            gore.head_material.clone(),
+            Collider::sphere(HEAD_GORE_RADIUS),
+            Vec3::ONE,
+            HEAD_GORE_RADIUS,
+        )
+    } else {
+        (
+            gore.limb_mesh.clone(),
+            gore.limb_material.clone(),
+            Collider::capsule(GORE_RADIUS, length),
+            Vec3::new(1.0, length / GORE_BASE_LENGTH, 1.0),
+            length * 0.5,
+        )
+    };
     let scatter = Vec3::new(ops::sin(seed * 1.7), ops::sin(seed * 2.3).abs(), ops::sin(seed * 3.1));
     commands.spawn((
         Name::new("SeveredPart"),
-        Mesh3d(gore.mesh.clone()),
-        MeshMaterial3d(gore.material.clone()),
+        Mesh3d(mesh),
+        MeshMaterial3d(material),
         Transform::from_translation(from + along * length * 0.5)
             .with_rotation(Quat::from_rotation_arc(Vec3::Y, along))
-            .with_scale(Vec3::new(1.0, length / GORE_BASE_LENGTH, 1.0)),
+            .with_scale(scale),
         RigidBody::Dynamic,
-        Collider::capsule(GORE_RADIUS, length),
+        collider,
         ColliderDensity(GORE_DENSITY),
         SweptCcd::default(),
         LinearVelocity(along * GORE_THROW_SPEED + scatter * GORE_THROW_SPEED * 0.4 + Vec3::Y * 1.2),
         AngularVelocity(scatter * GORE_SPIN),
         GorePiece {
             remaining: GORE_LIFETIME,
-            half_length: length * 0.5,
+            half_length,
             bleed: JET_SECONDS,
             next_drop: 0.0,
         },
