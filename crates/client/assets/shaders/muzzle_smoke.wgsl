@@ -7,7 +7,7 @@
 // x = life progress 0..1, y = per-puff seed, z = density, w = billow speed
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> settings: vec4<f32>;
 
-const STEPS: i32 = 16;
+const STEPS: i32 = 12;
 
 /// Over how many metres of depth difference the quad fades out where it meets
 /// solid geometry. Without this a puff against a wall shows the hard line of
@@ -43,16 +43,27 @@ fn value_noise(p: vec3<f32>) -> f32 {
     return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
 }
 
-fn fbm(p: vec3<f32>) -> f32 {
+fn fbm_octaves(p: vec3<f32>, octaves: i32) -> f32 {
     var sum = 0.0;
     var amplitude = 0.5;
     var point = p;
-    for (var octave = 0; octave < 4; octave = octave + 1) {
+    for (var octave = 0; octave < octaves; octave = octave + 1) {
         sum = sum + amplitude * value_noise(point);
         point = point * 2.02;
         amplitude = amplitude * 0.5;
     }
     return sum;
+}
+
+fn fbm(p: vec3<f32>) -> f32 {
+    return fbm_octaves(p, 4);
+}
+
+// The warp only displaces the sample point, so its fine detail never reaches
+// the image. Three of these run per step against one of the full fbm, which
+// made them three quarters of the shader cost for something nothing can see.
+fn fbm_warp(p: vec3<f32>) -> f32 {
+    return fbm_octaves(p, 2);
 }
 
 // Smoke density inside a soft sphere. The puff rises, expands and tears apart
@@ -66,7 +77,7 @@ fn density_at(p: vec3<f32>, progress: f32, seed: f32, billow: f32) -> f32 {
     // drift up and churn; domain warp gives the curling, non-uniform edge
     let drift = vec3<f32>(0.0, -progress * billow, 0.0);
     let base = p * 3.4 + drift + vec3<f32>(seed, seed * 1.7, seed * 2.3);
-    let warp = vec3<f32>(fbm(base * 0.7), fbm(base * 0.7 + 11.3), fbm(base * 0.7 + 23.9));
+    let warp = vec3<f32>(fbm_warp(base * 0.7), fbm_warp(base * 0.7 + 11.3), fbm_warp(base * 0.7 + 23.9));
     let noise = fbm(base + warp * 1.6);
 
     // erode the cloud over its life so it dissolves instead of fading flat
