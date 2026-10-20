@@ -45,13 +45,38 @@ pub(crate) fn begin_death(
 /// The clip gets the first moments — the stagger, the knee buckle — then
 /// physics takes the fall, so the body lands on whatever is actually there
 /// instead of clipping through a stair or a wall.
+fn death_logging() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DEATH_LOG").is_ok())
+}
+
 pub(crate) fn update_death(
     time: Res<Time>,
     mut commands: Commands,
-    mut dying: Query<(Entity, &mut PlayingDeath)>,
+    mut dying: Query<(Entity, &mut PlayingDeath, Option<&ZombieAnimationPlayer>, Option<&ZombieHitboxBones>, &Transform)>,
+    players: Query<&AnimationPlayer>,
+    globals: Query<&GlobalTransform>,
 ) {
-    for (entity, mut death) in &mut dying {
+    for (entity, mut death, link, bones, root) in &mut dying {
         death.until_handoff -= time.delta_secs();
+        if death_logging() {
+            let state = link
+                .and_then(|l| players.get(l.0).ok())
+                .map(|p| {
+                    let active: Vec<String> = p
+                        .playing_animations()
+                        .map(|(node, a)| format!("node{node:?} seek={:.3} done={}", a.seek_time(), a.is_finished()))
+                        .collect();
+                    if active.is_empty() { "NOTHING PLAYING".to_string() } else { active.join(", ") }
+                })
+                .unwrap_or_else(|| "no player link".to_string());
+            let chest = bones
+                .and_then(|b| b.chest)
+                .and_then(|e| globals.get(e).ok())
+                .map(|g| g.translation().y - root.translation.y)
+                .unwrap_or(f32::NAN);
+            info!("[death] id={:?} t={:.2}s chest={chest:.3} {state}", entity, RAGDOLL_HANDOFF_SECONDS - death.until_handoff);
+        }
         if death.until_handoff > 0.0 {
             continue;
         }
