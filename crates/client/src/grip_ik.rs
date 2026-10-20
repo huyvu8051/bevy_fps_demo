@@ -10,8 +10,8 @@ const POLE_OUT_ALONG_SHOULDER_LINE: f32 = 0.4;
 
 const MARKER_RADIUS_METRES: f32 = 0.022;
 const DRAW_OVER_SOLID_GEOMETRY_BIAS: f32 = 1000.0;
-const AXIS_BAR_LENGTH: f32 = 150.0;
-const AXIS_BAR_THICKNESS: f32 = 8.0;
+const AXIS_BAR_LENGTH_METRES: f32 = 0.15;
+const AXIS_BAR_THICKNESS_METRES: f32 = 0.008;
 
 const TEST_TARGET_RIGHT_FROM_EYE: Vec3 = Vec3::new(0.16, -0.10, -0.32);
 const TEST_TARGET_LEFT_FROM_EYE: Vec3 = Vec3::new(-0.16, -0.10, -0.32);
@@ -123,8 +123,8 @@ pub(crate) fn spawn_grip_sockets(
     let fore_entity = fore.id();
 
     if markers.is_some() {
-        spawn_axis_gizmo(&mut commands, &mut meshes, &mut materials, trigger_entity);
-        spawn_axis_gizmo(&mut commands, &mut meshes, &mut materials, fore_entity);
+        spawn_axis_gizmo(&mut commands, &mut meshes, &mut materials, trigger_entity, metres_to_parent_units);
+        spawn_axis_gizmo(&mut commands, &mut meshes, &mut materials, fore_entity, metres_to_parent_units);
     }
     info!("[grip] sockets under {parent:?} (test_targets={testing})");
 }
@@ -134,9 +134,12 @@ fn spawn_axis_gizmo(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     parent: Entity,
+    metres_to_parent_units: f32,
 ) {
-    let bar = meshes.add(Cuboid::new(AXIS_BAR_THICKNESS, AXIS_BAR_THICKNESS, AXIS_BAR_LENGTH));
-    let half = AXIS_BAR_LENGTH * 0.5;
+    let thick = AXIS_BAR_THICKNESS_METRES * metres_to_parent_units;
+    let length = AXIS_BAR_LENGTH_METRES * metres_to_parent_units;
+    let bar = meshes.add(Cuboid::new(thick, thick, length));
+    let half = length * 0.5;
     let quarter_turn = std::f32::consts::FRAC_PI_2;
     let axes = [
         ("+X", Vec3::X * half, Quat::from_rotation_y(quarter_turn), LinearRgba::rgb(8.0, 0.2, 0.2)),

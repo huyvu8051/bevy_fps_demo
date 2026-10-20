@@ -10,10 +10,11 @@ use crate::*;
 pub(crate) struct WeaponDef {
     pub(crate) name: &'static str,
     pub(crate) mesh_path: &'static str,
-    /// Metres per unit of the mesh's own space. The AK is modelled in
-    /// millimetres, which is why its grip points read in the hundreds.
+    /// Metres per unit of the mesh's own space, and the yaw that brings the
+    /// mesh's length onto the camera's forward. Both are 1.0 and 0.0 for a
+    /// mesh authored to the house convention: metres, barrel down -Z, origin
+    /// on the bore at the muzzle. They exist for meshes that are not.
     pub(crate) mesh_scale: f32,
-    /// Yaw that brings the mesh's own length onto the camera's forward.
     pub(crate) mesh_yaw_deg: f32,
 
     pub(crate) rest_offset: Vec3,
@@ -25,7 +26,9 @@ pub(crate) struct WeaponDef {
     /// moved by hand whenever rest_offset is.
     pub(crate) muzzle_offset: Vec3,
     pub(crate) scope_lens_offset: Vec3,
-    /// Gun relative, so it follows the gun on its own.
+    /// Added to the gun's own offset but along the camera's axes, not the
+    /// gun's, so it tracks where the gun sits without taking its sway. Moving
+    /// the mesh origin moves this with it.
     pub(crate) eject_port: Vec3,
 
     /// In the mesh's own units, which is the space the IK solver works in.
@@ -62,21 +65,23 @@ impl WeaponId {
 
 }
 
-/// Measured over many sessions against this mesh; see the comments on the
-/// fields for what each one is relative to.
+/// Standardised to match the M4: metres, barrel down -Z, origin on the bore at
+/// the muzzle. The turn and the millimetres are baked into the asset's root
+/// node, so the grips below are the Socket_RearGrip / Socket_FrontGrip the
+/// mesh now ships with.
 static AK47: WeaponDef = WeaponDef {
     name: "AK-47",
     mesh_path: "models/ak47_scope/raw/scene.gltf",
-    mesh_scale: 0.001,
-    mesh_yaw_deg: -90.0,
-    rest_offset: Vec3::new(0.22, -0.32, -0.56),
-    ads_offset: Vec3::new(0.0, -0.307, -0.35),
-    ready_offset: Vec3::new(0.055, -0.40, -0.47),
+    mesh_scale: 1.0,
+    mesh_yaw_deg: 0.0,
+    rest_offset: Vec3::new(0.220, -0.104, -1.045),
+    ads_offset: Vec3::new(0.0, -0.091, -0.835),
+    ready_offset: Vec3::new(0.055, -0.184, -0.955),
     muzzle_offset: Vec3::new(0.2, -0.045, -1.11),
     scope_lens_offset: Vec3::new(0.0, 0.0, -0.2),
-    eject_port: Vec3::new(0.10, 0.225, 0.03),
-    trigger_grip_mesh: Vec3::new(160.0, 80.0, -130.0),
-    fore_grip_mesh: Vec3::new(-50.0, 160.0, 100.0),
+    eject_port: Vec3::new(0.100, 0.009, 0.515),
+    trigger_grip_mesh: Vec3::new(0.0, -0.136, 0.645),
+    fore_grip_mesh: Vec3::new(0.0, -0.056, 0.435),
     fire_rate: 0.1,
     magazine: 50,
 };
@@ -89,10 +94,9 @@ static AK47: WeaponDef = WeaponDef {
 ///   Socket_RearGrip   (0,     -0.094,  0.531)
 ///
 /// The muzzle sits at the origin and the stock runs back to +Z, so the mesh
-/// already points down -Z and needs no turn at all. It is in metres, so the
-/// grips read in metres where the AK reads in hundreds.
+/// already points down -Z and needs no turn at all. This is the convention the
+/// AK was since standardised onto, so the two now read in the same frame.
 ///
-/// rest_offset puts this muzzle exactly where the AK's tuned one is, and
 /// ads_offset lifts Socket_Sight onto the camera axis at 0.35m of eye relief.
 static M4A1: WeaponDef = WeaponDef {
     name: "M4A1",
@@ -114,9 +118,7 @@ static M4A1: WeaponDef = WeaponDef {
 /// Rebuilds the viewmodel for the weapon the player picked.
 ///
 /// The mesh and the IK sockets are both built against one weapon's geometry,
-/// so both are thrown away and made again rather than retargeted: the grip
-/// points live in the mesh's own units, and those units are not even the same
-/// between these two.
+/// so both are thrown away and made again rather than retargeted.
 pub(crate) fn switch_weapon(
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
