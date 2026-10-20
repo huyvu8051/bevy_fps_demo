@@ -24,7 +24,6 @@ pub(crate) fn begin_death(
     link: Option<&ZombieAnimationPlayer>,
     players: &mut Query<&mut AnimationPlayer>,
     push: Vec3,
-    severed: Vec<(shared::ZombieLimb, usize)>,
 ) {
     let (clip, clip_seconds) = anim.slot(kind).death(entity.to_bits() as usize);
     if let Some(link) = link {
@@ -42,9 +41,6 @@ pub(crate) fn begin_death(
             DeathClipPlaying,
             DeathImpulse { push },
         ));
-    if !severed.is_empty() {
-        commands.entity(entity).insert(SeveredLimbs(severed));
-    }
 }
 
 /// The clip gets the first moments — the stagger, the knee buckle — then

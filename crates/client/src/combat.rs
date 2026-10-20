@@ -121,7 +121,6 @@ pub(crate) fn handle_fire_shot(
             health.0 -= damage;
             let killed = health.0 <= 0.0;
             if killed {
-                let severed = limb_damage.take(entity);
                 begin_death(
                     &mut commands,
                     entity,
@@ -131,7 +130,6 @@ pub(crate) fn handle_fire_shot(
                     &mut anim_players,
                     Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero()
                         * DEATH_PUSH_SPEED,
-                    severed,
                 );
                 respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
             } else {
