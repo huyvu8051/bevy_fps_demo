@@ -163,7 +163,14 @@ pub(crate) fn update_blood_particles(
 ) {
     let dt = time.delta_secs();
     let eye = camera.single().ok().map(|global| global.translation());
+    // A severance bleeds from both faces of the cut for over a second, so a
+    // few at once puts hundreds of these up. Oldest go first, as elsewhere.
+    let mut over_budget = query.iter().len().saturating_sub(MAX_BLOOD_PARTICLES);
     for (entity, mut transform, mut particle) in &mut query {
+        if over_budget > 0 && particle.remaining > 0.1 {
+            particle.remaining = 0.1;
+            over_budget -= 1;
+        }
         particle.velocity.y += BLOOD_PARTICLE_GRAVITY * dt;
         transform.translation += particle.velocity * dt;
 
