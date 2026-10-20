@@ -65,7 +65,7 @@ struct BoneLink {
     radius: f32,
 }
 
-fn bone_links(bones: &ZombieHitboxBones, severed: Option<&SeveredLimbs>) -> Option<Vec<BoneLink>> {
+fn bone_links(bones: &ZombieHitboxBones, severed: Option<&SeveredParts>) -> Option<Vec<BoneLink>> {
     let radius_torso = TORSO_HITBOX_RADIUS;
     let radius_limb = LIMB_HITBOX_RADIUS;
     let radius_head = HEAD_HITBOX_RADIUS;
@@ -107,7 +107,7 @@ fn bone_links(bones: &ZombieHitboxBones, severed: Option<&SeveredLimbs>) -> Opti
 pub(crate) fn arm_ragdoll(
     mut commands: Commands,
     globals: Query<&GlobalTransform>,
-    arming: Query<(Entity, &ZombieHitboxBones, Option<&SeveredLimbs>), (With<DeathClipPlaying>, Without<RagdollArming>)>,
+    arming: Query<(Entity, &ZombieHitboxBones, Option<&SeveredParts>), (With<DeathClipPlaying>, Without<RagdollArming>)>,
     ready: Query<Entity, With<ReadyToRagdoll>>,
 ) {
     for entity in &ready {
@@ -148,7 +148,7 @@ pub(crate) fn spawn_what_was_armed_last_frame(
         &RagdollArming,
         Option<&DeathImpulse>,
         Option<&ZombieAnimationPlayer>,
-        Option<&SeveredLimbs>,
+        Option<&SeveredParts>,
     )>,
     mut players: Query<&mut AnimationPlayer>,
 ) {

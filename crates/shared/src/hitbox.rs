@@ -178,27 +178,29 @@ pub fn zombie_hit_nearest_region(hit_point: Vec3, bones: &BoneWorldPositions) ->
     nearest
 }
 
-/// Which limb a shot landed on, and the joint it should come off at.
+/// Which part a shot landed on, and the joint it should come off at.
 ///
 /// The segment index doubles as the cut joint: a hit on the upper arm, the
 /// segment between joints 0 and 1, severs at joint 0.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ZombieLimb {
+pub enum ZombiePart {
+    Head,
     LeftArm,
     RightArm,
     LeftLeg,
     RightLeg,
 }
 
-impl ZombieLimb {
-    pub const ALL: [ZombieLimb; 4] = [Self::LeftArm, Self::RightArm, Self::LeftLeg, Self::RightLeg];
+impl ZombiePart {
+    pub const ALL: [ZombiePart; 5] = [Self::Head, Self::LeftArm, Self::RightArm, Self::LeftLeg, Self::RightLeg];
 
     pub fn index(self) -> usize {
         match self {
-            Self::LeftArm => 0,
-            Self::RightArm => 1,
-            Self::LeftLeg => 2,
-            Self::RightLeg => 3,
+            Self::Head => 0,
+            Self::LeftArm => 1,
+            Self::RightArm => 2,
+            Self::LeftLeg => 3,
+            Self::RightLeg => 4,
         }
     }
 }
@@ -207,12 +209,12 @@ pub struct BoneHit {
     pub point: Vec3,
     pub normal: Vec3,
     pub damage: f32,
-    pub limb: Option<(ZombieLimb, usize)>,
+    pub limb: Option<(ZombiePart, usize)>,
 }
 
 pub fn zombie_hit_damage_ray(origin: Vec3, direction: Dir3, max_distance: f32, bones: &BoneWorldPositions) -> Option<BoneHit> {
-    let mut best: Option<(f32, Vec3, f32, Option<(ZombieLimb, usize)>)> = None;
-    let mut consider = |hit: Option<(f32, Vec3)>, damage: f32, limb: Option<(ZombieLimb, usize)>| {
+    let mut best: Option<(f32, Vec3, f32, Option<(ZombiePart, usize)>)> = None;
+    let mut consider = |hit: Option<(f32, Vec3)>, damage: f32, limb: Option<(ZombiePart, usize)>| {
         if let Some((toi, normal)) = hit {
             if best.is_none_or(|(best_toi, ..)| toi < best_toi) {
                 best = Some((toi, normal, damage, limb));
@@ -221,9 +223,9 @@ pub fn zombie_hit_damage_ray(origin: Vec3, direction: Dir3, max_distance: f32, b
     };
 
     if let Some(pos) = bones.head {
-        consider(Collider::sphere(HEAD_HITBOX_RADIUS).cast_ray(pos, Quat::IDENTITY, origin, *direction, max_distance, true), HEAD_DAMAGE, None);
+        consider(Collider::sphere(HEAD_HITBOX_RADIUS).cast_ray(pos, Quat::IDENTITY, origin, *direction, max_distance, true), HEAD_DAMAGE, Some((ZombiePart::Head, 0)));
     }
-    for (limb, chain) in ZombieLimb::ALL
+    for (limb, chain) in ZombiePart::ALL
         .into_iter()
         .zip([&bones.left_arm, &bones.right_arm, &bones.left_leg, &bones.right_leg])
     {

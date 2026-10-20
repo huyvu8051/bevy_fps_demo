@@ -721,6 +721,7 @@ impl Plugin for GamePlugin {
                     (
                     test_blast_key.run_if(debug_keys_allowed),
                     forget_gone_zombies,
+                    update_gore,
                     update_death,
                     spawn_what_was_armed_last_frame,
                     apply_pending_blast,

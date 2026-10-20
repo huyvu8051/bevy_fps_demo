@@ -108,6 +108,7 @@ pub(crate) fn setup_common(
 
     commands.insert_resource(build_bullet_hole_assets(&asset_server, &mut meshes, &mut materials));
     commands.insert_resource(build_casing_assets(&mut meshes, &mut materials));
+    commands.insert_resource(build_gore_assets(&mut meshes, &mut materials));
 
     commands.insert_resource(BloodAssets {
         particle_mesh: meshes.add(Rectangle::new(BLOOD_PARTICLE_SIZE, BLOOD_PARTICLE_SIZE)),
