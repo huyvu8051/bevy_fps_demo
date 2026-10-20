@@ -219,11 +219,14 @@ pub(crate) fn forget_gone_zombies(mut removed: RemovedComponents<Zombie>, mut li
 
 const HEAD_GORE_RADIUS: f32 = 0.105;
 
+/// The generated arm measures 1.898 along its longest axis, which is Z, and a
+/// real arm is about 0.65m.
+const GORE_ARM_SCALE: f32 = 0.34;
+
 #[derive(Resource)]
 pub(crate) struct GoreAssets {
-    limb_mesh: Handle<Mesh>,
+    arm_scene: Handle<WorldAsset>,
     head_mesh: Handle<Mesh>,
-    limb_material: Handle<StandardMaterial>,
     head_material: Handle<StandardMaterial>,
 }
 
@@ -251,9 +254,8 @@ pub(crate) fn build_gore_assets(
         ..default()
     };
     GoreAssets {
-        limb_mesh: meshes.add(Capsule3d::new(GORE_RADIUS, GORE_BASE_LENGTH)),
+        arm_scene: asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/gore/severed_arm.glb")),
         head_mesh: meshes.add(Sphere::new(HEAD_GORE_RADIUS)),
-        limb_material: materials.add(flesh("textures/gore/limb.png")),
         head_material: materials.add(flesh("textures/gore/head.png")),
     }
 }
@@ -264,31 +266,17 @@ pub(crate) fn build_gore_assets(
 fn throw_part(commands: &mut Commands, gore: &GoreAssets, part: ZombiePart, from: Vec3, along: Vec3, length: f32, seed: f32) {
     let length = length.max(GORE_BASE_LENGTH * 0.5);
     let head = part == ZombiePart::Head;
-    let (mesh, material, collider, scale, half_length) = if head {
-        (
-            gore.head_mesh.clone(),
-            gore.head_material.clone(),
-            Collider::sphere(HEAD_GORE_RADIUS),
-            Vec3::ONE,
-            HEAD_GORE_RADIUS,
-        )
-    } else {
-        (
-            gore.limb_mesh.clone(),
-            gore.limb_material.clone(),
-            Collider::capsule(GORE_RADIUS, length),
-            Vec3::new(1.0, length / GORE_BASE_LENGTH, 1.0),
-            length * 0.5,
-        )
-    };
+    let collider = if head { Collider::sphere(HEAD_GORE_RADIUS) } else { Collider::capsule(GORE_RADIUS, length) };
+    let half_length = if head { HEAD_GORE_RADIUS } else { length * 0.5 };
     let scatter = Vec3::new(ops::sin(seed * 1.7), ops::sin(seed * 2.3).abs(), ops::sin(seed * 3.1));
-    commands.spawn((
+
+    let mut piece = commands.spawn((
         Name::new("SeveredPart"),
-        Mesh3d(mesh),
-        MeshMaterial3d(material),
+        // The body carries the physics and keeps its own axes: the capsule is
+        // Y aligned, so the rotation maps Y onto the direction the part left
+        // in. Anything mounted on it has to be brought into that frame.
         Transform::from_translation(from + along * length * 0.5)
-            .with_rotation(Quat::from_rotation_arc(Vec3::Y, along))
-            .with_scale(scale),
+            .with_rotation(Quat::from_rotation_arc(Vec3::Y, along)),
         RigidBody::Dynamic,
         collider,
         ColliderDensity(GORE_DENSITY),
@@ -302,6 +290,21 @@ fn throw_part(commands: &mut Commands, gore: &GoreAssets, part: ZombiePart, from
             next_drop: 0.0,
         },
     ));
+
+    if head {
+        piece.insert((Mesh3d(gore.head_mesh.clone()), MeshMaterial3d(gore.head_material.clone())));
+        return;
+    }
+
+    piece.with_children(|part| {
+        part.spawn((
+            WorldAssetRoot(gore.arm_scene.clone()),
+            // The arm model runs along its own Z, while the body it hangs off
+            // works in Y, so it is turned a quarter before being scaled down.
+            Transform::from_rotation(Quat::from_rotation_arc(Vec3::Z, Vec3::Y))
+                .with_scale(Vec3::splat(GORE_ARM_SCALE)),
+        ));
+    });
 }
 
 /// Severed parts are cheap but not free, and they are rigid bodies the solver
