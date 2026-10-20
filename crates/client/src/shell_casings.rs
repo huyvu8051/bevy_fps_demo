@@ -9,9 +9,13 @@ const CASING_LENGTH: f32 = 0.039;
 const CASING_RADIUS: f32 = 0.0049;
 const CASING_DENSITY: f32 = 8400.0;
 
-/// Clear of the firing arm. Sat tight against the receiver the brass spawns
-/// inside the viewmodel arm mesh and is hidden for the frames it is on screen.
-const EJECT_PORT: Vec3 = Vec3::new(0.10, 0.06, 0.03);
+/// Relative to the gun root. The bore runs 0.275 above that root, so the port
+/// sits just under it rather than down at the magazine.
+///
+/// x stays pushed out from the receiver: tight against it the brass spawns
+/// inside the viewmodel arm mesh and is hidden for the few frames it is on
+/// screen.
+const EJECT_PORT: Vec3 = Vec3::new(0.10, 0.225, 0.03);
 
 const PORT_SMOKE_COUNT: usize = 3;
 const PORT_SMOKE_SPEED: f32 = 0.55;
