@@ -507,13 +507,14 @@ pub(crate) fn shoot(
         ResMut<Assets<MuzzleSmokeMaterial>>,
         ResMut<Assets<MuzzleFlashMaterial>>,
     ),
-    (autopilot, intent, local_moving, local_sprinting, show_hit_markers, show_tracers): (
+    (autopilot, intent, local_moving, local_sprinting, show_hit_markers, show_tracers, active): (
         Res<Autopilot>,
         Res<AutopilotIntent>,
         Res<LocalPlayerMoving>,
         Res<LocalPlayerSprinting>,
         Res<ShowHitMarkers>,
         Res<ShowBulletTracers>,
+        Res<ActiveWeapon>,
     ),
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
@@ -540,7 +541,7 @@ pub(crate) fn shoot(
     if gun.ammo == 0 || gun.reload_remaining > 0.0 {
         return;
     }
-    *cooldown = FIRE_RATE;
+    *cooldown = active.def().fire_rate;
     gun.ammo -= 1;
     gun.recoil = RECOIL_DURATION;
 
@@ -580,7 +581,7 @@ pub(crate) fn shoot(
 
     let gun_drift = gun_transform.translation - gun.base_offset;
     let muzzle_world_pos = camera_transform.translation
-        + camera_transform.rotation * (MUZZLE_OFFSET_AT_REST + gun_drift);
+        + camera_transform.rotation * (active.def().muzzle_offset + gun_drift);
 
     commands.spawn((
         Mesh3d(vfx_assets.muzzle_fx.flash_mesh.clone()),
@@ -638,6 +639,7 @@ pub(crate) fn shoot(
         gun_transform,
         Vec3::ZERO,
         time.elapsed_secs() * 311.0,
+        active.def().eject_port,
     );
 
     let shot_shows_flame_blade =
@@ -683,7 +685,7 @@ pub(crate) fn shoot(
         }
 
         if autopilot.0 && is_aiming(cursor, &mouse, touch_aiming.0) {
-            *cooldown = FIRE_RATE * (1.0 + (distance / 10.0).min(4.0));
+            *cooldown = active.def().fire_rate * (1.0 + (distance / 10.0).min(4.0));
         }
 
         vfx_assets.recently_hit.0.insert(entity, RECENTLY_HIT_ZOMBIE_TTL);
@@ -707,6 +709,7 @@ pub(crate) fn reload_gun(
     game_over: Res<GameOver>,
     reload_sound: Res<ReloadSound>,
     mut gun: Query<&mut Gun>,
+    active: Res<ActiveWeapon>,
 ) {
     if game_over.0 || !(keys.just_pressed(KeyCode::KeyR) || touch_reload.0) {
         return;
@@ -714,7 +717,7 @@ pub(crate) fn reload_gun(
     let Ok(mut gun) = gun.single_mut() else {
         return;
     };
-    if gun.ammo == MAGAZINE_SIZE || gun.reload_remaining > 0.0 {
+    if gun.ammo == active.def().magazine || gun.reload_remaining > 0.0 {
         return;
     }
     gun.reload_remaining = RELOAD_DURATION;

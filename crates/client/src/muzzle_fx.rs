@@ -240,6 +240,7 @@ pub(crate) fn update_barrel_smoke(
     ribbon: Res<BarrelSmokeRibbon>,
     camera: Query<&Transform, With<FpsCamera>>,
     gun: Query<(&Transform, &Gun), Without<FpsCamera>>,
+    active: Res<ActiveWeapon>,
 ) {
     let dt = time.delta_secs();
     barrel.since_shot += dt;
@@ -281,7 +282,7 @@ pub(crate) fn update_barrel_smoke(
         barrel.next_point = BARREL_TRAIL_INTERVAL;
         if let Ok((gun_transform, gun)) = gun.single() {
             let gun_drift = gun_transform.translation - gun.base_offset;
-            let muzzle = eye.translation + eye.rotation * (MUZZLE_OFFSET_AT_REST + gun_drift);
+            let muzzle = eye.translation + eye.rotation * (active.def().muzzle_offset + gun_drift);
             // newest first, so index order runs muzzle upward
             barrel.points.insert(
                 0,

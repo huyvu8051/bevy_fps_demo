@@ -152,19 +152,16 @@ impl Default for PointLightQuality {
 #[derive(Component)]
 pub(crate) struct PointLightBaseIntensity(pub(crate) f32);
 
-pub(crate) fn gun_mesh_path() -> &'static str {
-    "models/ak47_scope/raw/scene.gltf"
-}
-
 pub(crate) fn spawn_gun_mesh_parts(
     commands: &mut Commands,
     asset_server: &AssetServer,
     _materials: &mut Assets<StandardMaterial>,
     gun_entity: Entity,
+    mesh_path: &str,
 ) {
     commands.spawn((
         Name::new("Gun mesh"),
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(gun_mesh_path()))),
+        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(mesh_path.to_string()))),
         Transform::IDENTITY,
         GunMeshPart,
         ChildOf(gun_entity),

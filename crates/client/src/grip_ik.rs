@@ -4,8 +4,6 @@ use crate::*;
 
 const MAX_EXTENSION: f32 = 0.995;
 
-const TRIGGER_GRIP_IN_GUN_MESH: Vec3 = Vec3::new(160.0, 80.0, -130.0);
-const FORE_GRIP_IN_GUN_MESH: Vec3 = Vec3::new(-50.0, 160.0, 100.0);
 
 const POLE_DROP_BELOW_SHOULDER: f32 = 0.3;
 const POLE_OUT_ALONG_SHOULDER_LINE: f32 = 0.4;
@@ -59,6 +57,7 @@ pub(crate) fn spawn_grip_sockets(
     gun: Query<Entity, With<Gun>>,
     camera: Query<Entity, With<FpsCamera>>,
     existing: Query<(), With<TriggerGripSocket>>,
+    active: Res<ActiveWeapon>,
 ) {
     if !existing.is_empty() {
         return;
@@ -76,7 +75,7 @@ pub(crate) fn spawn_grip_sockets(
             1.0,
         )
     } else {
-        (TRIGGER_GRIP_IN_GUN_MESH, FORE_GRIP_IN_GUN_MESH, 1.0 / GUN_SCALE)
+        (active.def().trigger_grip_mesh, active.def().fore_grip_mesh, 1.0 / active.def().mesh_scale)
     };
 
     let markers = grip_markers_enabled().then(|| {

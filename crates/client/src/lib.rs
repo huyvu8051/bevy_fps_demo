@@ -30,6 +30,8 @@ use shared::{
 #[cfg(target_os = "ios")]
 pub mod cadisplaylink;
 
+mod weapon;
+use weapon::*;
 mod dismember;
 use dismember::*;
 mod auto_lean;
@@ -127,27 +129,22 @@ use settings_persistence::*;
 mod splash_screen;
 use splash_screen::*;
 
-const GUN_OFFSET: Vec3 = Vec3::new(0.22, -0.32, -0.56);
 
 pub(crate) fn view_pullback() -> f32 {
     std::env::var("VIEW_PULLBACK").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0)
 }
 
-const GUN_ADS_OFFSET: Vec3 = Vec3::new(0.0, -0.307, -0.35);
 
 /// Low ready: held near the middle and a little forward of the hip rest, so
 /// coming back onto the sights is a short move instead of a full swing across
 /// the body. Sits just right of centre, on the firing-hand side, and
 /// muzzle-down, which is where a rifle hangs when its owner is waiting.
-const GUN_READY_OFFSET: Vec3 = Vec3::new(0.055, -0.40, -0.47);
 const GUN_READY_SPEED: f32 = 7.0;
 const GUN_READY_LEAN_CUTOFF: f32 = 0.12;
 const GUN_SETTLE_JITTER: Vec3 = Vec3::new(0.030, 0.024, 0.020);
 const GUN_SETTLE_SPEED: f32 = 3.0;
 const GUN_SHOULDER_SPEED: f32 = 9.0;
 const GUN_ADS_SPEED: f32 = 10.0;
-const GUN_SCALE: f32 = 0.001;
-const GUN_ROTATION_Y_DEG: f32 = -90.0;
 const RECOIL_KICK: f32 = 0.12;
 
 const RECOIL_KICK_UP: f32 = 0.01;
@@ -172,7 +169,6 @@ const WALL_GUN_RAISE_HEIGHT: f32 = 0.18;
 const WALL_GUN_RAISE_ROT_DEG: f32 = 90.0;
 const WALL_GUN_RAISE_SPEED: f32 = 10.0;
 
-const MAGAZINE_SIZE: u32 = 50;
 const RELOAD_DURATION: f32 = 1.6;
 
 const RELOAD_DIP: f32 = 0.12;
@@ -180,10 +176,6 @@ const RELOAD_TILT_DEG: f32 = 25.0;
 
 const RELOAD_LEFT_DIP: f32 = 0.12;
 
-// Tracks GUN_OFFSET.y. The muzzle is placed from the camera, not from the
-// gun, so lowering the rest pose without lowering this leaves the flash and
-// smoke hanging above the barrel.
-const MUZZLE_OFFSET_AT_REST: Vec3 = Vec3::new(0.2, -0.045, -1.11);
 
 const MUZZLE_FLASH_LIFETIME: f32 = 0.05;
 const FLASH_QUAD_SIZE: f32 = 0.32;
@@ -284,7 +276,6 @@ const SPARK_PARTICLE_GRAVITY: f32 = -9.0;
 const SPARK_PARTICLE_LIFETIME: f32 = 0.25;
 const SPARK_PARTICLE_SIZE: f32 = 0.02;
 
-const FIRE_RATE: f32 = 0.1;
 
 const RECOIL_PITCH_KICK: f32 = 0.022;
 const RECOIL_PUSH_BACK: f32 = 0.018;
@@ -362,7 +353,6 @@ const SCOPE_BASE_FOV: f32 = BASE_FOV;
 const AUTO_ZOOM_NEAR_DISTANCE: f32 = 10.0;
 const AUTO_ZOOM_FAR_DISTANCE: f32 = 100.0;
 
-const SCOPE_LENS_OFFSET: Vec3 = Vec3::new(0.0, 0.0, -0.2);
 
 const SCOPE_LENS_SIZE: f32 = 0.03;
 
@@ -557,6 +547,7 @@ impl Plugin for GamePlugin {
         .init_resource::<ShowBulletTracers>()
         .init_resource::<BarrelSmoke>()
         .init_resource::<LimbDamage>()
+        .init_resource::<ActiveWeapon>()
         .add_systems(
             PostUpdate,
             sever_limbs
@@ -742,6 +733,7 @@ impl Plugin for GamePlugin {
                     exclude_oversized_shadow_casters,
                     (
                     test_blast_key.run_if(debug_keys_allowed),
+                    switch_weapon,
                     forget_gone_zombies,
                     update_gore,
                     update_death,

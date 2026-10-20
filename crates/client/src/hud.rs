@@ -142,7 +142,7 @@ pub(crate) fn update_health_ui(
 
 pub(crate) fn spawn_ammo_ui(commands: &mut Commands) {
     commands.spawn((
-        Text::new(format!("{MAGAZINE_SIZE} / {MAGAZINE_SIZE}")),
+        Text::new(String::new()),
         TextFont {
             font_size: FontSize::Px(24.0),
             ..default()
@@ -453,7 +453,11 @@ pub(crate) fn update_radar_ui(
     }
 }
 
-pub(crate) fn update_ammo_ui(gun: Query<&Gun, Changed<Gun>>, mut text: Query<&mut Text, With<AmmoUi>>) {
+pub(crate) fn update_ammo_ui(
+    gun: Query<&Gun, Changed<Gun>>,
+    mut text: Query<&mut Text, With<AmmoUi>>,
+    active: Res<ActiveWeapon>,
+) {
     let Ok(gun) = gun.single() else {
         return;
     };
@@ -463,7 +467,7 @@ pub(crate) fn update_ammo_ui(gun: Query<&Gun, Changed<Gun>>, mut text: Query<&mu
     text.0 = if gun.reload_remaining > 0.0 {
         "RELOADING...".to_string()
     } else {
-        format!("{} / {MAGAZINE_SIZE}", gun.ammo)
+        format!("{} / {}", gun.ammo, active.def().magazine)
     };
 }
 

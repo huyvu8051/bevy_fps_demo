@@ -1,0 +1,11 @@
+Model Information:
+* title:	Low Poly Colt M4A1
+* source:	https://sketchfab.com/3d-models/low-poly-colt-m4a1-de142447b4d047bbb0311c2974520f1e
+* author:	puresaltt (https://sketchfab.com/PureSaltt)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Low Poly Colt M4A1" (https://sketchfab.com/3d-models/low-poly-colt-m4a1-de142447b4d047bbb0311c2974520f1e) by puresaltt (https://sketchfab.com/PureSaltt) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

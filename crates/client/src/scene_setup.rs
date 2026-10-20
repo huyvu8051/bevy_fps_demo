@@ -193,6 +193,7 @@ pub(crate) fn setup_gameplay(
     touch_enabled: Res<TouchControlsEnabled>,
     scene_target: Option<Res<SceneRenderTarget>>,
     mut pending: ResMut<MapSelectionPending>,
+    active: Res<ActiveWeapon>,
 ) {
     let Some(scene_target) = scene_target else {
         return;
@@ -265,17 +266,17 @@ pub(crate) fn setup_gameplay(
     let gun_entity = commands
         .spawn((
             Name::new("Gun (first-person viewmodel)"),
-            Transform::from_translation(GUN_OFFSET)
-                .with_rotation(Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians()))
-                .with_scale(Vec3::splat(GUN_SCALE)),
+            Transform::from_translation(active.def().rest_offset)
+                .with_rotation(Quat::from_rotation_y(active.def().mesh_yaw_deg.to_radians()))
+                .with_scale(Vec3::splat(active.def().mesh_scale)),
             Visibility::default(),
             Gun {
-                base_offset: GUN_OFFSET,
+                base_offset: active.def().rest_offset,
                 settle_jitter: Vec3::ZERO,
                 settle_current: Vec3::ZERO,
                 settle_rolled: false,
                 recoil: 0.0,
-                ammo: MAGAZINE_SIZE,
+                ammo: active.def().magazine,
                 reload_remaining: 0.0,
                 ads_blend: 0.0,
                 wall_raise: 0.0,
@@ -290,7 +291,7 @@ pub(crate) fn setup_gameplay(
             ChildOf(camera),
         ))
         .id();
-    spawn_gun_mesh_parts(&mut commands, &asset_server, &mut materials, gun_entity);
+    spawn_gun_mesh_parts(&mut commands, &asset_server, &mut materials, gun_entity, active.def().mesh_path);
 
     let scope_size = Extent3d {
         width: SCOPE_TEXTURE_SIZE,
@@ -363,7 +364,7 @@ pub(crate) fn setup_gameplay(
     commands.spawn((
         Mesh3d(meshes.add(Circle::new(SCOPE_LENS_SIZE / 2.0))),
         MeshMaterial3d(scope_lens_materials.add(scope_lens_material(scope_image_handle))),
-        Transform::from_translation(SCOPE_LENS_OFFSET),
+        Transform::from_translation(active.def().scope_lens_offset),
         Visibility::Hidden,
         RenderLayers::layer(VIEWMODEL_LAYER),
         ScopeLens,

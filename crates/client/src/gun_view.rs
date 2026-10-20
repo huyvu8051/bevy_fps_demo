@@ -133,6 +133,7 @@ pub(crate) fn update_scope_lens(
     mut scope_camera: Query<(&mut Camera, &mut Projection), With<ScopeCamera>>,
     mut lens: Query<(&mut Transform, &mut Visibility), (With<ScopeLens>, Without<ScopeReticle>)>,
     mut reticle: Query<&mut Transform, (With<ScopeReticle>, Without<ScopeLens>)>,
+    active: Res<ActiveWeapon>,
 ) {
     let Ok(gun) = gun.single() else {
         return;
@@ -154,15 +155,17 @@ pub(crate) fn update_scope_lens(
 
     if let Ok((mut transform, mut visibility)) = lens.single_mut() {
 
-        let lens_x = GUN_OFFSET.x + (SCOPE_LENS_OFFSET.x - GUN_OFFSET.x) * gun.ads_blend;
+        let rest = active.def().rest_offset;
+        let lens = active.def().scope_lens_offset;
+        let lens_x = rest.x + (lens.x - rest.x) * gun.ads_blend;
         let timings = gun_pose_timings(gun);
         let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend) - RELOAD_LEFT_DIP * timings.dip + timings.bob_x;
-        let lens_y = SCOPE_LENS_OFFSET.y - SCOPE_LENS_HIDDEN_DROP * (1.0 - gun.ads_blend)
+        let lens_y = lens.y - SCOPE_LENS_HIDDEN_DROP * (1.0 - gun.ads_blend)
             + SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend)
             + RECOIL_KICK_UP * timings.recoil_t
             - RELOAD_DIP * timings.dip
             - timings.bob_y;
-        let lens_z = GUN_OFFSET.z + (SCOPE_LENS_OFFSET.z - GUN_OFFSET.z) * gun.ads_blend + RECOIL_KICK * timings.recoil_t;
+        let lens_z = rest.z + (lens.z - rest.z) * gun.ads_blend + RECOIL_KICK * timings.recoil_t;
         transform.translation = Vec3::new(swapped_x, lens_y, lens_z);
         transform.rotation = gun_recoil_sway_rotation(gun, &timings);
         *visibility = if visible { Visibility::Visible } else { Visibility::Hidden };
@@ -181,6 +184,7 @@ pub(crate) fn gun_view_animation(
     mut query: Query<(&mut Transform, &mut Gun), Without<FpsCamera>>,
     local_moving: Res<LocalPlayerMoving>,
     local_sprinting: Res<LocalPlayerSprinting>,
+    active: Res<ActiveWeapon>,
 ) {
     let camera_single = camera.single().ok();
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
@@ -219,7 +223,7 @@ pub(crate) fn gun_view_animation(
         if gun.reload_remaining > 0.0 {
             gun.reload_remaining = (gun.reload_remaining - time.delta_secs()).max(0.0);
             if gun.reload_remaining == 0.0 {
-                gun.ammo = MAGAZINE_SIZE;
+                gun.ammo = active.def().magazine;
             }
         }
 
@@ -283,8 +287,8 @@ pub(crate) fn gun_view_animation(
 
         let timings = gun_pose_timings(&gun);
 
-        let resting = gun.base_offset.lerp(GUN_READY_OFFSET, gun.ready_blend) + gun.settle_current;
-        let base_pos = resting.lerp(GUN_ADS_OFFSET, gun.ads_blend) - Vec3::Z * view_pullback();
+        let resting = gun.base_offset.lerp(active.def().ready_offset, gun.ready_blend) + gun.settle_current;
+        let base_pos = resting.lerp(active.def().ads_offset, gun.ads_blend) - Vec3::Z * view_pullback();
 
         let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
         transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)
@@ -295,7 +299,7 @@ pub(crate) fn gun_view_animation(
                 RECOIL_KICK * timings.recoil_t,
             );
 
-        let base_rotation = Quat::from_rotation_y(GUN_ROTATION_Y_DEG.to_radians())
+        let base_rotation = Quat::from_rotation_y(active.def().mesh_yaw_deg.to_radians())
             * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip);
 
         let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
