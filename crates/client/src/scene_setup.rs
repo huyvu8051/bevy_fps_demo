@@ -362,7 +362,7 @@ pub(crate) fn setup_gameplay(
     ));
 
     commands.spawn((
-        Mesh3d(meshes.add(Circle::new(SCOPE_LENS_SIZE / 2.0))),
+        Mesh3d(meshes.add(Circle::new(1.0))),
         MeshMaterial3d(scope_lens_materials.add(scope_lens_material(scope_image_handle))),
         Transform::from_translation(active.def().scope_lens_offset),
         Visibility::Hidden,

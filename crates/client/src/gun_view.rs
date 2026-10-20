@@ -19,6 +19,63 @@ pub(crate) struct ScopeLens;
 #[derive(Component)]
 pub(crate) struct ScopeReticle;
 
+/// The two glass planes of the scope, as the mesh itself marks them. Both the
+/// camera that looks through the scope and the disc that shows what it saw used
+/// to be placed by replaying the gun's whole animation a second time; riding
+/// these instead means recoil, sway, bob and the shoulder swap come for free and
+/// cannot drift out of step.
+///
+/// The socket's scale carries the lens radius, so a unit circle under it is the
+/// real glass. A camera must take the position and the turn but never that
+/// scale.
+#[derive(Component)]
+pub(crate) struct ScopeObjectiveSocket;
+
+#[derive(Component)]
+pub(crate) struct ScopeOcularSocket;
+
+/// Pins the sights up so the scope can be looked at without waiting for the
+/// autopilot to pick a target far enough away to want them.
+pub(crate) fn force_ads() -> bool {
+    std::env::var("FORCE_ADS").map(|value| value == "1").unwrap_or(false)
+}
+
+/// Meshes that do not mark their scope fall back to the tuned offsets, the same
+/// way a mesh that is not in metres falls back to mesh_scale.
+pub(crate) fn wire_scope_sockets(
+    mut commands: Commands,
+    child_of: Query<&ChildOf>,
+    gun: Query<(), With<Gun>>,
+    new_names: Query<(Entity, &Name), Added<Name>>,
+) {
+    for (entity, name) in &new_names {
+        let marker = match name.as_str() {
+            "Socket_ScopeObjective" => 0,
+            "Socket_ScopeOcular" => 1,
+            _ => continue,
+        };
+        let mut current = entity;
+        let mut under_gun = false;
+        for _ in 0..20 {
+            if gun.contains(current) {
+                under_gun = true;
+                break;
+            }
+            let Ok(parent) = child_of.get(current) else { break };
+            current = parent.0;
+        }
+        if !under_gun {
+            continue;
+        }
+        if marker == 0 {
+            commands.entity(entity).insert(ScopeObjectiveSocket);
+        } else {
+            commands.entity(entity).insert(ScopeOcularSocket);
+        }
+        info!("[scope] {name} wired");
+    }
+}
+
 #[derive(Resource)]
 pub(crate) struct ScopeZoom(pub(crate) f32);
 
@@ -65,8 +122,19 @@ pub(crate) fn gun_recoil_sway_rotation(gun: &Gun, timings: &GunPoseTimings) -> Q
 pub(crate) fn sync_scope_camera(
     camera: Query<&Transform, (With<FpsCamera>, Without<ScopeCamera>, Without<Gun>)>,
     gun: Query<(&Gun, &Transform), (Without<FpsCamera>, Without<ScopeCamera>)>,
+    objective: Query<&GlobalTransform, With<ScopeObjectiveSocket>>,
     mut scope_camera: Query<&mut Transform, (With<ScopeCamera>, Without<FpsCamera>, Without<Gun>)>,
 ) {
+    // Light enters a scope at the front lens, and the mesh says where that is.
+    // Position and turn only: the socket's scale is the lens radius, and a
+    // camera that took it would scale the whole world it renders.
+    if let (Ok(socket), Ok(mut scope_transform)) = (objective.single(), scope_camera.single_mut()) {
+        let placed = socket.compute_transform();
+        *scope_transform =
+            Transform::from_translation(placed.translation).with_rotation(placed.rotation);
+        return;
+    }
+
     let (Ok(camera_transform), Ok((gun, gun_transform)), Ok(mut scope_transform)) =
         (camera.single(), gun.single(), scope_camera.single_mut())
     else {
@@ -133,6 +201,8 @@ pub(crate) fn update_scope_lens(
     mut scope_camera: Query<(&mut Camera, &mut Projection), With<ScopeCamera>>,
     mut lens: Query<(&mut Transform, &mut Visibility), (With<ScopeLens>, Without<ScopeReticle>)>,
     mut reticle: Query<&mut Transform, (With<ScopeReticle>, Without<ScopeLens>)>,
+    ocular: Query<&GlobalTransform, With<ScopeOcularSocket>>,
+    eye: Query<&GlobalTransform, With<FpsCamera>>,
     active: Res<ActiveWeapon>,
 ) {
     let Ok(gun) = gun.single() else {
@@ -154,7 +224,17 @@ pub(crate) fn update_scope_lens(
     }
 
     if let Ok((mut transform, mut visibility)) = lens.single_mut() {
+        *visibility = if visible { Visibility::Visible } else { Visibility::Hidden };
 
+        // What the player looks into is the rear glass, so sit on it. The disc
+        // is a unit circle and the socket's scale is the lens radius, which
+        // makes the picture exactly as wide as the real eyepiece.
+        if let (Ok(socket), Ok(eye)) = (ocular.single(), eye.single()) {
+            *transform = socket.reparented_to(eye);
+            return;
+        }
+
+        transform.scale = Vec3::splat(SCOPE_LENS_SIZE * 0.5);
         let rest = active.def().rest_offset;
         let lens = active.def().scope_lens_offset;
         let lens_x = rest.x + (lens.x - rest.x) * gun.ads_blend;
@@ -168,7 +248,6 @@ pub(crate) fn update_scope_lens(
         let lens_z = rest.z + (lens.z - rest.z) * gun.ads_blend + RECOIL_KICK * timings.recoil_t;
         transform.translation = Vec3::new(swapped_x, lens_y, lens_z);
         transform.rotation = gun_recoil_sway_rotation(gun, &timings);
-        *visibility = if visible { Visibility::Visible } else { Visibility::Hidden };
     }
 }
 
@@ -227,7 +306,7 @@ pub(crate) fn gun_view_animation(
             }
         }
 
-        let ads_target = if aiming { 1.0 } else { 0.0 };
+        let ads_target = if aiming || force_ads() { 1.0 } else { 0.0 };
         let ads_step = (GUN_ADS_SPEED * time.delta_secs()).min(1.0);
         gun.ads_blend += (ads_target - gun.ads_blend) * ads_step;
 
