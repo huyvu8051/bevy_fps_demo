@@ -9,15 +9,15 @@ use shared::ZombiePart;
 const SEVER_DAMAGE: f32 = 1.0;
 const SEVERED_BONE_SCALE: f32 = 0.001;
 
-const BURST_COUNT: usize = 18;
-const BURST_SPEED: f32 = 3.4;
+const BURST_COUNT: usize = 34;
+const BURST_SPEED: f32 = 4.6;
 
 /// Both faces of a cut keep pumping for a moment after it opens, rather than
 /// one puff at the instant of severance.
-const JET_SECONDS: f32 = 1.5;
-const JET_INTERVAL: f32 = 0.04;
-const JET_COUNT: usize = 3;
-const JET_SPEED: f32 = 2.4;
+const JET_SECONDS: f32 = 2.0;
+const JET_INTERVAL: f32 = 0.03;
+const JET_COUNT: usize = 6;
+const JET_SPEED: f32 = 3.8;
 const JET_SPREAD: f32 = 0.45;
 
 const GORE_RADIUS: f32 = 0.075;
