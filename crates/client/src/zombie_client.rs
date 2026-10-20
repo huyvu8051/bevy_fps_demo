@@ -576,15 +576,24 @@ pub(crate) fn wire_gun_mesh(
     mut commands: Commands,
     child_of: Query<&ChildOf>,
     gun: Query<(), With<Gun>>,
+    names: Query<&Name>,
     new_meshes: Query<Entity, Added<Mesh3d>>,
 ) {
     for mesh_entity in &new_meshes {
         let mut current = mesh_entity;
+        // The magazine is the one part that leaves the gun, so it is marked on
+        // the way past. Which entity carries the name depends on how many
+        // primitives the part has, hence the whole walk rather than the leaf.
+        let mut is_magazine = false;
         for _ in 0..20 {
+            is_magazine |= names.get(current).is_ok_and(|n| n.as_str().contains("magazine"));
             if gun.contains(current) {
                 commands
                     .entity(mesh_entity)
                     .insert((GunMesh, RenderLayers::layer(VIEWMODEL_LAYER)));
+                if is_magazine {
+                    commands.entity(mesh_entity).insert(ViewmodelMagazine);
+                }
                 break;
             }
             let Ok(parent) = child_of.get(current) else {
