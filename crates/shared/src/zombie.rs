@@ -237,7 +237,7 @@ pub fn zombie_kind_death_clips(kind: ZombieKind) -> &'static [(usize, f32)] {
     }
 }
 
-pub const ZOMBIE_LIE_STILL_SECONDS: f32 = 3.0;
+pub const ZOMBIE_LIE_STILL_SECONDS: f32 = 5.0;
 
 pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; ZombiePose::COUNT] {
     match kind {

@@ -291,6 +291,12 @@ pub(crate) fn drive_skeleton_from_ragdoll(
                 parent_global.rotation().inverse() * body_global.rotation() * bone_from_body;
         }
 
+        if death_logging() {
+            info!(
+                "[corpse] id={entity:?} t={:.2}s root_y={:.3} settled_for={:.2}",
+                ragdoll.elapsed, root.translation.y, ragdoll.settled_for
+            );
+        }
         if let Some(&(_, root_body, _)) = ragdoll.bodies.first() {
             if let Ok(global) = globals.get(root_body) {
                 root.translation = global.translation();

@@ -5,6 +5,11 @@ use shared::{Chase, ZOMBIE_LIE_STILL_SECONDS};
 
 const DISSOLVE_DURATION: f32 = 1.1;
 
+/// Share of the death clip that plays before physics takes the body. The last
+/// stretch is ragdoll, so the fall lands on what is actually there and the
+/// handoff is hidden inside a movement the clip had already started.
+const CLIP_SHARE_BEFORE_RAGDOLL: f32 = 0.7;
+
 #[derive(Component)]
 pub(crate) struct PlayingDeath {
     until_handoff: f32,
@@ -37,7 +42,10 @@ pub(crate) fn begin_death(
         .remove::<Zombie>()
         .remove::<Chase>()
         .insert((
-            PlayingDeath { until_handoff: clip_seconds, total: clip_seconds },
+            PlayingDeath {
+                until_handoff: clip_seconds * CLIP_SHARE_BEFORE_RAGDOLL,
+                total: clip_seconds * CLIP_SHARE_BEFORE_RAGDOLL,
+            },
             DeathClipPlaying,
             DeathImpulse { push },
         ));
@@ -46,7 +54,7 @@ pub(crate) fn begin_death(
 /// The clip gets the first moments — the stagger, the knee buckle — then
 /// physics takes the fall, so the body lands on whatever is actually there
 /// instead of clipping through a stair or a wall.
-fn death_logging() -> bool {
+pub(crate) fn death_logging() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("DEATH_LOG").is_ok())
 }
