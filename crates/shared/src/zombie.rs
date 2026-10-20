@@ -216,6 +216,11 @@ pub fn zombie_kind_limping_walk_clips(kind: ZombieKind) -> &'static [usize] {
     }
 }
 
+/// Clip index, and how long to let it run before physics takes the body.
+///
+/// These are the clip lengths, so each death plays out in full. Measured from
+/// the chest bone, clips 21 to 24 hold the body upright for the first 1.2 to
+/// 1.7 seconds, so the fall lands late in the clip either way.
 pub fn zombie_kind_death_clips(kind: ZombieKind) -> &'static [(usize, f32)] {
     match kind {
         ZombieKind::Classic => &[

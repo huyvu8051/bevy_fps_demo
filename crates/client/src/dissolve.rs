@@ -8,6 +8,7 @@ const DISSOLVE_DURATION: f32 = 1.1;
 #[derive(Component)]
 pub(crate) struct PlayingDeath {
     until_handoff: f32,
+    total: f32,
 }
 
 #[derive(Component)]
@@ -24,7 +25,7 @@ pub(crate) fn begin_death(
     players: &mut Query<&mut AnimationPlayer>,
     push: Vec3,
 ) {
-    let (clip, _) = anim.slot(kind).death(entity.to_bits() as usize);
+    let (clip, clip_seconds) = anim.slot(kind).death(entity.to_bits() as usize);
     if let Some(link) = link {
         if let Ok(mut player) = players.get_mut(link.0) {
             player.stop_all();
@@ -36,7 +37,7 @@ pub(crate) fn begin_death(
         .remove::<Zombie>()
         .remove::<Chase>()
         .insert((
-            PlayingDeath { until_handoff: RAGDOLL_HANDOFF_SECONDS },
+            PlayingDeath { until_handoff: clip_seconds, total: clip_seconds },
             DeathClipPlaying,
             DeathImpulse { push },
         ));
@@ -75,7 +76,7 @@ pub(crate) fn update_death(
                 .and_then(|e| globals.get(e).ok())
                 .map(|g| g.translation().y - root.translation.y)
                 .unwrap_or(f32::NAN);
-            info!("[death] id={:?} t={:.2}s chest={chest:.3} {state}", entity, RAGDOLL_HANDOFF_SECONDS - death.until_handoff);
+            info!("[death] id={:?} t={:.2}s chest={chest:.3} {state}", entity, death.total - death.until_handoff);
         }
         if death.until_handoff > 0.0 {
             continue;

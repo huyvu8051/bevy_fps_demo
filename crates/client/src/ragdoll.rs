@@ -3,7 +3,6 @@ use bevy::prelude::*;
 
 use crate::*;
 
-const HANDOFF_AFTER_SECONDS: f32 = 0.45;
 pub(crate) const DEATH_PUSH_SPEED: f32 = 2.2;
 const SETTLE_SPEED: f32 = 0.35;
 const SETTLE_HOLD_SECONDS: f32 = 0.4;
@@ -317,4 +316,3 @@ pub(crate) struct DeathImpulse {
     pub(crate) push: Vec3,
 }
 
-pub(crate) const RAGDOLL_HANDOFF_SECONDS: f32 = HANDOFF_AFTER_SECONDS;
