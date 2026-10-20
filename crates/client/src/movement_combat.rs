@@ -507,7 +507,7 @@ pub(crate) fn shoot(
         ResMut<Assets<MuzzleSmokeMaterial>>,
         ResMut<Assets<MuzzleFlashMaterial>>,
     ),
-    (autopilot, intent, local_moving, local_sprinting, show_hit_markers, show_tracers, active): (
+    (autopilot, intent, local_moving, local_sprinting, show_hit_markers, show_tracers, active, smoke): (
         Res<Autopilot>,
         Res<AutopilotIntent>,
         Res<LocalPlayerMoving>,
@@ -515,6 +515,7 @@ pub(crate) fn shoot(
         Res<ShowHitMarkers>,
         Res<ShowBulletTracers>,
         Res<ActiveWeapon>,
+        Res<SmokeEnabled>,
     ),
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
@@ -599,17 +600,19 @@ pub(crate) fn shoot(
         },
     ));
 
-    commands.spawn((
-        Mesh3d(vfx_assets.muzzle_fx.smoke_mesh.clone()),
-        MeshMaterial3d(smoke_materials.add(muzzle_smoke_material(time.elapsed_secs() * 173.0))),
-        Transform::from_translation(muzzle_world_pos)
-            .with_rotation(camera_transform.rotation)
-            .with_scale(Vec3::splat(SMOKE_START_SCALE)),
-        Smoke {
-            velocity: *camera_transform.forward() * 0.4 + Vec3::Y * 0.5,
-            remaining: SMOKE_LIFETIME,
-        },
-    ));
+    if smoke.0 {
+        commands.spawn((
+            Mesh3d(vfx_assets.muzzle_fx.smoke_mesh.clone()),
+            MeshMaterial3d(smoke_materials.add(muzzle_smoke_material(time.elapsed_secs() * 173.0))),
+            Transform::from_translation(muzzle_world_pos)
+                .with_rotation(camera_transform.rotation)
+                .with_scale(Vec3::splat(SMOKE_START_SCALE)),
+            Smoke {
+                velocity: *camera_transform.forward() * 0.4 + Vec3::Y * 0.5,
+                remaining: SMOKE_LIFETIME,
+            },
+        ));
+    }
 
     let forward = *camera_transform.forward();
     let right = *camera_transform.right();
@@ -640,6 +643,7 @@ pub(crate) fn shoot(
         Vec3::ZERO,
         time.elapsed_secs() * 311.0,
         active.def().eject_port,
+        smoke.0,
     );
 
     let shot_shows_flame_blade =

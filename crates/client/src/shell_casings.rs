@@ -75,6 +75,7 @@ pub(crate) fn eject_casing(
     player_velocity: Vec3,
     seed: f32,
     eject_port: Vec3,
+    smoke: bool,
 ) {
     let port = eye.translation + eye.rotation * (gun.translation + eject_port);
     let right = *eye.right();
@@ -99,7 +100,7 @@ pub(crate) fn eject_casing(
         ShellCasing { remaining: CASING_LIFETIME },
     ));
 
-    for i in 0..PORT_SMOKE_COUNT {
+    for i in 0..(if smoke { PORT_SMOKE_COUNT } else { 0 }) {
         let seed = seed + i as f32 * 53.7;
         let drift = (away + up * PORT_SMOKE_RISE + scatter(seed) * 0.4).normalize_or_zero();
         commands.spawn((

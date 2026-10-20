@@ -405,6 +405,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     .with_children(|row| {
                         spawn_cheat_toggle_button(row, "MSAA", CheatMsaaButton);
                         spawn_cheat_toggle_button(row, "Scope", CheatScopeCameraButton);
+                        spawn_cheat_toggle_button(row, "Smoke", CheatSmokeButton);
                     });
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
@@ -634,6 +635,9 @@ pub(crate) struct CheatGunButton;
 pub(crate) struct CheatMsaaButton;
 #[derive(Component)]
 pub(crate) struct CheatScopeCameraButton;
+
+#[derive(Component)]
+pub(crate) struct CheatSmokeButton;
 #[derive(Component)]
 pub(crate) struct CheatKillAllButton;
 #[derive(Component)]
@@ -803,10 +807,12 @@ pub(crate) fn cheat_toggle_buttons_2(
     mut aim_blur: ResMut<AimBlurEnabled>,
     mut zombie_anim: ResMut<ZombieAnimDisabled>,
     mut zombie_health_bars: ResMut<ZombieHealthBarsHidden>,
+    mut smoke: ResMut<SmokeEnabled>,
     hitboxes_btn: Query<&Interaction, (With<CheatHitboxesButton>, Changed<Interaction>)>,
     aim_blur_btn: Query<&Interaction, (With<CheatAimBlurButton>, Changed<Interaction>)>,
     zombie_anim_btn: Query<&Interaction, (With<CheatZombieAnimButton>, Changed<Interaction>)>,
     zombie_health_bars_btn: Query<&Interaction, (With<CheatZombieHealthBarsButton>, Changed<Interaction>)>,
+    smoke_btn: Query<&Interaction, (With<CheatSmokeButton>, Changed<Interaction>)>,
 ) {
     if tapped(&hitboxes_btn) {
         show_hitboxes.0 = !show_hitboxes.0;
@@ -819,6 +825,9 @@ pub(crate) fn cheat_toggle_buttons_2(
     }
     if tapped(&zombie_health_bars_btn) {
         zombie_health_bars.0 = !zombie_health_bars.0;
+    }
+    if tapped(&smoke_btn) {
+        smoke.0 = !smoke.0;
     }
 }
 
@@ -878,6 +887,7 @@ pub(crate) fn update_cheat_toggle_colors(
     zombie_health_bars: Res<ZombieHealthBarsHidden>,
     gun_visible: Res<GunVisible>,
     map_msaa: Res<MapMsaaOn>,
+    smoke: Res<SmokeEnabled>,
     mut buttons: Query<
         (
             &mut BackgroundColor,
@@ -890,6 +900,7 @@ pub(crate) fn update_cheat_toggle_colors(
             Option<&CheatZombieHealthBarsButton>,
             Option<&CheatGunButton>,
             Option<&CheatMsaaButton>,
+            Option<&CheatSmokeButton>,
         ),
         Or<(
             With<CheatNoclipButton>,
@@ -901,11 +912,12 @@ pub(crate) fn update_cheat_toggle_colors(
             With<CheatZombieHealthBarsButton>,
             With<CheatGunButton>,
             With<CheatMsaaButton>,
+            With<CheatSmokeButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, gun_m, msaa_m) in
+    for (mut bg, noclip_m, god_m, freeze_m, hitboxes_m, aim_blur_m, zombie_anim_m, zombie_hp_m, gun_m, msaa_m, smoke_m) in
         &mut buttons
     {
         let on = if noclip_m.is_some() {
@@ -924,8 +936,10 @@ pub(crate) fn update_cheat_toggle_colors(
             zombie_health_bars.0
         } else if gun_m.is_some() {
             gun_visible.0
+        } else if msaa_m.is_some() {
+            map_msaa.0
         } else {
-            msaa_m.is_some() && map_msaa.0
+            smoke_m.is_some() && smoke.0
         };
         *bg = BackgroundColor(color_for(on));
     }

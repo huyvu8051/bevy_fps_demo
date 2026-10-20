@@ -570,6 +570,7 @@ impl Plugin for GamePlugin {
         .init_resource::<LightQuality>()
         .init_resource::<PointLightQuality>()
         .init_resource::<ScopeCameraEnabled>()
+        .init_resource::<SmokeEnabled>()
         .init_resource::<LocalPlayerMoving>()
 .init_resource::<LocalPlayerSprinting>()
 .init_resource::<LocalPlayerMoveAxis>()

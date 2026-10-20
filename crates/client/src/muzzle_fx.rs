@@ -183,6 +183,18 @@ struct TrailPoint {
 /// One continuous ribbon rising off a hot barrel, the way a stick of incense
 /// smokes. Separate puffs read as lumps, and each puff cost a raymarch; the
 /// whole stream here is a single unlit mesh.
+/// Every powder effect the gun makes: the puff at the muzzle, the wisp out of
+/// the ejection port, and the trail that rises once the firing stops. One
+/// switch, because they read as one thing and they cost together.
+#[derive(Resource)]
+pub(crate) struct SmokeEnabled(pub(crate) bool);
+
+impl Default for SmokeEnabled {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct BarrelSmoke {
     since_shot: f32,
@@ -241,7 +253,19 @@ pub(crate) fn update_barrel_smoke(
     camera: Query<&Transform, With<FpsCamera>>,
     gun: Query<(&Transform, &Gun), Without<FpsCamera>>,
     active: Res<ActiveWeapon>,
+    smoke: Res<SmokeEnabled>,
 ) {
+    // Switched off mid-trail the banked points have to go too, or the column
+    // hangs in the air with nothing left to feed it.
+    if !smoke.0 {
+        barrel.points.clear();
+        barrel.visible = 0.0;
+        if let Some(mut mesh) = meshes.get_mut(&ribbon.mesh) {
+            write_ribbon(&[], Vec3::ZERO, 0.0, &mut mesh);
+        }
+        return;
+    }
+
     let dt = time.delta_secs();
     barrel.since_shot += dt;
     barrel.next_point -= dt;
