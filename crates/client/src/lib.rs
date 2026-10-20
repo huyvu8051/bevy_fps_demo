@@ -224,6 +224,20 @@ const BARREL_TRAIL_WIDTH: f32 = 0.018;
 const BARREL_TRAIL_SPREAD: f32 = 0.13;
 const BARREL_TRAIL_ALPHA: f32 = 0.55;
 
+/// The trail is laid down in world space, so a fast turn sweeps the muzzle
+/// through a wide arc and paints a ribbon across the view. Faded out by how
+/// hard the eye is moving: rad/s for the turn, m/s for the walk, against a
+/// sprint of 6.4.
+/// Nothing below the start: ordinary aiming and walking leave it alone, and
+/// only a hard swing or a sprint takes it out. Measured in play, a turn
+/// averages 0.5 rad/s and peaks near 4.7, a walk averages 1.1 m/s against a
+/// sprint of 6.4.
+const BARREL_TRAIL_TURN_START: f32 = 0.9;
+const BARREL_TRAIL_TURN_FADE: f32 = 2.6;
+const BARREL_TRAIL_MOVE_START: f32 = 2.5;
+const BARREL_TRAIL_MOVE_FADE: f32 = 5.5;
+const BARREL_TRAIL_FADE_SPEED: f32 = 6.0;
+
 const BLOOD_PARTICLE_COUNT: usize = 14;
 const BLOOD_PARTICLE_SPEED: f32 = 3.2;
 const BLOOD_PARTICLE_GRAVITY: f32 = -9.0;

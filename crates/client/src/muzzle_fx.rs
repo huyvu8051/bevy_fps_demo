@@ -188,6 +188,10 @@ pub(crate) struct BarrelSmoke {
     since_shot: f32,
     next_point: f32,
     points: Vec<TrailPoint>,
+    /// Previous eye pose, so the turn and walk rates come from the camera
+    /// itself and cover autopilot as well as the mouse.
+    last_eye: Option<(Vec3, Quat)>,
+    visible: f32,
 }
 
 #[derive(Resource)]
@@ -253,7 +257,24 @@ pub(crate) fn update_barrel_smoke(
     barrel.points.retain(|point| point.age < BARREL_TRAIL_LIFETIME);
 
     let Ok(eye) = camera.single() else { return };
-    if barrel.since_shot <= BARREL_SMOKE_WINDOW && barrel.next_point <= 0.0 {
+
+    let (turn, travel) = match barrel.last_eye {
+        Some((was_at, was_facing)) => (
+            was_facing.angle_between(eye.rotation) / dt.max(1e-4),
+            was_at.distance(eye.translation) / dt.max(1e-4),
+        ),
+        None => (0.0, 0.0),
+    };
+    barrel.last_eye = Some((eye.translation, eye.rotation));
+    let ramp = |value: f32, start: f32, end: f32| ((value - start) / (end - start)).clamp(0.0, 1.0);
+    let motion = ramp(turn, BARREL_TRAIL_TURN_START, BARREL_TRAIL_TURN_FADE)
+        .max(ramp(travel, BARREL_TRAIL_MOVE_START, BARREL_TRAIL_MOVE_FADE));
+    let settle = (BARREL_TRAIL_FADE_SPEED * dt).min(1.0);
+    barrel.visible += ((1.0 - motion) - barrel.visible) * settle;
+
+    // Stop laying new points too, or standing still would reveal the streak
+    // the turn had already banked.
+    if barrel.visible > 0.35 && barrel.since_shot <= BARREL_SMOKE_WINDOW && barrel.next_point <= 0.0 {
         barrel.next_point = BARREL_TRAIL_INTERVAL;
         if let Ok((gun_transform, gun)) = gun.single() {
             let gun_drift = gun_transform.translation - gun.base_offset;
@@ -268,10 +289,10 @@ pub(crate) fn update_barrel_smoke(
     }
 
     let Some(mut mesh) = meshes.get_mut(&ribbon.mesh) else { return };
-    write_ribbon(&barrel.points, eye.translation, &mut mesh);
+    write_ribbon(&barrel.points, eye.translation, barrel.visible, &mut mesh);
 }
 
-fn write_ribbon(points: &[TrailPoint], eye: Vec3, mesh: &mut Mesh) {
+fn write_ribbon(points: &[TrailPoint], eye: Vec3, visible: f32, mesh: &mut Mesh) {
     let rows = BARREL_TRAIL_MAX_POINTS * RIBBON_COLUMNS;
     let mut positions = vec![[0.0f32; 3]; rows];
     let mut normals = vec![[0.0, 0.0, 1.0f32]; rows];
@@ -295,7 +316,7 @@ fn write_ribbon(points: &[TrailPoint], eye: Vec3, mesh: &mut Mesh) {
         let life = (point.age / BARREL_TRAIL_LIFETIME).clamp(0.0, 1.0);
         let half = (BARREL_TRAIL_WIDTH + point.age * BARREL_TRAIL_SPREAD) * 0.5;
         // squared so the column holds together off the muzzle and thins high up
-        let alpha = BARREL_TRAIL_ALPHA * (1.0 - life) * (1.0 - life);
+        let alpha = BARREL_TRAIL_ALPHA * (1.0 - life) * (1.0 - life) * visible;
 
         // Edge columns carry no alpha, so the ribbon fades out sideways rather
         // than ending on a cut line and reading as a paper streamer.
