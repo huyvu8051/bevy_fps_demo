@@ -10,6 +10,9 @@ const DISSOLVE_DURATION: f32 = 1.1;
 /// handoff is hidden inside a movement the clip had already started.
 const CLIP_SHARE_BEFORE_RAGDOLL: f32 = 0.7;
 
+/// How long physics keeps the body after the clip would have ended.
+const RAGDOLL_AFTER_CLIP_SECONDS: f32 = 5.0;
+
 #[derive(Component)]
 pub(crate) struct PlayingDeath {
     until_handoff: f32,
@@ -89,7 +92,14 @@ pub(crate) fn update_death(
         if death.until_handoff > 0.0 {
             continue;
         }
-        commands.entity(entity).remove::<PlayingDeath>().insert(ReadyToRagdoll);
+        // total is the share of the clip that played, so the rest of it is what
+        // physics owes before the extra run starts.
+        let rest_of_clip =
+            death.total * (1.0 - CLIP_SHARE_BEFORE_RAGDOLL) / CLIP_SHARE_BEFORE_RAGDOLL;
+        commands
+            .entity(entity)
+            .remove::<PlayingDeath>()
+            .insert(ReadyToRagdoll(rest_of_clip + RAGDOLL_AFTER_CLIP_SECONDS));
     }
 }
 

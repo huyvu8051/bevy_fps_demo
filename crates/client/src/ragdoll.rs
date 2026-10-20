@@ -5,8 +5,8 @@ use crate::*;
 
 pub(crate) const DEATH_PUSH_SPEED: f32 = 2.2;
 const SETTLE_SPEED: f32 = 0.35;
-const SETTLE_HOLD_SECONDS: f32 = 0.4;
-const MAX_RAGDOLL_SECONDS: f32 = 6.0;
+/// A blast has no clip behind it, so its bodies get a flat run.
+const BLAST_RAGDOLL_SECONDS: f32 = 6.0;
 
 const BONE_DENSITY: f32 = 900.0;
 const MIN_BONE_LENGTH: f32 = 0.06;
@@ -23,13 +23,14 @@ const TWIST_LIMIT_HINGE: f32 = 0.08;
 #[derive(Component)]
 pub(crate) struct RagdollArming {
     captured: Vec<(Entity, Vec3, Quat)>,
+    lifetime: f32,
 }
 
 impl RagdollArming {
     /// No captured motion: used when a blast takes over, where the throw
     /// dwarfs whatever the body was already doing.
     pub(crate) fn empty() -> Self {
-        Self { captured: Vec::new() }
+        Self { captured: Vec::new(), lifetime: BLAST_RAGDOLL_SECONDS }
     }
 }
 
@@ -38,6 +39,7 @@ pub(crate) struct Ragdolling {
     bodies: Vec<(Entity, Entity, Quat)>,
     settled_for: f32,
     elapsed: f32,
+    lifetime: f32,
 }
 
 impl Ragdolling {
@@ -108,9 +110,9 @@ pub(crate) fn arm_ragdoll(
     mut commands: Commands,
     globals: Query<&GlobalTransform>,
     arming: Query<(Entity, &ZombieHitboxBones, Option<&SeveredParts>), (With<DeathClipPlaying>, Without<RagdollArming>)>,
-    ready: Query<Entity, With<ReadyToRagdoll>>,
+    ready: Query<(Entity, &ReadyToRagdoll)>,
 ) {
-    for entity in &ready {
+    for (entity, ready_for) in &ready {
         let Ok((_, bones, severed)) = arming.get(entity) else { continue };
         let Some(links) = bone_links(bones, severed) else { continue };
         let captured = links
@@ -123,12 +125,12 @@ pub(crate) fn arm_ragdoll(
         commands
             .entity(entity)
             .remove::<ReadyToRagdoll>()
-            .insert(RagdollArming { captured });
+            .insert(RagdollArming { captured, lifetime: ready_for.0 });
     }
 }
 
 #[derive(Component)]
-pub(crate) struct ReadyToRagdoll;
+pub(crate) struct ReadyToRagdoll(pub(crate) f32);
 
 #[derive(Component)]
 pub(crate) struct DeathClipPlaying;
@@ -237,7 +239,7 @@ pub(crate) fn spawn_what_was_armed_last_frame(
             .entity(entity)
             .remove::<RagdollArming>()
             .remove::<DeathClipPlaying>()
-            .insert(Ragdolling { bodies: pairs, settled_for: 0.0, elapsed: 0.0 });
+            .insert(Ragdolling { bodies: pairs, settled_for: 0.0, elapsed: 0.0, lifetime: armed.lifetime });
     }
 }
 
@@ -309,7 +311,11 @@ pub(crate) fn drive_skeleton_from_ragdoll(
             0.0
         };
 
-        if ragdoll.settled_for >= SETTLE_HOLD_SECONDS || ragdoll.elapsed >= MAX_RAGDOLL_SECONDS {
+        // Runs its whole term instead of stopping as soon as it comes to rest:
+        // the body is meant to be watched, and a late blast should still be
+        // able to move it. Avian sleeps bodies that stop, so the cost of
+        // leaving them up is small.
+        if ragdoll.elapsed >= ragdoll.lifetime {
             for &(_, body, _) in &ragdoll.bodies {
                 commands.entity(body).despawn();
             }

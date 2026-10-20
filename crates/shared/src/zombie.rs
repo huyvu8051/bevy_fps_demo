@@ -237,7 +237,9 @@ pub fn zombie_kind_death_clips(kind: ZombieKind) -> &'static [(usize, f32)] {
     }
 }
 
-pub const ZOMBIE_LIE_STILL_SECONDS: f32 = 5.0;
+/// Spent: the ragdoll itself now runs on for seconds after the clip, so the
+/// body has already been still and watchable by the time this is reached.
+pub const ZOMBIE_LIE_STILL_SECONDS: f32 = 0.0;
 
 pub fn zombie_kind_pose_clips(kind: ZombieKind) -> [usize; ZombiePose::COUNT] {
     match kind {
