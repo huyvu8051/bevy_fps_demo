@@ -81,26 +81,32 @@ static AK47: WeaponDef = WeaponDef {
     magazine: 50,
 };
 
-/// Placeholders. The mesh carries Socket_Muzzle, Socket_FrontGrip,
-/// Socket_RearGrip and Socket_Sight, which is where these four should come
-/// from instead of being guessed; until that reader lands the gun will sit
-/// roughly right and the hands and muzzle will not.
+/// Read off the sockets the mesh ships with rather than guessed:
 ///
-/// What is known: the mesh is in metres and runs 0.757 along its own +Z, and
-/// the camera looks down -Z, hence the half turn.
+///   Socket_Muzzle     (0.011,  0,      0    )
+///   Socket_FrontGrip  (0,      0,      0.276)
+///   Socket_Sight      (0,      0.057,  0.512)
+///   Socket_RearGrip   (0,     -0.094,  0.531)
+///
+/// The muzzle sits at the origin and the stock runs back to +Z, so the mesh
+/// already points down -Z and needs no turn at all. It is in metres, so the
+/// grips read in metres where the AK reads in hundreds.
+///
+/// rest_offset puts this muzzle exactly where the AK's tuned one is, and
+/// ads_offset lifts Socket_Sight onto the camera axis at 0.35m of eye relief.
 static M4A1: WeaponDef = WeaponDef {
     name: "M4A1",
     mesh_path: "models/m4a1/mesh/m4a1_rigged.glb",
     mesh_scale: 1.0,
-    mesh_yaw_deg: 180.0,
-    rest_offset: Vec3::new(0.22, -0.32, -0.56),
-    ads_offset: Vec3::new(0.0, -0.307, -0.35),
-    ready_offset: Vec3::new(0.055, -0.40, -0.47),
-    muzzle_offset: Vec3::new(0.2, -0.045, -0.95),
+    mesh_yaw_deg: 0.0,
+    rest_offset: Vec3::new(0.189, -0.045, -1.110),
+    ads_offset: Vec3::new(0.0, -0.057, -0.862),
+    ready_offset: Vec3::new(0.05, -0.125, -1.020),
+    muzzle_offset: Vec3::new(0.2, -0.045, -1.110),
     scope_lens_offset: Vec3::new(0.0, 0.0, -0.2),
-    eject_port: Vec3::new(0.10, 0.20, 0.03),
-    trigger_grip_mesh: Vec3::new(0.0, -0.06, 0.20),
-    fore_grip_mesh: Vec3::new(0.0, -0.05, 0.45),
+    eject_port: Vec3::new(0.06, 0.02, 0.33),
+    trigger_grip_mesh: Vec3::new(0.0, -0.094, 0.531),
+    fore_grip_mesh: Vec3::new(0.0, 0.0, 0.276),
     fire_rate: 0.085,
     magazine: 30,
 };
