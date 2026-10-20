@@ -1,6 +1,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::dismember::LimbDamage;
 use crate::dissolve::begin_death;
 use crate::ragdoll::DEATH_PUSH_SPEED;
 use crate::map::*;
@@ -49,6 +50,7 @@ pub(crate) fn handle_fire_shot(
     mut respawns: ResMut<PendingRespawns>,
     mut threats: Query<&mut PlayerThreat>,
     damage_multiplier: Res<DamageMultiplierServer>,
+    mut limb_damage: ResMut<LimbDamage>,
 ) {
     for mut threat in &mut threats {
         threat.0 += PLAYER_THREAT_PER_SHOT;
@@ -85,7 +87,7 @@ pub(crate) fn handle_fire_shot(
         let entity = *entity;
         info!("[shot] outer capsule hit: zombie={entity} distance={distance:.2}");
 
-        let Some((hit_point, normal, damage)) = zombie_hit_damage_ray(shot.origin, direction, MAX_SHOT_DISTANCE, bones) else {
+        let Some(hit) = zombie_hit_damage_ray(shot.origin, direction, MAX_SHOT_DISTANCE, bones) else {
             let outer_hit_point = shot.origin + *direction * distance;
             if let Some((region, nearest_distance, radius)) = zombie_hit_nearest_region(outer_hit_point, bones) {
                 info!(
@@ -98,6 +100,10 @@ pub(crate) fn handle_fire_shot(
             }
             continue;
         };
+        let (hit_point, normal, damage) = (hit.point, hit.normal, hit.damage);
+        if let Some((limb, segment)) = hit.limb {
+            limb_damage.record(entity, limb, segment, damage);
+        }
         let damage = damage * damage_multiplier.0
             * path.damage_scale_at(shot.origin, shot.origin.distance(hit_point));
 
@@ -115,6 +121,7 @@ pub(crate) fn handle_fire_shot(
             health.0 -= damage;
             let killed = health.0 <= 0.0;
             if killed {
+                let severed = limb_damage.take(entity);
                 begin_death(
                     &mut commands,
                     entity,
@@ -124,6 +131,7 @@ pub(crate) fn handle_fire_shot(
                     &mut anim_players,
                     Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero()
                         * DEATH_PUSH_SPEED,
+                    severed,
                 );
                 respawns.0.push(PendingRespawn { timer: ZOMBIE_RESPAWN_DELAY });
             } else {

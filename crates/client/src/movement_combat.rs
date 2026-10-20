@@ -665,7 +665,7 @@ pub(crate) fn shoot(
         .filter_map(|(entity, bones)| {
             let bone_positions = resolve_bone_world_positions(bones, |bone| globals.get(bone).ok().map(GlobalTransform::translation));
             zombie_hit_damage_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, &bone_positions)
-                .map(|(point, normal, _damage)| (point.distance(camera_transform.translation), entity, point, normal))
+                .map(|hit| (hit.point.distance(camera_transform.translation), entity, hit.point, hit.normal))
         })
         .filter(|(distance, ..)| !wall_distance.is_some_and(|w| w < distance - 0.1))
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));

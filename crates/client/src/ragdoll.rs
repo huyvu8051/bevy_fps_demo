@@ -65,7 +65,7 @@ struct BoneLink {
     radius: f32,
 }
 
-fn bone_links(bones: &ZombieHitboxBones) -> Option<Vec<BoneLink>> {
+fn bone_links(bones: &ZombieHitboxBones, severed: Option<&SeveredLimbs>) -> Option<Vec<BoneLink>> {
     let radius_torso = TORSO_HITBOX_RADIUS;
     let radius_limb = LIMB_HITBOX_RADIUS;
     let radius_head = HEAD_HITBOX_RADIUS;
@@ -73,6 +73,9 @@ fn bone_links(bones: &ZombieHitboxBones) -> Option<Vec<BoneLink>> {
     let mut links = Vec::with_capacity(15);
     let mut push = |bone: Option<Entity>, parent_slot, joint, radius| -> Option<usize> {
         let bone = bone?;
+        if is_severed(severed, bones, bone) {
+            return None;
+        }
         links.push(BoneLink { bone, parent_slot, joint, radius });
         Some(links.len() - 1)
     };
@@ -104,12 +107,12 @@ fn bone_links(bones: &ZombieHitboxBones) -> Option<Vec<BoneLink>> {
 pub(crate) fn arm_ragdoll(
     mut commands: Commands,
     globals: Query<&GlobalTransform>,
-    arming: Query<(Entity, &ZombieHitboxBones), (With<DeathClipPlaying>, Without<RagdollArming>)>,
+    arming: Query<(Entity, &ZombieHitboxBones, Option<&SeveredLimbs>), (With<DeathClipPlaying>, Without<RagdollArming>)>,
     ready: Query<Entity, With<ReadyToRagdoll>>,
 ) {
     for entity in &ready {
-        let Ok((_, bones)) = arming.get(entity) else { continue };
-        let Some(links) = bone_links(bones) else { continue };
+        let Ok((_, bones, severed)) = arming.get(entity) else { continue };
+        let Some(links) = bone_links(bones, severed) else { continue };
         let captured = links
             .iter()
             .filter_map(|link| {
@@ -145,11 +148,12 @@ pub(crate) fn spawn_what_was_armed_last_frame(
         &RagdollArming,
         Option<&DeathImpulse>,
         Option<&ZombieAnimationPlayer>,
+        Option<&SeveredLimbs>,
     )>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
     let dt = time.delta_secs().max(1e-4);
-    for (entity, bones, armed, impulse, link) in &arming {
+    for (entity, bones, armed, impulse, link, severed) in &arming {
         // The clip has to stop here. Left running it keeps writing bone
         // rotations every frame and simply overwrites whatever physics does.
         if let Some(link) = link {
@@ -158,7 +162,7 @@ pub(crate) fn spawn_what_was_armed_last_frame(
             }
         }
 
-        let Some(links) = bone_links(bones) else {
+        let Some(links) = bone_links(bones, severed) else {
             commands.entity(entity).remove::<RagdollArming>();
             continue;
         };

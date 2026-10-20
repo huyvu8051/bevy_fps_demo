@@ -30,6 +30,8 @@ use shared::{
 #[cfg(target_os = "ios")]
 pub mod cadisplaylink;
 
+mod dismember;
+use dismember::*;
 mod auto_lean;
 mod autopilot;
 use auto_lean::*;
@@ -532,6 +534,13 @@ impl Plugin for GamePlugin {
         .init_resource::<ShowFloatingDamage>()
         .init_resource::<ShowBulletTracers>()
         .init_resource::<BarrelSmoke>()
+        .init_resource::<LimbDamage>()
+        .add_systems(
+            PostUpdate,
+            sever_limbs
+                .after(bevy::app::AnimationSystems)
+                .before(TransformSystems::Propagate),
+        )
         .init_resource::<SettingsMenuVisible>()
         .init_resource::<SettingsMenuScrollState>()
         .init_resource::<SettingsMenuPageIndex>()
@@ -711,6 +720,7 @@ impl Plugin for GamePlugin {
                     exclude_oversized_shadow_casters,
                     (
                     test_blast_key.run_if(debug_keys_allowed),
+                    forget_gone_zombies,
                     update_death,
                     spawn_what_was_armed_last_frame,
                     apply_pending_blast,
