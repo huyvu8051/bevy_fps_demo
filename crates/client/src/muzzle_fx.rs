@@ -272,9 +272,12 @@ pub(crate) fn update_barrel_smoke(
     let settle = (BARREL_TRAIL_FADE_SPEED * dt).min(1.0);
     barrel.visible += ((1.0 - motion) - barrel.visible) * settle;
 
-    // Stop laying new points too, or standing still would reveal the streak
-    // the turn had already banked.
-    if barrel.visible > 0.35 && barrel.since_shot <= BARREL_SMOKE_WINDOW && barrel.next_point <= 0.0 {
+    // A barrel only smokes once the firing stops, and new points stop going
+    // down while the eye is moving hard, or coming to a stop would reveal the
+    // streak the turn had already banked.
+    let venting = barrel.since_shot >= BARREL_SMOKE_DELAY
+        && barrel.since_shot <= BARREL_SMOKE_DELAY + BARREL_SMOKE_WINDOW;
+    if barrel.visible > 0.35 && venting && barrel.next_point <= 0.0 {
         barrel.next_point = BARREL_TRAIL_INTERVAL;
         if let Ok((gun_transform, gun)) = gun.single() {
             let gun_drift = gun_transform.translation - gun.base_offset;

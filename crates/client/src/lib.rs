@@ -217,6 +217,10 @@ const SMOKE_DRAG: f32 = 1.2;
 const SMOKE_MAX_PUFFS: usize = 9;
 const SMOKE_BUOYANCY: f32 = 0.22;
 
+/// Nothing goes up while the trigger is down. FIRE_RATE is 0.1, so a shot
+/// resets the clock long before this, and the trail only starts once the
+/// shooting has actually stopped.
+const BARREL_SMOKE_DELAY: f32 = 0.25;
 const BARREL_SMOKE_WINDOW: f32 = 1.6;
 const BARREL_TRAIL_MAX_POINTS: usize = 26;
 const BARREL_TRAIL_INTERVAL: f32 = 0.045;
