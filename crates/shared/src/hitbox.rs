@@ -225,17 +225,22 @@ pub fn zombie_hit_damage_ray(origin: Vec3, direction: Dir3, max_distance: f32, b
     if let Some(pos) = bones.head {
         consider(Collider::sphere(HEAD_HITBOX_RADIUS).cast_ray(pos, Quat::IDENTITY, origin, *direction, max_distance, true), HEAD_DAMAGE, Some((ZombiePart::Head, 0)));
     }
-    for (limb, chain) in ZombiePart::ALL
-        .into_iter()
-        .zip([&bones.left_arm, &bones.right_arm, &bones.left_leg, &bones.right_leg])
-    {
+    // Paired in one place rather than zipping two lists. ALL carries the head
+    // as well, and zipping it against the four limb chains silently shifted
+    // every part by one, so a hit on one arm was tallied against the other.
+    for (part, chain) in [
+        (ZombiePart::LeftArm, &bones.left_arm),
+        (ZombiePart::RightArm, &bones.right_arm),
+        (ZombiePart::LeftLeg, &bones.left_leg),
+        (ZombiePart::RightLeg, &bones.right_leg),
+    ] {
         for (segment, pair) in chain.windows(2).enumerate() {
             if let (Some(a), Some(b)) = (pair[0], pair[1]) {
                 if let Some((position, rotation, length)) = capsule_transform(a, b) {
                     consider(
                         Collider::capsule(LIMB_HITBOX_RADIUS, length).cast_ray(position, rotation, origin, *direction, max_distance, true),
                         LIMB_DAMAGE,
-                        Some((limb, segment)),
+                        Some((part, segment)),
                     );
                 }
             }
