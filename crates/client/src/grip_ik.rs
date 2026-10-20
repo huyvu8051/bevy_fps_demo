@@ -54,29 +54,26 @@ pub(crate) fn spawn_grip_sockets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    gun: Query<Entity, With<Gun>>,
     camera: Query<Entity, With<FpsCamera>>,
     existing: Query<(), With<TriggerGripSocket>>,
-    active: Res<ActiveWeapon>,
 ) {
-    if !existing.is_empty() {
+    // The gun's own grips are the mesh's Socket_RearGrip and Socket_FrontGrip,
+    // tagged where they are rather than copied into the weapon table and
+    // spawned again. All that is left here is the debug rig, which puts the
+    // targets at fixed points off the eye so the solver can be read on its own.
+    if !existing.is_empty() || !grip_test_targets_enabled() {
         return;
     }
-    let testing = grip_test_targets_enabled();
-    let Ok(parent) = (if testing { camera.single() } else { gun.single() }) else {
+    let Ok(parent) = camera.single() else {
         return;
     };
 
-    let (trigger_at, fore_at, metres_to_parent_units) = if testing {
-        let cancel_debug_pullback = Vec3::Z * view_pullback();
-        (
-            TEST_TARGET_RIGHT_FROM_EYE - cancel_debug_pullback,
-            TEST_TARGET_LEFT_FROM_EYE - cancel_debug_pullback,
-            1.0,
-        )
-    } else {
-        (active.def().trigger_grip_mesh, active.def().fore_grip_mesh, 1.0 / active.def().mesh_scale)
-    };
+    let cancel_debug_pullback = Vec3::Z * view_pullback();
+    let (trigger_at, fore_at, metres_to_parent_units) = (
+        TEST_TARGET_RIGHT_FROM_EYE - cancel_debug_pullback,
+        TEST_TARGET_LEFT_FROM_EYE - cancel_debug_pullback,
+        1.0,
+    );
 
     let markers = grip_markers_enabled().then(|| {
         (
@@ -126,7 +123,7 @@ pub(crate) fn spawn_grip_sockets(
         spawn_axis_gizmo(&mut commands, &mut meshes, &mut materials, trigger_entity, metres_to_parent_units);
         spawn_axis_gizmo(&mut commands, &mut meshes, &mut materials, fore_entity, metres_to_parent_units);
     }
-    info!("[grip] sockets under {parent:?} (test_targets={testing})");
+    info!("[grip] test targets under {parent:?}");
 }
 
 fn spawn_axis_gizmo(

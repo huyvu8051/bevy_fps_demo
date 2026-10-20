@@ -592,9 +592,9 @@
     },
     {
       "children": [
+        8,
         9,
-        10,
-        11
+        10
       ],
       "matrix": [
         1,
@@ -622,14 +622,6 @@
         0,
         0,
         0
-      ]
-    },
-    {
-      "name": "Socket_Sight",
-      "translation": [
-        -0.00006,
-        0.09267,
-        0.64165
       ]
     },
     {
@@ -661,7 +653,7 @@
       "mesh": 2
     },
     {
-      "name": "Socket_ScopeObjective",
+      "name": "Socket_ScopeCamera",
       "translation": [
         -0.00006,
         0.09056,
@@ -674,16 +666,24 @@
       ]
     },
     {
-      "name": "Socket_ScopeOcular",
+      "name": "Socket_ScopeView",
       "translation": [
         -0.00006,
         0.09056,
-        0.64031
+        0.57296
       ],
       "scale": [
         0.0131,
         0.0131,
         0.0131
+      ]
+    },
+    {
+      "name": "Socket_Aim",
+      "translation": [
+        -0.00006,
+        0.09056,
+        0.64031
       ]
     }
   ],
@@ -704,7 +704,7 @@
         5,
         6,
         7,
-        8,
+        11,
         12,
         13
       ]

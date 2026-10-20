@@ -19,20 +19,26 @@ pub(crate) struct ScopeLens;
 #[derive(Component)]
 pub(crate) struct ScopeReticle;
 
-/// The two glass planes of the scope, as the mesh itself marks them. Both the
-/// camera that looks through the scope and the disc that shows what it saw used
-/// to be placed by replaying the gun's whole animation a second time; riding
-/// these instead means recoil, sway, bob and the shoulder swap come for free and
-/// cannot drift out of step.
+/// Where the scope looks from and where its picture is drawn, both marked in
+/// the mesh. They say what they are for rather than what they sit on: the first
+/// is the front glass, because that is where light enters, but the second is
+/// set down the tube rather than on the rear glass, so the glass draws over the
+/// picture and the view reads as recessed.
 ///
-/// The socket's scale carries the lens radius, so a unit circle under it is the
-/// real glass. A camera must take the position and the turn but never that
-/// scale.
+/// Carrying that depth in the asset rather than in a constant here is the point
+/// — it is a property of one scope's glass and tube, not of every weapon.
+///
+/// Both sockets' scale is the lens radius, so a unit circle under one is the
+/// right width. A camera must take the position and the turn but never that
+/// scale, or it would scale the whole world it renders.
+///
+/// Riding these means recoil, sway, bob and the shoulder swap come for free and
+/// cannot drift out of step with the mesh.
 #[derive(Component)]
-pub(crate) struct ScopeObjectiveSocket;
+pub(crate) struct ScopeCameraSocket;
 
 #[derive(Component)]
-pub(crate) struct ScopeOcularSocket;
+pub(crate) struct ScopeViewSocket;
 
 /// Pins the sights up so the scope can be looked at without waiting for the
 /// autopilot to pick a target far enough away to want them.
@@ -40,20 +46,27 @@ pub(crate) fn force_ads() -> bool {
     std::env::var("FORCE_ADS").map(|value| value == "1").unwrap_or(false)
 }
 
-/// Meshes that do not mark their scope fall back to the tuned offsets, the same
-/// way a mesh that is not in metres falls back to mesh_scale.
-pub(crate) fn wire_scope_sockets(
+/// Where the eye lines up behind the sights: the rear glass on a scope, the
+/// rear sight on irons. Distinct from ScopeViewSocket, which is where the
+/// picture draws and sits further down the tube.
+#[derive(Component)]
+pub(crate) struct AimSocket;
+
+/// Hands the mesh's own named points to the systems that want them, so the
+/// weapon table carries none of this geometry twice.
+///
+/// Only a weapon with glass marks the scope pair; one that sights down irons
+/// leaves both unmarked and the whole scope view stays off for it.
+pub(crate) fn wire_weapon_sockets(
     mut commands: Commands,
     child_of: Query<&ChildOf>,
     gun: Query<(), With<Gun>>,
     new_names: Query<(Entity, &Name), Added<Name>>,
 ) {
     for (entity, name) in &new_names {
-        let marker = match name.as_str() {
-            "Socket_ScopeObjective" => 0,
-            "Socket_ScopeOcular" => 1,
-            _ => continue,
-        };
+        if !name.as_str().starts_with("Socket_") {
+            continue;
+        }
         let mut current = entity;
         let mut under_gun = false;
         for _ in 0..20 {
@@ -67,12 +80,16 @@ pub(crate) fn wire_scope_sockets(
         if !under_gun {
             continue;
         }
-        if marker == 0 {
-            commands.entity(entity).insert(ScopeObjectiveSocket);
-        } else {
-            commands.entity(entity).insert(ScopeOcularSocket);
-        }
-        info!("[scope] {name} wired");
+        let mut socket = commands.entity(entity);
+        match name.as_str() {
+            "Socket_ScopeCamera" => socket.insert(ScopeCameraSocket),
+            "Socket_ScopeView" => socket.insert(ScopeViewSocket),
+            "Socket_Aim" => socket.insert(AimSocket),
+            "Socket_RearGrip" => socket.insert(TriggerGripSocket),
+            "Socket_FrontGrip" => socket.insert(ForeGripSocket),
+            _ => continue,
+        };
+        info!("[socket] {name} wired");
     }
 }
 
@@ -112,46 +129,32 @@ pub(crate) fn gun_pose_timings(gun: &Gun) -> GunPoseTimings {
     GunPoseTimings { recoil_t, dip, bob_x, bob_y }
 }
 
-pub(crate) fn gun_recoil_sway_rotation(gun: &Gun, timings: &GunPoseTimings) -> Quat {
-    Quat::from_rotation_z(gun.look_sway_roll.to_radians())
-        * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
-        * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
-        * Quat::from_rotation_x((RELOAD_TILT_DEG * timings.dip + RECOIL_TILT_UP_DEG * timings.recoil_t).to_radians())
-}
-
+/// Light enters a scope at the front lens, and the mesh says where that is.
+/// Position and turn only: the socket's scale is the lens radius, and a camera
+/// that took it would scale the whole world it renders.
+///
+/// A weapon with no glass has nothing to sit on and nothing to show, so this
+/// does nothing for it — iron sights only bring the gun up to the eye.
 pub(crate) fn sync_scope_camera(
-    camera: Query<&Transform, (With<FpsCamera>, Without<ScopeCamera>, Without<Gun>)>,
-    gun: Query<(&Gun, &Transform), (Without<FpsCamera>, Without<ScopeCamera>)>,
-    objective: Query<&GlobalTransform, With<ScopeObjectiveSocket>>,
-    mut scope_camera: Query<&mut Transform, (With<ScopeCamera>, Without<FpsCamera>, Without<Gun>)>,
+    camera_socket: Query<&GlobalTransform, With<ScopeCameraSocket>>,
+    eye: Query<&Transform, (With<FpsCamera>, Without<ScopeCamera>, Without<Gun>)>,
+    gun: Query<(&Transform, &GlobalTransform), (With<Gun>, Without<ScopeCamera>)>,
+    mut scope_camera: Query<&mut Transform, (With<ScopeCamera>, Without<Gun>)>,
 ) {
-    // Light enters a scope at the front lens, and the mesh says where that is.
-    // Position and turn only: the socket's scale is the lens radius, and a
-    // camera that took it would scale the whole world it renders.
-    if let (Ok(socket), Ok(mut scope_transform)) = (objective.single(), scope_camera.single_mut()) {
-        let placed = socket.compute_transform();
-        *scope_transform =
-            Transform::from_translation(placed.translation).with_rotation(placed.rotation);
-        return;
-    }
-
-    let (Ok(camera_transform), Ok((gun, gun_transform)), Ok(mut scope_transform)) =
-        (camera.single(), gun.single(), scope_camera.single_mut())
+    let (Ok(socket), Ok(eye), Ok((gun_local, gun_global)), Ok(mut scope_transform)) =
+        (camera_socket.single(), eye.single(), gun.single(), scope_camera.single_mut())
     else {
         return;
     };
-    *scope_transform = *camera_transform;
-
-    let local_to_world = |local: Vec3| {
-        camera_transform.right() * local.x + camera_transform.up() * local.y
-            - camera_transform.forward() * local.z
-    };
-
-    scope_transform.translation += local_to_world(gun_transform.translation)
-
-        + camera_transform.up() * (SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend) + SCOPE_CAMERA_HEIGHT_OFFSET * gun.ads_blend);
-
-    scope_transform.rotation *= gun_recoil_sway_rotation(gun, &gun_pose_timings(gun));
+    // Only the socket's place *inside the gun* is taken from the propagated
+    // transforms, and that never animates, so last frame's copy is as good as
+    // this one's. Everything that does move is composed from transforms written
+    // this frame, which is what keeps the view from trailing the mesh by a
+    // frame whenever the eye turns.
+    let in_gun = socket.reparented_to(gun_global);
+    let placed = eye.mul_transform(gun_local.mul_transform(in_gun));
+    *scope_transform =
+        Transform::from_translation(placed.translation).with_rotation(placed.rotation);
 }
 
 pub(crate) fn adjust_scope_zoom(
@@ -201,14 +204,16 @@ pub(crate) fn update_scope_lens(
     mut scope_camera: Query<(&mut Camera, &mut Projection), With<ScopeCamera>>,
     mut lens: Query<(&mut Transform, &mut Visibility), (With<ScopeLens>, Without<ScopeReticle>)>,
     mut reticle: Query<&mut Transform, (With<ScopeReticle>, Without<ScopeLens>)>,
-    ocular: Query<&GlobalTransform, With<ScopeOcularSocket>>,
-    eye: Query<&GlobalTransform, With<FpsCamera>>,
-    active: Res<ActiveWeapon>,
+    view_socket: Query<&GlobalTransform, With<ScopeViewSocket>>,
+    gun_placed: Query<(&Transform, &GlobalTransform), (With<Gun>, Without<ScopeLens>, Without<ScopeReticle>)>,
 ) {
     let Ok(gun) = gun.single() else {
         return;
     };
-    let visible = scope_camera_enabled.0
+    // No rear glass means no scope picture at all. The M4 aims down irons: the
+    // gun comes up and that is the whole of it.
+    let visible = !view_socket.is_empty()
+        && scope_camera_enabled.0
         && gun.ads_blend > SCOPE_ACTIVE_ADS_THRESHOLD
         && gun.wall_raise < SCOPE_HIDDEN_WALL_RAISE_THRESHOLD;
 
@@ -229,25 +234,21 @@ pub(crate) fn update_scope_lens(
         // What the player looks into is the rear glass, so sit on it. The disc
         // is a unit circle and the socket's scale is the lens radius, which
         // makes the picture exactly as wide as the real eyepiece.
-        if let (Ok(socket), Ok(eye)) = (ocular.single(), eye.single()) {
-            *transform = socket.reparented_to(eye);
-            return;
+        //
+        // Set back down the tube rather than on the socket. Sat on it the disc
+        // lands inside the 1.8mm the mesh's own glass occupies and the two
+        // fight for the depth buffer; behind it the glass draws over the
+        // picture, which is what looking through a scope does.
+        //
+        // The disc and the gun are both children of the eye, so the disc's
+        // offset is the gun's own transform with the socket's place inside it
+        // on the end. Only that inner part comes from the propagated
+        // transforms, and it never animates; the gun's transform is this
+        // frame's, so the disc cannot trail the mesh when the eye turns.
+        if let (Ok(socket), Ok((gun_local, gun_global))) = (view_socket.single(), gun_placed.single()) {
+            let in_gun = socket.reparented_to(gun_global);
+            *transform = gun_local.mul_transform(in_gun);
         }
-
-        transform.scale = Vec3::splat(SCOPE_LENS_SIZE * 0.5);
-        let rest = active.def().rest_offset;
-        let lens = active.def().scope_lens_offset;
-        let lens_x = rest.x + (lens.x - rest.x) * gun.ads_blend;
-        let timings = gun_pose_timings(gun);
-        let swapped_x = lens_x * (1.0 - 2.0 * gun.shoulder_blend) - RELOAD_LEFT_DIP * timings.dip + timings.bob_x;
-        let lens_y = lens.y - SCOPE_LENS_HIDDEN_DROP * (1.0 - gun.ads_blend)
-            + SCOPE_HIP_HEIGHT_OFFSET * (1.0 - gun.ads_blend)
-            + RECOIL_KICK_UP * timings.recoil_t
-            - RELOAD_DIP * timings.dip
-            - timings.bob_y;
-        let lens_z = rest.z + (lens.z - rest.z) * gun.ads_blend + RECOIL_KICK * timings.recoil_t;
-        transform.translation = Vec3::new(swapped_x, lens_y, lens_z);
-        transform.rotation = gun_recoil_sway_rotation(gun, &timings);
     }
 }
 
@@ -260,7 +261,8 @@ pub(crate) fn gun_view_animation(
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     camera: Query<(&Transform, &Lean), (With<FpsCamera>, Without<Gun>)>,
     spatial_query: SpatialQuery,
-    mut query: Query<(&mut Transform, &mut Gun), Without<FpsCamera>>,
+    mut query: Query<(&mut Transform, &GlobalTransform, &mut Gun), Without<FpsCamera>>,
+    aim: Query<&GlobalTransform, (With<AimSocket>, Without<Gun>, Without<FpsCamera>)>,
     local_moving: Res<LocalPlayerMoving>,
     local_sprinting: Res<LocalPlayerSprinting>,
     active: Res<ActiveWeapon>,
@@ -295,7 +297,7 @@ pub(crate) fn gun_view_animation(
                 1.0 - (hit.distance / WALL_GUN_RAISE_DISTANCE).clamp(0.0, 1.0)
             })
     });
-    for (mut transform, mut gun) in &mut query {
+    for (mut transform, gun_global, mut gun) in &mut query {
         if gun.recoil > 0.0 {
             gun.recoil = (gun.recoil - time.delta_secs()).max(0.0);
         }
@@ -367,7 +369,18 @@ pub(crate) fn gun_view_animation(
         let timings = gun_pose_timings(&gun);
 
         let resting = gun.base_offset.lerp(active.def().ready_offset, gun.ready_blend) + gun.settle_current;
-        let base_pos = resting.lerp(active.def().ads_offset, gun.ads_blend) - Vec3::Z * view_pullback();
+        // Sighted means Socket_Aim on the camera axis at this weapon.s eye
+        // relief; the mesh says where that point is, so the offset is a
+        // subtraction rather than a dialled-in vector. Where it sits inside
+        // the gun never animates, so last frame.s copy of that is fine.
+        let sighted = aim
+            .single()
+            .map(|aim_global| {
+                let in_gun = aim_global.reparented_to(gun_global);
+                Vec3::new(0.0, 0.0, -active.def().ads_eye_relief) - in_gun.translation
+            })
+            .unwrap_or(resting);
+        let base_pos = resting.lerp(sighted, gun.ads_blend) - Vec3::Z * view_pullback();
 
         let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
         transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)

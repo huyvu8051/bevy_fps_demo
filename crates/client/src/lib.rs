@@ -176,8 +176,6 @@ const RELOAD_DURATION: f32 = 1.6;
 const RELOAD_DIP: f32 = 0.12;
 const RELOAD_TILT_DEG: f32 = 25.0;
 
-const RELOAD_LEFT_DIP: f32 = 0.12;
-
 
 const MUZZLE_FLASH_LIFETIME: f32 = 0.05;
 const FLASH_QUAD_SIZE: f32 = 0.32;
@@ -356,15 +354,12 @@ const AUTO_ZOOM_NEAR_DISTANCE: f32 = 10.0;
 const AUTO_ZOOM_FAR_DISTANCE: f32 = 100.0;
 
 
-const SCOPE_LENS_SIZE: f32 = 0.03;
 
-const SCOPE_LENS_HIDDEN_DROP: f32 = 0.03;
 
-const SCOPE_CAMERA_HEIGHT_OFFSET: f32 = 0.0;
 
-const SCOPE_HIP_HEIGHT_OFFSET: f32 = 0.05;
 
 const SCOPE_ACTIVE_ADS_THRESHOLD: f32 = 0.02;
+
 const SCOPE_HIDDEN_WALL_RAISE_THRESHOLD: f32 = 0.2;
 
 const WORLD_LAYER: usize = 0;
@@ -712,7 +707,7 @@ impl Plugin for GamePlugin {
                 wire_zombie_animations,
                 wire_zombie_hitbox_bones,
                 wire_gun_mesh,
-                wire_scope_sockets,
+                wire_weapon_sockets,
                 update_zombie_animation,
                 freeze_zombie_animations,
 

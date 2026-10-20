@@ -18,22 +18,20 @@ pub(crate) struct WeaponDef {
     pub(crate) mesh_yaw_deg: f32,
 
     pub(crate) rest_offset: Vec3,
-    pub(crate) ads_offset: Vec3,
     pub(crate) ready_offset: Vec3,
+    /// How far the eye sits behind Socket_Aim when sighted: the rear glass on
+    /// a scope, the rear sight on irons. The gun is then placed so that point
+    /// lands on the camera axis, which is the whole of ads_offset.
+    pub(crate) ads_eye_relief: f32,
 
     /// Camera relative, unlike everything else here. The muzzle is placed from
     /// the eye and the drift from rest_offset added on, so this has to be
     /// moved by hand whenever rest_offset is.
     pub(crate) muzzle_offset: Vec3,
-    pub(crate) scope_lens_offset: Vec3,
     /// Added to the gun's own offset but along the camera's axes, not the
     /// gun's, so it tracks where the gun sits without taking its sway. Moving
     /// the mesh origin moves this with it.
     pub(crate) eject_port: Vec3,
-
-    /// In the mesh's own units, which is the space the IK solver works in.
-    pub(crate) trigger_grip_mesh: Vec3,
-    pub(crate) fore_grip_mesh: Vec3,
 
     pub(crate) fire_rate: f32,
     pub(crate) magazine: u32,
@@ -75,42 +73,45 @@ static AK47: WeaponDef = WeaponDef {
     mesh_scale: 1.0,
     mesh_yaw_deg: 0.0,
     rest_offset: Vec3::new(0.220, -0.104, -1.045),
-    ads_offset: Vec3::new(0.0, -0.091, -0.835),
     ready_offset: Vec3::new(0.055, -0.184, -0.955),
+    ads_eye_relief: 0.195,
     muzzle_offset: Vec3::new(0.2, -0.045, -1.11),
-    scope_lens_offset: Vec3::new(0.0, 0.0, -0.2),
     eject_port: Vec3::new(0.100, 0.009, 0.515),
-    trigger_grip_mesh: Vec3::new(0.0, -0.136, 0.645),
-    fore_grip_mesh: Vec3::new(0.0, -0.056, 0.435),
     fire_rate: 0.1,
     magazine: 50,
 };
 
 /// Read off the sockets the mesh ships with rather than guessed:
 ///
-///   Socket_Muzzle     (0.011,  0,      0    )
-///   Socket_FrontGrip  (0,      0,      0.276)
-///   Socket_Sight      (0,      0.057,  0.512)
-///   Socket_RearGrip   (0,     -0.094,  0.531)
+///   Socket_Muzzle      (0.011,  0,      0    )
+///   Socket_SightFront  (0,      0.058,  0.164)
+///   Socket_FrontGrip   (0,      0,      0.276)
+///   Socket_SightRear   (0,      0.057,  0.512)
+///   Socket_RearGrip    (0,     -0.094,  0.531)
 ///
 /// The muzzle sits at the origin and the stock runs back to +Z, so the mesh
 /// already points down -Z and needs no turn at all. This is the convention the
 /// AK was since standardised onto, so the two now read in the same frame.
 ///
-/// ads_offset lifts Socket_Sight onto the camera axis at 0.35m of eye relief.
+/// This one carries no glass: a carry handle and a post, 350mm of sight radius
+/// between them. There is no scope camera and no lens for it, only the gun
+/// coming up — ads_offset lifts Socket_SightRear onto the camera axis at 0.35m
+/// of eye relief.
+///
+/// rest_offset lands Socket_RearGrip exactly where the AK's sits, because the
+/// thing that holds still across a weapon swap is the firing hand, not the
+/// muzzle. Anchoring on the muzzle instead — which is what the origin happens
+/// to be — threw this 213mm-shorter rifle 208mm away from the shoulder.
 static M4A1: WeaponDef = WeaponDef {
     name: "M4A1",
     mesh_path: "models/m4a1/mesh/m4a1_rigged.glb",
     mesh_scale: 1.0,
     mesh_yaw_deg: 0.0,
-    rest_offset: Vec3::new(0.189, -0.045, -1.110),
-    ads_offset: Vec3::new(0.0, -0.057, -0.862),
-    ready_offset: Vec3::new(0.05, -0.125, -1.020),
-    muzzle_offset: Vec3::new(0.2, -0.045, -1.110),
-    scope_lens_offset: Vec3::new(0.0, 0.0, -0.2),
+    rest_offset: Vec3::new(0.220, -0.146, -0.931),
+    ready_offset: Vec3::new(0.081, -0.226, -0.841),
+    ads_eye_relief: 0.350,
+    muzzle_offset: Vec3::new(0.231, -0.146, -0.931),
     eject_port: Vec3::new(0.06, 0.02, 0.33),
-    trigger_grip_mesh: Vec3::new(0.0, -0.094, 0.531),
-    fore_grip_mesh: Vec3::new(0.0, 0.0, 0.276),
     fire_rate: 0.085,
     magazine: 30,
 };
