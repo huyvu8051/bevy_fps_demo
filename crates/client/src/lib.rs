@@ -127,7 +127,7 @@ use settings_persistence::*;
 mod splash_screen;
 use splash_screen::*;
 
-const GUN_OFFSET: Vec3 = Vec3::new(0.22, -0.28, -0.56);
+const GUN_OFFSET: Vec3 = Vec3::new(0.22, -0.32, -0.56);
 
 pub(crate) fn view_pullback() -> f32 {
     std::env::var("VIEW_PULLBACK").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0)
@@ -180,7 +180,10 @@ const RELOAD_TILT_DEG: f32 = 25.0;
 
 const RELOAD_LEFT_DIP: f32 = 0.12;
 
-const MUZZLE_OFFSET_AT_REST: Vec3 = Vec3::new(0.2, -0.005, -1.11);
+// Tracks GUN_OFFSET.y. The muzzle is placed from the camera, not from the
+// gun, so lowering the rest pose without lowering this leaves the flash and
+// smoke hanging above the barrel.
+const MUZZLE_OFFSET_AT_REST: Vec3 = Vec3::new(0.2, -0.045, -1.11);
 
 const MUZZLE_FLASH_LIFETIME: f32 = 0.05;
 const FLASH_QUAD_SIZE: f32 = 0.32;
