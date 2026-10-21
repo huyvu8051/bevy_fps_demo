@@ -13,64 +13,14 @@ const DRAW_OVER_SOLID_GEOMETRY_BIAS: f32 = 1000.0;
 const AXIS_BAR_LENGTH_METRES: f32 = 0.15;
 const AXIS_BAR_THICKNESS_METRES: f32 = 0.008;
 
-/// How each hand sits on the weapon, read off the rig's own "rifle aiming
-/// idle" pose. Taken by walking the exported glb forward from the hips at
-/// frame 1, not measured in Blender, so no rotation had to be carried across
-/// a change of axis convention by hand.
-///
-/// Both sides build the same frame to compare against — barrel axis from one
-/// grip to the other, up from the weapon — so the pose transfers even though
-/// the rig was posed around a rifle whose grips sit 404mm apart against this
-/// AK's 225mm.
-
-/// Where the weapon's grip socket sits inside the hand, in the hand bone's own
-/// frame: +Y runs from the wrist to the knuckles, +X across the palm, +Z out
-/// through the back of the hand. The rig puts the knuckles 112mm from the
-/// wrist, so Y around 0.06 lands the socket mid-palm.
-///
-/// The solver moves the wrist, but the weapon rests against the palm's
-/// surface, which is off the bone axis in more than one direction — a single
-/// slide down Y cannot express that, which is why these are vectors and why
-/// the two hands do not share one.
-///
-/// Not guessed: a 22mm bar was laid across each palm in Blender and every
-/// finger solved onto it, so this is the axis of the thing the hand is
-/// actually closed around. See FINGER_GRIP_POSE, which was measured in the
-/// same pass and only means anything paired with these.
-///
-/// Z is not a guess either. It is the palm's own skin, measured off the 60
-/// mesh vertices across the middle of the hand (+0.0265) plus the bar's
-/// radius, so the bar rests on the palm instead of being half buried in it.
-/// An earlier 0.022 put the bar's lower surface exactly on the bone axis,
-/// which looked like the hand lying on top of the weapon.
-///
-/// The bar is not square to the hand: it is tilted 20 degrees so its pinky end
-/// sits nearer the wrist, the way a handguard actually crosses a palm. That
-/// tilt lives in LEFT_HAND_ON_GUN / RIGHT_HAND_ON_GUN, not here, because this
-/// is a point and the tilt is a direction.
-///
-/// Tunable without a rebuild: GRIP_IN_HAND_LEFT=x,y,z and GRIP_IN_HAND_RIGHT.
+/// Where the grip socket sits inside the hand, in the hand bone's own frame:
+/// +Y wrist to knuckles, +X across the palm, +Z out through the palm. Measured
+/// against the same 22mm bar as FINGER_GRIP_POSE and only valid paired with it.
 const LEFT_GRIP_IN_HAND: Vec3 = Vec3::new(0.0, 0.075, 0.0485);
 const RIGHT_GRIP_IN_HAND: Vec3 = Vec3::new(0.0, 0.075, 0.0485);
 
-fn grip_in_hand(variable: &str, fallback: Vec3) -> Vec3 {
-    let Ok(raw) = std::env::var(variable) else { return fallback };
-    let parts: Vec<f32> = raw.split(',').filter_map(|p| p.trim().parse().ok()).collect();
-    match parts[..] {
-        [x, y, z] => Vec3::new(x, y, z),
-        _ => {
-            warn!("[grip] {variable}=\"{raw}\" khong doc duoc, can dang x,y,z");
-            fallback
-        }
-    }
-}
-
-/// Both carry a further 20 degrees about the hand's own Z over what the rig's
-/// pose gave, which is the tilt of the bar the fingers were solved onto: the
-/// grip runs diagonally across the palm, pinky end toward the wrist, so the
-/// turn that lands the weapon in the hand has to carry that diagonal too.
-/// Opposite signs because the hands are mirrored — +X runs thumb to pinky on
-/// the left and pinky to thumb on the right.
+/// Turn that lands the weapon in the hand. Mirrored, so the 20 degrees of bar
+/// tilt they carry has opposite signs.
 const RIGHT_HAND_ON_GUN: Quat = Quat::from_xyzw(-0.354492, -0.699015, 0.283518, 0.552567);
 const LEFT_HAND_ON_GUN: Quat = Quat::from_xyzw(-0.579770, -0.302469, -0.275973, 0.704427);
 
@@ -95,17 +45,6 @@ fn grip_markers_enabled() -> bool {
 
 fn grip_test_targets_enabled() -> bool {
     std::env::var("GRIP_TEST").map(|value| value != "0").unwrap_or(false)
-}
-
-/// Whether the hand is clamped to the weapon's own turn, or left hanging off
-/// the forearm with the local rotation the shooter pack authored for it.
-///
-/// Clamping is what keeps a grip from sliding as the elbow moves, but it is
-/// only as good as the rotation it is handed — and a wrong one turns the whole
-/// hand end-on to the eye, which reads as the hand being cut off rather than
-/// as the hand being mis-aimed.
-fn hand_locked_to_weapon() -> bool {
-    std::env::var("HAND_LOCK").map(|value| value != "0").unwrap_or(true)
 }
 
 pub(crate) fn grip_ik_enabled() -> bool {
@@ -303,13 +242,9 @@ fn set_bone_world_rotation(
     Some(*global)
 }
 
-/// Rebuilds world transforms down a subtree the solver has just moved.
-///
-/// The solver runs after Bevy has already propagated this frame, which is the
-/// only way it can read where the gun ended up. The cost is that everything
-/// hanging off the bones it moves — every finger — still holds the world
-/// transform propagation gave it, so the hand walks away and leaves the
-/// fingers stretched behind it.
+/// The solver runs after Bevy has propagated, so anything under a bone it
+/// moves still holds last pass's world transform. Without this the fingers
+/// stay put and stretch as the hand leaves them.
 fn repropagate_subtree(
     root: Entity,
     root_global: GlobalTransform,
@@ -345,32 +280,17 @@ fn solve_arm(
     let shoulder = transforms.get(arm).ok()?.1.translation();
     let elbow = transforms.get(fore_arm).ok()?.1.translation();
     let wrist = transforms.get(hand).ok()?.1.translation();
-    // The socket is where the gun sits in the palm, but the bone this solver
-    // moves is the wrist, and the rig puts the knuckles 112mm beyond it. Aim
-    // the wrist back down the hand by half of that, or the palm and every
-    // posed finger end up buried inside the receiver — which looks exactly
-    // like the hand not being drawn at all.
-    //
-    // The hand's turn is known before the arm is solved, because it comes from
-    // the gun rather than from the forearm.
+    // The solver moves the wrist but the socket is where the weapon sits in
+    // the palm, so aim the wrist back down the hand by grip_in_hand.
     let socket_global = transforms.get(target).ok()?.1;
-    let gun_rotation = socket_global.rotation();
-    let grip_rotation = gun_rotation * hand_on_gun;
-    let target_pos =
-        socket_global.translation() - grip_rotation * grip_in_hand;
+    let grip_rotation = socket_global.rotation() * hand_on_gun;
+    let target_pos = socket_global.translation() - grip_rotation * grip_in_hand;
     let pole_pos = transforms.get(pole).ok()?.1.translation();
 
     let upper_len = elbow.distance(shoulder);
     let lower_len = wrist.distance(elbow);
     if upper_len < 1e-5 || lower_len < 1e-5 {
         return None;
-    }
-    if std::env::var("REACH_LOG").is_ok() {
-        info!(
-            "[reach] vai {:.3?} tam {:.3?} | tay dai {:.3}+{:.3}={:.3} | can {:.3}",
-            shoulder, target_pos, upper_len, lower_len, upper_len + lower_len,
-            shoulder.distance(target_pos),
-        );
     }
 
     let toward_target = (target_pos - shoulder).try_normalize()?;
@@ -400,20 +320,9 @@ fn solve_arm(
         bone_orientation_with_twist_pinned_to(lower_dir, bend_plane),
         transforms,
     )?;
-    // The hand does not hang off the forearm. It is clamped to the gun, so the
-    // palm and the posed fingers keep their grip wherever the solver had to put
-    // the elbow — and the grip turns with the weapon through recoil and sway
-    // without anything here having to know about either.
-    //
-    let hand_global = if hand_locked_to_weapon() {
-        set_bone_world_rotation(hand, fore_global, grip_rotation, transforms)?
-    } else {
-        let hand_local = *transforms.get(hand).ok()?.0;
-        let global = fore_global.mul_transform(hand_local);
-        *transforms.get_mut(hand).ok()?.1 = global;
-        global
-    };
-
+    // Clamped to the weapon rather than hanging off the forearm, so the grip
+    // holds wherever the solver had to put the elbow.
+    let hand_global = set_bone_world_rotation(hand, fore_global, grip_rotation, transforms)?;
     repropagate_subtree(hand, hand_global, children, transforms);
 
     Some(hand_global.translation().distance(target_pos))
@@ -440,14 +349,12 @@ pub(crate) fn solve_grip_ik(
 
     let right = bones.right_arm.zip(bones.right_fore_arm).zip(bones.right_hand).and_then(
         |((arm, fore_arm), hand)| {
-            let offset = grip_in_hand("GRIP_IN_HAND_RIGHT", RIGHT_GRIP_IN_HAND);
-            solve_arm(arm, fore_arm, hand, trigger, right_pole, RIGHT_HAND_ON_GUN, offset, &child_of, &children, &mut transforms)
+            solve_arm(arm, fore_arm, hand, trigger, right_pole, RIGHT_HAND_ON_GUN, RIGHT_GRIP_IN_HAND, &child_of, &children, &mut transforms)
         },
     );
     let left = bones.left_arm.zip(bones.left_fore_arm).zip(bones.left_hand).and_then(
         |((arm, fore_arm), hand)| {
-            let offset = grip_in_hand("GRIP_IN_HAND_LEFT", LEFT_GRIP_IN_HAND);
-            solve_arm(arm, fore_arm, hand, fore, left_pole, LEFT_HAND_ON_GUN, offset, &child_of, &children, &mut transforms)
+            solve_arm(arm, fore_arm, hand, fore, left_pole, LEFT_HAND_ON_GUN, LEFT_GRIP_IN_HAND, &child_of, &children, &mut transforms)
         },
     );
 
@@ -458,81 +365,6 @@ pub(crate) fn solve_grip_ik(
             "[grip] residual right={:?} left={:?}",
             right.map(|d| format!("{d:.4}m")),
             left.map(|d| format!("{d:.4}m")),
-        );
-    }
-}
-
-/// Puts a marker on the hand bones themselves, which answers a question the
-/// socket markers cannot: whether the hand is where the solver says it is.
-/// A zero residual only proves the bone reached the target, not that anything
-/// is drawn there.
-pub(crate) fn mark_hand_bones(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    bones: Query<&PlayerModelSkeletonBones, With<ViewmodelBody>>,
-    mut done: Local<bool>,
-) {
-    if *done || !grip_markers_enabled() {
-        return;
-    }
-    let Ok(bones) = bones.single() else { return };
-    let (Some(left), Some(right)) = (bones.left_hand, bones.right_hand) else {
-        return;
-    };
-    *done = true;
-    let mesh = meshes.add(Sphere::new(MARKER_RADIUS_METRES));
-    for (bone, glow) in [
-        (left, LinearRgba::rgb(0.5, 6.0, 1.2)),
-        (right, LinearRgba::rgb(6.0, 0.6, 0.4)),
-    ] {
-        let colour = Color::linear_rgb(glow.red.min(1.0), glow.green.min(1.0), glow.blue.min(1.0));
-        commands.spawn((
-            Name::new("HandBoneMarker"),
-            Mesh3d(mesh.clone()),
-            MeshMaterial3d(materials.add(glowing_unlit_material(colour, glow))),
-            Transform::default(),
-            RenderLayers::layer(VIEWMODEL_LAYER),
-            ChildOf(bone),
-        ));
-    }
-    info!("[grip] hand bone markers on");
-}
-
-/// Measures the hand in world space against the length the rig was built with.
-///
-/// A stretched finger is not a bad pose, it is a bad transform: the knuckle
-/// sits 112mm from the wrist in the asset, so any other number here means
-/// something upstream is scaling the skeleton the skin was bound to.
-pub(crate) fn log_hand_scale(
-    bones: Query<&PlayerModelSkeletonBones, With<ViewmodelBody>>,
-    names: Query<&Name>,
-    globals: Query<&GlobalTransform>,
-    children: Query<&Children>,
-    time: Res<Time>,
-    mut next: Local<f32>,
-) {
-    if std::env::var("HAND_LOG").is_err() || time.elapsed_secs() < *next {
-        return;
-    }
-    *next = time.elapsed_secs() + 1.0;
-    let Ok(bones) = bones.single() else { return };
-    for (side, hand) in [("trai", bones.left_hand), ("phai", bones.right_hand)] {
-        let Some(hand) = hand else { continue };
-        let Ok(hand_global) = globals.get(hand) else { continue };
-        let (scale, _, _) = hand_global.to_scale_rotation_translation();
-        let knuckle = children.get(hand).ok().and_then(|kids| {
-            kids.iter().find(|kid| {
-                names.get(*kid).is_ok_and(|n| n.as_str().ends_with("HandMiddle1"))
-            })
-        });
-        let dist = knuckle
-            .and_then(|k| globals.get(k).ok())
-            .map(|k| k.translation().distance(hand_global.translation()));
-        info!(
-            "[hand] {side} scale={:.3?} co tay->dot giua={:?} (rig: 0.112)",
-            scale,
-            dist.map(|d| format!("{d:.4}m")),
         );
     }
 }

@@ -132,12 +132,8 @@ mod splash_screen;
 use splash_screen::*;
 
 
-/// How far the eye sits behind the player's own eye point.
-///
-/// Started as a debug knob for looking at the viewmodel and stayed at the
-/// value that read best. The gun and the body both subtract it again, so
-/// pulling back moves the camera and leaves everything it is looking at where
-/// it was.
+/// How far the eye sits behind the player's own eye point. The gun and the
+/// body subtract it again, so pulling back moves only the camera.
 pub(crate) fn view_pullback() -> f32 {
     std::env::var("VIEW_PULLBACK").ok().and_then(|v| v.parse().ok()).unwrap_or(0.13)
 }
@@ -159,9 +155,12 @@ const GUN_BOB_AMOUNT_Y: f32 = 0.012;
 const GUN_BOB_BLEND_SPEED: f32 = 6.0;
 const AIM_BOB_MULTIPLIER: f32 = 0.35;
 
-const LOOK_SWAY_SENSITIVITY: f32 = 0.15;
-const LOOK_SWAY_MAX_DEG: f32 = 0.5;
-const LOOK_SWAY_SPEED: f32 = 10.0;
+/// How far the weapon lags behind a turn. SPEED is what reads as weight:
+/// lower leaves it behind for longer. SENSITIVITY has to keep an ordinary
+/// turn inside MAX_DEG, or every movement alike pins it at full swing.
+const LOOK_SWAY_SENSITIVITY: f32 = 0.10;
+const LOOK_SWAY_MAX_DEG: f32 = 3.5;
+const LOOK_SWAY_SPEED: f32 = 5.0;
 
 const WALL_GUN_RAISE_DISTANCE: f32 = 1.5;
 const WALL_GUN_RAISE_HEIGHT: f32 = 0.18;
@@ -708,7 +707,6 @@ impl Plugin for GamePlugin {
                     wire_player_model_scene_nodes,
                     (spawn_viewmodel_body, wire_viewmodel_body_meshes),
                     spawn_grip_sockets,
-                    mark_hand_bones,
                     wire_player_model_animations,
                     update_local_player_model_animation,
                     apply_player_model_pose_override,
@@ -790,7 +788,6 @@ impl Plugin for GamePlugin {
         (
             update_pole_targets,
             solve_grip_ik,
-            log_hand_scale,
         )
             .chain()
             .after(TransformSystems::Propagate)

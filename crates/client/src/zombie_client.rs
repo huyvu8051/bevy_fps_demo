@@ -72,7 +72,10 @@ pub(crate) struct Gun {
     pub(crate) bob_phase: f32,
     pub(crate) bob_blend: f32,
 
-    pub(crate) look_sway_roll: f32,
+    /// How far the weapon is still turned away from where the view now points,
+    /// as yaw then pitch in degrees. Chases zero, so it is only non-zero while
+    /// the view is moving or has just stopped.
+    pub(crate) look_sway: Vec2,
 
     pub(crate) settle_jitter: Vec3,
     pub(crate) settle_current: Vec3,

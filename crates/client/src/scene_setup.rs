@@ -286,7 +286,7 @@ pub(crate) fn setup_gameplay(
                 recoil_roll: 0.0,
                 bob_phase: 0.0,
                 bob_blend: 0.0,
-                look_sway_roll: 0.0,
+                look_sway: Vec2::ZERO,
             },
             ChildOf(camera),
         ))

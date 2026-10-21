@@ -361,10 +361,16 @@ pub(crate) fn gun_view_animation(
             gun.bob_phase += GUN_BOB_SPEED * time.delta_secs();
         }
 
-        let sway_target =
-            (look_delta.0.x * LOOK_SWAY_SENSITIVITY).clamp(-LOOK_SWAY_MAX_DEG, LOOK_SWAY_MAX_DEG);
+        // Late to a turn, not rolled by one. Both meshes put their origin on
+        // the muzzle, so this pivots there: the barrel holds its aim and the
+        // stock swings out. X negated because a positive delta turns right and
+        // the weapon is still aimed left of where the view now points.
+        let lag = Vec2::new(-look_delta.0.x, look_delta.0.y);
+        let sway_target = (lag * LOOK_SWAY_SENSITIVITY)
+            .clamp(Vec2::splat(-LOOK_SWAY_MAX_DEG), Vec2::splat(LOOK_SWAY_MAX_DEG));
         let sway_step = (LOOK_SWAY_SPEED * time.delta_secs()).min(1.0);
-        gun.look_sway_roll += (sway_target - gun.look_sway_roll) * sway_step;
+        let sway_gap = sway_target - gun.look_sway;
+        gun.look_sway += sway_gap * sway_step;
 
         let kick = &active.def().recoil;
         let timings = gun_pose_timings(&gun, active.def());
@@ -397,7 +403,8 @@ pub(crate) fn gun_view_animation(
 
         let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
         transform.rotation = Quat::from_rotation_x(wall_raise_tilt)
-            * Quat::from_rotation_z(gun.look_sway_roll.to_radians())
+            * Quat::from_rotation_y(gun.look_sway.x.to_radians())
+            * Quat::from_rotation_x(gun.look_sway.y.to_radians())
             * Quat::from_rotation_y(kick.yaw_kick_deg.to_radians() * gun.recoil_roll * timings.recoil_t)
             * Quat::from_rotation_z(kick.roll_deg.to_radians() * gun.recoil_roll * timings.recoil_t)
             * Quat::from_rotation_x(kick.tilt_up_deg.to_radians() * timings.recoil_t)

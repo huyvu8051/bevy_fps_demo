@@ -38,38 +38,24 @@ pub(crate) struct WeaponDef {
     pub(crate) recoil: Recoil,
 }
 
-/// What a shot does to the view and to the weapon in the hands.
-///
-/// Kept apart from the rest of WeaponDef because it is the half a weapon is
-/// felt by rather than seen by: two rifles can sit in exactly the same place
-/// and still be told apart the moment the trigger is held.
-///
-/// The view half and the viewmodel half are deliberately separate numbers.
-/// Driving both off one would tie how hard the gun is to hold to how much it
-/// visibly jumps, and those are different things to tune.
+/// What a shot does to the view and to the weapon in the hands. The two halves
+/// are separate numbers on purpose: how hard a weapon is to hold and how much
+/// it visibly jumps are different things to tune.
 pub(crate) struct Recoil {
-    /// Radians of pitch added per shot, and the ceiling a held burst climbs
-    /// to. The ceiling is also what bullet spread reads as heat, so raising
-    /// it loosens the weapon's sustained accuracy as well as its climb.
+    /// Radians of pitch per shot and the ceiling a burst climbs to. The
+    /// ceiling also sets what bullet spread reads as heat.
     pub(crate) pitch_kick: f32,
     pub(crate) pitch_kick_max: f32,
-    /// Sideways wander per shot. Its sign alternates, so it reads as a wobble
-    /// rather than a drift off target.
+    /// Sideways wander per shot, sign alternating so it wobbles rather than
+    /// drifts.
     pub(crate) yaw_jitter: f32,
-    /// Metres the eye is pushed back per shot, and its ceiling. Applied level
-    /// rather than along the view, so pitch climb does not drag the eye down.
-    pub(crate) push_back: f32,
-    pub(crate) push_back_max: f32,
-    /// Rate of the exponential all three decay by.
+    /// Rate of the exponential both decay by.
     pub(crate) recovery_speed: f32,
 
-    /// Seconds one shot's weapon animation runs for.
     pub(crate) duration: f32,
-    /// Metres the weapon travels back into the shoulder, and up.
     pub(crate) kick_back: f32,
     pub(crate) kick_up: f32,
-    /// Degrees the weapon turns. Roll and yaw flip sign per shot so a burst
-    /// never plays the same frame twice.
+    /// Degrees the weapon turns. Roll and yaw flip sign per shot.
     pub(crate) tilt_up_deg: f32,
     pub(crate) roll_deg: f32,
     pub(crate) yaw_kick_deg: f32,
@@ -112,27 +98,25 @@ static AK47: WeaponDef = WeaponDef {
     mesh_yaw_deg: 0.0,
     rest_offset: Vec3::new(0.190, -0.054, -0.800),
     ready_offset: Vec3::new(0.045, -0.184, -0.710),
-    ads_eye_relief: 0.195,
+    ads_eye_relief: 0.165,
     muzzle_offset: Vec3::new(0.170, 0.005, -0.865),
     eject_port: Vec3::new(0.100, 0.009, 0.515),
     fire_rate: 0.1,
     magazine: 50,
-    // The values the whole feel was originally tuned on, back when recoil was
-    // global. A 7.62 rifle: slow, heavy, and loose at the top of a burst.
+    // 7.62: slower, heavier, looser at the top of a burst. Every axis above
+    // the M4's.
     recoil: Recoil {
-        pitch_kick: 0.022,
-        pitch_kick_max: 0.16,
-        yaw_jitter: 0.012,
-        push_back: 0.018,
-        push_back_max: 0.07,
-        recovery_speed: 5.0,
+        pitch_kick: 0.018,
+        pitch_kick_max: 0.135,
+        yaw_jitter: 0.0095,
+        recovery_speed: 5.6,
 
-        duration: 0.12,
-        kick_back: 0.12,
-        kick_up: 0.01,
-        tilt_up_deg: 4.0,
-        roll_deg: 3.0,
-        yaw_kick_deg: 3.0,
+        duration: 0.11,
+        kick_back: 0.095,
+        kick_up: 0.008,
+        tilt_up_deg: 3.2,
+        roll_deg: 2.4,
+        yaw_kick_deg: 2.4,
     },
 };
 
@@ -162,24 +146,20 @@ static M4A1: WeaponDef = WeaponDef {
     mesh_path: "models/m4a1/mesh/m4a1_rigged.glb",
     mesh_scale: 1.0,
     mesh_yaw_deg: 0.0,
-    rest_offset: Vec3::new(0.190, -0.096, -0.686),
-    ready_offset: Vec3::new(0.071, -0.226, -0.596),
-    ads_eye_relief: 0.350,
-    muzzle_offset: Vec3::new(0.201, -0.096, -0.686),
+    rest_offset: Vec3::new(0.190, -0.066, -0.686),
+    ready_offset: Vec3::new(0.071, -0.196, -0.596),
+    ads_eye_relief: 0.320,
+    muzzle_offset: Vec3::new(0.201, -0.066, -0.686),
     eject_port: Vec3::new(0.06, 0.02, 0.33),
     fire_rate: 0.085,
     magazine: 30,
-    // A 5.56 carbine against the AK's 7.62: roughly two thirds the kick in
-    // every axis, and it settles faster. It also fires faster, so matching the
-    // AK per shot would have climbed harder for the same trigger hold — the
-    // point of the split is that a burst ends somewhere different, not just
-    // that one shot looks different.
+    // 5.56: about two thirds the AK's kick, settling faster. Cut by more than
+    // a flat ratio because it also fires faster, and matching per shot would
+    // have climbed harder for the same trigger hold.
     recoil: Recoil {
         pitch_kick: 0.014,
         pitch_kick_max: 0.11,
         yaw_jitter: 0.007,
-        push_back: 0.011,
-        push_back_max: 0.045,
         recovery_speed: 6.5,
 
         duration: 0.10,

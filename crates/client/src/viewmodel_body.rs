@@ -162,20 +162,13 @@ pub(crate) fn pose_viewmodel_arms(
     }
 }
 
-/// The grip the hands hold, solved against a 22mm bar laid across each palm in
-/// Blender: every joint was bent about its own axis until its child sat one
-/// finger-thickness off the bar's surface, which landed all 24 within 0.2mm of
-/// target at bend angles between 29 and 65 degrees.
+/// Solved in Blender against a 22mm bar laid across each palm, every joint
+/// curled until it just touched. Thumbs are still the rig's own rifle idle;
+/// its fingers closed around something far larger than a handguard, which is
+/// why the hand read as holding nothing.
 ///
-/// The rig's own "rifle aiming idle" was the starting pose and the thumbs are
-/// still exactly it, but its fingers were closed around a grip far larger than
-/// a handguard — every knuckle sat 33mm clear of a 22mm bar, which is why the
-/// hand read as holding nothing.
-///
-/// Read back as parent-relative rotations, the same form the loader uses, and
-/// checked against the glb's own rest values first so no axis convention was
-/// converted by hand. They only mean anything paired with LEFT_GRIP_IN_HAND /
-/// RIGHT_GRIP_IN_HAND, which is where that bar sits.
+/// Parent-relative, the form the loader uses. Only valid paired with
+/// LEFT_GRIP_IN_HAND / RIGHT_GRIP_IN_HAND, which is where that bar sits.
 ///
 /// They are forced every frame rather than left to the clip because only two
 /// of the four clips the player runs are rifle poses: walking and running
