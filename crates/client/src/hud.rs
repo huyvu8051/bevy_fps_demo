@@ -547,6 +547,7 @@ pub(crate) fn update_crosshair(
     mut lines: Query<(&CrosshairLine, &mut Node)>,
     local_moving: Res<LocalPlayerMoving>,
     local_sprinting: Res<LocalPlayerSprinting>,
+    active: Res<ActiveWeapon>,
 ) {
     let Ok(recoil) = camera.single() else {
         return;
@@ -558,7 +559,14 @@ pub(crate) fn update_crosshair(
         root.display = if aiming { Display::None } else { Display::Flex };
     }
 
-    let spread = current_bullet_spread(recoil.pitch_kick, aiming, local_moving.0, stance, local_sprinting.0);
+    let spread = current_bullet_spread(
+        recoil.pitch_kick,
+        active.def().recoil.pitch_kick_max,
+        aiming,
+        local_moving.0,
+        stance,
+        local_sprinting.0,
+    );
     let gap = CROSSHAIR_BASE_GAP_PX + spread * CROSSHAIR_GAP_SPREAD_SCALE;
 
     for (line, mut node) in &mut lines {

@@ -132,8 +132,14 @@ mod splash_screen;
 use splash_screen::*;
 
 
+/// How far the eye sits behind the player's own eye point.
+///
+/// Started as a debug knob for looking at the viewmodel and stayed at the
+/// value that read best. The gun and the body both subtract it again, so
+/// pulling back moves the camera and leaves everything it is looking at where
+/// it was.
 pub(crate) fn view_pullback() -> f32 {
-    std::env::var("VIEW_PULLBACK").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0)
+    std::env::var("VIEW_PULLBACK").ok().and_then(|v| v.parse().ok()).unwrap_or(0.13)
 }
 
 
@@ -147,15 +153,6 @@ const GUN_SETTLE_JITTER: Vec3 = Vec3::new(0.030, 0.024, 0.020);
 const GUN_SETTLE_SPEED: f32 = 3.0;
 const GUN_SHOULDER_SPEED: f32 = 9.0;
 const GUN_ADS_SPEED: f32 = 10.0;
-const RECOIL_KICK: f32 = 0.12;
-
-const RECOIL_KICK_UP: f32 = 0.01;
-const RECOIL_TILT_UP_DEG: f32 = 4.0;
-
-const RECOIL_ROLL_DEG: f32 = 3.0;
-const RECOIL_YAW_KICK_DEG: f32 = 3.0;
-const RECOIL_DURATION: f32 = 0.12;
-
 const GUN_BOB_SPEED: f32 = 8.0;
 const GUN_BOB_AMOUNT_X: f32 = 0.015;
 const GUN_BOB_AMOUNT_Y: f32 = 0.012;
@@ -277,12 +274,7 @@ const SPARK_PARTICLE_LIFETIME: f32 = 0.25;
 const SPARK_PARTICLE_SIZE: f32 = 0.02;
 
 
-const RECOIL_PITCH_KICK: f32 = 0.022;
-const RECOIL_PUSH_BACK: f32 = 0.018;
-const RECOIL_PUSH_BACK_MAX: f32 = 0.07;
-const RECOIL_PITCH_KICK_MAX: f32 = 0.16;
-const RECOIL_YAW_JITTER: f32 = 0.012;
-const RECOIL_RECOVERY_SPEED: f32 = 5.0;
+// Recoil is per weapon now: see WeaponDef::recoil in weapon.rs.
 
 const BULLET_SPREAD: f32 = 0.02;
 
@@ -716,6 +708,7 @@ impl Plugin for GamePlugin {
                     wire_player_model_scene_nodes,
                     (spawn_viewmodel_body, wire_viewmodel_body_meshes),
                     spawn_grip_sockets,
+                    mark_hand_bones,
                     wire_player_model_animations,
                     update_local_player_model_animation,
                     apply_player_model_pose_override,
@@ -785,6 +778,7 @@ impl Plugin for GamePlugin {
             drive_skeleton_from_ragdoll,
             aim_zombie_heads,
             apply_bone_flinch,
+            hold_finger_grip,
         )
             .after(AnimationSystems)
             .before(TransformSystems::Propagate)
@@ -796,6 +790,7 @@ impl Plugin for GamePlugin {
         (
             update_pole_targets,
             solve_grip_ik,
+            log_hand_scale,
         )
             .chain()
             .after(TransformSystems::Propagate)

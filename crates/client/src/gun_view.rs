@@ -116,8 +116,8 @@ pub(crate) struct GunPoseTimings {
     bob_y: f32,
 }
 
-pub(crate) fn gun_pose_timings(gun: &Gun) -> GunPoseTimings {
-    let recoil_t = gun.recoil / RECOIL_DURATION;
+pub(crate) fn gun_pose_timings(gun: &Gun, def: &WeaponDef) -> GunPoseTimings {
+    let recoil_t = gun.recoil / def.recoil.duration;
     let reload_t = gun.reload_remaining / RELOAD_DURATION;
 
     let dip = 4.0 * reload_t * (1.0 - reload_t);
@@ -366,7 +366,8 @@ pub(crate) fn gun_view_animation(
         let sway_step = (LOOK_SWAY_SPEED * time.delta_secs()).min(1.0);
         gun.look_sway_roll += (sway_target - gun.look_sway_roll) * sway_step;
 
-        let timings = gun_pose_timings(&gun);
+        let kick = &active.def().recoil;
+        let timings = gun_pose_timings(&gun, active.def());
 
         let resting = gun.base_offset.lerp(active.def().ready_offset, gun.ready_blend) + gun.settle_current;
         // Sighted means Socket_Aim on the camera axis at this weapon.s eye
@@ -386,9 +387,9 @@ pub(crate) fn gun_view_animation(
         transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)
             + Vec3::new(
                 timings.bob_x,
-                RECOIL_KICK_UP * timings.recoil_t - RELOAD_DIP * timings.dip - timings.bob_y
+                kick.kick_up * timings.recoil_t - RELOAD_DIP * timings.dip - timings.bob_y
                     + WALL_GUN_RAISE_HEIGHT * gun.wall_raise,
-                RECOIL_KICK * timings.recoil_t,
+                kick.kick_back * timings.recoil_t,
             );
 
         let base_rotation = Quat::from_rotation_y(active.def().mesh_yaw_deg.to_radians())
@@ -397,9 +398,9 @@ pub(crate) fn gun_view_animation(
         let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
         transform.rotation = Quat::from_rotation_x(wall_raise_tilt)
             * Quat::from_rotation_z(gun.look_sway_roll.to_radians())
-            * Quat::from_rotation_y(RECOIL_YAW_KICK_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
-            * Quat::from_rotation_z(RECOIL_ROLL_DEG.to_radians() * gun.recoil_roll * timings.recoil_t)
-            * Quat::from_rotation_x(RECOIL_TILT_UP_DEG.to_radians() * timings.recoil_t)
+            * Quat::from_rotation_y(kick.yaw_kick_deg.to_radians() * gun.recoil_roll * timings.recoil_t)
+            * Quat::from_rotation_z(kick.roll_deg.to_radians() * gun.recoil_roll * timings.recoil_t)
+            * Quat::from_rotation_x(kick.tilt_up_deg.to_radians() * timings.recoil_t)
             * base_rotation;
     }
 }

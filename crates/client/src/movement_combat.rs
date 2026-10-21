@@ -12,8 +12,11 @@ pub(crate) fn is_aiming(cursor: &CursorOptions, mouse: &ButtonInput<MouseButton>
     (cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Right)) || touch_aiming
 }
 
-pub(crate) fn current_bullet_spread(pitch_kick: f32, aiming: bool, moving: bool, stance: PlayerStance, sprinting: bool) -> f32 {
-    let heat = pitch_kick / RECOIL_PITCH_KICK_MAX;
+/// `pitch_kick_max` is the firing weapon's own ceiling, not a global one: heat
+/// has to be how far into *this* weapon's climb the burst has got, or a rifle
+/// with a gentler ceiling would read as permanently hot.
+pub(crate) fn current_bullet_spread(pitch_kick: f32, pitch_kick_max: f32, aiming: bool, moving: bool, stance: PlayerStance, sprinting: bool) -> f32 {
+    let heat = pitch_kick / pitch_kick_max;
     let mut spread = BULLET_SPREAD * (0.3 + heat);
     if aiming {
         spread *= AIM_SPREAD_MULTIPLIER;
@@ -176,10 +179,11 @@ pub(crate) fn mouse_look(
 
 pub(crate) fn apply_view_recoil(
     time: Res<Time>,
+    active: Res<ActiveWeapon>,
     mut query: Query<(&mut Transform, &FpsCamera, &mut ViewRecoil, &Lean)>,
 ) {
     for (mut transform, cam, mut recoil, lean) in &mut query {
-        let remaining = ops::exp(-RECOIL_RECOVERY_SPEED * time.delta_secs());
+        let remaining = ops::exp(-active.def().recoil.recovery_speed * time.delta_secs());
         recoil.pitch_kick *= remaining;
         recoil.yaw_kick *= remaining;
         recoil.push_back *= remaining;
@@ -412,12 +416,12 @@ pub(crate) fn send_player_input(
 
 pub(crate) fn sync_camera_to_player(
     player_query: Query<(&Transform, &PlayerStance), (With<Player>, Without<FpsCamera>)>,
-    mut camera_query: Query<(&mut Transform, &Lean, &ViewRecoil), With<FpsCamera>>,
+    mut camera_query: Query<(&mut Transform, &FpsCamera, &Lean, &ViewRecoil), With<FpsCamera>>,
 ) {
     let Ok((player_transform, stance)) = player_query.single() else {
         return;
     };
-    let Ok((mut camera_transform, lean, recoil)) = camera_query.single_mut() else {
+    let Ok((mut camera_transform, cam, lean, recoil)) = camera_query.single_mut() else {
         return;
     };
     let eye_height_offset = match stance {
@@ -430,7 +434,12 @@ pub(crate) fn sync_camera_to_player(
 
     let side_offset = *camera_transform.right() * LEAN_SIDE_OFFSET * lean.current;
     let pullback = *camera_transform.back() * view_pullback();
-    let kick_back = *camera_transform.back() * recoil.push_back;
+    // Level, not along the camera's own back. Recoil pitches the view up by as
+    // much as 9 degrees, and taking the kick down that same axis dropped the
+    // eye as it pushed it — which reads as the player being shoved around
+    // rather than the weapon kicking.
+    let level_back = Quat::from_rotation_y(cam.yaw) * Vec3::Z;
+    let kick_back = level_back * recoil.push_back;
     camera_transform.translation = eye + side_offset + pullback + kick_back;
 }
 
@@ -544,7 +553,7 @@ pub(crate) fn shoot(
     }
     *cooldown = active.def().fire_rate;
     gun.ammo -= 1;
-    gun.recoil = RECOIL_DURATION;
+    gun.recoil = active.def().recoil.duration;
 
     gun.recoil_roll = ops::sin(time.elapsed_secs() * 641.0);
     commands.spawn((AudioPlayer(vfx_assets.gunshot.0.clone()), PlaybackSettings::DESPAWN, GunshotVoice));
@@ -558,16 +567,18 @@ pub(crate) fn shoot(
         return;
     };
 
-    recoil.pitch_kick = (recoil.pitch_kick + RECOIL_PITCH_KICK).min(RECOIL_PITCH_KICK_MAX);
+    let kick = &active.def().recoil;
+    recoil.pitch_kick = (recoil.pitch_kick + kick.pitch_kick).min(kick.pitch_kick_max);
 
     let jitter = ops::sin(time.elapsed_secs() * 977.0);
-    recoil.yaw_kick += jitter * RECOIL_YAW_JITTER;
-    recoil.push_back = (recoil.push_back + RECOIL_PUSH_BACK).min(RECOIL_PUSH_BACK_MAX);
+    recoil.yaw_kick += jitter * kick.yaw_jitter;
+    recoil.push_back = (recoil.push_back + kick.push_back).min(kick.push_back_max);
 
     let stance = vfx_assets.stance.single().copied().unwrap_or_default();
 
     let spread = current_bullet_spread(
         recoil.pitch_kick,
+        kick.pitch_kick_max,
         is_aiming(cursor, &mouse, touch_aiming.0),
         local_moving.0,
         stance,
