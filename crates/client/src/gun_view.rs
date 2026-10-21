@@ -81,6 +81,11 @@ pub(crate) fn force_ads() -> bool {
 #[derive(Component)]
 pub(crate) struct AimSocket;
 
+/// The front post on a weapon that sights down irons. Paired with AimSocket it
+/// gives the sight line, the same way the scope pair gives the optical axis.
+#[derive(Component)]
+pub(crate) struct FrontSightSocket;
+
 /// The bore's end. Everything that leaves the barrel is placed and aimed from
 /// here, so flash, smoke and casings follow the weapon through recoil and sway
 /// without any of them holding their own copy of where the barrel is.
@@ -113,13 +118,16 @@ pub(crate) fn track_muzzle_socket(
 /// Neither point moves inside the weapon, so this runs off the propagated
 /// transforms and the result is exact rather than a frame late.
 pub(crate) fn track_optical_axis(
-    front: Query<&GlobalTransform, With<ScopeCameraSocket>>,
-    aim: Query<&GlobalTransform, (With<AimSocket>, Without<ScopeCameraSocket>)>,
+    glass: Query<&GlobalTransform, With<ScopeCameraSocket>>,
+    post: Query<&GlobalTransform, With<FrontSightSocket>>,
+    aim: Query<&GlobalTransform, (With<AimSocket>, Without<ScopeCameraSocket>, Without<FrontSightSocket>)>,
     mut gun: Query<(&GlobalTransform, &mut Gun)>,
 ) {
     let Ok((gun_global, mut gun)) = gun.single_mut() else { return };
-    let (Ok(front), Ok(aim)) = (front.single(), aim.single()) else {
-        // Irons: nothing to correct, and nothing to read it from.
+    // Glass on a scope, the front post on irons: either way it is the far end
+    // of the sight line, and either way the near end is where the eye goes.
+    let front = glass.single().or(post.single());
+    let (Ok(front), Ok(aim)) = (front, aim.single()) else {
         gun.optical_fix = Quat::IDENTITY;
         return;
     };
@@ -162,6 +170,7 @@ pub(crate) fn wire_weapon_sockets(
             "Socket_ScopeCamera" => socket.insert(ScopeCameraSocket),
             "Socket_ScopeView" => socket.insert(ScopeViewSocket),
             "Socket_Aim" => socket.insert(AimSocket),
+            "Socket_SightFront" => socket.insert(FrontSightSocket),
             "Socket_Muzzle" => socket.insert(MuzzleSocket),
             "Socket_RearGrip" => socket.insert(TriggerGripSocket),
             "Socket_FrontGrip" => socket.insert(ForeGripSocket),
