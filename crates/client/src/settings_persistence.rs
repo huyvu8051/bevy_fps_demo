@@ -13,7 +13,9 @@ pub(crate) struct PersistedSettings {
     pub(crate) fps_cap: Option<u32>,
     pub(crate) map_msaa_on: Option<bool>,
     pub(crate) scope_camera_enabled: Option<bool>,
-    pub(crate) smoke_enabled: Option<bool>,
+    pub(crate) muzzle_smoke_enabled: Option<bool>,
+    pub(crate) port_smoke_enabled: Option<bool>,
+    pub(crate) barrel_smoke_enabled: Option<bool>,
     pub(crate) sensitivity_scale: Option<f32>,
     pub(crate) noclip: Option<bool>,
     pub(crate) god_mode: Option<bool>,
@@ -119,7 +121,9 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(fps_cap, FpsCap);
     apply!(map_msaa_on, MapMsaaOn);
     apply!(scope_camera_enabled, ScopeCameraEnabled);
-    apply!(smoke_enabled, SmokeEnabled);
+    apply!(muzzle_smoke_enabled, MuzzleSmokeEnabled);
+    apply!(port_smoke_enabled, PortSmokeEnabled);
+    apply!(barrel_smoke_enabled, BarrelSmokeEnabled);
     apply!(sensitivity_scale, SensitivityScale);
     apply!(noclip, Noclip);
     apply!(god_mode, GodMode);
@@ -174,7 +178,9 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(FpsCap)
         || changed!(MapMsaaOn)
         || changed!(ScopeCameraEnabled)
-        || changed!(SmokeEnabled)
+        || changed!(MuzzleSmokeEnabled)
+        || changed!(PortSmokeEnabled)
+        || changed!(BarrelSmokeEnabled)
         || changed!(SensitivityScale)
         || changed!(Noclip)
         || changed!(GodMode)
@@ -210,7 +216,9 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         fps_cap: world.get_resource::<FpsCap>().map(|r| r.0),
         map_msaa_on: world.get_resource::<MapMsaaOn>().map(|r| r.0),
         scope_camera_enabled: world.get_resource::<ScopeCameraEnabled>().map(|r| r.0),
-        smoke_enabled: world.get_resource::<SmokeEnabled>().map(|r| r.0),
+        muzzle_smoke_enabled: world.get_resource::<MuzzleSmokeEnabled>().map(|r| r.0),
+        port_smoke_enabled: world.get_resource::<PortSmokeEnabled>().map(|r| r.0),
+        barrel_smoke_enabled: world.get_resource::<BarrelSmokeEnabled>().map(|r| r.0),
         sensitivity_scale: world.get_resource::<SensitivityScale>().map(|r| r.0),
         noclip: world.get_resource::<Noclip>().map(|r| r.0),
         god_mode: world.get_resource::<GodMode>().map(|r| r.0),

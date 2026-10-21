@@ -51,6 +51,7 @@ pub(crate) struct MuzzleFxAssets {
     pub(crate) flash_mesh: Handle<Mesh>,
     pub(crate) ember_mesh: Handle<Mesh>,
     pub(crate) smoke_mesh: Handle<Mesh>,
+    pub(crate) smoke_atlas: Handle<Image>,
 }
 
 #[derive(Resource)]

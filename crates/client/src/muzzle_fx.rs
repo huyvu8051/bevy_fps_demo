@@ -6,8 +6,6 @@ use bevy::shader::ShaderRef;
 use crate::*;
 
 const MUZZLE_SMOKE_SHADER: &str = "shaders/muzzle_smoke.wgsl";
-const MUZZLE_SMOKE_DENSITY: f32 = 4.7;
-const MUZZLE_SMOKE_BILLOW: f32 = 1.5;
 
 const MUZZLE_FLASH_SHADER: &str = "shaders/muzzle_flash.wgsl";
 const MUZZLE_FLASH_RAY_SCALE: f32 = 2.6;
@@ -20,12 +18,16 @@ const SHAPE_DIRECTIONAL_BLADE: f32 = 1.0;
 pub(crate) struct MuzzleSmokeMaterial {
     #[uniform(0)]
     settings: Vec4,
+    #[texture(1)]
+    #[sampler(2)]
+    atlas: Handle<Image>,
 }
 
 impl MuzzleSmokeMaterial {
-    fn new(seed: f32) -> Self {
+    fn new(seed: f32, atlas: Handle<Image>) -> Self {
         Self {
-            settings: Vec4::new(0.0, seed, MUZZLE_SMOKE_DENSITY, MUZZLE_SMOKE_BILLOW),
+            settings: Vec4::new(0.0, seed % std::f32::consts::TAU, 0.0, 0.0),
+            atlas,
         }
     }
 
@@ -44,9 +46,14 @@ impl Material for MuzzleSmokeMaterial {
     }
 }
 
-pub(crate) fn muzzle_smoke_material(seed: f32) -> MuzzleSmokeMaterial {
-    MuzzleSmokeMaterial::new(seed)
+pub(crate) fn muzzle_smoke_material(seed: f32, atlas: Handle<Image>) -> MuzzleSmokeMaterial {
+    MuzzleSmokeMaterial::new(seed, atlas)
 }
+
+/// The sprite sheet the puff shader reads, baked offline from the raymarch it
+/// replaced. One 1024 texture against 960 noise lookups per pixel, which is
+/// what made a sustained burst fill-rate bound.
+pub(crate) const SMOKE_ATLAS_PATH: &str = "textures/muzzle_smoke_atlas.png";
 
 #[derive(Component)]
 pub(crate) struct MuzzleBlade {
@@ -180,21 +187,29 @@ struct TrailPoint {
     sway_seed: f32,
 }
 
+/// The three powder effects switch separately. They read as one thing but
+/// they do not cost like one: the puff spawns per shot, the port wisp rides
+/// every casing, and the trail is a mesh rebuilt each frame it lives.
+macro_rules! smoke_switch {
+    ($name:ident) => {
+        #[derive(Resource)]
+        pub(crate) struct $name(pub(crate) bool);
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self(true)
+            }
+        }
+    };
+}
+
+smoke_switch!(MuzzleSmokeEnabled);
+smoke_switch!(PortSmokeEnabled);
+smoke_switch!(BarrelSmokeEnabled);
+
 /// One continuous ribbon rising off a hot barrel, the way a stick of incense
 /// smokes. Separate puffs read as lumps, and each puff cost a raymarch; the
 /// whole stream here is a single unlit mesh.
-/// Every powder effect the gun makes: the puff at the muzzle, the wisp out of
-/// the ejection port, and the trail that rises once the firing stops. One
-/// switch, because they read as one thing and they cost together.
-#[derive(Resource)]
-pub(crate) struct SmokeEnabled(pub(crate) bool);
-
-impl Default for SmokeEnabled {
-    fn default() -> Self {
-        Self(true)
-    }
-}
-
 #[derive(Resource, Default)]
 pub(crate) struct BarrelSmoke {
     since_shot: f32,
@@ -252,7 +267,7 @@ pub(crate) fn update_barrel_smoke(
     ribbon: Res<BarrelSmokeRibbon>,
     camera: Query<&Transform, With<FpsCamera>>,
     gun: Query<(&Transform, &Gun), Without<FpsCamera>>,
-    smoke: Res<SmokeEnabled>,
+    smoke: Res<BarrelSmokeEnabled>,
 ) {
     // Switched off mid-trail the banked points have to go too, or the column
     // hangs in the air with nothing left to feed it.

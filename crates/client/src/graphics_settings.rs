@@ -232,3 +232,34 @@ pub(crate) fn distance_fog_for(scenario: Scenario) -> DistanceFog {
         },
     }
 }
+
+/// Frame pacing, printed rather than drawn, so a run can be measured from the
+/// log instead of from the Metal HUD, which the in-game capture cannot see.
+pub(crate) fn log_frame_pacing(
+    time: Res<Time<Real>>,
+    cap: Res<FpsCap>,
+    mut frames: Local<u32>,
+    mut window: Local<f32>,
+    mut worst: Local<f32>,
+) {
+    if std::env::var("FPS_LOG").is_err() {
+        return;
+    }
+    let dt = time.delta_secs();
+    *frames += 1;
+    *window += dt;
+    *worst = worst.max(dt);
+    if *window < 1.0 {
+        return;
+    }
+    let mean_ms = *window / *frames as f32 * 1000.0;
+    info!(
+        "[fps] {:.1} fps | khung {:.2}ms (te nhat {:.2}ms) | tran dat {} = {:.2}ms",
+        *frames as f32 / *window,
+        mean_ms,
+        *worst * 1000.0,
+        cap.0,
+        1000.0 / cap.0 as f32,
+    );
+    (*frames, *window, *worst) = (0, 0.0, 0.0);
+}

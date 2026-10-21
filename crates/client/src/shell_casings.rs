@@ -2,7 +2,9 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy::math::ops;
 
-use crate::{elapsed_fraction_of, muzzle_smoke_material, FpsCamera, MuzzleSmokeMaterial};
+use crate::{
+    elapsed_fraction_of, muzzle_smoke_material, FpsCamera, MuzzleSmokeMaterial, SMOKE_ATLAS_PATH,
+};
 
 
 const CASING_LENGTH: f32 = 0.039;
@@ -30,6 +32,7 @@ pub(crate) struct CasingAssets {
     mesh: Handle<Mesh>,
     material: Handle<StandardMaterial>,
     smoke_mesh: Handle<Mesh>,
+    smoke_atlas: Handle<Image>,
 }
 
 #[derive(Component)]
@@ -44,6 +47,7 @@ pub(crate) struct ShellCasing {
 }
 
 pub(crate) fn build_casing_assets(
+    asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) -> CasingAssets {
@@ -56,6 +60,7 @@ pub(crate) fn build_casing_assets(
             ..default()
         }),
         smoke_mesh: meshes.add(Rectangle::new(PORT_SMOKE_SIZE, PORT_SMOKE_SIZE)),
+        smoke_atlas: asset_server.load(SMOKE_ATLAS_PATH),
     }
 }
 
@@ -105,7 +110,7 @@ pub(crate) fn eject_casing(
         let drift = (away + up * PORT_SMOKE_RISE + scatter(seed) * 0.4).normalize_or_zero();
         commands.spawn((
             Mesh3d(assets.smoke_mesh.clone()),
-            MeshMaterial3d(smoke_materials.add(muzzle_smoke_material(seed * 97.0 + i as f32 * 31.0))),
+            MeshMaterial3d(smoke_materials.add(muzzle_smoke_material(seed * 97.0 + i as f32 * 31.0, assets.smoke_atlas.clone()))),
             Transform::from_translation(port),
             PortSmoke { velocity: drift * PORT_SMOKE_SPEED, remaining: PORT_SMOKE_LIFETIME },
         ));

@@ -507,7 +507,7 @@ pub(crate) fn shoot(
         ResMut<Assets<MuzzleSmokeMaterial>>,
         ResMut<Assets<MuzzleFlashMaterial>>,
     ),
-    (autopilot, intent, local_moving, local_sprinting, show_hit_markers, show_tracers, active, smoke): (
+    (autopilot, intent, local_moving, local_sprinting, show_hit_markers, show_tracers, active, muzzle_smoke, port_smoke): (
         Res<Autopilot>,
         Res<AutopilotIntent>,
         Res<LocalPlayerMoving>,
@@ -515,7 +515,8 @@ pub(crate) fn shoot(
         Res<ShowHitMarkers>,
         Res<ShowBulletTracers>,
         Res<ActiveWeapon>,
-        Res<SmokeEnabled>,
+        Res<MuzzleSmokeEnabled>,
+        Res<PortSmokeEnabled>,
     ),
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
@@ -602,10 +603,13 @@ pub(crate) fn shoot(
         },
     ));
 
-    if smoke.0 {
+    if muzzle_smoke.0 {
         commands.spawn((
             Mesh3d(vfx_assets.muzzle_fx.smoke_mesh.clone()),
-            MeshMaterial3d(smoke_materials.add(muzzle_smoke_material(time.elapsed_secs() * 173.0))),
+            MeshMaterial3d(smoke_materials.add(muzzle_smoke_material(
+                time.elapsed_secs() * 173.0,
+                vfx_assets.muzzle_fx.smoke_atlas.clone(),
+            ))),
             Transform::from_translation(muzzle_world_pos)
                 .with_rotation(camera_transform.rotation)
                 .with_scale(Vec3::splat(SMOKE_START_SCALE)),
@@ -648,7 +652,7 @@ pub(crate) fn shoot(
         Vec3::ZERO,
         time.elapsed_secs() * 311.0,
         active.def().eject_port,
-        smoke.0,
+        port_smoke.0,
     );
 
     let shot_shows_flame_blade =

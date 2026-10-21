@@ -73,6 +73,7 @@ pub(crate) fn setup_common(
         flash_mesh: meshes.add(Rectangle::new(FLASH_QUAD_SIZE, FLASH_QUAD_SIZE)),
         ember_mesh: meshes.add(Rectangle::new(MUZZLE_EMBER_SIZE, MUZZLE_EMBER_SIZE)),
         smoke_mesh: meshes.add(Rectangle::new(0.25, 0.25)),
+        smoke_atlas: asset_server.load(SMOKE_ATLAS_PATH),
     });
 
     commands.insert_resource(TracerAssets {
@@ -107,7 +108,7 @@ pub(crate) fn setup_common(
     ));
 
     commands.insert_resource(build_bullet_hole_assets(&asset_server, &mut meshes, &mut materials));
-    commands.insert_resource(build_casing_assets(&mut meshes, &mut materials));
+    commands.insert_resource(build_casing_assets(&asset_server, &mut meshes, &mut materials));
     commands.insert_resource(build_gore_assets(&asset_server, &mut meshes, &mut materials));
 
     commands.insert_resource(BloodAssets {

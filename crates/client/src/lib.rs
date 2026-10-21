@@ -448,6 +448,15 @@ pub fn main() {
                         title: "Last Day in Saigon".to_string(),
 
                         mode: WindowMode::Windowed,
+                        // VSYNC=0 unclamps the frame rate. Measuring a cost
+                        // through vsync cannot see anything cheaper than a
+                        // refresh: every setting reads as 8.33ms on a 120Hz
+                        // panel whether it costs 2ms or 8.
+                        present_mode: if std::env::var("VSYNC").map(|v| v == "0").unwrap_or(false) {
+                            bevy::window::PresentMode::AutoNoVsync
+                        } else {
+                            bevy::window::PresentMode::default()
+                        },
                         ..default()
                     }),
                     ..default()
@@ -563,7 +572,9 @@ impl Plugin for GamePlugin {
         .init_resource::<LightQuality>()
         .init_resource::<PointLightQuality>()
         .init_resource::<ScopeCameraEnabled>()
-        .init_resource::<SmokeEnabled>()
+        .init_resource::<MuzzleSmokeEnabled>()
+        .init_resource::<PortSmokeEnabled>()
+        .init_resource::<BarrelSmokeEnabled>()
         .init_resource::<LocalPlayerMoving>()
 .init_resource::<LocalPlayerSprinting>()
 .init_resource::<LocalPlayerMoveAxis>()
@@ -702,6 +713,8 @@ impl Plugin for GamePlugin {
                 wire_zombie_hitbox_bones,
                 wire_gun_mesh,
                 wire_weapon_sockets,
+                log_frame_pacing,
+                log_body_swing,
                 track_muzzle_socket,
                 update_zombie_animation,
                 freeze_zombie_animations,

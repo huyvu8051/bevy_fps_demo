@@ -4,118 +4,54 @@
 #import bevy_pbr::prepass_utils::prepass_depth
 #import bevy_pbr::view_transformations::depth_ndc_to_view_z
 
-// x = life progress 0..1, y = per-puff seed, z = density, w = billow speed
+// x = life progress 0..1, y = per-puff turn in radians
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> settings: vec4<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(1) var atlas: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(2) var atlas_sampler: sampler;
 
-const STEPS: i32 = 12;
+// Sprite sheet baked from the raymarch this shader used to run. R holds the
+// lit term, A the coverage. Must match the baker's layout.
+const COLS: f32 = 8.0;
+const ROWS: f32 = 8.0;
+const TILE_TEXELS: f32 = 128.0;
 
 /// Over how many metres of depth difference the quad fades out where it meets
 /// solid geometry. Without this a puff against a wall shows the hard line of
 /// the quad cutting into it.
 const SOFT_FADE_METRES: f32 = 0.35;
-const SPHERE_RADIUS: f32 = 0.5;
-
-fn hash(p: vec3<f32>) -> f32 {
-    let q = fract(p * 0.3183099 + vec3<f32>(0.1, 0.1, 0.1));
-    let r = q * 17.0;
-    return fract(r.x * r.y * r.z * (r.x + r.y + r.z));
-}
-
-// value noise: trilinear blend of the 8 lattice corners
-fn value_noise(p: vec3<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-
-    let n000 = hash(i + vec3<f32>(0.0, 0.0, 0.0));
-    let n100 = hash(i + vec3<f32>(1.0, 0.0, 0.0));
-    let n010 = hash(i + vec3<f32>(0.0, 1.0, 0.0));
-    let n110 = hash(i + vec3<f32>(1.0, 1.0, 0.0));
-    let n001 = hash(i + vec3<f32>(0.0, 0.0, 1.0));
-    let n101 = hash(i + vec3<f32>(1.0, 0.0, 1.0));
-    let n011 = hash(i + vec3<f32>(0.0, 1.0, 1.0));
-    let n111 = hash(i + vec3<f32>(1.0, 1.0, 1.0));
-
-    let x00 = mix(n000, n100, u.x);
-    let x10 = mix(n010, n110, u.x);
-    let x01 = mix(n001, n101, u.x);
-    let x11 = mix(n011, n111, u.x);
-    return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
-}
-
-fn fbm_octaves(p: vec3<f32>, octaves: i32) -> f32 {
-    var sum = 0.0;
-    var amplitude = 0.5;
-    var point = p;
-    for (var octave = 0; octave < octaves; octave = octave + 1) {
-        sum = sum + amplitude * value_noise(point);
-        point = point * 2.02;
-        amplitude = amplitude * 0.5;
-    }
-    return sum;
-}
-
-fn fbm(p: vec3<f32>) -> f32 {
-    return fbm_octaves(p, 4);
-}
-
-// The warp only displaces the sample point, so its fine detail never reaches
-// the image. Three of these run per step against one of the full fbm, which
-// made them three quarters of the shader cost for something nothing can see.
-fn fbm_warp(p: vec3<f32>) -> f32 {
-    return fbm_octaves(p, 2);
-}
-
-// Smoke density inside a soft sphere. The puff rises, expands and tears apart
-// as `progress` runs 0 -> 1.
-fn density_at(p: vec3<f32>, progress: f32, seed: f32, billow: f32) -> f32 {
-    let falloff = 1.0 - smoothstep(0.0, SPHERE_RADIUS, length(p));
-    if (falloff <= 0.0) {
-        return 0.0;
-    }
-
-    // drift up and churn; domain warp gives the curling, non-uniform edge
-    let drift = vec3<f32>(0.0, -progress * billow, 0.0);
-    let base = p * 3.4 + drift + vec3<f32>(seed, seed * 1.7, seed * 2.3);
-    let warp = vec3<f32>(fbm_warp(base * 0.7), fbm_warp(base * 0.7 + 11.3), fbm_warp(base * 0.7 + 23.9));
-    let noise = fbm(base + warp * 1.6);
-
-    // erode the cloud over its life so it dissolves instead of fading flat
-    let erosion = mix(0.22, 0.86, progress);
-    return max(noise - erosion, 0.0) * falloff;
-}
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let progress = clamp(settings.x, 0.0, 1.0);
-    let seed = settings.y;
-    let strength = settings.z;
-    let billow = settings.w;
 
-    // March straight through the quad's local box — the quad is billboarded by
-    // the CPU, so -Z is always the direction away from the viewer.
+    // One bake serves every puff, so each is turned about its own centre to
+    // keep repeats from reading as the same cloud twice.
+    let turn = settings.y;
     let centred = in.uv - vec2<f32>(0.5);
-    let entry = vec3<f32>(centred.x, -centred.y, SPHERE_RADIUS);
-    let step = vec3<f32>(0.0, 0.0, -2.0 * SPHERE_RADIUS / f32(STEPS));
+    let c = cos(turn);
+    let s = sin(turn);
+    let spun = vec2<f32>(centred.x * c - centred.y * s, centred.x * s + centred.y * c)
+        + vec2<f32>(0.5);
+    let inside = f32(spun.x >= 0.0 && spun.x <= 1.0 && spun.y >= 0.0 && spun.y <= 1.0);
 
-    var transmittance = 1.0;
-    var lit = 0.0;
-    var position = entry;
+    // Half a texel in from each edge, or the filter reaches into the
+    // neighbouring frame and drags the wrong cloud in with it.
+    let inset = 0.5 / TILE_TEXELS;
+    let within = inset + clamp(spun, vec2<f32>(0.0), vec2<f32>(1.0)) * (1.0 - 2.0 * inset);
 
-    for (var i = 0; i < STEPS; i = i + 1) {
-        let d = density_at(position, progress, seed, billow) * strength;
-        if (d > 0.0) {
-            let absorbed = 1.0 - exp(-d * 0.35);
-            // cheap self-shadowing: the top of the puff catches more light
-            let shade = mix(0.45, 1.0, clamp(position.y / SPHERE_RADIUS * 0.5 + 0.5, 0.0, 1.0));
-            lit = lit + transmittance * absorbed * shade;
-            transmittance = transmittance * (1.0 - absorbed);
-            if (transmittance < 0.01) {
-                break;
-            }
-        }
-        position = position + step;
-    }
+    let frame = floor(progress * (COLS * ROWS - 1.0));
+    let cell = vec2<f32>(frame % COLS, floor(frame / COLS));
+    // Explicit level, not textureSample: the discard below puts this in
+    // non-uniform control flow, where implicit derivatives are undefined and
+    // the hardware is free to pick any mip. It picked the smallest, which
+    // sampled one average colour over the whole quad and drew it as a flat
+    // rectangle.
+    let baked = textureSampleLevel(
+        atlas,
+        atlas_sampler,
+        (cell + within) / vec2<f32>(COLS, ROWS),
+        0.0,
+    ) * inside;
 
     // How far the solid world is behind this fragment. Both are negative
     // (view -z is forward), so the subtraction gives a positive gap.
@@ -123,10 +59,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let quad_z = depth_ndc_to_view_z(in.position.z);
     let gap = clamp((quad_z - scene_z) / SOFT_FADE_METRES, 0.0, 1.0);
 
-    let alpha = (1.0 - transmittance) * (1.0 - progress * progress) * gap;
+    let alpha = baked.a * (1.0 - progress * progress) * gap;
     if (alpha <= 0.001) {
         discard;
     }
-    let colour = mix(vec3<f32>(0.34, 0.33, 0.32), vec3<f32>(0.86, 0.86, 0.84), clamp(lit, 0.0, 1.0));
+    let colour = mix(vec3<f32>(0.34, 0.33, 0.32), vec3<f32>(0.86, 0.86, 0.84), baked.r);
     return vec4<f32>(colour, alpha);
 }
