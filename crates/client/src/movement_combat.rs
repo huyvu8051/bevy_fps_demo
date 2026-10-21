@@ -40,6 +40,7 @@ pub(crate) fn current_bullet_spread(pitch_kick: f32, pitch_kick_max: f32, aiming
 pub(crate) struct ViewRecoil {
     pub(crate) pitch_kick: f32,
     pub(crate) yaw_kick: f32,
+    pub(crate) push_back: f32,
 }
 
 #[derive(Component, Default)]
@@ -184,6 +185,7 @@ pub(crate) fn apply_view_recoil(
         let remaining = ops::exp(-active.def().recoil.recovery_speed * time.delta_secs());
         recoil.pitch_kick *= remaining;
         recoil.yaw_kick *= remaining;
+        recoil.push_back *= remaining;
 
         let pitch = (cam.pitch + recoil.pitch_kick).clamp(-1.54, 1.54);
         let yaw = cam.yaw + recoil.yaw_kick;
@@ -413,12 +415,12 @@ pub(crate) fn send_player_input(
 
 pub(crate) fn sync_camera_to_player(
     player_query: Query<(&Transform, &PlayerStance), (With<Player>, Without<FpsCamera>)>,
-    mut camera_query: Query<(&mut Transform, &Lean), With<FpsCamera>>,
+    mut camera_query: Query<(&mut Transform, &Lean, &ViewRecoil), With<FpsCamera>>,
 ) {
     let Ok((player_transform, stance)) = player_query.single() else {
         return;
     };
-    let Ok((mut camera_transform, lean)) = camera_query.single_mut() else {
+    let Ok((mut camera_transform, lean, recoil)) = camera_query.single_mut() else {
         return;
     };
     let eye_height_offset = match stance {
@@ -431,7 +433,10 @@ pub(crate) fn sync_camera_to_player(
 
     let side_offset = *camera_transform.right() * LEAN_SIDE_OFFSET * lean.current;
     let pullback = *camera_transform.back() * view_pullback();
-    camera_transform.translation = eye + side_offset + pullback;
+    // Along the camera's own back, not a levelled one: a kick that stays
+    // horizontal while the view climbs reads as the player being shoved.
+    let kick_back = *camera_transform.back() * recoil.push_back;
+    camera_transform.translation = eye + side_offset + pullback + kick_back;
 }
 
 
@@ -564,6 +569,7 @@ pub(crate) fn shoot(
 
     let jitter = ops::sin(time.elapsed_secs() * 977.0);
     recoil.yaw_kick += jitter * kick.yaw_jitter;
+    recoil.push_back = (recoil.push_back + kick.push_back).min(kick.push_back_max);
 
     let stance = vfx_assets.stance.single().copied().unwrap_or_default();
 
