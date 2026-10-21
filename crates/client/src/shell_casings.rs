@@ -2,6 +2,8 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy::math::ops;
 
+use shared::GameLayer;
+
 use crate::{
     elapsed_fraction_of, muzzle_smoke_material, FpsCamera, MuzzleSmokeMaterial, SMOKE_ATLAS_PATH,
 };
@@ -95,6 +97,10 @@ pub(crate) fn eject_casing(
         RigidBody::Dynamic,
         Collider::cylinder(CASING_RADIUS, CASING_LENGTH),
         ColliderDensity(CASING_DENSITY),
+        // Debris, so the player capsule cast never sees it. Ejected at the
+        // chest, a shell otherwise lands inside the capsule and the character
+        // controller slides the player off it, once per shot.
+        CollisionLayers::new(GameLayer::Debris, [GameLayer::Default]),
         // Map geometry is a trimesh, which has no thickness, and a 5mm casing
         // covers 8cm in a physics step once gravity has it. Without swept
         // collision it passes straight through the floor and is never seen

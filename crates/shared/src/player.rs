@@ -1,6 +1,18 @@
 
+use avian3d::prelude::*;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
+
+/// Debris is spent shells and the like: solid enough to land on the floor,
+/// but never an obstacle. Without a layer of its own a casing ejected close to
+/// the chest lands inside the player's own capsule, and the character
+/// controller slides the player off it — one shove per shot.
+#[derive(PhysicsLayer, Clone, Copy, Debug, Default)]
+pub enum GameLayer {
+    #[default]
+    Default,
+    Debris,
+}
 
 #[derive(Component)]
 pub struct Player {

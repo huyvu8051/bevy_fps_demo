@@ -3,7 +3,7 @@ use bevy::prelude::*;
 
 use crate::{
     ClientInput, Player, PlayerStance, AIM_MOVE_SPEED_MULTIPLIER, CROUCH_LENGTH, CROUCH_SPEED_MULTIPLIER,
-    GRAVITY, ground_normal_min_y, JUMP_SPEED, MOVE_SPEED, NOCLIP_SPEED, PLAYER_LENGTH, PLAYER_RADIUS,
+    GameLayer, GRAVITY, ground_normal_min_y, JUMP_SPEED, MOVE_SPEED, NOCLIP_SPEED, PLAYER_LENGTH, PLAYER_RADIUS,
     PRONE_LENGTH, PRONE_SPEED_MULTIPLIER, SPRINT_MULTIPLIER,
 };
 
@@ -136,7 +136,9 @@ pub fn simulate_player_step(mover: &MoveAndSlide, transform: &mut Transform, pla
     let velocity = horizontal + Vec3::Y * vertical_velocity;
     let shape = Collider::capsule(PLAYER_RADIUS, capsule_length);
     let config = MoveAndSlideConfig::default();
-    let filter = SpatialQueryFilter::default();
+    // Debris is excluded: a shell landing inside the capsule would otherwise
+    // read as a wall and slide the player off it.
+    let filter = SpatialQueryFilter::from_mask(GameLayer::Default);
 
     let was_grounded = player.grounded;
     let mut grounded_this_frame = false;
