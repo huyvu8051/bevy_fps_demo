@@ -30,7 +30,8 @@ pub(crate) struct CharacterRon {
     pub(crate) audio: Vec<String>,
 }
 
-pub(crate) const AVAILABLE_CHARACTER_DIRS: &[&str] = &["characters/soldier_meshy"];
+pub(crate) const AVAILABLE_CHARACTER_DIRS: &[&str] =
+    &["characters/soldier_shooter", "characters/soldier_meshy"];
 
 fn load_character_ron_by_dir(dir: &str) -> CharacterRon {
     #[cfg(target_os = "ios")]

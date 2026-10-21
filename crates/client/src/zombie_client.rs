@@ -403,6 +403,17 @@ pub(crate) fn wire_zombie_animations(
 
 const PLAYER_MODEL_SCENE_ROOT_NAME: &str = "target_character";
 
+/// A Meshy export leaves Mixamo's joint names bare; a Mixamo one keeps the
+/// `mixamorig:` prefix on every single joint. Matching the bare name takes
+/// both, and costs nothing for a name that has no prefix to drop.
+///
+/// Worth being blunt about the failure this avoids: nothing errors when the
+/// names miss. The bones simply never wire, so the head is never collapsed and
+/// fills the first-person view, and no clip ever plays.
+fn bare_bone_name(name: &str) -> &str {
+    name.rsplit(':').next().unwrap_or(name)
+}
+
 pub(crate) fn wire_player_model_scene_nodes(
     mut commands: Commands,
     child_of: Query<&ChildOf>,
@@ -414,7 +425,14 @@ pub(crate) fn wire_player_model_scene_nodes(
 ) {
     for entity in &new_names {
         let Ok(name) = names.get(entity) else { continue };
-        match name.as_str() {
+        // Zombies share these bone names, so the grip is only pinned on a
+        // skeleton that hangs under the player model.
+        if let Some(rotation) = finger_grip_rotation(bare_bone_name(name.as_str())) {
+            if find_animation_root(entity, &child_of, |e| roots.contains(e)).is_some() {
+                commands.entity(entity).try_insert(GripFingerPose(rotation));
+            }
+        }
+        match bare_bone_name(name.as_str()) {
             "LeftUpLeg" | "RightUpLeg" | "RightArm" | "RightForeArm" | "RightHand" | "LeftArm"
             | "LeftForeArm" | "LeftHand" | "Head" | "Hips" => {
                 let Some(root) = find_animation_root(entity, &child_of, |e| roots.contains(e)) else {
@@ -424,7 +442,7 @@ pub(crate) fn wire_player_model_scene_nodes(
                 if let Ok(transform) = transforms.get(entity) {
                     commands.entity(entity).try_insert(BoneRest(transform.rotation));
                 }
-                match name.as_str() {
+                match bare_bone_name(name.as_str()) {
                     "LeftUpLeg" => bones.left_upper_leg = Some(entity),
                     "RightUpLeg" => bones.right_upper_leg = Some(entity),
                     "RightArm" => bones.right_arm = Some(entity),

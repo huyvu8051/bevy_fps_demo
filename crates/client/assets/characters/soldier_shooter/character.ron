@@ -1,0 +1,62 @@
+// Metadata for the "soldier_shooter" character — read
+// docs/CHARACTER_IMPORT_CHECKLIST.md before replacing this mesh.
+//
+// Source: Mixamo "Basic Shooter Pack" (Ch35_nonPBR.fbx plus 16 clip FBXs).
+// Unlike soldier_meshy, the rig and the clips came out of the same export, so
+// none of the rest-pose retargeting that failed twice for zombie_soldier is in
+// play here — the clips were authored for exactly this skeleton. Keep it that
+// way: do not point another character's anim_source at this file, and do not
+// point this character at another rig's clips.
+//
+// Imported through Blender, and three things were normalised PERMANENTLY in
+// the asset rather than worked around at runtime:
+//
+//   1. Mixamo exports in centimetres, so the armature arrived at scale 0.01.
+//      Scale is applied, so the glb is in metres and the character stands
+//      1.794m with its feet on z=0. Only mixamorig:Hips carries non-zero
+//      location keys (every other bone is rotation-only), so the clips' Hips
+//      curves were multiplied by 0.01 to match — miss that and the hips travel
+//      in metres what they meant in centimetres.
+//   2. It faced the opposite way to soldier_meshy (toes -Y against its +Y),
+//      so the armature is rotated 180 degrees about Z and applied.
+//      facing_deg stays 0.0 because of that.
+//   3. Textures arrived as 24 4096x4096 PNGs — 12 of them unused duplicates.
+//      The duplicates are gone, the three Specular maps with them (glTF's core
+//      PBR has no use for them and this is the nonPBR export), and the
+//      remaining nine are 1024. 142MB of FBX became 12.4MB of glb.
+//
+// mesh/anim_source are two SEPARATE glb files, the same split every other
+// character uses: mesh has zero animations of its own, every clip below is
+// loaded from anim_source by index.
+//
+// scale/y_offset still want checking by eye in-game — the checklist is firm
+// that there is no way to detect a wrong offset but to look at it. They are
+// F9-tunable with EDITOR=1: Comma/Period for scale, Minus/Equal for y_offset,
+// then save.
+(
+    id: "soldier_shooter",
+    display_name: "Soldier (Shooter Pack)",
+    lore_ref: "docs/characters/soldier.md",
+
+    mesh: "characters/soldier_shooter/mesh/soldier_shooter.glb",
+    anim_source: "characters/soldier_shooter/anims/shooter_base.glb",
+    scale: 1.0,
+    y_offset: -0.76,
+    facing_deg: 0.0,
+
+    // Indices into anim_source, exported in this order on purpose.
+    // The pack has twelve more clips — firing, reloading, strafe left/right,
+    // turns, jump, grenade, hit reaction — that are not here because
+    // CharacterAnimIndices has nowhere to put them yet. shoot/death point at
+    // idle: the player path only ever loads the first four.
+    animations: (
+        idle: 0,
+        walk: 1,
+        run: 2,
+        run_back: 3,
+        shoot: 0,
+        death: 0,
+    ),
+
+    audio: [],
+)
