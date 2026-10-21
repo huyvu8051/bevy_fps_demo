@@ -736,3 +736,4 @@ pub(crate) fn reload_gun(
     gun.reload_remaining = RELOAD_DURATION;
     commands.spawn((AudioPlayer(reload_sound.0.clone()), PlaybackSettings::DESPAWN));
 }
+

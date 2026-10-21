@@ -685,6 +685,12 @@ impl Plugin for GamePlugin {
                     autopilot_pick_target,
                     autopilot_think.after(bevy_landmass::prelude::LandmassSystems::Output),
                     mouse_look,
+                    // Before shoot, not after. Everything that leaves the
+                    // barrel is placed from the weapon's transform, and a
+                    // weapon posed afterwards leaves that transform a frame
+                    // old -- 2cm of it while the weapon is swinging to ready,
+                    // which shows as the flash hanging off the muzzle.
+                    gun_view_animation,
                     shoot,
                     reload_gun,
                     suggest_auto_lean,
@@ -714,7 +720,6 @@ impl Plugin for GamePlugin {
                 wire_gun_mesh,
                 wire_weapon_sockets,
                 log_frame_pacing,
-                log_body_swing,
                 track_muzzle_socket,
                 update_zombie_animation,
                 freeze_zombie_animations,
@@ -758,7 +763,6 @@ impl Plugin for GamePlugin {
                 adjust_scope_zoom,
                 update_scope_zoom_slider_visual,
                 update_scope_zoom_slider_visibility,
-                gun_view_animation,
                 sync_scope_camera,
                 update_scope_lens,
                 update_ammo_ui,
