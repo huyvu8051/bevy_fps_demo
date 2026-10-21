@@ -52,6 +52,26 @@ pub(crate) fn force_ads() -> bool {
 #[derive(Component)]
 pub(crate) struct AimSocket;
 
+/// The bore's end. Everything that leaves the barrel is placed and aimed from
+/// here, so flash, smoke and casings follow the weapon through recoil and sway
+/// without any of them holding their own copy of where the barrel is.
+#[derive(Component)]
+pub(crate) struct MuzzleSocket;
+
+/// Caches where the bore ends inside the weapon.
+///
+/// The socket does not move within the weapon, so reparenting last frame's
+/// world transforms yields a value that is exact rather than one frame late.
+/// What it is composed with afterwards is the current weapon transform.
+pub(crate) fn track_muzzle_socket(
+    muzzle: Query<&GlobalTransform, With<MuzzleSocket>>,
+    mut gun: Query<(&GlobalTransform, &mut Gun)>,
+) {
+    let Ok(socket) = muzzle.single() else { return };
+    let Ok((gun_global, mut gun)) = gun.single_mut() else { return };
+    gun.muzzle_local = socket.reparented_to(gun_global);
+}
+
 /// Hands the mesh's own named points to the systems that want them, so the
 /// weapon table carries none of this geometry twice.
 ///
@@ -85,6 +105,7 @@ pub(crate) fn wire_weapon_sockets(
             "Socket_ScopeCamera" => socket.insert(ScopeCameraSocket),
             "Socket_ScopeView" => socket.insert(ScopeViewSocket),
             "Socket_Aim" => socket.insert(AimSocket),
+            "Socket_Muzzle" => socket.insert(MuzzleSocket),
             "Socket_RearGrip" => socket.insert(TriggerGripSocket),
             "Socket_FrontGrip" => socket.insert(ForeGripSocket),
             _ => continue,

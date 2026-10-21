@@ -581,9 +581,10 @@ pub(crate) fn shoot(
         + *camera_transform.up() * spread_y;
     let direction = Dir3::new(spread_dir).unwrap_or(camera_transform.forward());
 
-    let gun_drift = gun_transform.translation - gun.base_offset;
-    let muzzle_world_pos = camera_transform.translation
-        + camera_transform.rotation * (active.def().muzzle_offset + gun_drift);
+    let muzzle_in_cam = gun_transform.mul_transform(gun.muzzle_local);
+    let muzzle_world_pos =
+        camera_transform.translation + camera_transform.rotation * muzzle_in_cam.translation;
+    let bore_axis = camera_transform.rotation * (muzzle_in_cam.rotation * Vec3::NEG_Z);
 
     commands.spawn((
         Mesh3d(vfx_assets.muzzle_fx.flash_mesh.clone()),
@@ -615,7 +616,10 @@ pub(crate) fn shoot(
         ));
     }
 
-    let forward = *camera_transform.forward();
+    // Down the barrel, not down the view: recoil and sway turn the weapon
+    // away from where the camera points, and what leaves the muzzle leaves
+    // along the muzzle.
+    let forward = bore_axis;
     let right = *camera_transform.right();
     let up = *camera_transform.up();
 

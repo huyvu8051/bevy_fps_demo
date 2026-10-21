@@ -252,7 +252,6 @@ pub(crate) fn update_barrel_smoke(
     ribbon: Res<BarrelSmokeRibbon>,
     camera: Query<&Transform, With<FpsCamera>>,
     gun: Query<(&Transform, &Gun), Without<FpsCamera>>,
-    active: Res<ActiveWeapon>,
     smoke: Res<SmokeEnabled>,
 ) {
     // Switched off mid-trail the banked points have to go too, or the column
@@ -305,8 +304,8 @@ pub(crate) fn update_barrel_smoke(
     if barrel.visible > 0.35 && venting && barrel.next_point <= 0.0 {
         barrel.next_point = BARREL_TRAIL_INTERVAL;
         if let Ok((gun_transform, gun)) = gun.single() {
-            let gun_drift = gun_transform.translation - gun.base_offset;
-            let muzzle = eye.translation + eye.rotation * (active.def().muzzle_offset + gun_drift);
+            let muzzle_in_cam = gun_transform.mul_transform(gun.muzzle_local);
+            let muzzle = eye.translation + eye.rotation * muzzle_in_cam.translation;
             // newest first, so index order runs muzzle upward
             barrel.points.insert(
                 0,

@@ -272,6 +272,7 @@ pub(crate) fn setup_gameplay(
             Visibility::default(),
             Gun {
                 base_offset: active.def().rest_offset,
+                muzzle_local: Transform::IDENTITY,
                 settle_jitter: Vec3::ZERO,
                 settle_current: Vec3::ZERO,
                 settle_twist_jitter: 0.0,

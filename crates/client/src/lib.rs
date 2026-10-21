@@ -702,6 +702,7 @@ impl Plugin for GamePlugin {
                 wire_zombie_hitbox_bones,
                 wire_gun_mesh,
                 wire_weapon_sockets,
+                track_muzzle_socket,
                 update_zombie_animation,
                 freeze_zombie_animations,
 

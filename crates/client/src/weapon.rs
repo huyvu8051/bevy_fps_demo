@@ -24,10 +24,6 @@ pub(crate) struct WeaponDef {
     /// lands on the camera axis, which is the whole of ads_offset.
     pub(crate) ads_eye_relief: f32,
 
-    /// Camera relative, unlike everything else here. The muzzle is placed from
-    /// the eye and the drift from rest_offset added on, so this has to be
-    /// moved by hand whenever rest_offset is.
-    pub(crate) muzzle_offset: Vec3,
     /// Added to the gun's own offset but along the camera's axes, not the
     /// gun's, so it tracks where the gun sits without taking its sway. Moving
     /// the mesh origin moves this with it.
@@ -99,7 +95,6 @@ static AK47: WeaponDef = WeaponDef {
     rest_offset: Vec3::new(0.190, -0.054, -0.800),
     ready_offset: Vec3::new(0.045, -0.184, -0.710),
     ads_eye_relief: 0.165,
-    muzzle_offset: Vec3::new(0.170, 0.005, -0.865),
     eject_port: Vec3::new(0.100, 0.009, 0.515),
     fire_rate: 0.1,
     magazine: 50,
@@ -120,27 +115,12 @@ static AK47: WeaponDef = WeaponDef {
     },
 };
 
-/// Read off the sockets the mesh ships with rather than guessed:
+/// No glass: a carry handle and a post, so it marks no scope sockets and the
+/// scope view stays off for it.
 ///
-///   Socket_Muzzle      (0.011,  0,      0    )
-///   Socket_SightFront  (0,      0.058,  0.164)
-///   Socket_FrontGrip   (0,      0,      0.276)
-///   Socket_SightRear   (0,      0.057,  0.512)
-///   Socket_RearGrip    (0,     -0.094,  0.531)
-///
-/// The muzzle sits at the origin and the stock runs back to +Z, so the mesh
-/// already points down -Z and needs no turn at all. This is the convention the
-/// AK was since standardised onto, so the two now read in the same frame.
-///
-/// This one carries no glass: a carry handle and a post, 350mm of sight radius
-/// between them. There is no scope camera and no lens for it, only the gun
-/// coming up — ads_offset lifts Socket_SightRear onto the camera axis at 0.35m
-/// of eye relief.
-///
-/// rest_offset lands Socket_RearGrip exactly where the AK's sits, because the
-/// thing that holds still across a weapon swap is the firing hand, not the
-/// muzzle. Anchoring on the muzzle instead — which is what the origin happens
-/// to be — threw this 213mm-shorter rifle 208mm away from the shoulder.
+/// rest_offset is anchored on Socket_RearGrip rather than on the origin,
+/// because what holds still across a weapon swap is the firing hand. Anchoring
+/// on the muzzle threw this 213mm-shorter rifle 208mm from the shoulder.
 static M4A1: WeaponDef = WeaponDef {
     name: "M4A1",
     mesh_path: "models/m4a1/mesh/m4a1_rigged.glb",
@@ -149,7 +129,6 @@ static M4A1: WeaponDef = WeaponDef {
     rest_offset: Vec3::new(0.190, -0.066, -0.686),
     ready_offset: Vec3::new(0.071, -0.196, -0.596),
     ads_eye_relief: 0.320,
-    muzzle_offset: Vec3::new(0.201, -0.066, -0.686),
     eject_port: Vec3::new(0.06, 0.02, 0.33),
     fire_rate: 0.085,
     magazine: 30,

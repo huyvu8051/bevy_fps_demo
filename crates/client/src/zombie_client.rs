@@ -77,6 +77,11 @@ pub(crate) struct Gun {
     /// the view is moving or has just stopped.
     pub(crate) look_sway: Vec2,
 
+    /// Socket_Muzzle in the weapon's own frame, kept here so anything leaving
+    /// the barrel can be placed from the current weapon transform without
+    /// reaching for the socket entity or carrying a stale world transform.
+    pub(crate) muzzle_local: Transform,
+
     pub(crate) settle_jitter: Vec3,
     pub(crate) settle_current: Vec3,
     pub(crate) settle_twist_jitter: f32,
