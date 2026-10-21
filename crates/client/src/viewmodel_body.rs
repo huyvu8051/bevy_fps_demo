@@ -229,3 +229,39 @@ pub(crate) fn finger_grip_rotation(bare_name: &str) -> Option<Quat> {
         .find(|(name, _)| *name == bare_name)
         .map(|(_, rotation)| *rotation)
 }
+
+pub(crate) fn log_body_swing(
+    camera: Query<(&GlobalTransform, &FpsCamera, &ViewRecoil)>,
+    body: Query<&GlobalTransform, With<ViewmodelBody>>,
+    time: Res<Time>,
+    mut rest_reference: Local<Option<f32>>,
+    mut next: Local<f32>,
+) {
+    if std::env::var("PUSH_LOG").is_err() || time.elapsed_secs() < *next {
+        return;
+    }
+    *next = time.elapsed_secs() + 0.1;
+    let (Ok((eye, cam, recoil)), Ok(body)) = (camera.single(), body.single()) else {
+        return;
+    };
+
+    let from_eye = body.translation() - eye.translation();
+    let flat = Vec2::new(from_eye.x, from_eye.z).length();
+
+    // Aiming moves the body too, on the same lever, so the only honest way to
+    // read the recoil's share is against where the body sat at this same aim
+    // with no kick on it.
+    if recoil.pitch_kick.abs() < 1e-4 {
+        *rest_reference = Some(flat);
+    }
+    let swing = rest_reference.map(|at_rest| flat - at_rest);
+
+    info!(
+        "[push] ngam={:+5.1}deg giat={:+4.1}deg | than nguoi: ngang={:.3}m doc={:.3}m | lech do giat={}",
+        cam.pitch.to_degrees(),
+        recoil.pitch_kick.to_degrees(),
+        flat,
+        from_eye.y,
+        swing.map(|d| format!("{:+.3}m", d)).unwrap_or_else(|| "chua co moc".into()),
+    );
+}

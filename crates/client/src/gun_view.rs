@@ -388,9 +388,9 @@ pub(crate) fn gun_view_animation(
 
         // Late to a turn, not rolled by one. Both meshes put their origin on
         // the muzzle, so this pivots there: the barrel holds its aim and the
-        // stock swings out. X negated because a positive delta turns right and
-        // the weapon is still aimed left of where the view now points.
-        let lag = Vec2::new(-look_delta.0.x, look_delta.0.y);
+        // stock swings out. Negated because the weapon is still aimed back
+        // where the view was, opposite the way it just moved.
+        let lag = -look_delta.0;
         let sway_target = (lag * LOOK_SWAY_SENSITIVITY)
             .clamp(Vec2::splat(-LOOK_SWAY_MAX_DEG), Vec2::splat(LOOK_SWAY_MAX_DEG));
         let sway_step = (LOOK_SWAY_SPEED * time.delta_secs()).min(1.0);
