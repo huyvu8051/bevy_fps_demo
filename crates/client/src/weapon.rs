@@ -10,12 +10,6 @@ use crate::*;
 pub(crate) struct WeaponDef {
     pub(crate) name: &'static str,
     pub(crate) mesh_path: &'static str,
-    /// Metres per unit of the mesh's own space, and the yaw that brings the
-    /// mesh's length onto the camera's forward. Both are 1.0 and 0.0 for a
-    /// mesh authored to the house convention: metres, barrel down -Z, origin
-    /// on the bore at the muzzle. They exist for meshes that are not.
-    pub(crate) mesh_scale: f32,
-    pub(crate) mesh_yaw_deg: f32,
 
     pub(crate) rest_offset: Vec3,
     pub(crate) ready_offset: Vec3,
@@ -96,8 +90,6 @@ impl WeaponId {
 static AK47: WeaponDef = WeaponDef {
     name: "AK-47",
     mesh_path: "models/ak47_scope/raw/scene.gltf",
-    mesh_scale: 1.0,
-    mesh_yaw_deg: 0.0,
     rest_offset: Vec3::new(0.160, -0.0905, -0.7094),
     ready_offset: Vec3::new(0.045, -0.1905, -0.6194),
     ads_eye_relief: 0.032,
@@ -132,8 +124,6 @@ static AK47: WeaponDef = WeaponDef {
 static M4A1: WeaponDef = WeaponDef {
     name: "M4A1",
     mesh_path: "models/m4a1/mesh/m4a1_rigged.glb",
-    mesh_scale: 1.0,
-    mesh_yaw_deg: 0.0,
     rest_offset: Vec3::new(0.160, -0.096, -0.626),
     ready_offset: Vec3::new(0.071, -0.196, -0.536),
     ads_eye_relief: 0.120,
@@ -175,8 +165,6 @@ static M4A1: WeaponDef = WeaponDef {
 static M24: WeaponDef = WeaponDef {
     name: "M24",
     mesh_path: "models/m24/mesh/m24.glb",
-    mesh_scale: 1.0,
-    mesh_yaw_deg: 0.0,
     rest_offset: Vec3::new(0.160, -0.0905, -0.9770),
     ready_offset: Vec3::new(0.045, -0.1905, -0.8870),
     ads_eye_relief: 0.032,
@@ -211,7 +199,7 @@ pub(crate) fn switch_weapon(
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut active: ResMut<ActiveWeapon>,
-    mut gun: Query<(Entity, &mut Transform, &mut Gun)>,
+    mut gun: Query<(Entity, &mut Gun)>,
     mesh_parts: Query<Entity, With<GunMeshPart>>,
     sockets: Query<Entity, Or<(With<TriggerGripSocket>, With<ForeGripSocket>)>>,
 ) {
@@ -228,14 +216,12 @@ pub(crate) fn switch_weapon(
         return;
     }
 
-    let Ok((gun_entity, mut transform, mut gun)) = gun.single_mut() else {
+    let Ok((gun_entity, mut gun)) = gun.single_mut() else {
         return;
     };
     active.0 = wanted;
     let def = wanted.def();
 
-    transform.rotation = Quat::from_rotation_y(def.mesh_yaw_deg.to_radians());
-    transform.scale = Vec3::splat(def.mesh_scale);
     gun.base_offset = def.rest_offset;
     gun.ammo = def.magazine;
     gun.reload_remaining = 0.0;

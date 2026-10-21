@@ -494,7 +494,6 @@ pub(crate) fn gun_view_animation(
         // way, since it is only wanted while looking through the glass.
         let settle_twist = gun.settle_twist_current * (1.0 - gun.ads_blend);
         let base_rotation = Quat::from_rotation_z(settle_twist.to_radians())
-            * Quat::from_rotation_y(active.def().mesh_yaw_deg.to_radians())
             * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip)
             * Quat::IDENTITY.slerp(gun.optical_fix, gun.ads_blend);
 

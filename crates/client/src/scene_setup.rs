@@ -326,9 +326,7 @@ pub(crate) fn setup_gameplay(
     let gun_entity = commands
         .spawn((
             Name::new("Gun (first-person viewmodel)"),
-            Transform::from_translation(active.def().rest_offset)
-                .with_rotation(Quat::from_rotation_y(active.def().mesh_yaw_deg.to_radians()))
-                .with_scale(Vec3::splat(active.def().mesh_scale)),
+            Transform::from_translation(active.def().rest_offset),
             Visibility::default(),
             Gun {
                 optical_fix: Quat::IDENTITY,
