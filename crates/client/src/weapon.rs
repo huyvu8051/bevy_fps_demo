@@ -94,10 +94,10 @@ static AK47: WeaponDef = WeaponDef {
     mesh_path: "models/ak47_scope/raw/scene.gltf",
     mesh_scale: 1.0,
     mesh_yaw_deg: 0.0,
-    rest_offset: Vec3::new(0.160, -0.084, -0.800),
-    ready_offset: Vec3::new(0.045, -0.184, -0.710),
-    ads_eye_relief: 0.165,
-    eject_port: Vec3::new(0.100, 0.009, 0.515),
+    rest_offset: Vec3::new(0.160, -0.0905, -0.7094),
+    ready_offset: Vec3::new(0.045, -0.1905, -0.6194),
+    ads_eye_relief: 0.075,
+    eject_port: Vec3::new(0.0953, 0.0086, 0.4905),
     fire_rate: 0.1,
     magazine: 50,
     // 7.62: slower, heavier, looser at the top of a burst. Every axis above
@@ -128,9 +128,9 @@ static M4A1: WeaponDef = WeaponDef {
     mesh_path: "models/m4a1/mesh/m4a1_rigged.glb",
     mesh_scale: 1.0,
     mesh_yaw_deg: 0.0,
-    rest_offset: Vec3::new(0.160, -0.096, -0.686),
-    ready_offset: Vec3::new(0.071, -0.196, -0.596),
-    ads_eye_relief: 0.320,
+    rest_offset: Vec3::new(0.160, -0.096, -0.626),
+    ready_offset: Vec3::new(0.071, -0.196, -0.536),
+    ads_eye_relief: 0.230,
     eject_port: Vec3::new(0.06, 0.02, 0.33),
     fire_rate: 0.085,
     magazine: 30,
@@ -160,18 +160,20 @@ static M4A1: WeaponDef = WeaponDef {
 /// A bolt gun: it fires about as often as the others reload, so the recoil can
 /// be heavy without a burst ever stacking it.
 ///
-/// rest_offset lands Socket_RearGrip where the AK's sits, the same firing-hand
-/// anchor the M4 uses.
+/// Anchored on the bore, not on Socket_RearGrip like the other two. Its grip
+/// sits 68mm under the bore against the AK's 130mm, so matching hands dropped
+/// the whole rifle 61mm and it read as carried low. A shouldered rifle holds
+/// its bore at the eye, not its grip.
 static M24: WeaponDef = WeaponDef {
     name: "M24",
     mesh_path: "models/m24/mesh/m24.glb",
     mesh_scale: 1.0,
     mesh_yaw_deg: 0.0,
-    rest_offset: Vec3::new(0.160, -0.155, -0.995),
-    ready_offset: Vec3::new(0.045, -0.255, -0.905),
-    ads_eye_relief: 0.165,
+    rest_offset: Vec3::new(0.160, -0.0905, -0.9770),
+    ready_offset: Vec3::new(0.045, -0.1905, -0.8870),
+    ads_eye_relief: 0.075,
     // Eyeballed, like the other two. The mesh has no Socket_Eject yet.
-    eject_port: Vec3::new(0.050, 0.015, 0.720),
+    eject_port: Vec3::new(0.0525, 0.0158, 0.7560),
     fire_rate: 1.3,
     magazine: 5,
     recoil: Recoil {
