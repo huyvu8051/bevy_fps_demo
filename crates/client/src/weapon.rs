@@ -62,6 +62,7 @@ pub(crate) enum WeaponId {
     #[default]
     Ak47,
     M4a1,
+    M24,
 }
 
 #[derive(Resource, Default)]
@@ -78,6 +79,7 @@ impl WeaponId {
         match self {
             WeaponId::Ak47 => &AK47,
             WeaponId::M4a1 => &M4A1,
+            WeaponId::M24 => &M24,
         }
     }
 
@@ -92,7 +94,7 @@ static AK47: WeaponDef = WeaponDef {
     mesh_path: "models/ak47_scope/raw/scene.gltf",
     mesh_scale: 1.0,
     mesh_yaw_deg: 0.0,
-    rest_offset: Vec3::new(0.190, -0.054, -0.800),
+    rest_offset: Vec3::new(0.160, -0.084, -0.800),
     ready_offset: Vec3::new(0.045, -0.184, -0.710),
     ads_eye_relief: 0.165,
     eject_port: Vec3::new(0.100, 0.009, 0.515),
@@ -126,7 +128,7 @@ static M4A1: WeaponDef = WeaponDef {
     mesh_path: "models/m4a1/mesh/m4a1_rigged.glb",
     mesh_scale: 1.0,
     mesh_yaw_deg: 0.0,
-    rest_offset: Vec3::new(0.190, -0.066, -0.686),
+    rest_offset: Vec3::new(0.160, -0.096, -0.686),
     ready_offset: Vec3::new(0.071, -0.196, -0.596),
     ads_eye_relief: 0.320,
     eject_port: Vec3::new(0.06, 0.02, 0.33),
@@ -150,6 +152,43 @@ static M4A1: WeaponDef = WeaponDef {
     },
 };
 
+/// Standardised in Blender on import, where it arrived 29.8m long down +X with
+/// non-uniform scale on a nested empty. The barrel radius after scaling came
+/// out 10.5mm against the real rifle's 8.5mm, which is the check that the
+/// 0.039 factor was right rather than merely plausible.
+///
+/// A bolt gun: it fires about as often as the others reload, so the recoil can
+/// be heavy without a burst ever stacking it.
+///
+/// rest_offset lands Socket_RearGrip where the AK's sits, the same firing-hand
+/// anchor the M4 uses.
+static M24: WeaponDef = WeaponDef {
+    name: "M24",
+    mesh_path: "models/m24/mesh/m24.glb",
+    mesh_scale: 1.0,
+    mesh_yaw_deg: 0.0,
+    rest_offset: Vec3::new(0.160, -0.155, -0.995),
+    ready_offset: Vec3::new(0.045, -0.255, -0.905),
+    ads_eye_relief: 0.165,
+    // Eyeballed, like the other two. The mesh has no Socket_Eject yet.
+    eject_port: Vec3::new(0.050, 0.015, 0.720),
+    fire_rate: 1.3,
+    magazine: 5,
+    recoil: Recoil {
+        pitch_kick: 0.055,
+        pitch_kick_max: 0.200,
+        yaw_jitter: 0.012,
+        recovery_speed: 4.0,
+
+        duration: 0.25,
+        kick_back: 0.160,
+        kick_up: 0.014,
+        tilt_up_deg: 6.0,
+        roll_deg: 3.5,
+        yaw_kick_deg: 3.0,
+    },
+};
+
 /// Rebuilds the viewmodel for the weapon the player picked.
 ///
 /// The mesh and the IK sockets are both built against one weapon's geometry,
@@ -168,6 +207,8 @@ pub(crate) fn switch_weapon(
         WeaponId::Ak47
     } else if keys.just_pressed(KeyCode::Digit2) {
         WeaponId::M4a1
+    } else if keys.just_pressed(KeyCode::Digit3) {
+        WeaponId::M24
     } else {
         return;
     };
