@@ -8,10 +8,17 @@ pub(crate) struct BoneRest(pub(crate) Quat);
 #[derive(Component)]
 pub(crate) struct ViewmodelBody;
 
-const BODY_OFFSET_FROM_EYE: Vec3 = Vec3::new(0.0, -1.471, 0.0);
+/// Drops the body so the camera sits at the character's own eyes. Measured
+/// against the rig rather than nudged: soldier_shooter stands 1.794m with its
+/// feet on the origin and its head bone at 1.532, which puts the eyes near
+/// 1.63.
+const BODY_OFFSET_FROM_EYE: Vec3 = Vec3::new(0.0, -1.63, 0.0);
 
 const HEAD_COLLAPSE_SCALE: f32 = 0.0001;
-const ARM_SCALE: f32 = 2.07;
+/// 1.0 for a rig that is already human-proportioned. This was 2.07 to stretch
+/// a mesh whose arms could not otherwise reach the gun, which also doubled
+/// their thickness — the slab of skin that used to fill the view.
+const ARM_SCALE: f32 = 1.0;
 const HAND_SCALE_CANCELLING_ARM_SCALE: f32 = 1.0 / ARM_SCALE;
 const HIP_BLADE_DEG: f32 = -30.0;
 
@@ -153,4 +160,79 @@ pub(crate) fn pose_viewmodel_arms(
         let Ok(mut transform) = transforms.get_mut(bone) else { continue };
         transform.rotation = Quat::from_rotation_arc(Vec3::Y, aim_in_parent);
     }
+}
+
+/// The grip the hands hold, solved against a 22mm bar laid across each palm in
+/// Blender: every joint was bent about its own axis until its child sat one
+/// finger-thickness off the bar's surface, which landed all 24 within 0.2mm of
+/// target at bend angles between 29 and 65 degrees.
+///
+/// The rig's own "rifle aiming idle" was the starting pose and the thumbs are
+/// still exactly it, but its fingers were closed around a grip far larger than
+/// a handguard — every knuckle sat 33mm clear of a 22mm bar, which is why the
+/// hand read as holding nothing.
+///
+/// Read back as parent-relative rotations, the same form the loader uses, and
+/// checked against the glb's own rest values first so no axis convention was
+/// converted by hand. They only mean anything paired with LEFT_GRIP_IN_HAND /
+/// RIGHT_GRIP_IN_HAND, which is where that bar sits.
+///
+/// They are forced every frame rather than left to the clip because only two
+/// of the four clips the player runs are rifle poses: walking and running
+/// backwards came from Mixamo with open hands, and the grip would let go
+/// halfway through a step.
+///
+/// The ten fingertip bones are not here: their rotations are identity.
+const FINGER_GRIP_POSE: &[(&str, Quat)] = &[
+    ("LeftHandIndex1", Quat::from_xyzw(0.43597, 0.02352, 0.04846, 0.89835)),
+    ("LeftHandIndex2", Quat::from_xyzw(0.38315, 0.00000, 0.00000, 0.92369)),
+    ("LeftHandIndex3", Quat::from_xyzw(0.27647, 0.00000, 0.00000, 0.96102)),
+    ("LeftHandMiddle1", Quat::from_xyzw(0.42245, -0.00591, -0.01269, 0.90628)),
+    ("LeftHandMiddle2", Quat::from_xyzw(0.46652, 0.00000, 0.00000, 0.88451)),
+    ("LeftHandMiddle3", Quat::from_xyzw(0.30535, 0.00000, 0.00000, 0.95224)),
+    ("LeftHandPinky1", Quat::from_xyzw(0.56899, -0.00243, -0.00351, 0.82234)),
+    ("LeftHandPinky2", Quat::from_xyzw(0.56859, 0.00000, 0.00000, 0.82262)),
+    ("LeftHandPinky3", Quat::from_xyzw(0.22812, 0.00000, 0.00000, 0.97363)),
+    ("LeftHandRing1", Quat::from_xyzw(0.47205, -0.00991, -0.01850, 0.88132)),
+    ("LeftHandRing2", Quat::from_xyzw(0.46805, 0.00000, 0.00000, 0.88370)),
+    ("LeftHandRing3", Quat::from_xyzw(0.22178, 0.00000, 0.00000, 0.97510)),
+    ("LeftHandThumb1", Quat::from_xyzw(0.13362, 0.06153, 0.16997, 0.97441)),
+    ("LeftHandThumb2", Quat::from_xyzw(0.10248, 0.17281, -0.04630, 0.97852)),
+    ("LeftHandThumb3", Quat::from_xyzw(-0.12531, 0.02766, 0.08647, 0.98796)),
+    ("RightHandIndex1", Quat::from_xyzw(0.45814, -0.02501, -0.04844, 0.88721)),
+    ("RightHandIndex2", Quat::from_xyzw(0.39491, 0.00000, 0.00000, 0.91872)),
+    ("RightHandIndex3", Quat::from_xyzw(0.26307, 0.00000, 0.00000, 0.96478)),
+    ("RightHandMiddle1", Quat::from_xyzw(0.44409, 0.00701, 0.01415, 0.89584)),
+    ("RightHandMiddle2", Quat::from_xyzw(0.46223, 0.00000, 0.00000, 0.88676)),
+    ("RightHandMiddle3", Quat::from_xyzw(0.26451, 0.00000, 0.00000, 0.96438)),
+    ("RightHandPinky1", Quat::from_xyzw(0.54759, 0.01368, 0.02090, 0.83637)),
+    ("RightHandPinky2", Quat::from_xyzw(0.54975, 0.00000, 0.00000, 0.83533)),
+    ("RightHandPinky3", Quat::from_xyzw(0.33212, 0.00000, 0.00000, 0.94324)),
+    ("RightHandRing1", Quat::from_xyzw(0.50519, 0.01306, 0.02231, 0.86262)),
+    ("RightHandRing2", Quat::from_xyzw(0.46981, 0.00000, 0.00000, 0.88277)),
+    ("RightHandRing3", Quat::from_xyzw(0.12171, 0.00000, 0.00000, 0.99257)),
+    ("RightHandThumb1", Quat::from_xyzw(0.24710, -0.08230, -0.20471, 0.94353)),
+    ("RightHandThumb2", Quat::from_xyzw(0.01796, -0.20757, 0.21122, 0.95498)),
+    ("RightHandThumb3", Quat::from_xyzw(-0.18776, -0.04791, 0.45418, 0.86958)),
+];
+
+/// Marks one finger bone with the rotation it should hold.
+#[derive(Component)]
+pub(crate) struct GripFingerPose(pub(crate) Quat);
+
+/// Writes the grip back over whatever the clip did. Has to land after the
+/// animation has run and before transforms propagate, or it is either
+/// overwritten or a frame late.
+pub(crate) fn hold_finger_grip(mut fingers: Query<(&GripFingerPose, &mut Transform)>) {
+    for (pose, mut transform) in &mut fingers {
+        transform.rotation = pose.0;
+    }
+}
+
+/// The rotation for a bone name, if it is one of the fingers we pose.
+pub(crate) fn finger_grip_rotation(bare_name: &str) -> Option<Quat> {
+    FINGER_GRIP_POSE
+        .iter()
+        .find(|(name, _)| *name == bare_name)
+        .map(|(_, rotation)| *rotation)
 }
