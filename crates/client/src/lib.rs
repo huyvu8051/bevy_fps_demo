@@ -359,10 +359,28 @@ const WORLD_LAYER: usize = 0;
 const VIEWMODEL_LAYER: usize = 1;
 
 const SCOPE_RETICLE_LAYER: usize = 2;
-const SCOPE_RETICLE_DISTANCE: f32 = 0.3;
 
-const SCOPE_RETICLE_WIDTH: f32 = 0.001;
-const SCOPE_RETICLE_HEIGHT: f32 = 0.002;
+/// A duplex reticle, in radians subtended. The mark hangs off the scope camera
+/// turned to point down the barrel, so only its angular size is ever visible —
+/// pushing it further out slides it along the same ray and changes nothing.
+/// There is no throw to set, and no parallax: the mark shows the barrel's
+/// direction, which is where the bullet goes, wherever the eye happens to be.
+///
+/// REACH overshoots the 0.098 rad the scope sees at default zoom, so the thick
+/// posts run off the edge of the picture rather than stopping inside it.
+const SCOPE_RETICLE_REACH: f32 = 0.070;
+/// The AK's short scope keeps a lit chevron instead: close work, and a duplex
+/// would cover more of the picture than it is worth at that magnification.
+const SCOPE_CHEVRON_WIDTH: f32 = 0.00333;
+const SCOPE_CHEVRON_HEIGHT: f32 = 0.00667;
+/// Where the thick outer posts give way to the fine inner lines.
+const SCOPE_RETICLE_TAPER: f32 = 0.42;
+const SCOPE_RETICLE_POST_WIDTH: f32 = 0.0013;
+const SCOPE_RETICLE_LINE_WIDTH: f32 = 0.00035;
+/// Gap at dead centre, so the mark never hides what it is pointing at.
+const SCOPE_RETICLE_CENTRE_GAP: f32 = 0.035;
+const SCOPE_RETICLE_DOT_SIZE: f32 = 0.0011;
+const SCOPE_RETICLE_DOTS_PER_ARM: usize = 4;
 
 const STATIONARY_SPREAD_MULTIPLIER: f32 = 0.4;
 
@@ -764,6 +782,7 @@ impl Plugin for GamePlugin {
                 update_scope_zoom_slider_visual,
                 update_scope_zoom_slider_visibility,
                 sync_scope_camera,
+                (place_scope_reticle, swap_scope_reticle),
                 update_scope_lens,
                 update_ammo_ui,
                 update_crosshair,

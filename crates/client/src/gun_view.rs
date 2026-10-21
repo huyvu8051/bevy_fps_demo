@@ -19,6 +19,35 @@ pub(crate) struct ScopeLens;
 #[derive(Component)]
 pub(crate) struct ScopeReticle;
 
+/// One mark per kind of glass, built once and swapped on the single reticle
+/// entity rather than respawned, so nothing has to be rewired on a weapon
+/// change.
+#[derive(Resource)]
+pub(crate) struct ReticleAssets {
+    pub(crate) chevron: (Handle<Mesh>, Handle<StandardMaterial>),
+    pub(crate) duplex: (Handle<Mesh>, Handle<StandardMaterial>),
+}
+
+/// Hands the sighted weapon its own mark.
+pub(crate) fn swap_scope_reticle(
+    active: Res<ActiveWeapon>,
+    assets: Res<ReticleAssets>,
+    mut reticle: Query<(&mut Mesh3d, &mut MeshMaterial3d<StandardMaterial>), With<ScopeReticle>>,
+    mut shown: Local<Option<WeaponId>>,
+) {
+    if *shown == Some(active.0) {
+        return;
+    }
+    let Ok((mut mesh, mut material)) = reticle.single_mut() else { return };
+    let (next_mesh, next_material) = match active.0 {
+        WeaponId::M24 => &assets.duplex,
+        _ => &assets.chevron,
+    };
+    mesh.0 = next_mesh.clone();
+    material.0 = next_material.clone();
+    *shown = Some(active.0);
+}
+
 /// Where the scope looks from and where its picture is drawn, both marked in
 /// the mesh. They say what they are for rather than what they sit on: the first
 /// is the front glass, because that is where light enters, but the second is
@@ -150,32 +179,59 @@ pub(crate) fn gun_pose_timings(gun: &Gun, def: &WeaponDef) -> GunPoseTimings {
     GunPoseTimings { recoil_t, dip, bob_x, bob_y }
 }
 
-/// Light enters a scope at the front lens, and the mesh says where that is.
-/// Position and turn only: the socket's scale is the lens radius, and a camera
-/// that took it would scale the whole world it renders.
+/// Takes the scope picture from the eye rather than from the weapon.
 ///
-/// A weapon with no glass has nothing to sit on and nothing to show, so this
-/// does nothing for it — iron sights only bring the gun up to the eye.
+/// Riding the weapon's own socket is what kills the parallax effect: the mark
+/// hangs off the barrel, and a camera bolted to the same barrel moves with it,
+/// so the two never part and the mark sits dead centre whatever the weapon
+/// does. From the eye they move independently, which is the whole point —
+/// a weapon held off the eye's line shows its mark off-centre, still over
+/// what the barrel is pointing at.
 pub(crate) fn sync_scope_camera(
-    camera_socket: Query<&GlobalTransform, With<ScopeCameraSocket>>,
-    eye: Query<&Transform, (With<FpsCamera>, Without<ScopeCamera>, Without<Gun>)>,
-    gun: Query<(&Transform, &GlobalTransform), (With<Gun>, Without<ScopeCamera>)>,
-    mut scope_camera: Query<&mut Transform, (With<ScopeCamera>, Without<Gun>)>,
+    eye: Query<&Transform, (With<FpsCamera>, Without<ScopeCamera>)>,
+    mut scope_camera: Query<&mut Transform, With<ScopeCamera>>,
 ) {
-    let (Ok(socket), Ok(eye), Ok((gun_local, gun_global)), Ok(mut scope_transform)) =
-        (camera_socket.single(), eye.single(), gun.single(), scope_camera.single_mut())
+    let (Ok(eye), Ok(mut scope_transform)) = (eye.single(), scope_camera.single_mut()) else {
+        return;
+    };
+    *scope_transform = Transform::from_translation(eye.translation).with_rotation(eye.rotation);
+}
+
+/// Turns the mark to point down the weapon's own sight axis.
+///
+/// It hangs off the scope camera, so it is always in front of the lens and
+/// facing it; all the weapon contributes is the direction. That makes it a
+/// perfectly parallax-free sight: the mark shows where the barrel points,
+/// which is where the bullet goes, however the weapon sits against the eye.
+/// The socket says which way that is, so no weapon carries its own copy.
+pub(crate) fn place_scope_reticle(
+    aim: Query<&GlobalTransform, With<AimSocket>>,
+    gun: Query<(&Transform, &GlobalTransform), (With<Gun>, Without<ScopeReticle>)>,
+    zoom: Res<ScopeZoom>,
+    mut reticle: Query<&mut Transform, With<ScopeReticle>>,
+) {
+    let (Ok(aim), Ok((gun_local, gun_global)), Ok(mut reticle)) =
+        (aim.single(), gun.single(), reticle.single_mut())
     else {
         return;
     };
-    // Only the socket's place *inside the gun* is taken from the propagated
-    // transforms, and that never animates, so last frame's copy is as good as
-    // this one's. Everything that does move is composed from transforms written
-    // this frame, which is what keeps the view from trailing the mesh by a
-    // frame whenever the eye turns.
-    let in_gun = socket.reparented_to(gun_global);
-    let placed = eye.mul_transform(gun_local.mul_transform(in_gun));
-    *scope_transform =
-        Transform::from_translation(placed.translation).with_rotation(placed.rotation);
+    // Both the camera and the weapon are placed from the eye this frame, so
+    // working in the eye's frame cancels the eye out and leaves no stale term.
+    // Only the socket's place *inside* the weapon comes from the propagated
+    // transforms, and that never animates, so last frame's copy is exact.
+    // Mixing a turn written this frame with one propagated last frame is what
+    // shakes the mark in step with how fast the view is moving.
+    let in_gun = aim.reparented_to(gun_global);
+    // A unit throw, because only the direction survives: the mark hangs off
+    // the camera, so pushing it further out moves it along the same ray and
+    // changes nothing the player can see. There is no throw to tune.
+    let down_the_barrel = gun_local.rotation * in_gun.rotation * Vec3::NEG_Z;
+    reticle.translation = down_the_barrel;
+    reticle.rotation = Quat::IDENTITY;
+    // The mesh is built in radians at unit distance, so this is purely the
+    // magnification: holding apparent thickness steady as the target grows is
+    // what a second focal plane scope does.
+    reticle.scale = Vec3::splat(SCOPE_DEFAULT_ZOOM / zoom.0);
 }
 
 pub(crate) fn adjust_scope_zoom(
@@ -224,7 +280,6 @@ pub(crate) fn update_scope_lens(
     scope_camera_enabled: Res<ScopeCameraEnabled>,
     mut scope_camera: Query<(&mut Camera, &mut Projection), With<ScopeCamera>>,
     mut lens: Query<(&mut Transform, &mut Visibility), (With<ScopeLens>, Without<ScopeReticle>)>,
-    mut reticle: Query<&mut Transform, (With<ScopeReticle>, Without<ScopeLens>)>,
     view_socket: Query<&GlobalTransform, With<ScopeViewSocket>>,
     gun_placed: Query<(&Transform, &GlobalTransform), (With<Gun>, Without<ScopeLens>, Without<ScopeReticle>)>,
 ) {
@@ -243,10 +298,6 @@ pub(crate) fn update_scope_lens(
         if let Projection::Perspective(perspective) = projection.as_mut() {
             perspective.fov = SCOPE_BASE_FOV / zoom.0;
         }
-    }
-
-    if let Ok(mut reticle_transform) = reticle.single_mut() {
-        reticle_transform.scale = Vec3::splat(SCOPE_DEFAULT_ZOOM / zoom.0);
     }
 
     if let Ok((mut transform, mut visibility)) = lens.single_mut() {
