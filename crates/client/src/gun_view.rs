@@ -101,6 +101,34 @@ pub(crate) fn track_muzzle_socket(
     gun.muzzle_local = socket.reparented_to(gun_global);
 }
 
+/// Reads the scope's optical axis off the two points the mesh marks along the
+/// tube, and caches the turn that brings it onto the camera's.
+///
+/// Sighting only ever slid the weapon until Socket_Aim sat on the camera axis
+/// and then assumed the glass was looking straight down the mesh. Nothing
+/// checked it, so a scope mounted with any cant would have aimed off and no
+/// weapon could have said so. Two marked points are enough to know instead of
+/// assume — 304mm apart on the M24, which is plenty of baseline.
+///
+/// Neither point moves inside the weapon, so this runs off the propagated
+/// transforms and the result is exact rather than a frame late.
+pub(crate) fn track_optical_axis(
+    front: Query<&GlobalTransform, With<ScopeCameraSocket>>,
+    aim: Query<&GlobalTransform, (With<AimSocket>, Without<ScopeCameraSocket>)>,
+    mut gun: Query<(&GlobalTransform, &mut Gun)>,
+) {
+    let Ok((gun_global, mut gun)) = gun.single_mut() else { return };
+    let (Ok(front), Ok(aim)) = (front.single(), aim.single()) else {
+        // Irons: nothing to correct, and nothing to read it from.
+        gun.optical_fix = Quat::IDENTITY;
+        return;
+    };
+    let down_the_tube = front.reparented_to(gun_global).translation
+        - aim.reparented_to(gun_global).translation;
+    let Ok(axis) = Dir3::new(down_the_tube) else { return };
+    gun.optical_fix = Quat::from_rotation_arc(*axis, Vec3::NEG_Z);
+}
+
 /// Hands the mesh's own named points to the systems that want them, so the
 /// weapon table carries none of this geometry twice.
 ///
@@ -451,16 +479,32 @@ pub(crate) fn gun_view_animation(
         let kick = &active.def().recoil;
         let timings = gun_pose_timings(&gun, active.def());
 
+        // Faded out by ads_blend, the way the positional jitter already is
+        // through resting: a weapon canted on its own bore would take the
+        // sights off the camera axis. The optical correction fades the other
+        // way, since it is only wanted while looking through the glass.
+        let settle_twist = gun.settle_twist_current * (1.0 - gun.ads_blend);
+        let base_rotation = Quat::from_rotation_z(settle_twist.to_radians())
+            * Quat::from_rotation_y(active.def().mesh_yaw_deg.to_radians())
+            * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip)
+            * Quat::IDENTITY.slerp(gun.optical_fix, gun.ads_blend);
+
         let resting = gun.base_offset.lerp(active.def().ready_offset, gun.ready_blend) + gun.settle_current;
         // Sighted means Socket_Aim on the camera axis at this weapon.s eye
         // relief; the mesh says where that point is, so the offset is a
         // subtraction rather than a dialled-in vector. Where it sits inside
         // the gun never animates, so last frame.s copy of that is fine.
+        //
+        // Turned before it is subtracted. The socket sits 0.91m down the
+        // weapon, so a straight subtraction only lands it on the axis while
+        // the weapon is square to the camera -- the moment the pose turns it,
+        // that lever throws the sight off by the turn times its length. Only
+        // base_rotation is taken out: sway and recoil are meant to show.
         let sighted = aim
             .single()
             .map(|aim_global| {
                 let in_gun = aim_global.reparented_to(gun_global);
-                Vec3::new(0.0, 0.0, -active.def().ads_eye_relief) - in_gun.translation
+                Vec3::new(0.0, 0.0, -active.def().ads_eye_relief) - base_rotation * in_gun.translation
             })
             .unwrap_or(resting);
         let base_pos = resting.lerp(sighted, gun.ads_blend) - Vec3::Z * view_pullback();
@@ -473,14 +517,6 @@ pub(crate) fn gun_view_animation(
                     + WALL_GUN_RAISE_HEIGHT * gun.wall_raise,
                 kick.kick_back * timings.recoil_t,
             );
-
-        // Faded out by ads_blend, the way the positional jitter already is
-        // through resting: a weapon canted on its own bore would take the
-        // sights off the camera axis.
-        let settle_twist = gun.settle_twist_current * (1.0 - gun.ads_blend);
-        let base_rotation = Quat::from_rotation_z(settle_twist.to_radians())
-            * Quat::from_rotation_y(active.def().mesh_yaw_deg.to_radians())
-            * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip);
 
         let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
         transform.rotation = Quat::from_rotation_x(wall_raise_tilt)

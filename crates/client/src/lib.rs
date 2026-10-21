@@ -738,7 +738,7 @@ impl Plugin for GamePlugin {
                 wire_gun_mesh,
                 wire_weapon_sockets,
                 log_frame_pacing,
-                track_muzzle_socket,
+                (track_muzzle_socket, track_optical_axis),
                 update_zombie_animation,
                 freeze_zombie_animations,
 

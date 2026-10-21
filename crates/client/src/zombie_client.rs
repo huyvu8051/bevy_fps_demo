@@ -52,6 +52,10 @@ pub(crate) struct ZombieHealthBarText;
 
 #[derive(Component)]
 pub(crate) struct Gun {
+    /// Turns the scope's own optical axis onto the camera's, read from the two
+    /// points the mesh marks along the tube rather than assumed. Identity for
+    /// a scope mounted true, and for a weapon with no glass at all.
+    pub(crate) optical_fix: Quat,
     pub(crate) base_offset: Vec3,
     pub(crate) recoil: f32,
     pub(crate) ammo: u32,

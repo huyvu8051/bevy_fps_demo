@@ -331,6 +331,7 @@ pub(crate) fn setup_gameplay(
                 .with_scale(Vec3::splat(active.def().mesh_scale)),
             Visibility::default(),
             Gun {
+                optical_fix: Quat::IDENTITY,
                 base_offset: active.def().rest_offset,
                 muzzle_local: Transform::IDENTITY,
                 settle_jitter: Vec3::ZERO,
