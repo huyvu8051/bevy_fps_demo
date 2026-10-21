@@ -274,6 +274,8 @@ pub(crate) fn setup_gameplay(
                 base_offset: active.def().rest_offset,
                 settle_jitter: Vec3::ZERO,
                 settle_current: Vec3::ZERO,
+                settle_twist_jitter: 0.0,
+                settle_twist_current: 0.0,
                 settle_rolled: false,
                 recoil: 0.0,
                 ammo: active.def().magazine,

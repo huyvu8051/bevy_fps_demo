@@ -334,7 +334,9 @@ pub(crate) fn gun_view_animation(
         if disturbed {
             if !gun.settle_rolled {
                 gun.settle_rolled = true;
-                gun.settle_jitter = settle_jitter(time.elapsed_secs());
+                let (offset, twist) = settle_jitter(time.elapsed_secs());
+                gun.settle_jitter = offset;
+                gun.settle_twist_jitter = twist;
             }
         } else {
             gun.settle_rolled = false;
@@ -346,6 +348,8 @@ pub(crate) fn gun_view_animation(
         let settle_step = (GUN_SETTLE_SPEED * time.delta_secs()).min(1.0);
         let settle_gap = gun.settle_jitter - gun.settle_current;
         gun.settle_current += settle_gap * settle_step;
+        let twist_gap = gun.settle_twist_jitter - gun.settle_twist_current;
+        gun.settle_twist_current += twist_gap * settle_step;
 
         let wall_raise_step = (WALL_GUN_RAISE_SPEED * time.delta_secs()).min(1.0);
         gun.wall_raise += (wall_target - gun.wall_raise) * wall_raise_step;
@@ -398,7 +402,12 @@ pub(crate) fn gun_view_animation(
                 kick.kick_back * timings.recoil_t,
             );
 
-        let base_rotation = Quat::from_rotation_y(active.def().mesh_yaw_deg.to_radians())
+        // Faded out by ads_blend, the way the positional jitter already is
+        // through resting: a weapon canted on its own bore would take the
+        // sights off the camera axis.
+        let settle_twist = gun.settle_twist_current * (1.0 - gun.ads_blend);
+        let base_rotation = Quat::from_rotation_z(settle_twist.to_radians())
+            * Quat::from_rotation_y(active.def().mesh_yaw_deg.to_radians())
             * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip);
 
         let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
@@ -416,11 +425,14 @@ pub(crate) fn gun_view_animation(
 /// Where the gun settles, nudged a little each time. Coming to rest on the
 /// exact same millimetre after every aim is what makes the pose read as a
 /// still image rather than a held weapon.
-fn settle_jitter(seed: f32) -> Vec3 {
+fn settle_jitter(seed: f32) -> (Vec3, f32) {
     let axis = |salt: f32| (ops::sin(seed * salt) * 43758.547).fract().abs() * 2.0 - 1.0;
-    Vec3::new(
-        axis(12.9898) * GUN_SETTLE_JITTER.x,
-        axis(78.233) * GUN_SETTLE_JITTER.y,
-        axis(37.719) * GUN_SETTLE_JITTER.z,
+    (
+        Vec3::new(
+            axis(12.9898) * GUN_SETTLE_JITTER.x,
+            axis(78.233) * GUN_SETTLE_JITTER.y,
+            axis(37.719) * GUN_SETTLE_JITTER.z,
+        ),
+        axis(94.673) * GUN_SETTLE_TWIST_DEG,
     )
 }

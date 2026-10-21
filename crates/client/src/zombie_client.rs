@@ -79,6 +79,8 @@ pub(crate) struct Gun {
 
     pub(crate) settle_jitter: Vec3,
     pub(crate) settle_current: Vec3,
+    pub(crate) settle_twist_jitter: f32,
+    pub(crate) settle_twist_current: f32,
     pub(crate) settle_rolled: bool,
 }
 
