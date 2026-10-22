@@ -22,6 +22,9 @@ pub(crate) struct WeaponDef {
     pub(crate) ads_speed: f32,
 
     pub(crate) scope: Scope,
+    /// How long the weapon takes to reload. A fifty round magazine and a five
+    /// round bolt gun are not the same job.
+    pub(crate) reload_duration: f32,
     pub(crate) fire_rate: f32,
     pub(crate) magazine: u32,
     pub(crate) recoil: Recoil,
@@ -117,6 +120,7 @@ static AK47: WeaponDef = WeaponDef {
     ads_speed: 10.0,
     // A short combat optic, not a sniper scope.
     scope: Scope { min_zoom: 2.0, default_zoom: 4.0, max_zoom: 6.0 },
+    reload_duration: 2.3,
     fire_rate: 0.1,
     magazine: 50,
     // 7.62: slower, heavier, looser at the top of a burst. Every axis above
@@ -148,12 +152,13 @@ static AK47: WeaponDef = WeaponDef {
 static M4A1: WeaponDef = WeaponDef {
     name: "M4A1",
     mesh_path: "models/m4a1/mesh/m4a1_rigged.glb",
-    rest_offset: Vec3::new(0.160, -0.096, -0.626),
-    ready_offset: Vec3::new(0.071, -0.196, -0.536),
+    rest_offset: Vec3::new(0.160, -0.1268, -0.626),
+    ready_offset: Vec3::new(0.071, -0.2268, -0.536),
     ads_eye_relief: 0.120,
     ads_speed: 12.5,
     // Irons: the scope view never comes on, so these only have to be sane.
     scope: Scope { min_zoom: 1.0, default_zoom: 1.0, max_zoom: 1.0 },
+    reload_duration: 1.9,
     fire_rate: 0.085,
     magazine: 30,
     // 5.56: about two thirds the AK's kick, settling faster. Cut by more than
@@ -197,6 +202,7 @@ static M24: WeaponDef = WeaponDef {
     ads_eye_relief: 0.032,
     ads_speed: 6.5,
     scope: Scope { min_zoom: 6.0, default_zoom: 10.0, max_zoom: 25.0 },
+    reload_duration: 3.1,
     fire_rate: 1.3,
     magazine: 5,
     recoil: Recoil {

@@ -33,6 +33,7 @@ pub(crate) struct PersistedSettings {
     pub(crate) show_bullet_tracers: Option<bool>,
     pub(crate) autopilot: Option<bool>,
     pub(crate) nav_debug_visible: Option<bool>,
+    pub(crate) aim_toggle_mode: Option<bool>,
 }
 
 #[cfg(target_os = "ios")]
@@ -141,6 +142,7 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(show_bullet_tracers, ShowBulletTracers);
     apply!(autopilot, Autopilot);
     apply!(nav_debug_visible, NavDebugVisible);
+    apply!(aim_toggle_mode, AimToggleMode);
 }
 
 pub(crate) fn apply_persisted_settings(world: &mut World) {
@@ -236,6 +238,7 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         show_bullet_tracers: world.get_resource::<ShowBulletTracers>().map(|r| r.0),
         autopilot: world.get_resource::<Autopilot>().map(|r| r.0),
         nav_debug_visible: world.get_resource::<NavDebugVisible>().map(|r| r.0),
+        aim_toggle_mode: world.get_resource::<AimToggleMode>().map(|r| r.0),
     }
 }
 

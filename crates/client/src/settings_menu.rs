@@ -405,6 +405,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     .with_children(|row| {
                         spawn_cheat_toggle_button(row, "MSAA", CheatMsaaButton);
                         spawn_cheat_toggle_button(row, "Scope", CheatScopeCameraButton);
+                        spawn_cheat_toggle_button(row, "AimTgl", AimToggleButton);
                         spawn_cheat_toggle_button(row, "Puff", CheatMuzzleSmokeButton);
                         spawn_cheat_toggle_button(row, "Port", CheatPortSmokeButton);
                         spawn_cheat_toggle_button(row, "Trail", CheatBarrelSmokeButton);
@@ -638,6 +639,10 @@ pub(crate) struct CheatMsaaButton;
 #[derive(Component)]
 pub(crate) struct CheatScopeCameraButton;
 
+/// Hold the right button for the sights, or click them up and click them down.
+#[derive(Component)]
+pub(crate) struct AimToggleButton;
+
 #[derive(Component)]
 pub(crate) struct CheatMuzzleSmokeButton;
 #[derive(Component)]
@@ -862,7 +867,12 @@ pub(crate) fn cheat_toggle_buttons_3(
     show_floating_damage_btn: Query<&Interaction, (With<CheatShowFloatingDamageButton>, Changed<Interaction>)>,
     scope_camera_btn: Query<&Interaction, (With<CheatScopeCameraButton>, Changed<Interaction>)>,
     show_tracers_btn: Query<&Interaction, (With<CheatShowTracersButton>, Changed<Interaction>)>,
+    aim_toggle_btn: Query<&Interaction, (With<AimToggleButton>, Changed<Interaction>)>,
+    mut aim_toggle: ResMut<AimToggleMode>,
 ) {
+    if tapped(&aim_toggle_btn) {
+        aim_toggle.0 = !aim_toggle.0;
+    }
     if tapped(&dof_alt_btn) {
         dof_alt.0 = !dof_alt.0;
     }
@@ -990,6 +1000,7 @@ pub(crate) fn update_extra_toggle_colors(
             Option<&CheatShowFloatingDamageButton>,
             Option<&CheatScopeCameraButton>,
             Option<&CheatShowTracersButton>,
+            Option<&AimToggleButton>,
         ),
         Or<(
             With<AutopilotButton>,
@@ -1000,11 +1011,13 @@ pub(crate) fn update_extra_toggle_colors(
             With<CheatShowFloatingDamageButton>,
             With<CheatScopeCameraButton>,
             With<CheatShowTracersButton>,
+            With<AimToggleButton>,
         )>,
     >,
+    aim_toggle: Res<AimToggleMode>,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, show_floating_damage_m, scope_camera_m, show_tracers_m) in &mut buttons {
+    for (mut bg, auto_m, dof_m, look_m, show_aim_m, show_markers_m, show_floating_damage_m, scope_camera_m, show_tracers_m, aim_toggle_m) in &mut buttons {
         let on = if auto_m.is_some() {
             autopilot.0
         } else if dof_m.is_some() {
@@ -1019,6 +1032,8 @@ pub(crate) fn update_extra_toggle_colors(
             show_floating_damage.0
         } else if scope_camera_m.is_some() {
             scope_camera.0
+        } else if aim_toggle_m.is_some() {
+            aim_toggle.0
         } else {
             show_tracers_m.is_some() && show_tracers.0
         };

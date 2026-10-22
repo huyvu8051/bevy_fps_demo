@@ -50,6 +50,7 @@ fn eased(from: Vec3, to: Vec3, t: f32) -> Vec3 {
 /// skeleton at all -- every mesh reports skins=0 -- and because the hands are
 /// already posed by IK, which a clip would fight over the same bones.
 pub(crate) fn drive_reload_hand(
+    active: Res<ActiveWeapon>,
     gun: Query<&Gun>,
     camera: Query<&GlobalTransform, With<FpsCamera>>,
     fore: Query<&GlobalTransform, With<ForeGripSocket>>,
@@ -70,7 +71,7 @@ pub(crate) fn drive_reload_hand(
         .unwrap_or(home.translation);
     let pouch = RELOAD_POUCH_FROM_EYE - Vec3::Z * view_pullback();
 
-    let progress = 1.0 - (gun.reload_remaining / RELOAD_DURATION).clamp(0.0, 1.0);
+    let progress = 1.0 - (gun.reload_remaining / active.def().reload_duration).clamp(0.0, 1.0);
     let span = |from: f32, to: f32| (progress - from) / (to - from);
     target.translation = if progress < RELOAD_HAND_AT_MAG {
         eased(home.translation, magwell, span(0.0, RELOAD_HAND_AT_MAG))
@@ -100,6 +101,7 @@ fn scatter(seed: f32) -> Vec3 {
 /// Triggered on the edge where the reload starts, which is the only thing the
 /// two entry points — the R key and firing the last round — have in common.
 pub(crate) fn drop_magazine_on_reload(
+    active: Res<ActiveWeapon>,
     time: Res<Time>,
     mut commands: Commands,
     gun: Query<&Gun>,
@@ -114,7 +116,7 @@ pub(crate) fn drop_magazine_on_reload(
     // while the hand is still on the fore grip reads as nothing pulled it.
     let reached = gun
         .single()
-        .map(|g| g.reload_remaining > 0.0 && 1.0 - g.reload_remaining / RELOAD_DURATION >= RELOAD_HAND_AT_MAG)
+        .map(|g| g.reload_remaining > 0.0 && 1.0 - g.reload_remaining / active.def().reload_duration >= RELOAD_HAND_AT_MAG)
         .unwrap_or(false);
     let started = reached && !*was_reloading;
     *was_reloading = reached;
@@ -177,11 +179,12 @@ fn magazine_log_enabled() -> bool {
 /// gun is level again well before the reload timer is, and an empty well that
 /// late reads as a missing part rather than a reload.
 pub(crate) fn restore_magazine_after_reload(
+    active: Res<ActiveWeapon>,
     gun: Query<&Gun>,
     mut magazines: Query<&mut Visibility, With<ViewmodelMagazine>>,
 ) {
     let Ok(gun) = gun.single() else { return };
-    if gun.reload_remaining > RELOAD_DURATION * (1.0 - MAG_SWAP_AT) {
+    if gun.reload_remaining > active.def().reload_duration * (1.0 - MAG_SWAP_AT) {
         return;
     }
     for mut visibility in &mut magazines {

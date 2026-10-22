@@ -8,8 +8,39 @@ pub(crate) struct FpsCamera {
     pub(crate) pitch: f32,
 }
 
-pub(crate) fn is_aiming(cursor: &CursorOptions, mouse: &ButtonInput<MouseButton>, touch_aiming: bool) -> bool {
-    (cursor.grab_mode != CursorGrabMode::None && mouse.pressed(MouseButton::Right)) || touch_aiming
+/// Whether the right button is held down for the sights, or clicked to put
+/// them up and clicked again to drop them.
+#[derive(Resource, Default)]
+pub(crate) struct AimToggleMode(pub(crate) bool);
+
+/// Whether the sights are wanted, as of this frame. One place decides it, so
+/// nothing downstream has to know which of the two modes is on.
+#[derive(Resource, Default)]
+pub(crate) struct AimHeld(pub(crate) bool);
+
+pub(crate) fn update_aim_held(
+    mode: Res<AimToggleMode>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    game_over: Res<GameOver>,
+    mut held: ResMut<AimHeld>,
+) {
+    // Nothing is aimed through a menu or a death screen, and a toggle left on
+    // across either would come back up on its own.
+    let free = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None) && !game_over.0;
+    if !free {
+        held.0 = false;
+        return;
+    }
+    held.0 = if mode.0 {
+        held.0 ^ mouse.just_pressed(MouseButton::Right)
+    } else {
+        mouse.pressed(MouseButton::Right)
+    };
+}
+
+pub(crate) fn is_aiming(cursor: &CursorOptions, held: &AimHeld, touch_aiming: bool) -> bool {
+    (cursor.grab_mode != CursorGrabMode::None && held.0) || touch_aiming
 }
 
 /// `pitch_kick_max` is the firing weapon's own ceiling: heat is how far into
@@ -142,7 +173,7 @@ pub(crate) fn grab_cursor(
 pub(crate) fn mouse_look(
     active: Res<ActiveWeapon>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    aim_held: Res<AimHeld>,
     touch_aiming: Res<TouchAiming>,
     zoom: Res<ScopeZoom>,
     mut motion: MessageReader<MouseMotion>,
@@ -172,7 +203,7 @@ pub(crate) fn mouse_look(
         return;
     }
 
-    let sensitivity = if is_aiming(cursor, &mouse, touch_aiming.0) {
+    let sensitivity = if is_aiming(cursor, &aim_held, touch_aiming.0) {
         MOUSE_SENSITIVITY * AIM_MOUSE_SENSITIVITY_MULTIPLIER * (active.def().scope.default_zoom / zoom.0)
     } else {
         MOUSE_SENSITIVITY
@@ -262,7 +293,7 @@ pub(crate) fn apply_lean_input(
 
 pub(crate) fn apply_aim_zoom(
     time: Res<Time>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    aim_held: Res<AimHeld>,
     touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut camera: Query<&mut Projection, With<FpsCamera>>,
@@ -270,7 +301,7 @@ pub(crate) fn apply_aim_zoom(
     let Ok(cursor) = cursor.single() else {
         return;
     };
-    let target_fov = if is_aiming(cursor, &mouse, touch_aiming.0) {
+    let target_fov = if is_aiming(cursor, &aim_held, touch_aiming.0) {
         BASE_FOV * AIM_FOV_MULTIPLIER
     } else {
         BASE_FOV
@@ -288,7 +319,7 @@ pub(crate) fn apply_aim_zoom(
 
 pub(crate) fn apply_aim_dof(
     mut commands: Commands,
-    mouse: Res<ButtonInput<MouseButton>>,
+    aim_held: Res<AimHeld>,
     touch_aiming: Res<TouchAiming>,
     aim_blur: Res<AimBlurEnabled>,
     dof_focal_alt: Res<AimDofFocalDistanceAlt>,
@@ -298,7 +329,7 @@ pub(crate) fn apply_aim_dof(
     let (Ok(cursor), Ok(camera_entity)) = (cursor.single(), camera.single()) else {
         return;
     };
-    if aim_blur.0 && is_aiming(cursor, &mouse, touch_aiming.0) {
+    if aim_blur.0 && is_aiming(cursor, &aim_held, touch_aiming.0) {
         let focal_distance = if dof_focal_alt.0 {
             AIM_DOF_FOCAL_DISTANCE_B
         } else {
@@ -344,8 +375,8 @@ pub(crate) fn toggle_player_stance(keys: Res<ButtonInput<KeyCode>>, mut player: 
 }
 
 pub(crate) fn send_player_input(
+    aim_held: Res<AimHeld>,
     keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
     touch: TouchGameplayInputs,
     time: Res<Time>,
     game_over: Res<GameOver>,
@@ -377,7 +408,7 @@ pub(crate) fn send_player_input(
     };
     let stance = *stance;
 
-    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch.aiming.0));
+    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &aim_held, touch.aiming.0));
 
     let (move_axis, sprinting) = if autopilot.0 {
         (intent.move_axis, intent.sprint)
@@ -514,7 +545,7 @@ pub(crate) fn shoot(
     mut commands: Commands,
     time: Res<Time>,
     game_over: Res<GameOver>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    aim_held: Res<AimHeld>,
     touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut camera: Query<(&Transform, &mut ViewRecoil), With<FpsCamera>>,
@@ -523,7 +554,7 @@ pub(crate) fn shoot(
     zombies: Query<(Entity, &ZombieHitboxBones), With<Zombie>>,
     globals: Query<&GlobalTransform>,
     spatial_query: SpatialQuery,
-    (touch_firing, casings): (Res<TouchFiring>, Res<CasingAssets>),
+    (touch_firing, casings, mouse): (Res<TouchFiring>, Res<CasingAssets>, Res<ButtonInput<MouseButton>>),
     mut cooldown: Local<f32>,
     (mut smoke_materials, mut flash_materials): (
         ResMut<Assets<MuzzleSmokeMaterial>>,
@@ -573,7 +604,7 @@ pub(crate) fn shoot(
     commands.spawn((AudioPlayer(vfx_assets.gunshot.0.clone()), PlaybackSettings::DESPAWN, GunshotVoice));
     if gun.ammo == 0 {
 
-        gun.reload_remaining = RELOAD_DURATION;
+        gun.reload_remaining = active.def().reload_duration;
         commands.spawn((AudioPlayer(vfx_assets.reload_sound.0.clone()), PlaybackSettings::DESPAWN));
     }
 
@@ -593,7 +624,7 @@ pub(crate) fn shoot(
     let spread = current_bullet_spread(
         recoil.pitch_kick,
         kick.pitch_kick_max,
-        is_aiming(cursor, &mouse, touch_aiming.0),
+        is_aiming(cursor, &aim_held, touch_aiming.0),
         local_moving.0,
         stance,
         local_sprinting.0,
@@ -725,7 +756,7 @@ pub(crate) fn shoot(
             ));
         }
 
-        if autopilot.0 && is_aiming(cursor, &mouse, touch_aiming.0) {
+        if autopilot.0 && is_aiming(cursor, &aim_held, touch_aiming.0) {
             *cooldown = active.def().fire_rate * (1.0 + (distance / 10.0).min(4.0));
         }
 
@@ -764,7 +795,7 @@ pub(crate) fn reload_gun(
     if gun.ammo == active.def().magazine || gun.reload_remaining > 0.0 {
         return;
     }
-    gun.reload_remaining = RELOAD_DURATION;
+    gun.reload_remaining = active.def().reload_duration;
     commands.spawn((AudioPlayer(reload_sound.0.clone()), PlaybackSettings::DESPAWN));
 }
 

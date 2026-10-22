@@ -538,7 +538,7 @@ pub(crate) fn spawn_crosshair(commands: &mut Commands) {
 }
 
 pub(crate) fn update_crosshair(
-    mouse: Res<ButtonInput<MouseButton>>,
+    aim_held: Res<AimHeld>,
     touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     camera: Query<&ViewRecoil, With<FpsCamera>>,
@@ -553,7 +553,7 @@ pub(crate) fn update_crosshair(
         return;
     };
     let stance = player.single().copied().unwrap_or_default();
-    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
+    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &aim_held, touch_aiming.0));
 
     if let Ok(mut root) = root.single_mut() {
         root.display = if aiming { Display::None } else { Display::Flex };

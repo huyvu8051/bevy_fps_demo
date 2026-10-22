@@ -202,7 +202,7 @@ pub(crate) fn wire_weapon_sockets(
 pub(crate) struct ScopeZoom(pub(crate) f32);
 
 pub(crate) fn update_scope_zoom_slider_visibility(
-    mouse: Res<ButtonInput<MouseButton>>,
+    aim_held: Res<AimHeld>,
     touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut track: Query<&mut Node, With<TouchScopeZoomSliderTrack>>,
@@ -210,7 +210,7 @@ pub(crate) fn update_scope_zoom_slider_visibility(
     let Ok(mut node) = track.single_mut() else {
         return;
     };
-    let aiming = cursor.single().is_ok_and(|c| is_aiming(c, &mouse, touch_aiming.0));
+    let aiming = cursor.single().is_ok_and(|c| is_aiming(c, &aim_held, touch_aiming.0));
     node.display = if aiming { Display::Flex } else { Display::None };
 }
 
@@ -221,9 +221,9 @@ pub(crate) struct GunPoseTimings {
     bob_y: f32,
 }
 
-pub(crate) fn gun_pose_timings(gun: &Gun) -> GunPoseTimings {
+pub(crate) fn gun_pose_timings(gun: &Gun, def: &WeaponDef) -> GunPoseTimings {
     let recoil_t = gun.recoil;
-    let reload_t = gun.reload_remaining / RELOAD_DURATION;
+    let reload_t = gun.reload_remaining / def.reload_duration;
 
     // A raised cosine rather than the parabola 4t(1-t) it replaces. Both peak
     // at 1 halfway through and both end at 0, but the parabola arrives and
@@ -298,7 +298,7 @@ pub(crate) fn place_scope_reticle(
 pub(crate) fn adjust_scope_zoom(
     active: Res<ActiveWeapon>,
     mut wheel: MessageReader<MouseWheel>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    aim_held: Res<AimHeld>,
     touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut zoom: ResMut<ScopeZoom>,
@@ -310,7 +310,7 @@ pub(crate) fn adjust_scope_zoom(
     let Ok(cursor) = cursor.single() else {
         return;
     };
-    if !is_aiming(cursor, &mouse, touch_aiming.0) {
+    if !is_aiming(cursor, &aim_held, touch_aiming.0) {
         wheel.clear();
         return;
     }
@@ -402,7 +402,7 @@ pub(crate) fn update_scope_lens(
 pub(crate) fn gun_view_animation(
     trigger_grip: Query<&GlobalTransform, With<TriggerGripSocket>>,
     time: Res<Time>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    aim_held: Res<AimHeld>,
     touch_aiming: Res<TouchAiming>,
     game_over: Res<GameOver>,
     look_delta: Res<MouseLookDelta>,
@@ -416,7 +416,7 @@ pub(crate) fn gun_view_animation(
     active: Res<ActiveWeapon>,
 ) {
     let camera_single = camera.single().ok();
-    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &mouse, touch_aiming.0));
+    let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &aim_held, touch_aiming.0));
 
     // Reads the requested lean, not the eased camera value: keying off the
     // eased one makes the gun wait for the camera to settle before it starts
@@ -460,7 +460,10 @@ pub(crate) fn gun_view_animation(
             }
         }
 
-        let ads_target = if aiming || force_ads() { 1.0 } else { 0.0 };
+        // The sights come down to reload. The weapon tilts 22 degrees and rolls
+        // 20 to clear the magwell, which is not a thing to be looking through.
+        let ads_target =
+            if (aiming || force_ads()) && gun.reload_remaining <= 0.0 { 1.0 } else { 0.0 };
         // Latched as the raise begins, and held for the whole of it. Reading
         // ready_blend live would not do: aiming drives it to zero, so a raise
         // that started from low ready would slow down halfway through it.
@@ -540,7 +543,7 @@ pub(crate) fn gun_view_animation(
         gun.look_sway += sway_gap * sway_step;
 
         let kick = &active.def().recoil;
-        let timings = gun_pose_timings(&gun);
+        let timings = gun_pose_timings(&gun, active.def());
 
         // Faded out by ads_blend, the way the positional jitter already is
         // through resting: a weapon canted on its own bore would take the

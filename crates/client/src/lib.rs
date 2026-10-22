@@ -171,7 +171,6 @@ const WALL_GUN_RAISE_HEIGHT: f32 = 0.18;
 const WALL_GUN_RAISE_ROT_DEG: f32 = 90.0;
 const WALL_GUN_RAISE_SPEED: f32 = 10.0;
 
-const RELOAD_DURATION: f32 = 1.6;
 
 const RELOAD_DIP: f32 = 0.12;
 /// Muzzle up, about the firing grip. Degrees.
@@ -544,6 +543,8 @@ impl Plugin for GamePlugin {
 
         .init_state::<AppState>()
         .init_resource::<AfterLoading>()
+        .init_resource::<AimToggleMode>()
+        .init_resource::<AimHeld>()
         .add_observer(on_zombie_replicated)
         .add_observer(on_zombie_kind_replicated)
         .add_observer(on_shot_fx)
@@ -715,6 +716,7 @@ impl Plugin for GamePlugin {
             (
                 (
                     grab_cursor,
+                    update_aim_held,
                     toggle_noclip.run_if(debug_keys_allowed),
                     toggle_player_stance,
                     toggle_debug_flags.run_if(debug_keys_allowed),
