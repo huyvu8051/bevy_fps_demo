@@ -263,3 +263,42 @@ pub(crate) fn log_frame_pacing(
     );
     (*frames, *window, *worst) = (0, 0.0, 0.0);
 }
+
+/// Per render graph node timings, behind RENDER_DIAG=1.
+///
+/// Bevy walks the whole Core3d graph for every active camera -- 28 nodes --
+/// and on Metal the GPU timestamps are unavailable, so what this records is
+/// the CPU cost of that walk. Which is the question: a second view measured
+/// 1.70ms with its world layer taken off it, drawing nothing but a reticle,
+/// and that number has to be made of named parts before anything can be done
+/// about it.
+pub(crate) fn render_diagnostics_if_asked() -> impl Plugin {
+    #[derive(Default)]
+    struct Maybe;
+    impl Plugin for Maybe {
+        fn build(&self, app: &mut App) {
+            if std::env::var("RENDER_DIAG").is_err() {
+                return;
+            }
+            app.add_plugins((
+                bevy::render::diagnostic::RenderDiagnosticsPlugin,
+                bevy::diagnostic::LogDiagnosticsPlugin {
+                    wait_duration: std::time::Duration::from_secs(5),
+                    ..default()
+                },
+            ));
+        }
+    }
+    Maybe
+}
+
+/// How many shadow cascades the sun splits into. CASCADES=n overrides it.
+///
+/// Every cascade is a separate shadow view, and every camera renders all of
+/// them: the sighted frame pays for them twice. Measured at 2.80ms of the
+/// 3.39ms aiming costs, which is 83% of it -- far and away the largest thing
+/// a second camera does, and nothing the resolution of its texture touches.
+pub(crate) fn cascade_config() -> bevy::light::CascadeShadowConfig {
+    let count = std::env::var("CASCADES").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+    bevy::light::CascadeShadowConfigBuilder { num_cascades: count, ..default() }.build()
+}

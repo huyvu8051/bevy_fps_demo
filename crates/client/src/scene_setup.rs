@@ -290,6 +290,7 @@ pub(crate) fn setup_gameplay(
             shadow_maps_enabled: light_shadows_enabled(),
             ..default()
         },
+        cascade_config(),
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
         MainSun,
     ));

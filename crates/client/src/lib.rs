@@ -580,6 +580,10 @@ impl Plugin for GamePlugin {
         .add_observer(on_game_state_event)
         .add_plugins(F9DebugPlugin)
         .add_plugins(navigation::ClientNavigationPlugin)
+        // RENDER_DIAG=1 times every render graph node. On Metal only the CPU
+        // side is recorded, which is the side a second camera is expensive on:
+        // the graph is walked per view whether that view draws anything or not.
+        .add_plugins(render_diagnostics_if_asked())
 
         .insert_resource(Noclip(false))
         .init_resource::<HitFlash>()
