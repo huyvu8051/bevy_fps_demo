@@ -298,9 +298,27 @@ pub(crate) fn render_diagnostics_if_asked() -> impl Plugin {
 /// them: the sighted frame pays for them twice. Measured at 2.80ms of the
 /// 3.39ms aiming costs, which is 83% of it -- far and away the largest thing
 /// a second camera does, and nothing the resolution of its texture touches.
-pub(crate) fn cascade_config() -> bevy::light::CascadeShadowConfig {
-    let count = std::env::var("CASCADES").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
-    bevy::light::CascadeShadowConfigBuilder { num_cascades: count, ..default() }.build()
+/// How many shadow cascades the sun splits into.
+///
+/// Every cascade is a separate shadow view and the whole set is rendered per
+/// camera, so this is the one number that moves the largest named cost in the
+/// frame. Two rather than Bevy's four: measured below, and the fourth cascade
+/// is the far one, where a city map is mostly roofs and haze anyway.
+#[derive(Resource)]
+pub(crate) struct ShadowCascades(pub(crate) u8);
+
+impl Default for ShadowCascades {
+    fn default() -> Self {
+        Self(std::env::var("CASCADES").ok().and_then(|v| v.parse().ok()).unwrap_or(2))
+    }
+}
+
+pub(crate) fn cascade_config(cascades: &ShadowCascades) -> bevy::light::CascadeShadowConfig {
+    bevy::light::CascadeShadowConfigBuilder {
+        num_cascades: cascades.0.max(1) as usize,
+        ..default()
+    }
+    .build()
 }
 
 /// Keeps a camera out of the shadow pass.

@@ -14,6 +14,7 @@
     scope_camera_enabled: Some(true),
     scope_fov_zoom: Some(false),
     merge_map_meshes: Some(false),
+    shadow_cascades: Some(2),
     sensitivity_scale: Some(1.0),
     damage_multiplier: Some(1.0),
     noclip: Some(false),

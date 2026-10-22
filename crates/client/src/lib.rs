@@ -633,6 +633,7 @@ impl Plugin for GamePlugin {
         .init_resource::<ScopeCameraEnabled>()
         .init_resource::<ScopeFovZoom>()
         .init_resource::<MergeMapMeshes>()
+        .init_resource::<ShadowCascades>()
         .init_resource::<MuzzleSmokeEnabled>()
         .init_resource::<PortSmokeEnabled>()
         .init_resource::<BarrelSmokeEnabled>()

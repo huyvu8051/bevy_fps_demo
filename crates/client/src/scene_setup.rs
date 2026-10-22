@@ -268,6 +268,7 @@ pub(crate) fn setup_gameplay(
     scene_target: Option<Res<SceneRenderTarget>>,
     mut pending: ResMut<MapSelectionPending>,
     active: Res<ActiveWeapon>,
+    cascades: Res<ShadowCascades>,
 ) {
     let Some(scene_target) = scene_target else {
         return;
@@ -290,7 +291,7 @@ pub(crate) fn setup_gameplay(
             shadow_maps_enabled: light_shadows_enabled(),
             ..default()
         },
-        cascade_config(),
+        cascade_config(&cascades),
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
         MainSun,
     ));
