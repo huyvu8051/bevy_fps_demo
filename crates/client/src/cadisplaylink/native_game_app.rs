@@ -17,6 +17,10 @@ pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, sc
 
     app.add_plugins(bevy::mesh::MeshPlugin);
     app.add_plugins(bevy::image::ImagePlugin::default());
+    // Without this nothing registers a loader for .wav or .ogg, and every
+    // sound the game asks for fails: the footsteps have been failing this way
+    // for as long as the hand-picked plugin list has existed.
+    app.add_plugins(bevy::audio::AudioPlugin::default());
 
     app.register_asset_loader(bevy::image::ImageLoader::new(
         bevy::image::CompressedImageFormats::NONE,
@@ -49,6 +53,17 @@ pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, sc
 
     app.register_type::<bevy::pbr::MeshMaterial3d<bevy::pbr::StandardMaterial>>();
     app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
+    // The desktop build gets these from MaterialPlugin / UiMaterialPlugin,
+    // which this list deliberately leaves out: iOS draws through its own
+    // Metal renderer and has no Bevy render pipeline to attach them to. The
+    // asset collections still have to exist, because GamePlugin's systems ask
+    // for them by value and a missing resource is a panic, not a skip -- and a
+    // panic inside the render frame callback crosses FFI and aborts.
+    app.init_asset::<crate::DamageOverlayMaterial>();
+    app.init_asset::<crate::ScopeLensMaterial>();
+    app.init_asset::<crate::MuzzleSmokeMaterial>();
+    app.init_asset::<crate::MuzzleFlashMaterial>();
+
     app.add_plugins(crate::GamePlugin);
 
     app.world_mut().spawn((
