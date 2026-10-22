@@ -166,11 +166,10 @@ static AK47: WeaponDef = WeaponDef {
 
         settle_speed: 21.0,
         kick_back: 0.075,
-        // Above the 21.3mm the 2.0 degree tilt drops the stock by over its own
-        // 612mm lever, or the weapon reads as sinking at the shot rather than
-        // rising: the tilt pivots on the muzzle, so it moves the tail.
+        // The whole weapon lifting, separate from the tilt below, which pivots
+        // on the muzzle and so moves the tail rather than the nose.
         kick_up: 0.0260,
-        tilt_up_deg: 2.0,
+        tilt_up_deg: 3.2,
         roll_deg: 0.8,
         yaw_kick_deg: 0.7,
     },
@@ -209,10 +208,8 @@ static M4A1: WeaponDef = WeaponDef {
 
         settle_speed: 23.0,
         kick_back: 0.055,
-        // Clears the 13.4mm its own 1.5 degree tilt drops the stock by, the way
-        // the AK clears its 21.3mm.
         kick_up: 0.0170,
-        tilt_up_deg: 1.5,
+        tilt_up_deg: 2.4,
         roll_deg: 0.6,
         yaw_kick_deg: 0.5,
     },
@@ -235,9 +232,11 @@ static M24: WeaponDef = WeaponDef {
     mesh_path: "models/m24/mesh/m24.glb",
     rest_offset: Vec3::new(0.160, -0.0905, -0.9770),
     ready_offset: Vec3::new(0.045, -0.1905, -0.8870),
-    // Closest of the three: the eye comes right up behind the rear glass, so
-    // the scope picture fills more of the view than either carbine's sight.
-    ads_eye_relief: 0.015,
+    // Closest of the three by a wide margin: the eye comes right up behind the
+    // rear glass, so the scope picture fills more of the view than either
+    // carbine's sight. The glass itself sits 55mm further down the tube, so
+    // there is still room before the near plane at 100mm.
+    ads_eye_relief: 0.008,
     ads_speed: 6.5,
     // Twice the AK at every stop: the glass it carries is the one thing this
     // rifle is for.
