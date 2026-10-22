@@ -43,10 +43,10 @@ pub(crate) fn is_aiming(cursor: &CursorOptions, held: &AimHeld, touch_aiming: bo
     (cursor.grab_mode != CursorGrabMode::None && held.0) || touch_aiming
 }
 
-/// `pitch_kick_max` is the firing weapon's own ceiling: heat is how far into
+/// `climb_max` is the firing weapon's own ceiling: heat is how far into
 /// *this* weapon's climb the burst has got, or a gentler one reads as hot.
-pub(crate) fn current_bullet_spread(pitch_kick: f32, pitch_kick_max: f32, aiming: bool, moving: bool, stance: PlayerStance, sprinting: bool) -> f32 {
-    let heat = pitch_kick / pitch_kick_max;
+pub(crate) fn current_bullet_spread(climb: f32, climb_max: f32, aiming: bool, moving: bool, stance: PlayerStance, sprinting: bool) -> f32 {
+    let heat = climb / climb_max;
     let mut spread = BULLET_SPREAD * (0.3 + heat);
     if aiming {
         spread *= AIM_SPREAD_MULTIPLIER;
@@ -69,15 +69,15 @@ pub(crate) fn current_bullet_spread(pitch_kick: f32, pitch_kick_max: f32, aiming
 
 #[derive(Component, Default)]
 pub(crate) struct ViewRecoil {
-    pub(crate) pitch_kick: f32,
-    pub(crate) yaw_kick: f32,
-    pub(crate) push_back: f32,
+    pub(crate) climb: f32,
+    pub(crate) wander: f32,
+    pub(crate) shove: f32,
     /// Where each of the three above is headed. The shot moves these; the
     /// three chase them, so the view is struck over a few frames instead of
     /// being moved whole in one.
-    pub(crate) pitch_target: f32,
-    pub(crate) yaw_target: f32,
-    pub(crate) push_target: f32,
+    pub(crate) climb_target: f32,
+    pub(crate) wander_target: f32,
+    pub(crate) shove_target: f32,
 }
 
 #[derive(Component, Default)]
@@ -229,18 +229,18 @@ pub(crate) fn apply_view_recoil(
         // rather than a view being dragged: it leaves hard, slows as it
         // reaches the end of its travel, and only then comes back.
         let kick = &active.def().recoil;
-        let settling = ops::exp(-kick.recovery_speed * time.delta_secs());
-        recoil.pitch_target *= settling;
-        recoil.yaw_target *= settling;
-        recoil.push_target *= settling;
+        let settling = ops::exp(-kick.view.recover_speed * time.delta_secs());
+        recoil.climb_target *= settling;
+        recoil.wander_target *= settling;
+        recoil.shove_target *= settling;
 
         let strike = 1.0 - ops::exp(-kick.strike_speed * time.delta_secs());
-        recoil.pitch_kick += (recoil.pitch_target - recoil.pitch_kick) * strike;
-        recoil.yaw_kick += (recoil.yaw_target - recoil.yaw_kick) * strike;
-        recoil.push_back += (recoil.push_target - recoil.push_back) * strike;
+        recoil.climb += (recoil.climb_target - recoil.climb) * strike;
+        recoil.wander += (recoil.wander_target - recoil.wander) * strike;
+        recoil.shove += (recoil.shove_target - recoil.shove) * strike;
 
-        let pitch = (cam.pitch + recoil.pitch_kick).clamp(-1.54, 1.54);
-        let yaw = cam.yaw + recoil.yaw_kick;
+        let pitch = (cam.pitch + recoil.climb).clamp(-1.54, 1.54);
+        let yaw = cam.yaw + recoil.wander;
 
         let roll = -LEAN_ROLL_DEG.to_radians() * lean.current;
         transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
@@ -487,8 +487,8 @@ pub(crate) fn sync_camera_to_player(
     let pullback = *camera_transform.back() * view_pullback();
     // Along the camera's own back, not a levelled one: a kick that stays
     // horizontal while the view climbs reads as the player being shoved.
-    let kick_back = *camera_transform.back() * recoil.push_back;
-    camera_transform.translation = eye + side_offset + pullback + kick_back;
+    let shove = *camera_transform.back() * recoil.shove;
+    camera_transform.translation = eye + side_offset + pullback + shove;
 }
 
 
@@ -617,17 +617,17 @@ pub(crate) fn shoot(
     };
 
     let kick = &active.def().recoil;
-    recoil.pitch_target = (recoil.pitch_target + kick.pitch_kick).min(kick.pitch_kick_max);
+    recoil.climb_target = (recoil.climb_target + kick.view.climb_per_shot).min(kick.view.climb_max);
 
     let jitter = ops::sin(time.elapsed_secs() * 977.0);
-    recoil.yaw_target += jitter * kick.yaw_jitter;
-    recoil.push_target = (recoil.push_target + kick.push_back).min(kick.push_back_max);
+    recoil.wander_target += jitter * kick.view.wander_per_shot;
+    recoil.shove_target = (recoil.shove_target + kick.view.shove_per_shot).min(kick.view.shove_max);
 
     let stance = vfx_assets.stance.single().copied().unwrap_or_default();
 
     let spread = current_bullet_spread(
-        recoil.pitch_kick,
-        kick.pitch_kick_max,
+        recoil.climb,
+        kick.view.climb_max,
         is_aiming(cursor, &aim_held, touch_aiming.0),
         local_moving.0,
         stance,

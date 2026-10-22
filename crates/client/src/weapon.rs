@@ -60,40 +60,61 @@ pub(crate) struct Scope {
     pub(crate) reticle_zoom: f32,
 }
 
-/// What a shot does to the view and to the weapon in the hands. The two halves
-/// are separate numbers on purpose: how hard a weapon is to hold and how much
-/// it visibly jumps are different things to tune.
+/// What a shot does, split by what it moves.
+///
+/// The weapon is a child of the camera, so the two halves never touch: nothing
+/// under `view` shifts the gun on screen -- it drags the world past it -- and
+/// nothing under `weapon` moves where the bullets go. One flat list of
+/// thirteen numbers hid that, and `kick_back` sat next to `push_back` meaning
+/// opposite halves of it.
 pub(crate) struct Recoil {
-    /// Radians of pitch per shot and the ceiling a burst climbs to. The
-    /// ceiling also sets what bullet spread reads as heat.
-    pub(crate) pitch_kick: f32,
-    pub(crate) pitch_kick_max: f32,
-    /// Sideways wander per shot, sign alternating so it wobbles rather than
-    /// drifts.
-    pub(crate) yaw_jitter: f32,
-    /// Metres the eye slides along its own back per shot, and the ceiling a
-    /// burst stacks to.
-    pub(crate) push_back: f32,
-    pub(crate) push_back_max: f32,
-    /// Rate of the exponential both decay by.
-    pub(crate) recovery_speed: f32,
-    /// How hard the blow lands. The kick chases its mark at this rate, so it
-    /// leaves fast and slows as it arrives rather than teleporting there --
-    /// the impulse, and then the shoulder taking it. Well above the two
-    /// recovery rates, or the strike reads as a drift.
+    /// How hard the blow lands, on both halves. Every value below runs at the
+    /// mark a shot set at this rate, so it leaves fast and slows as it
+    /// arrives rather than teleporting there -- the impulse, and then the
+    /// shoulder taking it. Well above either recovery rate, or the strike
+    /// reads as a drift.
     pub(crate) strike_speed: f32,
+    pub(crate) view: ViewKick,
+    pub(crate) weapon: WeaponKick,
+}
 
+/// What a shot does to the camera: where the player is aiming afterwards.
+pub(crate) struct ViewKick {
+    /// Radians the aim climbs per shot, and the ceiling a burst stacks to.
+    /// The ceiling also sets what bullet spread reads as heat.
+    pub(crate) climb_per_shot: f32,
+    pub(crate) climb_max: f32,
+    /// Radians the aim wanders sideways per shot, sign alternating so it
+    /// wobbles rather than drifts -- which is why it needs no ceiling.
+    pub(crate) wander_per_shot: f32,
+    /// Metres the camera slides along its own back per shot, and the ceiling.
+    /// Its own back rather than a levelled one, so a climbing view is shoved
+    /// up and back together.
+    pub(crate) shove_per_shot: f32,
+    pub(crate) shove_max: f32,
+    /// How fast the marks above tend back to zero: the aim coming home.
+    pub(crate) recover_speed: f32,
+}
+
+/// What a shot does to the weapon in the hands: how much it visibly jumps,
+/// none of which moves the aim.
+pub(crate) struct WeaponKick {
+    /// Metres straight back towards the shoulder, and straight up. Plain
+    /// translation, no pivot, so they move the whole weapon.
+    pub(crate) slide_back: f32,
+    pub(crate) lift: f32,
+    /// Degrees about the three axes. Pitch turns about the mesh origin, which
+    /// sits on the bore at the muzzle -- so it pins the nose and swings the
+    /// tail down, rather than lifting the nose. Roll and yaw flip sign per
+    /// shot.
+    pub(crate) pitch_deg: f32,
+    pub(crate) roll_deg: f32,
+    pub(crate) yaw_deg: f32,
     /// How fast the weapon settles back after a shot. A rate, like
-    /// recovery_speed above: the kick eases out rather than sliding home at a
+    /// recover_speed: the kick eases out rather than sliding home at a
     /// constant rate and stopping dead, which is the same curve the sights
     /// come up on.
     pub(crate) settle_speed: f32,
-    pub(crate) kick_back: f32,
-    pub(crate) kick_up: f32,
-    /// Degrees the weapon turns. Roll and yaw flip sign per shot.
-    pub(crate) tilt_up_deg: f32,
-    pub(crate) roll_deg: f32,
-    pub(crate) yaw_kick_deg: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -143,7 +164,7 @@ static AK47: WeaponDef = WeaponDef {
     mesh_path: "models/ak47_scope/raw/scene.gltf",
     rest_offset: Vec3::new(0.160, -0.0905, -0.7094),
     ready_offset: Vec3::new(0.045, -0.1905, -0.6194),
-    ads_eye_relief: 0.032,
+    ads_eye_relief: 0.01,
     ads_speed: 10.0,
     // The floor is half the default, because that is where aim sensitivity,
     // which is default/zoom against a half speed base, comes back out at
@@ -156,22 +177,23 @@ static AK47: WeaponDef = WeaponDef {
     // 7.62: slower, heavier, looser at the top of a burst. Every axis above
     // the M4's.
     recoil: Recoil {
-        pitch_kick: 0.0110,
-        pitch_kick_max: 0.090,
-        yaw_jitter: 0.0060,
-        push_back: 0.009,
-        push_back_max: 0.038,
-        recovery_speed: 6.6,
         strike_speed: 60.0,
-
-        settle_speed: 21.0,
-        kick_back: 0.075,
-        // The whole weapon lifting, separate from the tilt below, which pivots
-        // on the muzzle and so moves the tail rather than the nose.
-        kick_up: 0.0260,
-        tilt_up_deg: 3.2,
-        roll_deg: 0.8,
-        yaw_kick_deg: 0.7,
+        view: ViewKick {
+            climb_per_shot: 0.0110,
+            climb_max: 0.090,
+            wander_per_shot: 0.0060,
+            shove_per_shot: 0.03,
+            shove_max: 0.058,
+            recover_speed: 6.6,
+        },
+        weapon: WeaponKick {
+            slide_back: 0.075,
+            lift: 0.0260,
+            pitch_deg: 3.2,
+            roll_deg: 0.8,
+            yaw_deg: 0.7,
+            settle_speed: 21.0,
+        },
     },
 };
 
@@ -186,7 +208,7 @@ static M4A1: WeaponDef = WeaponDef {
     mesh_path: "models/m4a1/mesh/m4a1_rigged.glb",
     rest_offset: Vec3::new(0.160, -0.1268, -0.626),
     ready_offset: Vec3::new(0.071, -0.2268, -0.536),
-    ads_eye_relief: 0.120,
+    ads_eye_relief: 0.10,
     ads_speed: 12.5,
     // Irons: the scope view never comes on, so these only have to be sane.
     scope: Scope { min_zoom: 1.0, default_zoom: 1.0, max_zoom: 1.0, reticle_zoom: 1.0 },
@@ -198,20 +220,23 @@ static M4A1: WeaponDef = WeaponDef {
     // a flat ratio because it also fires faster, and matching per shot would
     // have climbed harder for the same trigger hold.
     recoil: Recoil {
-        pitch_kick: 0.0080,
-        pitch_kick_max: 0.068,
-        yaw_jitter: 0.0044,
-        push_back: 0.0065,
-        push_back_max: 0.028,
-        recovery_speed: 7.4,
         strike_speed: 70.0,
-
-        settle_speed: 23.0,
-        kick_back: 0.055,
-        kick_up: 0.0170,
-        tilt_up_deg: 2.4,
-        roll_deg: 0.6,
-        yaw_kick_deg: 0.5,
+        view: ViewKick {
+            climb_per_shot: 0.0080,
+            climb_max: 0.068,
+            wander_per_shot: 0.0044,
+            shove_per_shot: 0.0095,
+            shove_max: 0.038,
+            recover_speed: 7.4,
+        },
+        weapon: WeaponKick {
+            slide_back: 0.055,
+            lift: 0.0170,
+            pitch_deg: 2.4,
+            roll_deg: 0.6,
+            yaw_deg: 0.5,
+            settle_speed: 23.0,
+        },
     },
 };
 
@@ -236,7 +261,7 @@ static M24: WeaponDef = WeaponDef {
     // rear glass, so the scope picture fills more of the view than either
     // carbine's sight. The glass itself sits 55mm further down the tube, so
     // there is still room before the near plane at 100mm.
-    ads_eye_relief: 0.008,
+    ads_eye_relief: -0.02,
     ads_speed: 6.5,
     // Twice the AK at every stop: the glass it carries is the one thing this
     // rifle is for.
@@ -246,20 +271,23 @@ static M24: WeaponDef = WeaponDef {
     fire_rate: 1.3,
     magazine: 5,
     recoil: Recoil {
-        pitch_kick: 0.055,
-        pitch_kick_max: 0.200,
-        yaw_jitter: 0.012,
-        push_back: 0.030,
-        push_back_max: 0.075,
-        recovery_speed: 2.6,
         strike_speed: 28.0,
-
-        settle_speed: 5.5,
-        kick_back: 0.115,
-        kick_up: 0.014,
-        tilt_up_deg: 6.0,
-        roll_deg: 3.5,
-        yaw_kick_deg: 3.0,
+        view: ViewKick {
+            climb_per_shot: 0.055,
+            climb_max: 0.200,
+            wander_per_shot: 0.012,
+            shove_per_shot: 0.9,
+            shove_max: 0.925,
+            recover_speed: 2.6,
+        },
+        weapon: WeaponKick {
+            slide_back: 0.065,
+            lift: 0.014,
+            pitch_deg: 6.0,
+            roll_deg: 3.5,
+            yaw_deg: 3.0,
+            settle_speed: 5.5,
+        },
     },
 };
 

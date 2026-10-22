@@ -560,8 +560,8 @@ pub(crate) fn update_crosshair(
     }
 
     let spread = current_bullet_spread(
-        recoil.pitch_kick,
-        active.def().recoil.pitch_kick_max,
+        recoil.climb,
+        active.def().recoil.view.climb_max,
         aiming,
         local_moving.0,
         stance,

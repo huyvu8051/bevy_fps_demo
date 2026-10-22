@@ -471,7 +471,7 @@ pub(crate) fn gun_view_animation(
         // blow lands fast and the weapon comes back slowly, which is the
         // shape of the thing rather than one curve doing both.
         let kick = &active.def().recoil;
-        gun.recoil_target *= ops::exp(-kick.settle_speed * time.delta_secs());
+        gun.recoil_target *= ops::exp(-kick.weapon.settle_speed * time.delta_secs());
         let strike = 1.0 - ops::exp(-kick.strike_speed * time.delta_secs());
         gun.recoil += (gun.recoil_target - gun.recoil) * strike;
         if gun.reload_remaining > 0.0 {
@@ -617,18 +617,18 @@ pub(crate) fn gun_view_animation(
             + reload_swing
             + Vec3::new(
                 timings.bob_x,
-                kick.kick_up * timings.recoil_t - RELOAD_DIP * timings.dip - timings.bob_y
+                kick.weapon.lift * timings.recoil_t - RELOAD_DIP * timings.dip - timings.bob_y
                     + WALL_GUN_RAISE_HEIGHT * gun.wall_raise,
-                kick.kick_back * timings.recoil_t,
+                kick.weapon.slide_back * timings.recoil_t,
             );
 
         let wall_raise_tilt = WALL_GUN_RAISE_ROT_DEG.to_radians() * gun.wall_raise;
         transform.rotation = Quat::from_rotation_x(wall_raise_tilt)
             * Quat::from_rotation_y(gun.look_sway.x.to_radians())
             * Quat::from_rotation_x(gun.look_sway.y.to_radians())
-            * Quat::from_rotation_y(kick.yaw_kick_deg.to_radians() * gun.recoil_roll * timings.recoil_t)
-            * Quat::from_rotation_z(kick.roll_deg.to_radians() * gun.recoil_roll * timings.recoil_t)
-            * Quat::from_rotation_x(kick.tilt_up_deg.to_radians() * timings.recoil_t)
+            * Quat::from_rotation_y(kick.weapon.yaw_deg.to_radians() * gun.recoil_roll * timings.recoil_t)
+            * Quat::from_rotation_z(kick.weapon.roll_deg.to_radians() * gun.recoil_roll * timings.recoil_t)
+            * Quat::from_rotation_x(kick.weapon.pitch_deg.to_radians() * timings.recoil_t)
             * base_rotation;
     }
 }
