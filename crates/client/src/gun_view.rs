@@ -435,7 +435,6 @@ pub(crate) fn gun_view_animation(
     local_moving: Res<LocalPlayerMoving>,
     local_sprinting: Res<LocalPlayerSprinting>,
     active: Res<ActiveWeapon>,
-    pullback: Res<ViewPullback>,
 ) {
     let camera_single = camera.single().ok();
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &aim_held, touch_aiming.0));
@@ -611,7 +610,7 @@ pub(crate) fn gun_view_animation(
                 Vec3::new(0.0, 0.0, -active.def().ads_eye_relief) - base_rotation * in_gun.translation
             })
             .unwrap_or(resting);
-        let base_pos = resting.lerp(sighted, gun.ads_blend) - Vec3::Z * pullback.0;
+        let base_pos = resting.lerp(sighted, gun.ads_blend) - Vec3::Z * view_pullback();
 
         let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
         transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)

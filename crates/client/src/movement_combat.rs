@@ -468,7 +468,6 @@ pub(crate) fn send_player_input(
 pub(crate) fn sync_camera_to_player(
     player_query: Query<(&Transform, &PlayerStance), (With<Player>, Without<FpsCamera>)>,
     mut camera_query: Query<(&mut Transform, &Lean, &ViewRecoil), With<FpsCamera>>,
-    pullback_distance: Res<ViewPullback>,
 ) {
     let Ok((player_transform, stance)) = player_query.single() else {
         return;
@@ -485,7 +484,7 @@ pub(crate) fn sync_camera_to_player(
     let eye = player_transform.translation + Vec3::Y * eye_height_offset;
 
     let side_offset = *camera_transform.right() * LEAN_SIDE_OFFSET * lean.current;
-    let pullback = *camera_transform.back() * pullback_distance.0;
+    let pullback = *camera_transform.back() * view_pullback();
     // Along the camera's own back, not a levelled one: a kick that stays
     // horizontal while the view climbs reads as the player being shoved.
     let kick_back = *camera_transform.back() * recoil.push_back;
