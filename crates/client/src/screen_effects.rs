@@ -43,12 +43,8 @@ pub(crate) fn update_screen_effects(
     }
 }
 
-/// Whether the fullscreen grain and desaturation pass runs at all.
-///
-/// It is a FullscreenMaterial on the main camera, so it touches every pixel
-/// every frame whether anything is happening or not. Taking the component off
-/// the camera is what stops it; setting grain to zero would still pay for the
-/// pass.
+/// Whether the fullscreen grain and desaturation pass runs. Taking the
+/// component off is what stops it; a zero strength still pays for the pass.
 #[derive(Resource, Default)]
 pub(crate) struct ScreenEffectsEnabled(pub(crate) bool);
 

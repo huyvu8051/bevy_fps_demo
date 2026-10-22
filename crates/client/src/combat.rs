@@ -60,7 +60,6 @@ pub(crate) fn handle_fire_shot(
     let Ok(direction) = Dir3::new(shot.direction) else {
         return;
     };
-    info!("[shot] fired: origin={:.2?} direction={:.2?}", shot.origin, *direction);
 
     let filter = SpatialQueryFilter::default();
     let path = trace_shot_path(&spatial_query, shot.origin, direction, &filter);
@@ -85,7 +84,6 @@ pub(crate) fn handle_fire_shot(
 
     for (distance, entity, bones) in &candidates {
         let entity = *entity;
-        info!("[shot] outer capsule hit: zombie={entity} distance={distance:.2}");
 
         let Some(hit) = zombie_hit_damage_ray(shot.origin, direction, MAX_SHOT_DISTANCE, bones) else {
             let outer_hit_point = shot.origin + *direction * distance;
@@ -96,7 +94,6 @@ pub(crate) fn handle_fire_shot(
                     nearest_distance - radius
                 );
             } else {
-                info!("[shot] outer capsule hit but missed every inner bone capsule: zombie={entity} (no bones resolved yet) — trying the next zombie behind it, if any");
             }
             continue;
         };
@@ -116,7 +113,6 @@ pub(crate) fn handle_fire_shot(
             );
             continue;
         }
-        info!("[shot] inner bone capsule hit: zombie={entity} damage={damage:.1}");
         if let Ok((_, _, _, mut health, mut knockback, kind, link)) = zombies.get_mut(entity) {
             health.0 -= damage;
             let killed = health.0 <= 0.0;
@@ -143,16 +139,13 @@ pub(crate) fn handle_fire_shot(
     }
 
     let Some(hit) = spatial_query.cast_ray(shot.origin, direction, MAX_SHOT_DISTANCE, true, &filter) else {
-        info!("[shot] missed everything (no zombie, no surface)");
         return;
     };
     if zombies.contains(hit.entity) {
-        info!("[shot] outer capsule hit but missed every inner bone capsule — treating as a genuine miss, no VFX");
         return;
     }
 
     let surface_point = shot.origin + *direction * hit.distance;
-    info!("[shot] hit a surface, no zombie: point={surface_point:.2?}");
     commands.trigger(ShotFx::SurfaceHit { origin: shot.origin, point: surface_point, normal: hit.normal });
 }
 

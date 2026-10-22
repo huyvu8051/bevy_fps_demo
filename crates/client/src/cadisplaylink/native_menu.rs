@@ -8,9 +8,7 @@ use shared::Health;
 #[cfg(debug_assertions)]
 use shared::{Zombie, ZOMBIE_MAX_HEALTH};
 
-/// The game stopped being networked; there is no round trip left to report.
-/// The native menu still asks, and -1 is what it already showed when there
-/// was no client connected.
+/// Not networked any more; -1 is what the menu showed with no client.
 pub fn ping_ms(_app: &mut App) -> f32 {
     -1.0
 }

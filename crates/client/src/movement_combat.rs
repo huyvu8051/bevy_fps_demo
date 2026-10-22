@@ -203,10 +203,8 @@ pub(crate) fn mouse_look(
     } else {
         MOUSE_SENSITIVITY
     } * sensitivity_scale.0;
-    // Radians the view turned, not pixels the mouse moved. Sway is a weapon
-    // left behind by a turn, so it has to be measured against the turn: read
-    // off the mouse it ignored both the aim multiplier and the magnification,
-    // and a scope that slowed the view to a quarter swam four times as much.
+    // Radians the view turned, not pixels the mouse moved: sway is measured
+    // against the turn, so it follows the aim multiplier and the zoom.
     look_delta.0 = delta * sensitivity;
     if delta == Vec2::ZERO {
         return;
@@ -308,8 +306,6 @@ pub(crate) fn apply_aim_zoom(
     let Ok(cursor) = cursor.single() else {
         return;
     };
-    // force_ads() counts here too: a flag that puts the sights up without the
-    // sighted field makes a measurement run read as a different game.
     let aiming = is_aiming(cursor, &aim_held, touch_aiming.0) || force_ads();
     // In fov-zoom mode the main camera is the optic, so it takes the weapon's
     // own magnification rather than the gentle ADS nudge every weapon shares.
@@ -341,9 +337,7 @@ pub(crate) fn apply_aim_dof(
     let (Ok(cursor), Ok(camera_entity)) = (cursor.single(), camera.single()) else {
         return;
     };
-    // force_ads() counts, the way it does for the weapon pose. A flag that
-    // pins the sights up but leaves the sighted post-processing off makes a
-    // measurement run read cheaper than the game it is measuring.
+    // force_ads() counts, or a measurement run reads cheaper than the game.
     if aim_blur.0 && (is_aiming(cursor, &aim_held, touch_aiming.0) || force_ads()) {
         let focal_distance = if dof_focal_alt.0 {
             AIM_DOF_FOCAL_DISTANCE_B
@@ -759,7 +753,6 @@ pub(crate) fn shoot(
         .filter(|(distance, ..)| !wall_distance.is_some_and(|w| w < distance - 0.1))
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
     if let Some((distance, entity, point, normal)) = predicted_hit {
-        info!("[shot] local prediction: real bone hit zombie={entity} distance={distance:.2}");
         if show_hit_markers.0 {
             commands.spawn((
                 Mesh3d(vfx_assets.hit_assets.mesh.clone()),
@@ -781,8 +774,6 @@ pub(crate) fn shoot(
     let tracer_end = predicted_hit.map_or(muzzle_world_pos + *direction * MAX_SHOT_DISTANCE, |(_, _, point, _)| point);
     let tracer_start = muzzle_world_pos + Vec3::Y * TRACER_START_Y_OFFSET;
     spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 733.0, tracer_start, tracer_end, show_tracers.0);
-
-    info!("[shot] fired: origin={:.2?} direction={:.2?}", muzzle_world_pos, *direction);
     // The muzzle, so the shot that is scored is the one that was drawn. An eye
     // origin here against a bore origin in the prediction above would have the
     // two disagree by the whole offset between them.

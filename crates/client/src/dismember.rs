@@ -148,7 +148,6 @@ pub(crate) fn sever_limbs(
     globals: Query<&GlobalTransform>,
     mut wounded: Query<(Entity, &ZombieHitboxBones, Option<&mut SeveredParts>)>,
     mut bones: Query<&mut Transform>,
-    alive: Query<(), With<Zombie>>,
 ) {
     let dt = time.delta_secs();
     for (entity, hitboxes, cuts) in &mut wounded {
@@ -185,8 +184,6 @@ pub(crate) fn sever_limbs(
                     _ => (joint_global.up().normalize_or_zero(), GORE_BASE_LENGTH),
                 };
                 cut.along = along;
-                let state = if alive.contains(entity) { "ALIVE" } else { "dead" };
-                info!("[dismember] {state} zombie={entity} lost {:?} at joint {}", cut.part, cut.cut_at);
                 spray(&mut commands, &blood, at, along, BURST_COUNT, BURST_SPEED, at.x * 31.7 + at.z * 13.1, blood_enabled.spray);
                 throw_part(&mut commands, &gore, cut.part, at, along, length, at.x * 17.3 + at.z * 29.1);
             }

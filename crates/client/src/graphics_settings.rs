@@ -264,14 +264,7 @@ pub(crate) fn log_frame_pacing(
     (*frames, *window, *worst) = (0, 0.0, 0.0);
 }
 
-/// Per render graph node timings, behind RENDER_DIAG=1.
-///
-/// Bevy walks the whole Core3d graph for every active camera -- 28 nodes --
-/// and on Metal the GPU timestamps are unavailable, so what this records is
-/// the CPU cost of that walk. Which is the question: a second view measured
-/// 1.70ms with its world layer taken off it, drawing nothing but a reticle,
-/// and that number has to be made of named parts before anything can be done
-/// about it.
+/// Per render graph node timings, behind RENDER_DIAG=1. CPU only on Metal.
 pub(crate) fn render_diagnostics_if_asked() -> impl Plugin {
     #[derive(Default)]
     struct Maybe;
@@ -292,18 +285,8 @@ pub(crate) fn render_diagnostics_if_asked() -> impl Plugin {
     Maybe
 }
 
-/// How many shadow cascades the sun splits into. CASCADES=n overrides it.
-///
-/// Every cascade is a separate shadow view, and every camera renders all of
-/// them: the sighted frame pays for them twice. Measured at 2.80ms of the
-/// 3.39ms aiming costs, which is 83% of it -- far and away the largest thing
-/// a second camera does, and nothing the resolution of its texture touches.
-/// How many shadow cascades the sun splits into.
-///
-/// Every cascade is a separate shadow view and the whole set is rendered per
-/// camera, so this is the one number that moves the largest named cost in the
-/// frame. Two rather than Bevy's four: measured below, and the fourth cascade
-/// is the far one, where a city map is mostly roofs and haze anyway.
+/// Cascades the sun splits into. Each is a separate shadow view rendered per
+/// camera, so it is the largest single cost in the frame. CASCADES=n overrides.
 #[derive(Resource)]
 pub(crate) struct ShadowCascades(pub(crate) u8);
 
@@ -321,19 +304,12 @@ pub(crate) fn cascade_config(cascades: &ShadowCascades) -> bevy::light::CascadeS
     .build()
 }
 
-/// Keeps a camera out of the shadow pass.
+/// Keeps a camera out of the shadow pass, worth 2.8ms on a sighted frame.
 ///
-/// Every view renders the shadow maps again, and on a sighted frame that is
-/// 2.80ms of the 3.39ms aiming costs -- measured, and the single largest
-/// thing a second camera does. per_view_shadow_pass is the only system that
-/// requires ViewLightEntities; everything else reads it as Option, so taking
-/// it off a view after prepare_lights built it skips that view's pass and
-/// leaves the rest of the frame alone.
-///
-/// The view's own shadow depth texture then goes unwritten, so whatever
-/// shadows it samples are whatever was in that memory. For a scope at twelve
-/// magnifications that may be a fair trade; it may also be unusable. The
-/// point of the flag is to be able to look.
+/// per_view_shadow_pass is the only system that requires ViewLightEntities, so
+/// removing it after prepare_lights skips that view. Its depth texture then
+/// goes unwritten: reverse-Z reads the zeros as unshadowed, so the picture is
+/// lit but has no shadows.
 #[derive(Component, Clone, Copy, Default)]
 pub(crate) struct NoShadowPass;
 
@@ -420,16 +396,8 @@ pub(crate) fn apply_bloom(
     }
 }
 
-/// Counts what the opaque pass actually submits, behind DRAW_COUNT=1.
-///
-/// "285 merged meshes" is a count of entities, not of draws: frustum culling
-/// takes some away and batching puts some together, so the only honest number
-/// comes from the phase after both have happened.
-///
-/// multidrawable batch sets are one call each however many bins they hold;
-/// batchable bins are one call each; unbatchable entities are one call per
-/// entity. Shadow views are counted separately because a cascade redraws the
-/// casters and is easily the larger half.
+/// Counts what the opaque and shadow phases submit, behind DRAW_COUNT=1 --
+/// after culling and batching, which an entity count cannot tell you.
 pub(crate) struct DrawCountPlugin;
 
 impl Plugin for DrawCountPlugin {
@@ -475,16 +443,8 @@ fn count_draws(
     );
 }
 
-/// Whether the cameras carry DistanceFog.
-///
-/// Unlike bloom this is not a pass of its own: it is arithmetic inside the PBR
-/// shader, run per fragment, and it specialises the mesh pipeline. So the cost
-/// is spread through the opaque pass rather than sitting in a node where a
-/// profiler can name it, which is exactly why it needs measuring rather than
-/// guessing.
-///
-/// It is also load bearing for the look: the far distance of desert_city is
-/// haze, and that haze is why the sun's far shadow cascade was worth so little.
+/// Whether the cameras carry DistanceFog. Not a pass of its own but arithmetic
+/// inside the PBR shader, and measured at 0.01ms.
 #[derive(Resource, Default)]
 pub(crate) struct FogEnabled(pub(crate) bool);
 
@@ -509,32 +469,20 @@ pub(crate) fn apply_fog(
     }
 }
 
-/// Loads a glTF scene, saying out loud what is kept in RAM once it is on the
-/// GPU.
+/// Loads a glTF scene, saying what is kept in RAM once it is on the GPU.
 ///
-/// Bevy's default is MAIN_WORLD | RENDER_WORLD: a CPU copy of every mesh and
-/// every decoded texture, kept forever alongside the GPU copy. Measured on
-/// desktop, loading climbs about 1.7GB a second to a 9.9GB peak and settles
-/// at 2.7GB -- which is why an iPhone, jetsammed somewhere around 3GB, is
-/// killed two seconds in.
-///
-/// Only meshes are dropped. Materials cannot be: load_materials governs the
-/// StandardMaterial assets themselves, not their textures, and taking their
-/// main world half away empties Assets<StandardMaterial> -- which renders a
-/// black screen, measured, not guessed.
-///
-/// Meshes are safe to drop except where something reads them back, and one
-/// thing does: Avian builds the map's trimesh colliders from the CPU copy. So
-/// that caller keeps its half and says so at the call site.
+/// Only meshes can be dropped: load_materials governs the StandardMaterial
+/// assets rather than their textures, and dropping their main world half
+/// renders a black screen. The map keeps its CPU meshes for Avian's colliders.
 pub(crate) fn load_gltf_scene(
     asset_server: &AssetServer,
     path: impl Into<String>,
     meshes: RenderAssetUsages,
 ) -> Handle<bevy::world_serialization::WorldAsset> {
-    asset_server.load_with_settings(
-        GltfAssetLabel::Scene(0).from_asset(path.into()),
-        move |settings: &mut bevy::gltf::GltfLoaderSettings| {
+    asset_server
+        .load_builder()
+        .with_settings(move |settings: &mut bevy::gltf::GltfLoaderSettings| {
             settings.load_meshes = meshes;
-        },
-    )
+        })
+        .load(GltfAssetLabel::Scene(0).from_asset(path.into()))
 }

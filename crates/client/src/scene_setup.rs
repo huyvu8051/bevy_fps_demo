@@ -462,12 +462,9 @@ pub(crate) fn setup_gameplay(
         ChildOf(camera),
     ));
 
-    // The sight picture in fov-zoom mode is a hole in this, so the inner
-    // radius is resized every frame against whatever field the camera is on.
-    // The outer has to reach the corners, which on 16:9 sit 2.04 times the
-    // half height out -- and the whole ring is scaled by the hole, so the
-    // ratio has to carry that 2.04 and the 0.42 the hole is: 12 leaves room
-    // for a wider window than that.
+    // The hole is resized each frame to the camera's field. The outer radius
+    // must reach the corners, 2.04x the half height on 16:9, scaled by the
+    // hole's own 0.42 -- so 12 leaves room for wider windows.
     commands.spawn((
         Name::new("ScopeFovMask"),
         Mesh3d(meshes.add(Annulus::new(1.0, 12.0).mesh().resolution(64).build())),

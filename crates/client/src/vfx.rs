@@ -97,9 +97,7 @@ pub(crate) fn on_shot_confirmed(
 ) {
     let ShotConfirmed { origin, point, normal, damage, killed } = *trigger.event();
     if damage > 0.0 {
-        info!("[shot] server confirmed: inner bone capsule hit, damage={damage:.1} killed={killed}");
     } else {
-        info!("[shot] server confirmed: outer capsule hit but missed every inner bone capsule (0 damage)");
     }
 
     let hit_zombie = if killed {
@@ -330,9 +328,7 @@ pub(crate) fn on_shot_fx(
     match *trigger.event() {
         ShotFx::ZombieHit { origin, point, normal, damage, killed } => {
             if damage > 0.0 {
-                info!("[shot] (remote player) inner bone capsule hit: damage={damage:.1} killed={killed}");
             } else {
-                info!("[shot] (remote player) outer capsule hit but missed every inner bone capsule (0 damage)");
             }
             if show_hit_markers.0 {
                 commands.spawn((

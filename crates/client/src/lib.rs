@@ -134,13 +134,8 @@ mod splash_screen;
 use splash_screen::*;
 
 
-/// Which way the sight picture is made: a second camera rendering the world
-/// again into the eyepiece, or the main camera narrowing its own field and a
-/// ring blacking out the rest.
-///
-/// The first is what an optic really does and costs a whole extra view. The
-/// second is free and native resolution, at the price of the world outside
-/// the ring, which is simply not drawn.
+/// Picture-in-picture, or the main camera narrowing its own field behind a
+/// mask. The second costs no extra view but loses the world outside the ring.
 #[derive(Resource, Default)]
 pub(crate) struct ScopeFovZoom(pub(crate) bool);
 
@@ -172,11 +167,8 @@ const AIM_BOB_MULTIPLIER: f32 = 0.35;
 /// lower leaves it behind for longer. SENSITIVITY has to keep an ordinary
 /// turn inside MAX_DEG, or every movement alike pins it at full swing.
 ///
-/// SENSITIVITY is degrees of lag per radian the view turned, so the weapon
-/// follows the view rather than the mouse: a player on half sensitivity, and
-/// a scope that divides the turn rate by its magnification, both get a sway
-/// in proportion to what they can actually see move. 50.0 is 1/MOUSE_SENSITIVITY
-/// times the 0.10 degrees per pixel this was tuned at, so hip fire is unchanged.
+/// SENSITIVITY is degrees of lag per radian the view turned, so sway follows
+/// the view rather than the mouse and stays right at any sensitivity or zoom.
 const LOOK_SWAY_SENSITIVITY: f32 = 50.0;
 const LOOK_SWAY_MAX_DEG: f32 = 3.5;
 const LOOK_SWAY_SPEED: f32 = 5.0;

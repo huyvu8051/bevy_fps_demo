@@ -5,28 +5,20 @@ use std::collections::HashMap;
 
 use crate::map::MapRoot;
 
-/// Whether the map's static geometry is welded together after it loads.
-///
-/// desert_city arrives as 4296 nodes and 2363 mesh primitives sharing 28
-/// materials. Every one of those is an entity that must be transform
-/// propagated, visibility checked, extracted into the render world, batched
-/// and submitted, every frame, forever. Profiling put ~3.9ms a frame in the
-/// render world sync alone, against 0.9ms for the whole of the gameplay.
+/// Whether the map's static geometry is welded after it loads. desert_city is
+/// 2363 mesh primitives over 28 materials, each its own entity every frame.
 #[derive(Resource, Default)]
 pub(crate) struct MergeMapMeshes(pub(crate) bool);
 
 #[derive(Component)]
 pub(crate) struct MergedMapMesh;
 
-/// Welding everything sharing a material into one mesh would be fewer entities
-/// still, but a single mesh spanning the map can never be culled: look at a
-/// wall and you draw the whole city behind it. Cells keep the count down and
-/// the culling meaningful. Metres.
+/// Cells, not one mesh per material: a mesh spanning the map can never be
+/// culled. Metres.
 const MERGE_CELL_SIZE: f32 = 24.0;
 
-/// Which attributes a run of vertices carries. Meshes are only welded to
-/// others with the same set -- 2337 of the map's primitives have a colour
-/// channel and 26 do not, and a merged mesh cannot have it both ways.
+/// Meshes only weld to others with the same attributes: a merged mesh cannot
+/// have a colour channel on some vertices and not others.
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 struct Layout {
     colour: bool,
@@ -41,8 +33,7 @@ struct Group {
 
 #[derive(Default)]
 struct Run {
-    /// One real handle per group. AssetId is the key, but a material cannot be
-    /// rebuilt from an id any more, so the first part to land keeps its own.
+    /// AssetId is the key, but a material cannot be rebuilt from an id.
     material: Handle<StandardMaterial>,
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
@@ -60,12 +51,8 @@ fn float3(mesh: &Mesh, attribute: MeshVertexAttribute) -> Option<&Vec<[f32; 3]>>
 
 /// Welds the map's static meshes into one per material per cell.
 ///
-/// Runs once, after world_ready -- which is already the signal that the scene
-/// has loaded *and* that Avian has turned every ColliderConstructorHierarchy
-/// into real colliders. That ordering is the whole safety of this: the
-/// colliders are built from the original meshes and keep their own entities,
-/// so only the drawing is moved. Take the meshes away any earlier and the map
-/// loses its collision.
+/// Runs once after world_ready, which is also the signal that Avian has built
+/// the colliders. Any earlier and the map loses its collision.
 pub(crate) fn merge_static_map_meshes(
     mut commands: Commands,
     enabled: Res<MergeMapMeshes>,
@@ -110,9 +97,7 @@ pub(crate) fn merge_static_map_meshes(
         };
 
         let affine = global.affine();
-        // Normals need the inverse transpose, not the matrix: a non-uniform
-        // scale tilts them the wrong way otherwise, and the map is full of
-        // reused props stretched to fit.
+        // Inverse transpose, not the matrix: non-uniform scale tilts normals.
         let normal_matrix = affine.matrix3.inverse().transpose();
 
         let centre = affine.transform_point3(
@@ -156,8 +141,7 @@ pub(crate) fn merge_static_map_meshes(
     let groups = runs.len();
     for (group, run) in runs {
         let material = run.material.clone();
-        // RENDER_WORLD only: the colliders were built from the originals and
-        // nothing asks this copy a question on the CPU again.
+        // RENDER_WORLD only: nothing reads this copy back.
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, run.positions)
             .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, run.normals)
@@ -177,15 +161,10 @@ pub(crate) fn merge_static_map_meshes(
         ));
     }
 
-    // The originals keep their entity, their transform and their collider;
-    // they just stop being drawn.
-    //
-    // SyncToRenderWorld has to go with them. It is a required component of
-    // Mesh3d, and Bevy does not take required components away when the thing
-    // that required them is removed -- so without this the entity stops being
-    // drawn but carries on being copied into the render world every frame,
-    // which is most of what it cost. Same for the visibility set: no mesh, but
-    // check_visibility would still walk all 2363 of them.
+    // The originals keep their collider and stop being drawn. SyncToRenderWorld
+    // and the visibility set go too: Bevy does not remove required components
+    // when the thing requiring them goes, so the entity would carry on being
+    // copied into the render world every frame.
     for entity in &welded {
         commands.entity(*entity).remove::<(
             Mesh3d,

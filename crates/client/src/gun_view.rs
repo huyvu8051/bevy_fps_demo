@@ -19,10 +19,8 @@ pub(crate) struct ScopeScreen;
 #[derive(Component)]
 pub(crate) struct ScopeReticle;
 
-/// The red bead at dead centre of the duplex. Its own entity because a mesh
-/// carries one material, and the posts are black while the bead is not. Rides
-/// the reticle as a child, so the throw and the magnification scaling are
-/// already done for it.
+/// The red bead at the duplex centre. Its own entity because a mesh carries
+/// one material; a child of the reticle, so throw and scaling come for free.
 #[derive(Component)]
 pub(crate) struct ScopeReticleCentreDot;
 
@@ -308,11 +306,8 @@ pub(crate) fn place_scope_reticle(
     // The mesh is built in radians at unit distance, so this is purely the
     // magnification: holding apparent thickness steady as the target grows is
     // what a second focal plane scope does.
-    //
-    // Against reticle_zoom, not default_zoom. The two were the same number
-    // until the optics were wound up, at which point tying the mark to the
-    // weapon's power tripled the AK's chevron for a change that was meant to
-    // be about magnification alone.
+    // Against reticle_zoom, not default_zoom: tying the mark to the weapon's
+    // power would fatten it every time the optic is wound up.
     reticle.scale = Vec3::splat(active.def().scope.reticle_zoom / zoom.0);
 }
 
@@ -487,20 +482,10 @@ pub(crate) fn gun_view_animation(
         // 20 to clear the magwell, which is not a thing to be looking through.
         let ads_target =
             if (aiming || force_ads()) && gun.reload_remaining <= 0.0 { 1.0 } else { 0.0 };
-        // Latched as the raise begins, and held for the whole of it. Reading
-        // ready_blend live would not do: aiming drives it to zero, so a raise
-        // that started from low ready would slow down halfway through it.
-        // ready_blend is still last frame's here, which is what we want.
-        //
-        // On the rising edge of the request, not on ads_blend being near zero.
-        // ads_blend decays towards zero and never arrives, so testing it
-        // against f32::EPSILON meant the latch could not fire again for most
-        // of a second after the sights came down -- and a player who aimed
-        // again sooner than that kept whatever was latched last time, which
-        // after the first aim of a life is the hip value, for good.
-        //
-        // A raise that starts before the last one has finished coming down is
-        // at least as short a trip as one from low ready, hence the max.
+        // Latched on the rising edge of the request, not on ads_blend nearing
+        // zero -- it decays towards zero and never arrives. ready_blend is
+        // last frame's, before aiming drives it down. The max covers a raise
+        // that starts before the last one finished coming down.
         if ads_target > 0.0 && !gun.ads_wanted {
             gun.ads_from_ready = gun.ready_blend.max(gun.ads_blend);
         }
@@ -671,16 +656,9 @@ fn settle_jitter(seed: f32) -> (Vec3, f32) {
 #[derive(Component)]
 pub(crate) struct ScopeFovMask;
 
-/// Switches the sight picture between the two ways of making it.
-///
-/// In fov-zoom mode there is no second camera and no eyepiece disc: the main
-/// camera narrows its own field, the viewmodel layer comes off it because a
-/// weapon drawn at a 2 degree field fills the screen, and the ring blacks out
-/// everything the optic would not show. Native resolution, and the extra view
-/// costs nothing because there isn't one.
-///
-/// What it cannot do is show the world outside the ring, which a real optic
-/// does and the second camera did.
+/// Switches the sight picture between picture-in-picture and the main camera
+/// narrowing its own field behind a mask. The second costs no extra view but
+/// cannot show the world outside the ring.
 pub(crate) fn apply_scope_fov_zoom(
     mode: Res<ScopeFovZoom>,
     gun: Query<&Gun>,
@@ -695,10 +673,9 @@ pub(crate) fn apply_scope_fov_zoom(
     // frame, so it keeps its weapon on screen whatever the mode says.
     let zoomed = mode.0 && !eyepiece.is_empty() && gun.ads_blend > SCOPE_ACTIVE_ADS_THRESHOLD;
 
-    // The mark comes with it. It hangs off the scope camera, which still has
-    // the eye's transform whether it is drawing or not, and it is scaled
-    // against SCOPE_BASE_FOV / zoom -- which is exactly the field the main
-    // camera is on in this mode, so it lands the same size either way.
+    // The mark comes with it: it hangs off the scope camera, which keeps the
+    // eye's transform whether it draws or not, and is already scaled to this
+    // field.
     *layers = if zoomed {
         RenderLayers::from_layers(&[WORLD_LAYER, SCOPE_MASK_LAYER, SCOPE_RETICLE_LAYER])
     } else {

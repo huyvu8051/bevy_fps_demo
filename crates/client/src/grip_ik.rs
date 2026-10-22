@@ -329,7 +329,6 @@ fn solve_arm(
 }
 
 pub(crate) fn solve_grip_ik(
-    time: Res<Time>,
     bones: Query<&PlayerModelSkeletonBones, With<ViewmodelBody>>,
     trigger: Query<Entity, With<TriggerGripSocket>>,
     fore: Query<Entity, With<ForeGripSocket>>,
@@ -340,7 +339,6 @@ pub(crate) fn solve_grip_ik(
     child_of: Query<&ChildOf>,
     children: Query<&Children>,
     mut transforms: Query<(&mut Transform, &mut GlobalTransform)>,
-    mut next_log: Local<f32>,
 ) {
     let Ok(bones) = bones.single() else { return };
     let (Ok(trigger), Ok(fore), Ok(right_pole), Ok(left_pole)) =
@@ -349,7 +347,8 @@ pub(crate) fn solve_grip_ik(
         return;
     };
 
-    let right = bones.right_arm.zip(bones.right_fore_arm).zip(bones.right_hand).and_then(
+    // The solver returns how far it fell short; nothing reads it.
+    let _unreached = bones.right_arm.zip(bones.right_fore_arm).zip(bones.right_hand).and_then(
         |((arm, fore_arm), hand)| {
             solve_arm(arm, fore_arm, hand, trigger, right_pole, RIGHT_HAND_ON_GUN, RIGHT_GRIP_IN_HAND, &child_of, &children, &mut transforms)
         },
@@ -358,19 +357,10 @@ pub(crate) fn solve_grip_ik(
     // target for as long as that lasts.
     let reloading = gun.single().map(|g| g.reload_remaining > 0.0).unwrap_or(false);
     let left_target = reload_target.single().ok().filter(|_| reloading).unwrap_or(fore);
-    let left = bones.left_arm.zip(bones.left_fore_arm).zip(bones.left_hand).and_then(
+    let _unreached = bones.left_arm.zip(bones.left_fore_arm).zip(bones.left_hand).and_then(
         |((arm, fore_arm), hand)| {
             solve_arm(arm, fore_arm, hand, left_target, left_pole, LEFT_HAND_ON_GUN, LEFT_GRIP_IN_HAND, &child_of, &children, &mut transforms)
         },
     );
 
-    let now = time.elapsed_secs();
-    if now >= *next_log {
-        *next_log = now + 0.5;
-        info!(
-            "[grip] residual right={:?} left={:?}",
-            right.map(|d| format!("{d:.4}m")),
-            left.map(|d| format!("{d:.4}m")),
-        );
-    }
 }

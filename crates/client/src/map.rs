@@ -28,10 +28,8 @@ pub(crate) struct MapRoot;
 #[derive(Resource, Default)]
 pub(crate) struct WorldReady(pub(crate) bool);
 
-/// Optional on purpose. The resource comes from SimPlugin, and the iOS app
-/// builds its own plugin list -- a run condition that *requires* it aborts
-/// the process there rather than just not running, because a panic inside the
-/// render frame callback crosses an FFI boundary and cannot unwind.
+/// Optional on purpose: the resource comes from SimPlugin, which the iOS app's
+/// own plugin list does not build, and a missing one there aborts the process.
 pub(crate) fn world_ready(ready: Option<Res<WorldReady>>) -> bool {
     ready.is_some_and(|ready| ready.0)
 }

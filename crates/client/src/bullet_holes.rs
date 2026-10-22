@@ -180,12 +180,8 @@ pub(crate) fn update_impact_dust(
     }
 }
 
-/// Whether a shot leaves a mark on what it hit.
-///
-/// Each hole is an entity with its own material instance, and they stay until
-/// their lifetime runs out, so a long firefight accumulates them. Gated the
-/// same way tracers are: the flag goes into the spawn rather than a system
-/// deciding not to call it, so there is one place that knows.
+/// Whether a shot leaves a mark. Each hole is an entity with its own material
+/// and they accumulate, so a long firefight adds up.
 #[derive(Resource)]
 pub(crate) struct BulletHolesEnabled(pub(crate) bool);
 

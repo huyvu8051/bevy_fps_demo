@@ -344,12 +344,8 @@ pub(crate) fn droplet_image(size: u32) -> Image {
     )
 }
 
-/// What blood is drawn at all.
-///
-/// Two flags rather than one because they cost differently: spray is a burst
-/// of particles that clear themselves within a second, while a stain is an
-/// entity with its own material that sits on the floor until its lifetime
-/// runs out, so a long fight leaves the room covered in them.
+/// What blood is drawn. Two flags because they cost differently: spray clears
+/// itself within a second, a stain sits there until its lifetime runs out.
 #[derive(Resource, Default, Clone, Copy)]
 pub(crate) struct BloodEnabled {
     pub(crate) spray: bool,

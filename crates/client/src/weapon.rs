@@ -29,64 +29,38 @@ pub(crate) struct WeaponDef {
     pub(crate) recoil: Recoil,
 }
 
-/// How fast the sights come up. Weight and length: a carbine snaps up, a
-/// scoped bolt gun does not.
-///
-/// Two speeds because the weapon starts from two places, and how much the
-/// shorter trip saves is the weapon's own business -- a rifle held low and
-/// wide gains more from being half way there than a carbine already tucked in.
-/// It was one speed and a scale shared by all three.
-///
-/// A raise that begins part way between the two poses interpolates; dropping
-/// the sights uses from_ready either way, because what the rest pose costs is
-/// the distance up, not the distance back down.
+/// How fast the sights come up, from each starting pose. A raise that begins
+/// between them interpolates; dropping the sights always uses from_ready.
 pub(crate) struct AdsSpeed {
     pub(crate) from_ready: f32,
     pub(crate) from_rest: f32,
 }
 
-/// What the weapon sounds like. A 7.62, a 5.56 and a bolt gun do not share a
-/// report, and one file for all three was the last of the global settings.
-///
-/// Both files are cut by tools/make_weapon_sounds.sh. The reload is composed
-/// against reload_duration below, so changing that number means re-running the
-/// script or the mag hits land off the animation.
+/// Cut by tools/make_weapon_sounds.sh. The reload is composed against
+/// reload_duration, so changing that means re-running the script.
 pub(crate) struct WeaponSound {
     pub(crate) fire: &'static str,
     pub(crate) reload: &'static str,
 }
 
-/// What the glass magnifies by. A short scope on a rifle and a sniper's optic
-/// are not the same instrument, and a single global number made them so.
-///
-/// `default` is where a weapon starts and what the reticle is authored
-/// against; the two bounds are what the wheel and the touch slider range over.
-/// A weapon with no glass never shows a scope view, so its numbers only have
-/// to be sane, not meaningful.
+/// What the glass magnifies by. `default` is where ADS starts; the bounds are
+/// the wheel's range. A weapon with no glass never shows a scope view.
 pub(crate) struct Scope {
     pub(crate) min_zoom: f32,
     pub(crate) default_zoom: f32,
     pub(crate) max_zoom: f32,
-    /// The magnification the reticle mesh was drawn against. Its size on
-    /// screen is proportional to this and to nothing else, so it is kept apart
-    /// from default_zoom: winding a weapon up more powerful should not fatten
-    /// its marks along with it.
+    /// The magnification the reticle mesh was drawn against. Its size on screen
+    /// is proportional to this alone, so power and mark size stay independent.
     pub(crate) reticle_zoom: f32,
 }
 
-/// What a shot does, split by what it moves.
-///
-/// The weapon is a child of the camera, so the two halves never touch: nothing
-/// under `view` shifts the gun on screen -- it drags the world past it -- and
-/// nothing under `weapon` moves where the bullets go. One flat list of
-/// thirteen numbers hid that, and `kick_back` sat next to `push_back` meaning
-/// opposite halves of it.
+/// What a shot does, split by what it moves. The weapon is a child of the
+/// camera, so `view` never shifts the gun on screen and `weapon` never moves
+/// the aim.
 pub(crate) struct Recoil {
-    /// How hard the blow lands, on both halves. Every value below runs at the
-    /// mark a shot set at this rate, so it leaves fast and slows as it
-    /// arrives rather than teleporting there -- the impulse, and then the
-    /// shoulder taking it. Well above either recovery rate, or the strike
-    /// reads as a drift.
+    /// How hard the blow lands, on both halves: each value chases the mark a
+    /// shot set at this rate. Well above either recovery rate or it reads as
+    /// a drift.
     pub(crate) strike_speed: f32,
     pub(crate) view: ViewKick,
     pub(crate) weapon: WeaponKick,
