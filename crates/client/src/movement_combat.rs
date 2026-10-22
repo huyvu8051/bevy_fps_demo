@@ -581,17 +581,23 @@ pub(crate) fn shoot(
         stance,
         local_sprinting.0,
     );
-    let spread_x = ops::sin(time.elapsed_secs() * 613.0) * spread;
-    let spread_y = ops::sin(time.elapsed_secs() * 811.0) * spread;
-    let spread_dir = *camera_transform.forward()
-        + *camera_transform.right() * spread_x
-        + *camera_transform.up() * spread_y;
-    let direction = Dir3::new(spread_dir).unwrap_or(camera_transform.forward());
-
+    // Out of the barrel, not out of the eye. The two part company by every
+    // degree of sway and recoil the weapon has, so firing down the view made
+    // the sights a decoration: the shot went where the player looked whatever
+    // the weapon was doing, and no mark on the glass could have told the
+    // truth about it.
     let muzzle_in_cam = gun_transform.mul_transform(gun.muzzle_local);
     let muzzle_world_pos =
         camera_transform.translation + camera_transform.rotation * muzzle_in_cam.translation;
-    let bore_axis = camera_transform.rotation * (muzzle_in_cam.rotation * Vec3::NEG_Z);
+    let bore = camera_transform.rotation * muzzle_in_cam.rotation;
+    let bore_axis = bore * Vec3::NEG_Z;
+
+    let spread_x = ops::sin(time.elapsed_secs() * 613.0) * spread;
+    let spread_y = ops::sin(time.elapsed_secs() * 811.0) * spread;
+    // Scattered about the bore's own axes, so spread stays symmetric about
+    // the barrel however the weapon is canted.
+    let spread_dir = bore_axis + bore * Vec3::X * spread_x + bore * Vec3::Y * spread_y;
+    let direction = Dir3::new(spread_dir).unwrap_or(Dir3::new(bore_axis).unwrap_or(Dir3::NEG_Z));
 
     commands.spawn((
         Mesh3d(vfx_assets.muzzle_fx.flash_mesh.clone()),
@@ -679,14 +685,14 @@ pub(crate) fn shoot(
 
 
     let wall_distance = spatial_query
-        .cast_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, true, &SpatialQueryFilter::default())
+        .cast_ray(muzzle_world_pos, direction, MAX_SHOT_DISTANCE, true, &SpatialQueryFilter::default())
         .map(|hit| hit.distance);
     let predicted_hit = zombies
         .iter()
         .filter_map(|(entity, bones)| {
             let bone_positions = resolve_bone_world_positions(bones, |bone| globals.get(bone).ok().map(GlobalTransform::translation));
-            zombie_hit_damage_ray(camera_transform.translation, direction, MAX_SHOT_DISTANCE, &bone_positions)
-                .map(|hit| (hit.point.distance(camera_transform.translation), entity, hit.point, hit.normal))
+            zombie_hit_damage_ray(muzzle_world_pos, direction, MAX_SHOT_DISTANCE, &bone_positions)
+                .map(|hit| (hit.point.distance(muzzle_world_pos), entity, hit.point, hit.normal))
         })
         .filter(|(distance, ..)| !wall_distance.is_some_and(|w| w < distance - 0.1))
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
@@ -710,13 +716,16 @@ pub(crate) fn shoot(
         vfx_assets.recently_hit.0.insert(entity, RECENTLY_HIT_ZOMBIE_TTL);
     }
 
-    let tracer_end = predicted_hit.map_or(camera_transform.translation + *direction * MAX_SHOT_DISTANCE, |(_, _, point, _)| point);
+    let tracer_end = predicted_hit.map_or(muzzle_world_pos + *direction * MAX_SHOT_DISTANCE, |(_, _, point, _)| point);
     let tracer_start = muzzle_world_pos + Vec3::Y * TRACER_START_Y_OFFSET;
     spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, time.elapsed_secs() * 733.0, tracer_start, tracer_end, show_tracers.0);
 
-    info!("[shot] fired: origin={:.2?} direction={:.2?}", camera_transform.translation, *direction);
+    info!("[shot] fired: origin={:.2?} direction={:.2?}", muzzle_world_pos, *direction);
+    // The muzzle, so the shot that is scored is the one that was drawn. An eye
+    // origin here against a bore origin in the prediction above would have the
+    // two disagree by the whole offset between them.
     commands.trigger(FireShot {
-        origin: camera_transform.translation,
+        origin: muzzle_world_pos,
         direction: *direction,
     });
 }
