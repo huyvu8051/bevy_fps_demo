@@ -140,8 +140,10 @@ static AK47: WeaponDef = WeaponDef {
     ready_offset: Vec3::new(0.045, -0.1905, -0.6194),
     ads_eye_relief: 0.032,
     ads_speed: 10.0,
-    // A short combat optic, not a sniper scope.
-    scope: Scope { min_zoom: 2.0, default_zoom: 4.0, max_zoom: 6.0 },
+    // The floor is half the default, because that is where aim sensitivity,
+    // which is default/zoom against a half speed base, comes back out at
+    // exactly the hip fire rate.
+    scope: Scope { min_zoom: 6.0, default_zoom: 12.0, max_zoom: 20.0 },
     sound: WeaponSound { fire: "audio/weapons/ak47_fire.wav", reload: "audio/weapons/ak47_reload.wav" },
     reload_duration: 2.3,
     fire_rate: 0.1,
@@ -225,7 +227,9 @@ static M24: WeaponDef = WeaponDef {
     ready_offset: Vec3::new(0.045, -0.1905, -0.8870),
     ads_eye_relief: 0.032,
     ads_speed: 6.5,
-    scope: Scope { min_zoom: 6.0, default_zoom: 10.0, max_zoom: 25.0 },
+    // Twice the AK at every stop: the glass it carries is the one thing this
+    // rifle is for.
+    scope: Scope { min_zoom: 12.0, default_zoom: 24.0, max_zoom: 40.0 },
     sound: WeaponSound { fire: "audio/weapons/m24_fire.wav", reload: "audio/weapons/m24_reload.wav" },
     reload_duration: 3.1,
     fire_rate: 1.3,
