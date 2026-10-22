@@ -348,6 +348,7 @@ pub(crate) fn setup_gameplay(
                 settle_twist_current: 0.0,
                 settle_rolled: false,
                 recoil: 0.0,
+                recoil_target: 0.0,
                 ammo: active.def().magazine,
                 reload_remaining: 0.0,
                 ads_blend: 0.0,

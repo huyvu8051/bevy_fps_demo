@@ -61,6 +61,9 @@ pub(crate) struct Gun {
     pub(crate) ads_from_ready: f32,
     pub(crate) base_offset: Vec3,
     pub(crate) recoil: f32,
+    /// Where the kick is headed. The shot sets this; recoil chases it, so the
+    /// blow has a travel instead of arriving whole in one frame.
+    pub(crate) recoil_target: f32,
     pub(crate) ammo: u32,
 
     pub(crate) reload_remaining: f32,

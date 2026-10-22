@@ -41,6 +41,12 @@ pub(crate) struct ViewRecoil {
     pub(crate) pitch_kick: f32,
     pub(crate) yaw_kick: f32,
     pub(crate) push_back: f32,
+    /// Where each of the three above is headed. The shot moves these; the
+    /// three chase them, so the view is struck over a few frames instead of
+    /// being moved whole in one.
+    pub(crate) pitch_target: f32,
+    pub(crate) yaw_target: f32,
+    pub(crate) push_target: f32,
 }
 
 #[derive(Component, Default)]
@@ -183,10 +189,20 @@ pub(crate) fn apply_view_recoil(
     mut query: Query<(&mut Transform, &FpsCamera, &mut ViewRecoil, &Lean)>,
 ) {
     for (mut transform, cam, mut recoil, lean) in &mut query {
-        let remaining = ops::exp(-active.def().recoil.recovery_speed * time.delta_secs());
-        recoil.pitch_kick *= remaining;
-        recoil.yaw_kick *= remaining;
-        recoil.push_back *= remaining;
+        // The marks ease home at the weapon's recovery rate; the view runs
+        // after them far faster. That split is what reads as a blow absorbed
+        // rather than a view being dragged: it leaves hard, slows as it
+        // reaches the end of its travel, and only then comes back.
+        let kick = &active.def().recoil;
+        let settling = ops::exp(-kick.recovery_speed * time.delta_secs());
+        recoil.pitch_target *= settling;
+        recoil.yaw_target *= settling;
+        recoil.push_target *= settling;
+
+        let strike = 1.0 - ops::exp(-kick.strike_speed * time.delta_secs());
+        recoil.pitch_kick += (recoil.pitch_target - recoil.pitch_kick) * strike;
+        recoil.yaw_kick += (recoil.yaw_target - recoil.yaw_kick) * strike;
+        recoil.push_back += (recoil.push_target - recoil.push_back) * strike;
 
         let pitch = (cam.pitch + recoil.pitch_kick).clamp(-1.54, 1.54);
         let yaw = cam.yaw + recoil.yaw_kick;
@@ -551,7 +567,7 @@ pub(crate) fn shoot(
     }
     *cooldown = active.def().fire_rate;
     gun.ammo -= 1;
-    gun.recoil = 1.0;
+    gun.recoil_target = 1.0;
 
     gun.recoil_roll = ops::sin(time.elapsed_secs() * 641.0);
     commands.spawn((AudioPlayer(vfx_assets.gunshot.0.clone()), PlaybackSettings::DESPAWN, GunshotVoice));
@@ -566,11 +582,11 @@ pub(crate) fn shoot(
     };
 
     let kick = &active.def().recoil;
-    recoil.pitch_kick = (recoil.pitch_kick + kick.pitch_kick).min(kick.pitch_kick_max);
+    recoil.pitch_target = (recoil.pitch_target + kick.pitch_kick).min(kick.pitch_kick_max);
 
     let jitter = ops::sin(time.elapsed_secs() * 977.0);
-    recoil.yaw_kick += jitter * kick.yaw_jitter;
-    recoil.push_back = (recoil.push_back + kick.push_back).min(kick.push_back_max);
+    recoil.yaw_target += jitter * kick.yaw_jitter;
+    recoil.push_target = (recoil.push_target + kick.push_back).min(kick.push_back_max);
 
     let stance = vfx_assets.stance.single().copied().unwrap_or_default();
 

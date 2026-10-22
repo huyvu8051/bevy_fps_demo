@@ -443,7 +443,13 @@ pub(crate) fn gun_view_animation(
             })
     });
     for (mut transform, gun_global, mut gun) in &mut query {
-        gun.recoil *= ops::exp(-active.def().recoil.settle_speed * time.delta_secs());
+        // The mark eases home while the kick runs after it. Two rates, so the
+        // blow lands fast and the weapon comes back slowly, which is the
+        // shape of the thing rather than one curve doing both.
+        let kick = &active.def().recoil;
+        gun.recoil_target *= ops::exp(-kick.settle_speed * time.delta_secs());
+        let strike = 1.0 - ops::exp(-kick.strike_speed * time.delta_secs());
+        gun.recoil += (gun.recoil_target - gun.recoil) * strike;
         if gun.reload_remaining > 0.0 {
             gun.reload_remaining = (gun.reload_remaining - time.delta_secs()).max(0.0);
             if gun.reload_remaining == 0.0 {

@@ -57,6 +57,11 @@ pub(crate) struct Recoil {
     pub(crate) push_back_max: f32,
     /// Rate of the exponential both decay by.
     pub(crate) recovery_speed: f32,
+    /// How hard the blow lands. The kick chases its mark at this rate, so it
+    /// leaves fast and slows as it arrives rather than teleporting there --
+    /// the impulse, and then the shoulder taking it. Well above the two
+    /// recovery rates, or the strike reads as a drift.
+    pub(crate) strike_speed: f32,
 
     /// How fast the weapon settles back after a shot. A rate, like
     /// recovery_speed above: the kick eases out rather than sliding home at a
@@ -123,6 +128,7 @@ static AK47: WeaponDef = WeaponDef {
         push_back: 0.009,
         push_back_max: 0.038,
         recovery_speed: 6.6,
+        strike_speed: 60.0,
 
         settle_speed: 21.0,
         kick_back: 0.054,
@@ -160,6 +166,7 @@ static M4A1: WeaponDef = WeaponDef {
         push_back: 0.0065,
         push_back_max: 0.028,
         recovery_speed: 7.4,
+        strike_speed: 70.0,
 
         settle_speed: 23.0,
         kick_back: 0.039,
@@ -199,6 +206,7 @@ static M24: WeaponDef = WeaponDef {
         push_back: 0.030,
         push_back_max: 0.075,
         recovery_speed: 2.6,
+        strike_speed: 28.0,
 
         settle_speed: 5.5,
         kick_back: 0.160,
