@@ -82,7 +82,11 @@ pub(crate) fn spawn_bullet_hole(
     point: Vec3,
     normal: Vec3,
     seed: f32,
+    enabled: bool,
 ) {
+    if !enabled {
+        return;
+    }
     let normal = normal.normalize_or_zero();
     if normal == Vec3::ZERO {
         return;
@@ -173,5 +177,20 @@ pub(crate) fn update_impact_dust(
         if speck.remaining <= 0.0 {
             commands.entity(entity).despawn();
         }
+    }
+}
+
+/// Whether a shot leaves a mark on what it hit.
+///
+/// Each hole is an entity with its own material instance, and they stay until
+/// their lifetime runs out, so a long firefight accumulates them. Gated the
+/// same way tracers are: the flag goes into the spawn rather than a system
+/// deciding not to call it, so there is one place that knows.
+#[derive(Resource)]
+pub(crate) struct BulletHolesEnabled(pub(crate) bool);
+
+impl Default for BulletHolesEnabled {
+    fn default() -> Self {
+        Self(true)
     }
 }

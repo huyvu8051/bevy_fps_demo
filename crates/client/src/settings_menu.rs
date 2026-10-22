@@ -443,6 +443,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "Bloom", CheatBloomButton);
                         spawn_cheat_toggle_button(row, "Grain", CheatGrainButton);
                         spawn_cheat_toggle_button(row, "Fog", CheatFogButton);
+                        spawn_cheat_toggle_button(row, "Holes", CheatHolesButton);
                     });
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
@@ -1516,9 +1517,11 @@ pub(crate) fn render_toggle_buttons(
     mut bloom: ResMut<BloomEnabled>,
     mut grain: ResMut<ScreenEffectsEnabled>,
     mut fog: ResMut<FogEnabled>,
+    mut holes: ResMut<BulletHolesEnabled>,
     bloom_btn: Query<&Interaction, (With<CheatBloomButton>, Changed<Interaction>)>,
     grain_btn: Query<&Interaction, (With<CheatGrainButton>, Changed<Interaction>)>,
     fog_btn: Query<&Interaction, (With<CheatFogButton>, Changed<Interaction>)>,
+    holes_btn: Query<&Interaction, (With<CheatHolesButton>, Changed<Interaction>)>,
 ) {
     if tapped(&bloom_btn) {
         bloom.0 = !bloom.0;
@@ -1529,23 +1532,38 @@ pub(crate) fn render_toggle_buttons(
     if tapped(&fog_btn) {
         fog.0 = !fog.0;
     }
+    if tapped(&holes_btn) {
+        holes.0 = !holes.0;
+    }
 }
 
 pub(crate) fn update_render_toggle_colors(
     bloom: Res<BloomEnabled>,
     grain: Res<ScreenEffectsEnabled>,
     fog: Res<FogEnabled>,
+    holes: Res<BulletHolesEnabled>,
     mut buttons: Query<
-        (&mut BackgroundColor, Option<&CheatBloomButton>, Option<&CheatFogButton>),
-        Or<(With<CheatBloomButton>, With<CheatGrainButton>, With<CheatFogButton>)>,
+        (&mut BackgroundColor, Option<&CheatBloomButton>, Option<&CheatFogButton>, Option<&CheatHolesButton>),
+        Or<(With<CheatBloomButton>, With<CheatGrainButton>, With<CheatFogButton>, With<CheatHolesButton>)>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, is_bloom, is_fog) in &mut buttons {
-        let on = if is_bloom.is_some() { bloom.0 } else if is_fog.is_some() { fog.0 } else { grain.0 };
+    for (mut bg, is_bloom, is_fog, is_holes) in &mut buttons {
+        let on = if is_bloom.is_some() {
+            bloom.0
+        } else if is_fog.is_some() {
+            fog.0
+        } else if is_holes.is_some() {
+            holes.0
+        } else {
+            grain.0
+        };
         *bg = BackgroundColor(color_for(on));
     }
 }
 
 #[derive(Component)]
 pub(crate) struct CheatFogButton;
+
+#[derive(Component)]
+pub(crate) struct CheatHolesButton;

@@ -18,6 +18,7 @@
     bloom_enabled: Some(true),
     screen_effects_enabled: Some(false),
     fog_enabled: Some(false),
+    bullet_holes_enabled: Some(true),
     sensitivity_scale: Some(1.0),
     damage_multiplier: Some(1.0),
     noclip: Some(false),

@@ -323,6 +323,7 @@ pub(crate) fn on_shot_fx(
     show_floating_damage: Res<ShowFloatingDamage>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     holes: Res<BulletHoleAssets>,
+    holes_enabled: Res<BulletHolesEnabled>,
 ) {
     match *trigger.event() {
         ShotFx::ZombieHit { origin, point, normal, damage, killed } => {
@@ -371,7 +372,7 @@ pub(crate) fn on_shot_fx(
             let seed = time.elapsed_secs() * 619.0 + point.x * 13.7 + point.z * 7.3;
             spawn_bullet_tracer(&mut commands, &vfx_assets.tracer, seed, origin, point, show_tracers.0);
             spawn_spark_effects(&mut commands, &vfx_assets.sparks, &time, point, normal);
-            spawn_bullet_hole(&mut commands, &holes, &mut materials, point, normal, seed);
+            spawn_bullet_hole(&mut commands, &holes, &mut materials, point, normal, seed, holes_enabled.0);
         }
         ShotFx::Penetrated { point, normal } => {
             spawn_spark_effects(&mut commands, &vfx_assets.sparks, &time, point, normal);

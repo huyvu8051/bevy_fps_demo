@@ -19,6 +19,7 @@ pub(crate) struct PersistedSettings {
     pub(crate) bloom_enabled: Option<bool>,
     pub(crate) screen_effects_enabled: Option<bool>,
     pub(crate) fog_enabled: Option<bool>,
+    pub(crate) bullet_holes_enabled: Option<bool>,
     pub(crate) muzzle_smoke_enabled: Option<bool>,
     pub(crate) port_smoke_enabled: Option<bool>,
     pub(crate) barrel_smoke_enabled: Option<bool>,
@@ -135,6 +136,7 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(bloom_enabled, BloomEnabled);
     apply!(screen_effects_enabled, ScreenEffectsEnabled);
     apply!(fog_enabled, FogEnabled);
+    apply!(bullet_holes_enabled, BulletHolesEnabled);
     apply!(muzzle_smoke_enabled, MuzzleSmokeEnabled);
     apply!(port_smoke_enabled, PortSmokeEnabled);
     apply!(barrel_smoke_enabled, BarrelSmokeEnabled);
@@ -207,6 +209,7 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(BloomEnabled)
         || changed!(ScreenEffectsEnabled)
         || changed!(FogEnabled)
+        || changed!(BulletHolesEnabled)
         || changed!(MuzzleSmokeEnabled)
         || changed!(PortSmokeEnabled)
         || changed!(BarrelSmokeEnabled)
@@ -253,6 +256,7 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         bloom_enabled: world.get_resource::<BloomEnabled>().map(|r| r.0),
         screen_effects_enabled: world.get_resource::<ScreenEffectsEnabled>().map(|r| r.0),
         fog_enabled: world.get_resource::<FogEnabled>().map(|r| r.0),
+        bullet_holes_enabled: world.get_resource::<BulletHolesEnabled>().map(|r| r.0),
         muzzle_smoke_enabled: world.get_resource::<MuzzleSmokeEnabled>().map(|r| r.0),
         port_smoke_enabled: world.get_resource::<PortSmokeEnabled>().map(|r| r.0),
         barrel_smoke_enabled: world.get_resource::<BarrelSmokeEnabled>().map(|r| r.0),
