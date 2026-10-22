@@ -661,10 +661,9 @@ pub(crate) fn shoot(
         &casings,
         &mut smoke_materials,
         camera_transform,
-        gun_transform,
         Vec3::ZERO,
         time.elapsed_secs() * 311.0,
-        active.def().eject_port,
+        gun_transform.mul_transform(gun.eject_local).translation,
         port_smoke.0,
     );
 

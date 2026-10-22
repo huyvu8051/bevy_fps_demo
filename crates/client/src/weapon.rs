@@ -21,11 +21,6 @@ pub(crate) struct WeaponDef {
     /// a carbine snaps up, a scoped bolt gun does not.
     pub(crate) ads_speed: f32,
 
-    /// Added to the gun's own offset but along the camera's axes, not the
-    /// gun's, so it tracks where the gun sits without taking its sway. Moving
-    /// the mesh origin moves this with it.
-    pub(crate) eject_port: Vec3,
-
     pub(crate) scope: Scope,
     pub(crate) fire_rate: f32,
     pub(crate) magazine: u32,
@@ -117,7 +112,6 @@ static AK47: WeaponDef = WeaponDef {
     ads_speed: 10.0,
     // A short combat optic, not a sniper scope.
     scope: Scope { min_zoom: 2.0, default_zoom: 4.0, max_zoom: 6.0 },
-    eject_port: Vec3::new(0.0410, 0.0086, 0.4905),
     fire_rate: 0.1,
     magazine: 50,
     // 7.62: slower, heavier, looser at the top of a burst. Every axis above
@@ -154,7 +148,6 @@ static M4A1: WeaponDef = WeaponDef {
     ads_speed: 12.5,
     // Irons: the scope view never comes on, so these only have to be sane.
     scope: Scope { min_zoom: 1.0, default_zoom: 1.0, max_zoom: 1.0 },
-    eject_port: Vec3::new(0.06, 0.02, 0.33),
     fire_rate: 0.085,
     magazine: 30,
     // 5.56: about two thirds the AK's kick, settling faster. Cut by more than
@@ -197,8 +190,6 @@ static M24: WeaponDef = WeaponDef {
     ads_eye_relief: 0.032,
     ads_speed: 6.5,
     scope: Scope { min_zoom: 6.0, default_zoom: 10.0, max_zoom: 25.0 },
-    // Eyeballed, like the other two. The mesh has no Socket_Eject yet.
-    eject_port: Vec3::new(0.0525, 0.0158, 0.7560),
     fire_rate: 1.3,
     magazine: 5,
     recoil: Recoil {

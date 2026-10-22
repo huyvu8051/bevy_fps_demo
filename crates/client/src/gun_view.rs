@@ -84,6 +84,12 @@ pub(crate) fn force_ads() -> bool {
 #[derive(Component)]
 pub(crate) struct AimSocket;
 
+/// Where the brass leaves the weapon, marked on the mesh so the shell comes
+/// out of the port rather than out of a number that has to be guessed against
+/// a receiver nobody measured.
+#[derive(Component)]
+pub(crate) struct EjectSocket;
+
 /// The front post on a weapon that sights down irons. Paired with AimSocket it
 /// gives the sight line, the same way the scope pair gives the optical axis.
 #[derive(Component)]
@@ -102,11 +108,16 @@ pub(crate) struct MuzzleSocket;
 /// What it is composed with afterwards is the current weapon transform.
 pub(crate) fn track_muzzle_socket(
     muzzle: Query<&GlobalTransform, With<MuzzleSocket>>,
+    eject: Query<&GlobalTransform, With<EjectSocket>>,
     mut gun: Query<(&GlobalTransform, &mut Gun)>,
 ) {
-    let Ok(socket) = muzzle.single() else { return };
     let Ok((gun_global, mut gun)) = gun.single_mut() else { return };
-    gun.muzzle_local = socket.reparented_to(gun_global);
+    if let Ok(socket) = muzzle.single() {
+        gun.muzzle_local = socket.reparented_to(gun_global);
+    }
+    if let Ok(socket) = eject.single() {
+        gun.eject_local = socket.reparented_to(gun_global);
+    }
 }
 
 /// Reads the scope's optical axis off the two points the mesh marks along the
@@ -174,6 +185,7 @@ pub(crate) fn wire_weapon_sockets(
             "Socket_ScopeView" => socket.insert(ScopeViewSocket),
             "Socket_Aim" => socket.insert(AimSocket),
             "Socket_SightFront" => socket.insert(FrontSightSocket),
+            "Socket_Eject" => socket.insert(EjectSocket),
             "Socket_Muzzle" => socket.insert(MuzzleSocket),
             "Socket_RearGrip" => socket.insert(TriggerGripSocket),
             "Socket_FrontGrip" => socket.insert(ForeGripSocket),

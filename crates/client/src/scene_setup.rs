@@ -341,6 +341,7 @@ pub(crate) fn setup_gameplay(
                 ads_from_ready: 0.0,
                 base_offset: active.def().rest_offset,
                 muzzle_local: Transform::IDENTITY,
+                eject_local: Transform::IDENTITY,
                 settle_jitter: Vec3::ZERO,
                 settle_current: Vec3::ZERO,
                 settle_twist_jitter: 0.0,

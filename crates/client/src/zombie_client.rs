@@ -88,6 +88,10 @@ pub(crate) struct Gun {
     /// the barrel can be placed from the current weapon transform without
     /// reaching for the socket entity or carrying a stale world transform.
     pub(crate) muzzle_local: Transform,
+    /// Where the brass leaves, in the weapon.s own space. Cached beside the
+    /// muzzle and for the same reason: the socket never moves inside the
+    /// weapon, so the propagated copy is exact rather than a frame late.
+    pub(crate) eject_local: Transform,
 
     pub(crate) settle_jitter: Vec3,
     pub(crate) settle_current: Vec3,

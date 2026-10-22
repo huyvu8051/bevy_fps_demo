@@ -78,13 +78,15 @@ pub(crate) fn eject_casing(
     assets: &CasingAssets,
     smoke_materials: &mut Assets<MuzzleSmokeMaterial>,
     eye: &Transform,
-    gun: &Transform,
     player_velocity: Vec3,
     seed: f32,
-    eject_port: Vec3,
+    // Already in the eye's frame, turn of the weapon included. Composing it
+    // here from a loose offset would miss that turn, and the port sits half a
+    // metre down the weapon, so every degree of sway threw the brass wide.
+    port_in_eye: Vec3,
     smoke: bool,
 ) {
-    let port = eye.translation + eye.rotation * (gun.translation + eject_port);
+    let port = eye.translation + eye.rotation * port_in_eye;
     let right = *eye.right();
     let up = *eye.up();
     let away = (right + up * EJECT_UP + scatter(seed) * EJECT_SCATTER).normalize_or_zero();
