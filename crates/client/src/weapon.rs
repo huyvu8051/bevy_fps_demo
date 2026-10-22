@@ -49,7 +49,11 @@ pub(crate) struct Recoil {
     /// Rate of the exponential both decay by.
     pub(crate) recovery_speed: f32,
 
-    pub(crate) duration: f32,
+    /// How fast the weapon settles back after a shot. A rate, like
+    /// recovery_speed above: the kick eases out rather than sliding home at a
+    /// constant rate and stopping dead, which is the same curve the sights
+    /// come up on.
+    pub(crate) settle_speed: f32,
     pub(crate) kick_back: f32,
     pub(crate) kick_up: f32,
     /// Degrees the weapon turns. Roll and yaw flip sign per shot.
@@ -110,7 +114,7 @@ static AK47: WeaponDef = WeaponDef {
         push_back_max: 0.038,
         recovery_speed: 6.6,
 
-        duration: 0.11,
+        settle_speed: 21.0,
         kick_back: 0.054,
         kick_up: 0.0050,
         tilt_up_deg: 1.2,
@@ -146,7 +150,7 @@ static M4A1: WeaponDef = WeaponDef {
         push_back_max: 0.028,
         recovery_speed: 7.4,
 
-        duration: 0.10,
+        settle_speed: 23.0,
         kick_back: 0.039,
         kick_up: 0.0036,
         tilt_up_deg: 0.9,
@@ -186,7 +190,7 @@ static M24: WeaponDef = WeaponDef {
         push_back_max: 0.075,
         recovery_speed: 2.6,
 
-        duration: 0.42,
+        settle_speed: 5.5,
         kick_back: 0.160,
         kick_up: 0.014,
         tilt_up_deg: 6.0,

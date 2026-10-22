@@ -206,11 +206,16 @@ pub(crate) struct GunPoseTimings {
     bob_y: f32,
 }
 
-pub(crate) fn gun_pose_timings(gun: &Gun, def: &WeaponDef) -> GunPoseTimings {
-    let recoil_t = gun.recoil / def.recoil.duration;
+pub(crate) fn gun_pose_timings(gun: &Gun) -> GunPoseTimings {
+    let recoil_t = gun.recoil;
     let reload_t = gun.reload_remaining / RELOAD_DURATION;
 
-    let dip = 4.0 * reload_t * (1.0 - reload_t);
+    // A raised cosine rather than the parabola 4t(1-t) it replaces. Both peak
+    // at 1 halfway through and both end at 0, but the parabola arrives and
+    // leaves at full speed, so the weapon snapped into the dip and snapped
+    // back out of it. This one is flat at both ends: it eases in and eases
+    // out, which is the curve the sights and the kick already use.
+    let dip = ops::sin(std::f32::consts::PI * reload_t).powi(2);
     let bob_aim_scale = 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER);
     let bob_x = ops::sin(gun.bob_phase) * GUN_BOB_AMOUNT_X * gun.bob_blend * bob_aim_scale;
     // abs() already doubles the rate: |sin| repeats every pi, not every tau.
@@ -410,9 +415,7 @@ pub(crate) fn gun_view_animation(
             })
     });
     for (mut transform, gun_global, mut gun) in &mut query {
-        if gun.recoil > 0.0 {
-            gun.recoil = (gun.recoil - time.delta_secs()).max(0.0);
-        }
+        gun.recoil *= ops::exp(-active.def().recoil.settle_speed * time.delta_secs());
         if gun.reload_remaining > 0.0 {
             gun.reload_remaining = (gun.reload_remaining - time.delta_secs()).max(0.0);
             if gun.reload_remaining == 0.0 {
@@ -500,7 +503,7 @@ pub(crate) fn gun_view_animation(
         gun.look_sway += sway_gap * sway_step;
 
         let kick = &active.def().recoil;
-        let timings = gun_pose_timings(&gun, active.def());
+        let timings = gun_pose_timings(&gun);
 
         // Faded out by ads_blend, the way the positional jitter already is
         // through resting: a weapon canted on its own bore would take the

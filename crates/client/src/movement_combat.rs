@@ -550,7 +550,7 @@ pub(crate) fn shoot(
     }
     *cooldown = active.def().fire_rate;
     gun.ammo -= 1;
-    gun.recoil = active.def().recoil.duration;
+    gun.recoil = 1.0;
 
     gun.recoil_roll = ops::sin(time.elapsed_secs() * 641.0);
     commands.spawn((AudioPlayer(vfx_assets.gunshot.0.clone()), PlaybackSettings::DESPAWN, GunshotVoice));
