@@ -162,7 +162,13 @@ const AIM_BOB_MULTIPLIER: f32 = 0.35;
 /// How far the weapon lags behind a turn. SPEED is what reads as weight:
 /// lower leaves it behind for longer. SENSITIVITY has to keep an ordinary
 /// turn inside MAX_DEG, or every movement alike pins it at full swing.
-const LOOK_SWAY_SENSITIVITY: f32 = 0.10;
+///
+/// SENSITIVITY is degrees of lag per radian the view turned, so the weapon
+/// follows the view rather than the mouse: a player on half sensitivity, and
+/// a scope that divides the turn rate by its magnification, both get a sway
+/// in proportion to what they can actually see move. 50.0 is 1/MOUSE_SENSITIVITY
+/// times the 0.10 degrees per pixel this was tuned at, so hip fire is unchanged.
+const LOOK_SWAY_SENSITIVITY: f32 = 50.0;
 const LOOK_SWAY_MAX_DEG: f32 = 3.5;
 const LOOK_SWAY_SPEED: f32 = 5.0;
 
@@ -457,6 +463,8 @@ struct PerfTimings {
 
 }
 
+/// Radians the view turned this frame, after sensitivity and magnification.
+/// The weapon lags this, not the raw mouse; see LOOK_SWAY_SENSITIVITY.
 #[derive(Resource, Default)]
 struct MouseLookDelta(Vec2);
 

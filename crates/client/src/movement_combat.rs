@@ -198,16 +198,20 @@ pub(crate) fn mouse_look(
     }
 
     let delta: Vec2 = motion.read().map(|e| e.delta).sum();
-    look_delta.0 = delta;
-    if delta == Vec2::ZERO {
-        return;
-    }
-
     let sensitivity = if is_aiming(cursor, &aim_held, touch_aiming.0) {
         MOUSE_SENSITIVITY * AIM_MOUSE_SENSITIVITY_MULTIPLIER * (active.def().scope.default_zoom / zoom.0)
     } else {
         MOUSE_SENSITIVITY
     } * sensitivity_scale.0;
+    // Radians the view turned, not pixels the mouse moved. Sway is a weapon
+    // left behind by a turn, so it has to be measured against the turn: read
+    // off the mouse it ignored both the aim multiplier and the magnification,
+    // and a scope that slowed the view to a quarter swam four times as much.
+    look_delta.0 = delta * sensitivity;
+    if delta == Vec2::ZERO {
+        return;
+    }
+
     for mut cam in &mut query {
         cam.yaw -= delta.x * sensitivity;
         cam.pitch = (cam.pitch - delta.y * sensitivity).clamp(-PITCH_CLAMP, PITCH_CLAMP);
