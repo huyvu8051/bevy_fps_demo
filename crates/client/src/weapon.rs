@@ -166,7 +166,10 @@ static AK47: WeaponDef = WeaponDef {
 
         settle_speed: 21.0,
         kick_back: 0.054,
-        kick_up: 0.0050,
+        // Above the 12.8mm the 1.2 degree tilt drops the stock by over its own
+        // 612mm lever, or the weapon reads as sinking at the shot rather than
+        // rising: the tilt pivots on the muzzle, so it moves the tail.
+        kick_up: 0.0180,
         tilt_up_deg: 1.2,
         roll_deg: 0.8,
         yaw_kick_deg: 0.7,
