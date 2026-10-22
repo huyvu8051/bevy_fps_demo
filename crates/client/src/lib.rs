@@ -137,10 +137,12 @@ use splash_screen::*;
 /// which is the whole of how near or far the weapon reads.
 ///
 /// Per weapon, because the weapons are not the same length: a rifle that
-/// reaches a quarter metre further out wants the camera in closer to frame
-/// the same way. Held in a resource rather than read straight off the table
-/// so it can ease across a weapon swap, and so every one of the four places
-/// that has to agree on it reads the same number in the same frame.
+/// reaches a quarter metre further out fills more of the frame, so the camera
+/// stands further back to leave it room.
+///
+/// Held in a resource rather than read straight off the table so it can ease
+/// across a weapon swap, and so every one of the four places that has to
+/// agree on it reads the same number in the same frame.
 #[derive(Resource)]
 pub(crate) struct ViewPullback(pub(crate) f32);
 

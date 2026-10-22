@@ -173,7 +173,7 @@ static AK47: WeaponDef = WeaponDef {
         // Above the 12.8mm the 1.2 degree tilt drops the stock by over its own
         // 612mm lever, or the weapon reads as sinking at the shot rather than
         // rising: the tilt pivots on the muzzle, so it moves the tail.
-        kick_up: 0.0180,
+        kick_up: 0.0260,
         tilt_up_deg: 1.2,
         roll_deg: 0.8,
         yaw_kick_deg: 0.7,
@@ -214,7 +214,9 @@ static M4A1: WeaponDef = WeaponDef {
 
         settle_speed: 23.0,
         kick_back: 0.055,
-        kick_up: 0.0036,
+        // Clears the 8.0mm its own 0.9 degree tilt drops the stock by, the way
+        // the AK clears its 12.8mm.
+        kick_up: 0.0170,
         tilt_up_deg: 0.9,
         roll_deg: 0.6,
         yaw_kick_deg: 0.5,
@@ -240,9 +242,9 @@ static M24: WeaponDef = WeaponDef {
     ready_offset: Vec3::new(0.045, -0.1905, -0.8870),
     ads_eye_relief: 0.032,
     ads_speed: 6.5,
-    // 268mm longer than the AK and it shows: the camera comes in 60mm to
-    // frame it the way the shorter rifles already sit.
-    view_pullback: 0.07,
+    // 268mm longer than the AK and it shows: the camera stands 50mm further
+    // back than the carbines so the whole rifle has room in the frame.
+    view_pullback: 0.18,
     // Twice the AK at every stop: the glass it carries is the one thing this
     // rifle is for.
     scope: Scope { min_zoom: 12.0, default_zoom: 24.0, max_zoom: 40.0, reticle_zoom: 10.0 },
