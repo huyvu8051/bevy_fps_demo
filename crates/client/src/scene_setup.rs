@@ -442,6 +442,13 @@ pub(crate) fn setup_gameplay(
     };
 
     commands.spawn((
+        Name::new("ReloadHandTarget"),
+        Transform::default(),
+        ReloadHandTarget,
+        ChildOf(camera),
+    ));
+
+    commands.spawn((
         Mesh3d(reticles.chevron.0.clone()),
         MeshMaterial3d(reticles.chevron.1.clone()),
         // Hung off the camera, but aimed down the barrel each frame. Parenting

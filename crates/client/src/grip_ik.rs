@@ -333,6 +333,8 @@ pub(crate) fn solve_grip_ik(
     bones: Query<&PlayerModelSkeletonBones, With<ViewmodelBody>>,
     trigger: Query<Entity, With<TriggerGripSocket>>,
     fore: Query<Entity, With<ForeGripSocket>>,
+    reload_target: Query<Entity, With<ReloadHandTarget>>,
+    gun: Query<&Gun>,
     right_pole: Query<Entity, With<RightPoleTarget>>,
     left_pole: Query<Entity, With<LeftPoleTarget>>,
     child_of: Query<&ChildOf>,
@@ -352,9 +354,13 @@ pub(crate) fn solve_grip_ik(
             solve_arm(arm, fore_arm, hand, trigger, right_pole, RIGHT_HAND_ON_GUN, RIGHT_GRIP_IN_HAND, &child_of, &children, &mut transforms)
         },
     );
+    // The reload walks the left hand off the weapon, so it answers to its own
+    // target for as long as that lasts.
+    let reloading = gun.single().map(|g| g.reload_remaining > 0.0).unwrap_or(false);
+    let left_target = reload_target.single().ok().filter(|_| reloading).unwrap_or(fore);
     let left = bones.left_arm.zip(bones.left_fore_arm).zip(bones.left_hand).and_then(
         |((arm, fore_arm), hand)| {
-            solve_arm(arm, fore_arm, hand, fore, left_pole, LEFT_HAND_ON_GUN, LEFT_GRIP_IN_HAND, &child_of, &children, &mut transforms)
+            solve_arm(arm, fore_arm, hand, left_target, left_pole, LEFT_HAND_ON_GUN, LEFT_GRIP_IN_HAND, &child_of, &children, &mut transforms)
         },
     );
 

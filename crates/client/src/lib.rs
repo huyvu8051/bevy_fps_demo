@@ -839,6 +839,7 @@ impl Plugin for GamePlugin {
     app.add_systems(
         PostUpdate,
         (
+            drive_reload_hand,
             update_pole_targets,
             solve_grip_ik,
         )
