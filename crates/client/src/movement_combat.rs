@@ -333,7 +333,10 @@ pub(crate) fn apply_aim_dof(
     let (Ok(cursor), Ok(camera_entity)) = (cursor.single(), camera.single()) else {
         return;
     };
-    if aim_blur.0 && is_aiming(cursor, &aim_held, touch_aiming.0) {
+    // force_ads() counts, the way it does for the weapon pose. A flag that
+    // pins the sights up but leaves the sighted post-processing off makes a
+    // measurement run read cheaper than the game it is measuring.
+    if aim_blur.0 && (is_aiming(cursor, &aim_held, touch_aiming.0) || force_ads()) {
         let focal_distance = if dof_focal_alt.0 {
             AIM_DOF_FOCAL_DISTANCE_B
         } else {
