@@ -373,6 +373,7 @@ pub(crate) fn update_scope_lens(
 }
 
 pub(crate) fn gun_view_animation(
+    trigger_grip: Query<&GlobalTransform, With<TriggerGripSocket>>,
     time: Res<Time>,
     mouse: Res<ButtonInput<MouseButton>>,
     touch_aiming: Res<TouchAiming>,
@@ -513,8 +514,25 @@ pub(crate) fn gun_view_animation(
         // sights off the camera axis. The optical correction fades the other
         // way, since it is only wanted while looking through the glass.
         let settle_twist = gun.settle_twist_current * (1.0 - gun.ads_blend);
+        // Muzzle up and rolled onto its side, so the magazine well comes round
+        // to face the hand that has to empty it.
+        //
+        // Turned about the firing grip rather than about the mesh origin. That
+        // origin is on the bore at the muzzle, so turning about it pins the
+        // muzzle and swings the stock down instead -- the weapon drops its
+        // tail rather than lifting its nose, which is the wrong half moving.
+        // Rotating about a point means turning, then putting back what the
+        // turn moved that point by.
+        let reload_turn = Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip)
+            * Quat::from_rotation_z(RELOAD_ROLL_DEG.to_radians() * timings.dip);
+        let grip_in_gun = trigger_grip
+            .single()
+            .map(|socket| socket.reparented_to(gun_global).translation)
+            .unwrap_or(Vec3::ZERO);
+        let reload_swing = grip_in_gun - reload_turn * grip_in_gun;
+
         let base_rotation = Quat::from_rotation_z(settle_twist.to_radians())
-            * Quat::from_rotation_x(RELOAD_TILT_DEG.to_radians() * timings.dip)
+            * reload_turn
             * Quat::IDENTITY.slerp(gun.optical_fix, gun.ads_blend);
 
         let resting = gun.base_offset.lerp(active.def().ready_offset, gun.ready_blend) + gun.settle_current;
@@ -539,6 +557,7 @@ pub(crate) fn gun_view_animation(
 
         let swapped_x = base_pos.x * (1.0 - 2.0 * gun.shoulder_blend);
         transform.translation = Vec3::new(swapped_x, base_pos.y, base_pos.z)
+            + reload_swing
             + Vec3::new(
                 timings.bob_x,
                 kick.kick_up * timings.recoil_t - RELOAD_DIP * timings.dip - timings.bob_y

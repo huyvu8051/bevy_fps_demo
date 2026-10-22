@@ -174,7 +174,11 @@ const WALL_GUN_RAISE_SPEED: f32 = 10.0;
 const RELOAD_DURATION: f32 = 1.6;
 
 const RELOAD_DIP: f32 = 0.12;
-const RELOAD_TILT_DEG: f32 = 25.0;
+/// Muzzle up, about the firing grip. Degrees.
+const RELOAD_TILT_DEG: f32 = 22.0;
+/// Roll about the bore during a reload. Negative brings the magazine well
+/// round towards the weak hand, which is the hand that pulls the magazine.
+const RELOAD_ROLL_DEG: f32 = -20.0;
 
 
 const MUZZLE_FLASH_LIFETIME: f32 = 0.05;
