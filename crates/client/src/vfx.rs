@@ -92,6 +92,7 @@ pub(crate) fn on_shot_confirmed(
     globals: Query<&GlobalTransform>,
     child_of: Query<&ChildOf>,
     show_floating_damage: Res<ShowFloatingDamage>,
+    blood_enabled: Res<BloodEnabled>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let ShotConfirmed { origin, point, normal, damage, killed } = *trigger.event();
@@ -115,7 +116,7 @@ pub(crate) fn on_shot_confirmed(
     }
 
     let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
-    spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0, &mut materials, (point - origin).normalize_or_zero());
+    spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0, &mut materials, (point - origin).normalize_or_zero(), *blood_enabled);
 }
 
 
@@ -324,6 +325,7 @@ pub(crate) fn on_shot_fx(
     mut materials: ResMut<Assets<StandardMaterial>>,
     holes: Res<BulletHoleAssets>,
     holes_enabled: Res<BulletHolesEnabled>,
+    blood_enabled: Res<BloodEnabled>,
 ) {
     match *trigger.event() {
         ShotFx::ZombieHit { origin, point, normal, damage, killed } => {
@@ -356,7 +358,7 @@ pub(crate) fn on_shot_fx(
                     .and_then(|(_, _, bones)| nearest_zombie_bone(bones, point, &globals))
             };
             let bone_for_blood = nearest_bone.as_ref().map(|(entity, global)| (*entity, global));
-            spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0, &mut materials, (point - origin).normalize_or_zero());
+            spawn_zombie_hit_feedback(&mut commands, &vfx_assets.blood, &vfx_assets.sparks, &spatial_query, &time, point, normal, damage, bone_for_blood, killed, show_floating_damage.0, &mut materials, (point - origin).normalize_or_zero(), *blood_enabled);
         }
         ShotFx::SurfaceHit { origin, point, normal } => {
             if show_hit_markers.0 {

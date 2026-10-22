@@ -20,6 +20,8 @@ pub(crate) struct PersistedSettings {
     pub(crate) screen_effects_enabled: Option<bool>,
     pub(crate) fog_enabled: Option<bool>,
     pub(crate) bullet_holes_enabled: Option<bool>,
+    pub(crate) blood_spray_enabled: Option<bool>,
+    pub(crate) blood_stains_enabled: Option<bool>,
     pub(crate) muzzle_smoke_enabled: Option<bool>,
     pub(crate) port_smoke_enabled: Option<bool>,
     pub(crate) barrel_smoke_enabled: Option<bool>,
@@ -137,6 +139,16 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(screen_effects_enabled, ScreenEffectsEnabled);
     apply!(fog_enabled, FogEnabled);
     apply!(bullet_holes_enabled, BulletHolesEnabled);
+    // BloodEnabled is two flags in one resource, so the macro above, which
+    // assumes a newtype, does not fit it.
+    if let Some(mut blood) = world.get_resource_mut::<BloodEnabled>() {
+        if let Some(v) = settings.blood_spray_enabled {
+            blood.spray = v;
+        }
+        if let Some(v) = settings.blood_stains_enabled {
+            blood.stains = v;
+        }
+    }
     apply!(muzzle_smoke_enabled, MuzzleSmokeEnabled);
     apply!(port_smoke_enabled, PortSmokeEnabled);
     apply!(barrel_smoke_enabled, BarrelSmokeEnabled);
@@ -210,6 +222,7 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(ScreenEffectsEnabled)
         || changed!(FogEnabled)
         || changed!(BulletHolesEnabled)
+        || changed!(BloodEnabled)
         || changed!(MuzzleSmokeEnabled)
         || changed!(PortSmokeEnabled)
         || changed!(BarrelSmokeEnabled)
@@ -257,6 +270,8 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         screen_effects_enabled: world.get_resource::<ScreenEffectsEnabled>().map(|r| r.0),
         fog_enabled: world.get_resource::<FogEnabled>().map(|r| r.0),
         bullet_holes_enabled: world.get_resource::<BulletHolesEnabled>().map(|r| r.0),
+        blood_spray_enabled: world.get_resource::<BloodEnabled>().map(|r| r.spray),
+        blood_stains_enabled: world.get_resource::<BloodEnabled>().map(|r| r.stains),
         muzzle_smoke_enabled: world.get_resource::<MuzzleSmokeEnabled>().map(|r| r.0),
         port_smoke_enabled: world.get_resource::<PortSmokeEnabled>().map(|r| r.0),
         barrel_smoke_enabled: world.get_resource::<BarrelSmokeEnabled>().map(|r| r.0),

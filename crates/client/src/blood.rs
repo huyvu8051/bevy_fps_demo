@@ -36,25 +36,33 @@ pub(crate) fn spawn_blood_effects(
     killed: bool,
     materials: &mut Assets<StandardMaterial>,
     shot_direction: Vec3,
+    blood: BloodEnabled,
 ) {
-    spawn_blood_burst(commands, blood_assets, materials, hit_point, hit_normal, time.elapsed_secs() * 311.0);
-    spawn_exit_wound(commands, blood_assets, materials, spatial_query, hit_point, shot_direction, time.elapsed_secs() * 541.0);
+    if blood.spray {
+        spawn_blood_burst(commands, blood_assets, materials, hit_point, hit_normal, time.elapsed_secs() * 311.0);
 
-    for i in 0..BLOOD_PARTICLE_COUNT {
-
-        let seed = time.elapsed_secs() * 977.0 + i as f32 * 131.7;
-        let dir = Vec3::new(ops::sin(seed * 1.3), ops::sin(seed * 0.7).abs() * 0.6, ops::sin(seed * 2.1))
-            .normalize_or_zero();
-        commands.spawn((
-            Mesh3d(blood_assets.particle_mesh.clone()),
-            MeshMaterial3d(blood_assets.particle_material.clone()),
-            Transform::from_translation(hit_point),
-            BloodParticle {
-                velocity: dir * BLOOD_PARTICLE_SPEED,
-                remaining: BLOOD_PARTICLE_LIFETIME,
-            },
-        ));
+        for i in 0..BLOOD_PARTICLE_COUNT {
+            let seed = time.elapsed_secs() * 977.0 + i as f32 * 131.7;
+            let dir = Vec3::new(ops::sin(seed * 1.3), ops::sin(seed * 0.7).abs() * 0.6, ops::sin(seed * 2.1))
+                .normalize_or_zero();
+            commands.spawn((
+                Mesh3d(blood_assets.particle_mesh.clone()),
+                MeshMaterial3d(blood_assets.particle_material.clone()),
+                Transform::from_translation(hit_point),
+                BloodParticle {
+                    velocity: dir * BLOOD_PARTICLE_SPEED,
+                    remaining: BLOOD_PARTICLE_LIFETIME,
+                },
+            ));
+        }
     }
+
+    if !blood.stains {
+        return;
+    }
+    // The exit wound is a stain on whatever is behind the target, so it goes
+    // with the stains rather than with the spray.
+    spawn_exit_wound(commands, blood_assets, materials, spatial_query, hit_point, shot_direction, time.elapsed_secs() * 541.0);
 
     match bone {
         Some((entity, bone_global)) => {
@@ -334,4 +342,16 @@ pub(crate) fn droplet_image(size: u32) -> Image {
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     )
+}
+
+/// What blood is drawn at all.
+///
+/// Two flags rather than one because they cost differently: spray is a burst
+/// of particles that clear themselves within a second, while a stain is an
+/// entity with its own material that sits on the floor until its lifetime
+/// runs out, so a long fight leaves the room covered in them.
+#[derive(Resource, Default, Clone, Copy)]
+pub(crate) struct BloodEnabled {
+    pub(crate) spray: bool,
+    pub(crate) stains: bool,
 }

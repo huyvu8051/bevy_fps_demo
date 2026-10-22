@@ -113,7 +113,10 @@ fn part_chain(bones: &ZombieHitboxBones, part: ZombiePart) -> [Option<Entity>; 3
     }
 }
 
-fn spray(commands: &mut Commands, blood: &BloodAssets, at: Vec3, along: Vec3, count: usize, speed: f32, seed: f32) {
+fn spray(commands: &mut Commands, blood: &BloodAssets, at: Vec3, along: Vec3, count: usize, speed: f32, seed: f32, enabled: bool) {
+    if !enabled {
+        return;
+    }
     let sideways = along.any_orthonormal_vector();
     let other = along.cross(sideways);
     for i in 0..count {
@@ -139,6 +142,7 @@ pub(crate) fn sever_limbs(
     mut commands: Commands,
     time: Res<Time>,
     blood: Res<BloodAssets>,
+    blood_enabled: Res<BloodEnabled>,
     gore: Res<GoreAssets>,
     limb_damage: Res<LimbDamage>,
     globals: Query<&GlobalTransform>,
@@ -183,7 +187,7 @@ pub(crate) fn sever_limbs(
                 cut.along = along;
                 let state = if alive.contains(entity) { "ALIVE" } else { "dead" };
                 info!("[dismember] {state} zombie={entity} lost {:?} at joint {}", cut.part, cut.cut_at);
-                spray(&mut commands, &blood, at, along, BURST_COUNT, BURST_SPEED, at.x * 31.7 + at.z * 13.1);
+                spray(&mut commands, &blood, at, along, BURST_COUNT, BURST_SPEED, at.x * 31.7 + at.z * 13.1, blood_enabled.spray);
                 throw_part(&mut commands, &gore, cut.part, at, along, length, at.x * 17.3 + at.z * 29.1);
             }
 
@@ -194,7 +198,7 @@ pub(crate) fn sever_limbs(
             cut.next_drop -= dt;
             if cut.next_drop <= 0.0 {
                 cut.next_drop = JET_INTERVAL;
-                spray(&mut commands, &blood, at, cut.along, JET_COUNT, JET_SPEED, at.y * 97.1 + cut.bleed * 53.3);
+                spray(&mut commands, &blood, at, cut.along, JET_COUNT, JET_SPEED, at.y * 97.1 + cut.bleed * 53.3, blood_enabled.spray);
             }
         }
     }
@@ -313,6 +317,7 @@ pub(crate) fn update_gore(
     time: Res<Time>,
     mut commands: Commands,
     blood: Res<BloodAssets>,
+    blood_enabled: Res<BloodEnabled>,
     mut pieces: Query<(Entity, &mut GorePiece, &GlobalTransform)>,
 ) {
     let dt = time.delta_secs();
@@ -341,6 +346,6 @@ pub(crate) fn update_gore(
         // capsule's local -Y.
         let down_axis = global.rotation() * Vec3::NEG_Y;
         let face = global.translation() + down_axis * piece.half_length;
-        spray(&mut commands, &blood, face, down_axis, JET_COUNT, JET_SPEED, face.x * 61.7 + piece.bleed * 41.9);
+        spray(&mut commands, &blood, face, down_axis, JET_COUNT, JET_SPEED, face.x * 61.7 + piece.bleed * 41.9, blood_enabled.spray);
     }
 }

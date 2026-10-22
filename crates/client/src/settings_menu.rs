@@ -444,6 +444,8 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "Grain", CheatGrainButton);
                         spawn_cheat_toggle_button(row, "Fog", CheatFogButton);
                         spawn_cheat_toggle_button(row, "Holes", CheatHolesButton);
+                        spawn_cheat_toggle_button(row, "Blood", CheatBloodButton);
+                        spawn_cheat_toggle_button(row, "Pools", CheatPoolsButton);
                     });
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
@@ -1518,10 +1520,13 @@ pub(crate) fn render_toggle_buttons(
     mut grain: ResMut<ScreenEffectsEnabled>,
     mut fog: ResMut<FogEnabled>,
     mut holes: ResMut<BulletHolesEnabled>,
+    mut blood: ResMut<BloodEnabled>,
     bloom_btn: Query<&Interaction, (With<CheatBloomButton>, Changed<Interaction>)>,
     grain_btn: Query<&Interaction, (With<CheatGrainButton>, Changed<Interaction>)>,
     fog_btn: Query<&Interaction, (With<CheatFogButton>, Changed<Interaction>)>,
     holes_btn: Query<&Interaction, (With<CheatHolesButton>, Changed<Interaction>)>,
+    blood_btn: Query<&Interaction, (With<CheatBloodButton>, Changed<Interaction>)>,
+    pools_btn: Query<&Interaction, (With<CheatPoolsButton>, Changed<Interaction>)>,
 ) {
     if tapped(&bloom_btn) {
         bloom.0 = !bloom.0;
@@ -1535,6 +1540,12 @@ pub(crate) fn render_toggle_buttons(
     if tapped(&holes_btn) {
         holes.0 = !holes.0;
     }
+    if tapped(&blood_btn) {
+        blood.spray = !blood.spray;
+    }
+    if tapped(&pools_btn) {
+        blood.stains = !blood.stains;
+    }
 }
 
 pub(crate) fn update_render_toggle_colors(
@@ -1542,19 +1553,38 @@ pub(crate) fn update_render_toggle_colors(
     grain: Res<ScreenEffectsEnabled>,
     fog: Res<FogEnabled>,
     holes: Res<BulletHolesEnabled>,
+    blood: Res<BloodEnabled>,
     mut buttons: Query<
-        (&mut BackgroundColor, Option<&CheatBloomButton>, Option<&CheatFogButton>, Option<&CheatHolesButton>),
-        Or<(With<CheatBloomButton>, With<CheatGrainButton>, With<CheatFogButton>, With<CheatHolesButton>)>,
+        (
+            &mut BackgroundColor,
+            Option<&CheatBloomButton>,
+            Option<&CheatFogButton>,
+            Option<&CheatHolesButton>,
+            Option<&CheatBloodButton>,
+            Option<&CheatPoolsButton>,
+        ),
+        Or<(
+            With<CheatBloomButton>,
+            With<CheatGrainButton>,
+            With<CheatFogButton>,
+            With<CheatHolesButton>,
+            With<CheatBloodButton>,
+            With<CheatPoolsButton>,
+        )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, is_bloom, is_fog, is_holes) in &mut buttons {
+    for (mut bg, is_bloom, is_fog, is_holes, is_blood, is_pools) in &mut buttons {
         let on = if is_bloom.is_some() {
             bloom.0
         } else if is_fog.is_some() {
             fog.0
         } else if is_holes.is_some() {
             holes.0
+        } else if is_blood.is_some() {
+            blood.spray
+        } else if is_pools.is_some() {
+            blood.stains
         } else {
             grain.0
         };
@@ -1567,3 +1597,8 @@ pub(crate) struct CheatFogButton;
 
 #[derive(Component)]
 pub(crate) struct CheatHolesButton;
+
+#[derive(Component)]
+pub(crate) struct CheatBloodButton;
+#[derive(Component)]
+pub(crate) struct CheatPoolsButton;

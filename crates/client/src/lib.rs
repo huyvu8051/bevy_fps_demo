@@ -639,6 +639,7 @@ impl Plugin for GamePlugin {
         .init_resource::<ScreenEffectsEnabled>()
         .init_resource::<FogEnabled>()
         .init_resource::<BulletHolesEnabled>()
+        .init_resource::<BloodEnabled>()
         .init_resource::<MuzzleSmokeEnabled>()
         .init_resource::<PortSmokeEnabled>()
         .init_resource::<BarrelSmokeEnabled>()
