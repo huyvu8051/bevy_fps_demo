@@ -31,9 +31,16 @@ one() {
  scope_camera_enabled:Some(true),
  $key:Some($1))
 RON
-  HOME="$work/home" BEVY_ASSET_ROOT="$PWD/crates/client" MAP_ID=0 FORCE_ADS=1 FPS_LOG=1 \
+  # VSYNC=0 or nothing below a refresh is visible: on a 120Hz panel every
+  # configuration faster than 8.33ms reads as exactly 8.33ms.
+  HOME="$work/home" BEVY_ASSET_ROOT="$PWD/crates/client" MAP_ID=0 FORCE_ADS=1 FPS_LOG=1 VSYNC=0 \
     ./target/debug/client > "$work/run.log" 2>&1 &
   local p=$!
+  # macOS throttles an unfocused window to 10fps, which the filter below then
+  # discards -- and a run that loses focus loses most of its samples with it.
+  # Pull it to the front and give it a moment to settle before counting.
+  perl -e 'sleep 4'
+  osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is $p) to true" >/dev/null 2>&1 || true
   perl -e 'sleep 34'
   kill -TERM $p 2>/dev/null || true
   wait $p 2>/dev/null || true

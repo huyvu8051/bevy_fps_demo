@@ -377,3 +377,100 @@ impl Plugin for NoShadowPassPlugin {
         );
     }
 }
+
+/// Whether the main camera glows its bright pixels.
+///
+/// Measured at ~635us a frame in the baseline profile, which is more than the
+/// sun's fourth shadow cascade cost. It is also entirely a look, so it ships
+/// on and is a setting rather than a decision made for the player.
+#[derive(Resource)]
+pub(crate) struct BloomEnabled(pub(crate) bool);
+
+impl Default for BloomEnabled {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+/// Added and removed on the main camera to match the setting. The scope camera
+/// never has it; see the note where that one is spawned.
+pub(crate) fn apply_bloom(
+    mut commands: Commands,
+    enabled: Res<BloomEnabled>,
+    camera: Query<(Entity, Has<Bloom>), (With<FpsCamera>, Without<ScopeCamera>)>,
+) {
+    if !enabled.is_changed() {
+        return;
+    }
+    let Ok((camera, has_bloom)) = camera.single() else {
+        return;
+    };
+    match (enabled.0, has_bloom) {
+        (true, false) => {
+            commands.entity(camera).insert(Bloom::default());
+        }
+        (false, true) => {
+            // Hdr goes too. Bloom requires it, and a required component does
+            // not leave when the thing that required it does -- so without
+            // this the glow stops but the whole main pass keeps writing and
+            // reading a 16 bit float target for nothing.
+            commands.entity(camera).remove::<(Bloom, bevy::camera::Hdr)>();
+        }
+        _ => {}
+    }
+}
+
+/// Counts what the opaque pass actually submits, behind DRAW_COUNT=1.
+///
+/// "285 merged meshes" is a count of entities, not of draws: frustum culling
+/// takes some away and batching puts some together, so the only honest number
+/// comes from the phase after both have happened.
+///
+/// multidrawable batch sets are one call each however many bins they hold;
+/// batchable bins are one call each; unbatchable entities are one call per
+/// entity. Shadow views are counted separately because a cascade redraws the
+/// casters and is easily the larger half.
+pub(crate) struct DrawCountPlugin;
+
+impl Plugin for DrawCountPlugin {
+    fn build(&self, app: &mut App) {
+        if std::env::var("DRAW_COUNT").is_err() {
+            return;
+        }
+        let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) else { return };
+        render_app.add_systems(
+            bevy::render::Render,
+            count_draws.in_set(bevy::render::RenderSystems::PhaseSort),
+        );
+    }
+}
+
+/// A closure cannot be generic over the phase item, so this is a fn.
+fn tally<BPI: bevy::render::render_phase::BinnedPhaseItem>(
+    phase: &bevy::render::render_phase::BinnedRenderPhase<BPI>,
+) -> usize {
+    phase.multidrawable_meshes.len()
+        + phase.batchable_meshes.len()
+        + phase.unbatchable_meshes.values().map(|bin| bin.entities.len()).sum::<usize>()
+}
+
+fn count_draws(
+    opaque: Res<bevy::render::render_phase::ViewBinnedRenderPhases<bevy::core_pipeline::core_3d::Opaque3d>>,
+    shadow: Res<bevy::render::render_phase::ViewBinnedRenderPhases<bevy::pbr::Shadow>>,
+    mut every: Local<u32>,
+) {
+    *every += 1;
+    if *every % 120 != 0 {
+        return;
+    }
+    let opaque_views: Vec<usize> = opaque.values().map(tally).collect();
+    let shadow_total: usize = shadow.values().map(tally).sum();
+    info!(
+        "[draws] opaque per view {:?} = {}, shadow {} across {} views, total {}",
+        opaque_views,
+        opaque_views.iter().sum::<usize>(),
+        shadow_total,
+        shadow.len(),
+        opaque_views.iter().sum::<usize>() + shadow_total,
+    );
+}

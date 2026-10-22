@@ -587,6 +587,7 @@ impl Plugin for GamePlugin {
         // the graph is walked per view whether that view draws anything or not.
         .add_plugins(render_diagnostics_if_asked())
         .add_plugins(NoShadowPassPlugin)
+        .add_plugins(DrawCountPlugin)
 
         .insert_resource(Noclip(false))
         .init_resource::<HitFlash>()
@@ -634,6 +635,7 @@ impl Plugin for GamePlugin {
         .init_resource::<ScopeFovZoom>()
         .init_resource::<MergeMapMeshes>()
         .init_resource::<ShadowCascades>()
+        .init_resource::<BloomEnabled>()
         .init_resource::<MuzzleSmokeEnabled>()
         .init_resource::<PortSmokeEnabled>()
         .init_resource::<BarrelSmokeEnabled>()
@@ -840,7 +842,7 @@ impl Plugin for GamePlugin {
                 update_scope_zoom_slider_visibility,
                 sync_scope_camera,
                 (place_scope_reticle, swap_scope_reticle),
-                (update_scope_lens, apply_scope_fov_zoom).chain(),
+                (update_scope_lens, apply_scope_fov_zoom, apply_bloom).chain(),
                 update_ammo_ui,
                 update_crosshair,
                 set_hitbox_gizmo_depth_bias,
