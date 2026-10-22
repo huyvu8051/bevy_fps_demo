@@ -1,13 +1,21 @@
 #!/bin/bash
-# Adds an empty node to a .glb's JSON chunk and repairs the two length fields
-# the format carries for it: the file total at offset 8 and the chunk's own at
-# offset 12. A glTF JSON chunk is padded with spaces to a four byte boundary,
-# so growing it means rewriting both rather than editing in place.
+# Applies a jq program to a .glb's JSON chunk and repairs the two length fields
+# the format carries: the file total at offset 8 and the chunk's own at offset
+# 12. A glTF JSON chunk is space padded to a four byte boundary, so any edit
+# that changes its length means rewriting both rather than patching in place.
 #
-#   glb_add_socket.sh <file.glb> <node name> <x> <y> <z>
+#   glb_patch.sh <file.glb> '<jq program>'
+#
+# Adding a socket:
+#   glb_patch.sh w.glb '(.nodes|length) as $i
+#     | .nodes += [{name:"Socket_Eject", translation:[0,0,0]}]
+#     | .scenes[0].nodes += [$i]'
+#
+# Renaming one:
+#   glb_patch.sh w.glb '(.nodes[] | select(.name=="Socket_ScopeView") | .name) = "Socket_Eyepiece"'
 set -e
-f="$1"; name="$2"; x="$3"; y="$4"; z="$5"
-work="${TMPDIR:-/tmp}/glb_socket.$$"
+f="$1"; filter="$2"
+work="${TMPDIR:-/tmp}/glb_patch.$$"
 mkdir -p "$work"
 trap 'rm -rf "$work"' EXIT
 
@@ -17,11 +25,7 @@ head -c 20 "$f" | tail -c 4 | grep -q JSON || { echo "not a JSON chunk"; exit 1;
 tail -c +21 "$f" | head -c "$jsonlen" > "$work/in.json"
 tail -c +$((21 + jsonlen)) "$f" > "$work/rest.bin"
 
-jq -c --arg n "$name" --argjson x "$x" --argjson y "$y" --argjson z "$z" '
-  (.nodes | length) as $i
-  | .nodes += [{name: $n, translation: [$x, $y, $z]}]
-  | .scenes[0].nodes += [$i]
-' "$work/in.json" > "$work/out.json"
+jq -c "$filter" "$work/in.json" > "$work/out.json"
 
 newlen=$(wc -c < "$work/out.json" | tr -d ' ')
 pad=$(( (4 - newlen % 4) % 4 ))

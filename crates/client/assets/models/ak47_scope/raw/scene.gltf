@@ -653,7 +653,7 @@
       "mesh": 2
     },
     {
-      "name": "Socket_ScopeCamera",
+      "name": "Socket_Objective",
       "translation": [
         -0.00005715,
         0.0862584,
@@ -666,7 +666,7 @@
       ]
     },
     {
-      "name": "Socket_ScopeView",
+      "name": "Socket_Eyepiece",
       "translation": [
         -0.00005715,
         0.0862584,

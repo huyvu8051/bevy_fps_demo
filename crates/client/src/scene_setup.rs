@@ -384,7 +384,7 @@ pub(crate) fn setup_gameplay(
 
     let scope_camera = commands
         .spawn((
-            Name::new("ScopeCamera (renders the ADS lens texture)"),
+            Name::new("ScopeCamera (renders the picture the eyepiece shows)"),
             Camera3d::default(),
             Camera {
                 order: -1,
@@ -469,7 +469,7 @@ pub(crate) fn setup_gameplay(
         Transform::default(),
         Visibility::Hidden,
         RenderLayers::layer(VIEWMODEL_LAYER),
-        ScopeLens,
+        ScopeScreen,
         ChildOf(camera),
     ));
 

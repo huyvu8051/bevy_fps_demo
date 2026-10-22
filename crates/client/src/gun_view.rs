@@ -14,7 +14,7 @@ impl Default for ScopeCameraEnabled {
 pub(crate) struct ScopeCamera;
 
 #[derive(Component)]
-pub(crate) struct ScopeLens;
+pub(crate) struct ScopeScreen;
 
 #[derive(Component)]
 pub(crate) struct ScopeReticle;
@@ -51,11 +51,14 @@ pub(crate) fn swap_scope_reticle(
     *shown = Some(active.0);
 }
 
-/// Where the scope looks from and where its picture is drawn, both marked in
-/// the mesh. They say what they are for rather than what they sit on: the first
-/// is the front glass, because that is where light enters, but the second is
-/// set down the tube rather than on the rear glass, so the glass draws over the
-/// picture and the view reads as recessed.
+/// The two ends of the glass, named for the parts they are rather than for
+/// what the engine does with them -- the objective is the front lens where
+/// light enters, the eyepiece the rear one the eye looks into. The old names
+/// said ScopeCamera and ScopeView, and the first of those stopped being true
+/// the day the scope camera moved to the eye.
+///
+/// The picture is drawn at the eyepiece but set a little down the tube from
+/// the glass, so the glass draws over it and the view reads as recessed.
 ///
 /// Carrying that depth in the asset rather than in a constant here is the point
 /// — it is a property of one scope's glass and tube, not of every weapon.
@@ -67,10 +70,10 @@ pub(crate) fn swap_scope_reticle(
 /// Riding these means recoil, sway, bob and the shoulder swap come for free and
 /// cannot drift out of step with the mesh.
 #[derive(Component)]
-pub(crate) struct ScopeCameraSocket;
+pub(crate) struct ObjectiveSocket;
 
 #[derive(Component)]
-pub(crate) struct ScopeViewSocket;
+pub(crate) struct EyepieceSocket;
 
 /// Pins the sights up so the scope can be looked at without waiting for the
 /// autopilot to pick a target far enough away to want them.
@@ -79,8 +82,8 @@ pub(crate) fn force_ads() -> bool {
 }
 
 /// Where the eye lines up behind the sights: the rear glass on a scope, the
-/// rear sight on irons. Distinct from ScopeViewSocket, which is where the
-/// picture draws and sits further down the tube.
+/// rear sight on irons. Distinct from EyepieceSocket, which is where the
+/// picture draws, further down the tube than this.
 #[derive(Component)]
 pub(crate) struct AimSocket;
 
@@ -132,9 +135,9 @@ pub(crate) fn track_muzzle_socket(
 /// Neither point moves inside the weapon, so this runs off the propagated
 /// transforms and the result is exact rather than a frame late.
 pub(crate) fn track_optical_axis(
-    glass: Query<&GlobalTransform, With<ScopeCameraSocket>>,
+    glass: Query<&GlobalTransform, With<ObjectiveSocket>>,
     post: Query<&GlobalTransform, With<FrontSightSocket>>,
-    aim: Query<&GlobalTransform, (With<AimSocket>, Without<ScopeCameraSocket>, Without<FrontSightSocket>)>,
+    aim: Query<&GlobalTransform, (With<AimSocket>, Without<ObjectiveSocket>, Without<FrontSightSocket>)>,
     mut gun: Query<(&GlobalTransform, &mut Gun)>,
 ) {
     let Ok((gun_global, mut gun)) = gun.single_mut() else { return };
@@ -181,8 +184,8 @@ pub(crate) fn wire_weapon_sockets(
         }
         let mut socket = commands.entity(entity);
         match name.as_str() {
-            "Socket_ScopeCamera" => socket.insert(ScopeCameraSocket),
-            "Socket_ScopeView" => socket.insert(ScopeViewSocket),
+            "Socket_Objective" => socket.insert(ObjectiveSocket),
+            "Socket_Eyepiece" => socket.insert(EyepieceSocket),
             "Socket_Aim" => socket.insert(AimSocket),
             "Socket_SightFront" => socket.insert(FrontSightSocket),
             "Socket_Eject" => socket.insert(EjectSocket),
@@ -339,9 +342,9 @@ pub(crate) fn update_scope_lens(
     zoom: Res<ScopeZoom>,
     scope_camera_enabled: Res<ScopeCameraEnabled>,
     mut scope_camera: Query<(&mut Camera, &mut Projection), With<ScopeCamera>>,
-    mut lens: Query<(&mut Transform, &mut Visibility), (With<ScopeLens>, Without<ScopeReticle>)>,
-    view_socket: Query<&GlobalTransform, With<ScopeViewSocket>>,
-    gun_placed: Query<(&Transform, &GlobalTransform), (With<Gun>, Without<ScopeLens>, Without<ScopeReticle>)>,
+    mut lens: Query<(&mut Transform, &mut Visibility), (With<ScopeScreen>, Without<ScopeReticle>)>,
+    view_socket: Query<&GlobalTransform, With<EyepieceSocket>>,
+    gun_placed: Query<(&Transform, &GlobalTransform), (With<Gun>, Without<ScopeScreen>, Without<ScopeReticle>)>,
 ) {
     let Ok(gun) = gun.single() else {
         return;
