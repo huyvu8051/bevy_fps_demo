@@ -37,7 +37,12 @@ pub(crate) fn setup_common(
     commands.insert_resource(SceneRenderTarget(scene_image_handle.clone()));
 
     commands.spawn((Camera2d, IsDefaultUiCamera));
-    spawn_splash_screen(&mut commands, &asset_server);
+    // MAP_ID means a measurement or a debug run, which goes straight into the
+    // map. Two seconds of branding in front of that is two seconds of waiting
+    // on every single run.
+    if game_flow::map_id_override().is_none() {
+        spawn_splash_screen(&mut commands, &asset_server);
+    }
 
     commands.spawn((
         Node {
@@ -173,11 +178,14 @@ pub(crate) fn setup_common(
     commands.insert_resource(build_player_model_anim(&asset_server, &mut graphs, &player_model_tuning));
     commands.insert_resource(ScopeZoom(SCOPE_DEFAULT_ZOOM));
     commands.insert_resource(GameOver(false));
-    if game_flow::map_id_override().is_some() {
-        next_state.set(AppState::InGame);
+    // Everything now goes through the loading gate; it remembers where it was
+    // headed.
+    commands.insert_resource(AfterLoading(if game_flow::map_id_override().is_some() {
+        AppState::InGame
     } else {
-        next_state.set(AppState::Menu);
-    }
+        AppState::Menu
+    }));
+    next_state.set(AppState::Loading);
 }
 
 fn review_yaw_pitch() -> (f32, f32) {

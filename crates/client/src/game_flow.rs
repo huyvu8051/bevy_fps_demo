@@ -12,8 +12,100 @@ pub(crate) struct RestartButton;
 pub(crate) enum AppState {
     #[default]
     Init,
+    /// Holds a screen up while the scenes queued for the next state finish.
+    /// Entered from Init and from the map menu, and it remembers where it was
+    /// going, so one state serves both.
+    Loading,
     Menu,
     InGame,
+}
+
+#[derive(Resource)]
+pub(crate) struct AfterLoading(pub(crate) AppState);
+
+impl Default for AfterLoading {
+    fn default() -> Self {
+        Self(AppState::Menu)
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct LoadingScreen;
+
+#[derive(Component)]
+pub(crate) struct LoadingProgressText;
+
+pub(crate) fn spawn_loading_screen(mut commands: Commands) {
+    commands
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(14.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.04, 0.04, 0.05)),
+            GlobalZIndex(STATIC_UI_Z_INDEX + 900),
+            LoadingScreen,
+            NativeUiRoot,
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Text::new("LOADING"),
+                TextFont { font_size: FontSize::Px(34.0), ..default() },
+                TextColor(Color::srgb(0.85, 0.85, 0.88)),
+            ));
+            root.spawn((
+                Text::new(""),
+                TextFont { font_size: FontSize::Px(16.0), ..default() },
+                TextColor(Color::srgb(0.5, 0.5, 0.55)),
+                LoadingProgressText,
+            ));
+        });
+}
+
+pub(crate) fn despawn_loading_screen(mut commands: Commands, screens: Query<Entity, With<LoadingScreen>>) {
+    for entity in &screens {
+        commands.entity(entity).despawn();
+    }
+}
+
+/// Leaves for the state that was asked for once every scene in the world has
+/// its dependencies in hand.
+///
+/// Watching WorldAssetRoot rather than a list of handles gathered by hand is
+/// what makes this cover everything: the map, the viewmodel, the weapon and
+/// the gore parts are all spawned with one, so none of the twenty-odd load
+/// sites has to remember to register itself.
+pub(crate) fn finish_loading(
+    asset_server: Res<AssetServer>,
+    roots: Query<&WorldAssetRoot>,
+    after: Res<AfterLoading>,
+    mut next_state: ResMut<NextState<AppState>>,
+    mut progress: Query<&mut Text, With<LoadingProgressText>>,
+) {
+    let total = roots.iter().len();
+    let ready = roots
+        .iter()
+        .filter(|root| asset_server.is_loaded_with_dependencies(root.0.id()))
+        .count();
+
+    if let Ok(mut text) = progress.single_mut() {
+        **text = format!("{ready} / {total}");
+    }
+
+    // Going into a map with nothing spawned yet means setup has not run, so
+    // an empty set is not the same as a finished one.
+    if after.0 == AppState::InGame && total == 0 {
+        return;
+    }
+    if ready == total {
+        next_state.set(after.0);
+    }
 }
 
 #[derive(Resource)]
@@ -275,6 +367,7 @@ pub(crate) fn map_select_button(
     mut next_state: ResMut<NextState<AppState>>,
     mut noclip: ResMut<Noclip>,
     mut autopilot: ResMut<Autopilot>,
+    mut after: ResMut<AfterLoading>,
 ) {
     for (interaction, button) in &buttons {
         if *interaction != Interaction::Pressed {
@@ -284,7 +377,8 @@ pub(crate) fn map_select_button(
         let scenario = Scenario::from_map_id(button.0);
         noclip.0 = false;
         autopilot.0 = autopilot_enabled_by_default(scenario);
-        next_state.set(AppState::InGame);
+        after.0 = AppState::InGame;
+        next_state.set(AppState::Loading);
     }
 }
 

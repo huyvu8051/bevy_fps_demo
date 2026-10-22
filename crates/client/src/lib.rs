@@ -539,6 +539,7 @@ impl Plugin for GamePlugin {
         .init_resource::<AutoMaintainUi>()
 
         .init_state::<AppState>()
+        .init_resource::<AfterLoading>()
         .add_observer(on_zombie_replicated)
         .add_observer(on_zombie_kind_replicated)
         .add_observer(on_shot_fx)
@@ -619,7 +620,18 @@ impl Plugin for GamePlugin {
         .add_systems(Startup, spawn_pole_targets)
         .add_systems(OnEnter(AppState::Menu), enter_menu)
         .add_systems(OnExit(AppState::Menu), exit_menu)
-        .add_systems(OnEnter(AppState::InGame), setup_gameplay);
+        // Gameplay is built while the loading screen is still up, so the map
+        // and the weapon are queued and waited on rather than popping in once
+        // play has already started.
+        .add_systems(
+            OnEnter(AppState::Loading),
+            (
+                spawn_loading_screen,
+                setup_gameplay.run_if(|after: Res<AfterLoading>| after.0 == AppState::InGame),
+            ),
+        )
+        .add_systems(OnExit(AppState::Loading), despawn_loading_screen)
+        .add_systems(Update, finish_loading.run_if(in_state(AppState::Loading)));
     app.add_systems(Update, persist_settings_on_change);
 
     app.add_systems(
