@@ -179,7 +179,7 @@ static AK47: WeaponDef = WeaponDef {
     rest_offset: Vec3::new(0.160, -0.0905, -0.7094),
     ready_offset: Vec3::new(0.045, -0.1905, -0.6194),
     ads_eye_relief: 0.01,
-    ads_speed: AdsSpeed { from_ready: 10.0, from_rest: 5.5 },
+    ads_speed: AdsSpeed { from_ready: 8.0, from_rest: 5.5 },
     // The floor is half the default, because that is where aim sensitivity,
     // which is default/zoom against a half speed base, comes back out at
     // exactly the hip fire rate.
@@ -223,7 +223,7 @@ static M4A1: WeaponDef = WeaponDef {
     rest_offset: Vec3::new(0.160, -0.1268, -0.626),
     ready_offset: Vec3::new(0.071, -0.2268, -0.536),
     ads_eye_relief: 0.10,
-    ads_speed: AdsSpeed { from_ready: 12.5, from_rest: 6.875 },
+    ads_speed: AdsSpeed { from_ready: 16.0, from_rest: 9.0 },
     // Irons: the scope view never comes on, so these only have to be sane.
     scope: Scope { min_zoom: 1.0, default_zoom: 1.0, max_zoom: 1.0, reticle_zoom: 1.0 },
     sound: WeaponSound { fire: "audio/weapons/m4a1_fire.wav", reload: "audio/weapons/m4a1_reload.wav" },
@@ -276,7 +276,7 @@ static M24: WeaponDef = WeaponDef {
     // carbine's sight. The glass itself sits 55mm further down the tube, so
     // there is still room before the near plane at 100mm.
     ads_eye_relief: -0.0,
-    ads_speed: AdsSpeed { from_ready: 16.5, from_rest: 1.575 },
+    ads_speed: AdsSpeed { from_ready: 5.5, from_rest: 2.575 },
     // Twice the AK at every stop: the glass it carries is the one thing this
     // rifle is for.
     scope: Scope { min_zoom: 12.0, default_zoom: 24.0, max_zoom: 40.0, reticle_zoom: 10.0 },
