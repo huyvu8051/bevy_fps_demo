@@ -14,6 +14,7 @@ pub(crate) struct PersistedSettings {
     pub(crate) map_msaa_on: Option<bool>,
     pub(crate) scope_camera_enabled: Option<bool>,
     pub(crate) scope_fov_zoom: Option<bool>,
+    pub(crate) merge_map_meshes: Option<bool>,
     pub(crate) muzzle_smoke_enabled: Option<bool>,
     pub(crate) port_smoke_enabled: Option<bool>,
     pub(crate) barrel_smoke_enabled: Option<bool>,
@@ -125,6 +126,7 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(map_msaa_on, MapMsaaOn);
     apply!(scope_camera_enabled, ScopeCameraEnabled);
     apply!(scope_fov_zoom, ScopeFovZoom);
+    apply!(merge_map_meshes, MergeMapMeshes);
     apply!(muzzle_smoke_enabled, MuzzleSmokeEnabled);
     apply!(port_smoke_enabled, PortSmokeEnabled);
     apply!(barrel_smoke_enabled, BarrelSmokeEnabled);
@@ -192,6 +194,7 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(MapMsaaOn)
         || changed!(ScopeCameraEnabled)
         || changed!(ScopeFovZoom)
+        || changed!(MergeMapMeshes)
         || changed!(MuzzleSmokeEnabled)
         || changed!(PortSmokeEnabled)
         || changed!(BarrelSmokeEnabled)
@@ -233,6 +236,7 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         map_msaa_on: world.get_resource::<MapMsaaOn>().map(|r| r.0),
         scope_camera_enabled: world.get_resource::<ScopeCameraEnabled>().map(|r| r.0),
         scope_fov_zoom: world.get_resource::<ScopeFovZoom>().map(|r| r.0),
+        merge_map_meshes: world.get_resource::<MergeMapMeshes>().map(|r| r.0),
         muzzle_smoke_enabled: world.get_resource::<MuzzleSmokeEnabled>().map(|r| r.0),
         port_smoke_enabled: world.get_resource::<PortSmokeEnabled>().map(|r| r.0),
         barrel_smoke_enabled: world.get_resource::<BarrelSmokeEnabled>().map(|r| r.0),

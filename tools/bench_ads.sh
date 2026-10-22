@@ -37,7 +37,9 @@ RON
   perl -e 'sleep 34'
   kill -TERM $p 2>/dev/null || true
   wait $p 2>/dev/null || true
-  grep -o "khung [0-9.]*ms" "$work/run.log" | tail -22 | awk '{print $2}' >> "$work/$2.txt"
+  # Samples over 50ms are the window having lost focus: macOS throttles an
+  # unfocused window to exactly 10fps, which reads as a 100ms regression.
+  grep -o "khung [0-9.]*ms" "$work/run.log" | awk '{if ($2 < 50) print $2}' | tail -22 >> "$work/$2.txt"
 }
 
 for ((r = 0; r < rounds; r++)); do one "$a" A; one "$b" B; done
