@@ -56,6 +56,7 @@ pub(crate) fn drive_reload_hand(
     fore: Query<&GlobalTransform, With<ForeGripSocket>>,
     magazine: Query<&GlobalTransform, With<ViewmodelMagazine>>,
     mut target: Query<&mut Transform, With<ReloadHandTarget>>,
+    pullback: Res<ViewPullback>,
 ) {
     let (Ok(gun), Ok(eye), Ok(mut target), Ok(fore)) =
         (gun.single(), camera.single(), target.single_mut(), fore.single())
@@ -69,7 +70,7 @@ pub(crate) fn drive_reload_hand(
         .single()
         .map(|m| m.reparented_to(eye).translation)
         .unwrap_or(home.translation);
-    let pouch = RELOAD_POUCH_FROM_EYE - Vec3::Z * view_pullback();
+    let pouch = RELOAD_POUCH_FROM_EYE - Vec3::Z * pullback.0;
 
     let progress = 1.0 - (gun.reload_remaining / active.def().reload_duration).clamp(0.0, 1.0);
     let span = |from: f32, to: f32| (progress - from) / (to - from);

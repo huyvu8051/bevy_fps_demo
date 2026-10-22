@@ -33,6 +33,7 @@ pub(crate) fn spawn_viewmodel_body(
     tuning: Res<PlayerModelTuning>,
     camera: Query<Entity, With<FpsCamera>>,
     existing: Query<(), With<ViewmodelBody>>,
+    pullback: Res<ViewPullback>,
 ) {
     if !existing.is_empty() {
         return;
@@ -44,7 +45,7 @@ pub(crate) fn spawn_viewmodel_body(
     commands.spawn((
         Name::new("ViewmodelBody (first-person, headless)"),
         WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(tuning.mesh.clone()))),
-        Transform::from_translation(BODY_OFFSET_FROM_EYE - Vec3::Z * view_pullback())
+        Transform::from_translation(BODY_OFFSET_FROM_EYE - Vec3::Z * pullback.0)
             .with_rotation(Quat::from_rotation_y(tuning.facing_deg.to_radians()))
             .with_scale(Vec3::splat(tuning.scale)),
         ViewmodelBody,
@@ -52,6 +53,23 @@ pub(crate) fn spawn_viewmodel_body(
         PlayerModelSkeletonBones::default(),
         ChildOf(camera),
     ));
+}
+
+/// Keeps the body pinned to the eye while the camera moves off it.
+///
+/// Spawned once, so the distance baked in above goes stale the moment a weapon
+/// with a different one is drawn -- and a body that does not subtract exactly
+/// what the camera added slides away from the shoulders it belongs to.
+pub(crate) fn sync_viewmodel_body_pullback(
+    pullback: Res<ViewPullback>,
+    mut body: Query<&mut Transform, With<ViewmodelBody>>,
+) {
+    if !pullback.is_changed() {
+        return;
+    }
+    for mut transform in &mut body {
+        transform.translation = BODY_OFFSET_FROM_EYE - Vec3::Z * pullback.0;
+    }
 }
 
 pub(crate) fn wire_viewmodel_body_meshes(

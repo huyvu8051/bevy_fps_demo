@@ -20,6 +20,9 @@ pub(crate) struct WeaponDef {
     /// How fast the sights come up, from the ready pose. Weight and length:
     /// a carbine snaps up, a scoped bolt gun does not.
     pub(crate) ads_speed: f32,
+    /// How far the camera sits back off the eye while this weapon is held.
+    /// See ViewPullback: smaller brings the view in on the weapon.
+    pub(crate) view_pullback: f32,
 
     pub(crate) scope: Scope,
     pub(crate) sound: WeaponSound,
@@ -145,6 +148,7 @@ static AK47: WeaponDef = WeaponDef {
     ready_offset: Vec3::new(0.045, -0.1905, -0.6194),
     ads_eye_relief: 0.032,
     ads_speed: 10.0,
+    view_pullback: 0.13,
     // The floor is half the default, because that is where aim sensitivity,
     // which is default/zoom against a half speed base, comes back out at
     // exactly the hip fire rate.
@@ -189,6 +193,7 @@ static M4A1: WeaponDef = WeaponDef {
     ready_offset: Vec3::new(0.071, -0.2268, -0.536),
     ads_eye_relief: 0.120,
     ads_speed: 12.5,
+    view_pullback: 0.13,
     // Irons: the scope view never comes on, so these only have to be sane.
     scope: Scope { min_zoom: 1.0, default_zoom: 1.0, max_zoom: 1.0, reticle_zoom: 1.0 },
     sound: WeaponSound { fire: "audio/weapons/m4a1_fire.wav", reload: "audio/weapons/m4a1_reload.wav" },
@@ -235,6 +240,9 @@ static M24: WeaponDef = WeaponDef {
     ready_offset: Vec3::new(0.045, -0.1905, -0.8870),
     ads_eye_relief: 0.032,
     ads_speed: 6.5,
+    // 268mm longer than the AK and it shows: the camera comes in 60mm to
+    // frame it the way the shorter rifles already sit.
+    view_pullback: 0.07,
     // Twice the AK at every stop: the glass it carries is the one thing this
     // rifle is for.
     scope: Scope { min_zoom: 12.0, default_zoom: 24.0, max_zoom: 40.0, reticle_zoom: 10.0 },

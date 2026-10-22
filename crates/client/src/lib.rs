@@ -132,10 +132,45 @@ mod splash_screen;
 use splash_screen::*;
 
 
-/// How far the eye sits behind the player's own eye point. The gun and the
-/// body subtract it again, so pulling back moves only the camera.
-pub(crate) fn view_pullback() -> f32 {
-    std::env::var("VIEW_PULLBACK").ok().and_then(|v| v.parse().ok()).unwrap_or(0.13)
+/// How far the camera sits behind the player's own eye point. The gun, the
+/// body and the reload hand subtract it again, so it moves only the camera --
+/// which is the whole of how near or far the weapon reads.
+///
+/// Per weapon, because the weapons are not the same length: a rifle that
+/// reaches a quarter metre further out wants the camera in closer to frame
+/// the same way. Held in a resource rather than read straight off the table
+/// so it can ease across a weapon swap, and so every one of the four places
+/// that has to agree on it reads the same number in the same frame.
+#[derive(Resource)]
+pub(crate) struct ViewPullback(pub(crate) f32);
+
+impl Default for ViewPullback {
+    fn default() -> Self {
+        Self(WeaponId::Ak47.def().view_pullback)
+    }
+}
+
+/// A measurement override: set it and every weapon uses it. Reading the rig
+/// at one fixed distance is the point, so this outranks the table.
+pub(crate) fn view_pullback_override() -> Option<f32> {
+    std::env::var("VIEW_PULLBACK").ok().and_then(|v| v.parse().ok())
+}
+
+const VIEW_PULLBACK_SPEED: f32 = 9.0;
+
+/// Eases the camera to the held weapon's distance. One writer, so the camera
+/// and everything parented to it cannot disagree about it mid-frame.
+pub(crate) fn track_view_pullback(
+    time: Res<Time>,
+    active: Res<ActiveWeapon>,
+    mut pullback: ResMut<ViewPullback>,
+) {
+    let target = view_pullback_override().unwrap_or(active.def().view_pullback);
+    let step = (VIEW_PULLBACK_SPEED * time.delta_secs()).min(1.0);
+    let eased = pullback.0 + (target - pullback.0) * step;
+    if (eased - pullback.0).abs() > f32::EPSILON {
+        pullback.0 = eased;
+    }
 }
 
 
@@ -585,6 +620,7 @@ impl Plugin for GamePlugin {
         .init_resource::<BarrelSmoke>()
         .init_resource::<LimbDamage>()
         .init_resource::<ActiveWeapon>()
+        .init_resource::<ViewPullback>()
         .add_systems(
             PostUpdate,
             sever_limbs
@@ -740,7 +776,12 @@ impl Plugin for GamePlugin {
                     // weapon posed afterwards leaves that transform a frame
                     // old -- 2cm of it while the weapon is swinging to ready,
                     // which shows as the flash hanging off the muzzle.
-                    gun_view_animation,
+                    //
+                    // Pullback first within that: the camera, the gun, the
+                    // body and the reload hand all subtract the same number,
+                    // and one of them reading last frame's copy slides it off
+                    // the others.
+                    (track_view_pullback, sync_viewmodel_body_pullback, gun_view_animation).chain(),
                     shoot,
                     reload_gun,
                     suggest_auto_lean,

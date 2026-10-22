@@ -67,6 +67,7 @@ pub(crate) fn spawn_grip_sockets(
     mut materials: ResMut<Assets<StandardMaterial>>,
     camera: Query<Entity, With<FpsCamera>>,
     existing: Query<(), With<TriggerGripSocket>>,
+    pullback: Res<ViewPullback>,
 ) {
     // The gun's own grips are the mesh's Socket_RearGrip and Socket_FrontGrip,
     // tagged where they are rather than copied into the weapon table and
@@ -79,7 +80,7 @@ pub(crate) fn spawn_grip_sockets(
         return;
     };
 
-    let cancel_debug_pullback = Vec3::Z * view_pullback();
+    let cancel_debug_pullback = Vec3::Z * pullback.0;
     let (trigger_at, fore_at, metres_to_parent_units) = (
         TEST_TARGET_RIGHT_FROM_EYE - cancel_debug_pullback,
         TEST_TARGET_LEFT_FROM_EYE - cancel_debug_pullback,
