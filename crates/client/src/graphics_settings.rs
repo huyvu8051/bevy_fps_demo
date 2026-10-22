@@ -485,14 +485,8 @@ fn count_draws(
 ///
 /// It is also load bearing for the look: the far distance of desert_city is
 /// haze, and that haze is why the sun's far shadow cascade was worth so little.
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub(crate) struct FogEnabled(pub(crate) bool);
-
-impl Default for FogEnabled {
-    fn default() -> Self {
-        Self(true)
-    }
-}
 
 pub(crate) fn apply_fog(
     mut commands: Commands,

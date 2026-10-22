@@ -319,7 +319,6 @@ pub(crate) fn setup_gameplay(
             }),
             Transform::from_translation(player_spawn + Vec3::Y * EYE_HEIGHT_OFFSET),
             SpatialListener::default(),
-            ScreenEffects::default(),
             FpsCamera { yaw: review_yaw, pitch: review_pitch },
             ViewRecoil::default(),
             Lean::default(),
@@ -332,7 +331,6 @@ pub(crate) fn setup_gameplay(
                 Bloom::default(),
                 Msaa::Off,
                 bevy::core_pipeline::prepass::DepthPrepass,
-                distance_fog_for(scenario),
             ),
             RenderLayers::from_layers(&[WORLD_LAYER, VIEWMODEL_LAYER, SCOPE_MASK_LAYER]),
             RenderTarget::from(scene_target.0.clone()),
@@ -418,7 +416,6 @@ pub(crate) fn setup_gameplay(
             bevy::core_pipeline::prepass::DepthPrepass,
             RenderLayers::from_layers(&[WORLD_LAYER, SCOPE_RETICLE_LAYER]),
             NoShadowPass,
-            distance_fog_for(scenario),
             // No Bloom here, unlike the main camera. Measured at 0.66ms of the
             // 3.9ms a sighted frame costs -- a sixth of it -- for a glow drawn
             // into a 512px disc at twelve times magnification, where there is

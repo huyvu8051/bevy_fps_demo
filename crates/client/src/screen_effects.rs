@@ -49,14 +49,8 @@ pub(crate) fn update_screen_effects(
 /// every frame whether anything is happening or not. Taking the component off
 /// the camera is what stops it; setting grain to zero would still pay for the
 /// pass.
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub(crate) struct ScreenEffectsEnabled(pub(crate) bool);
-
-impl Default for ScreenEffectsEnabled {
-    fn default() -> Self {
-        Self(true)
-    }
-}
 
 pub(crate) fn apply_screen_effects_toggle(
     mut commands: Commands,

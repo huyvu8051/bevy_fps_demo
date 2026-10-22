@@ -1,6 +1,10 @@
 #!/bin/bash
-# A/B frame time for one setting, against a scene stripped of everything that
-# moves. Zombies frozen and unanimated, smoke, tracers, markers and the aim
+# A/B frame time for one setting, at full render resolution, against a scene
+# stripped of everything that moves.
+#
+# Full resolution because the game ships at 0.3 and measuring there hides
+# everything that costs per pixel: a 16x change in the scope texture measured
+# as nothing, and so did the render scale itself. Zombies frozen and unanimated, smoke, tracers, markers and the aim
 # blur all off: what is left is the renderer, which is the only thing a scope
 # measurement is about. Background noise on this machine is worth about 1ms,
 # so the runs are interleaved and the result is a median, not a mean.
@@ -23,6 +27,7 @@ pgrep -f "target/debug/client" >/dev/null && { echo "client dang chay -- dong no
 one() {
   cat > "$work/home/.bevy_fps_demo_settings.ron" <<RON
 (fps_cap:Some(1000),autopilot:Some(false),
+ render_resolution_scale:Some(1.0),
  freeze_zombies:Some(true),zombie_anim_disabled:Some(true),zombie_health_bars_hidden:Some(true),
  aim_blur_enabled:Some(false),
  muzzle_smoke_enabled:Some(false),port_smoke_enabled:Some(false),barrel_smoke_enabled:Some(false),
