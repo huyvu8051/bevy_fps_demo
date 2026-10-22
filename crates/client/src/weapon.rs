@@ -187,9 +187,9 @@ static AK47: WeaponDef = WeaponDef {
             recover_speed: 6.6,
         },
         weapon: WeaponKick {
-            slide_back: 0.075,
-            lift: 0.0260,
-            pitch_deg: 3.2,
+            slide_back: 0.055,
+            lift: 0.0160,
+            pitch_deg: 2.2,
             roll_deg: 0.8,
             yaw_deg: 0.7,
             settle_speed: 21.0,
@@ -261,7 +261,7 @@ static M24: WeaponDef = WeaponDef {
     // rear glass, so the scope picture fills more of the view than either
     // carbine's sight. The glass itself sits 55mm further down the tube, so
     // there is still room before the near plane at 100mm.
-    ads_eye_relief: -0.02,
+    ads_eye_relief: -0.0,
     ads_speed: 6.5,
     // Twice the AK at every stop: the glass it carries is the one thing this
     // rifle is for.
@@ -276,14 +276,14 @@ static M24: WeaponDef = WeaponDef {
             climb_per_shot: 0.055,
             climb_max: 0.200,
             wander_per_shot: 0.012,
-            shove_per_shot: 0.9,
+            shove_per_shot: 0.4,
             shove_max: 0.925,
             recover_speed: 2.6,
         },
         weapon: WeaponKick {
-            slide_back: 0.065,
+            slide_back: 0.04,
             lift: 0.014,
-            pitch_deg: 6.0,
+            pitch_deg: 3.0,
             roll_deg: 3.5,
             yaw_deg: 3.0,
             settle_speed: 5.5,
