@@ -31,10 +31,13 @@ pub(crate) struct ReticleAssets {
 /// Hands the sighted weapon its own mark.
 pub(crate) fn swap_scope_reticle(
     active: Res<ActiveWeapon>,
-    assets: Res<ReticleAssets>,
+    // Built in setup_gameplay, whose insert_resource only lands at the next
+    // sync point, so this runs at least one frame before it exists.
+    assets: Option<Res<ReticleAssets>>,
     mut reticle: Query<(&mut Mesh3d, &mut MeshMaterial3d<StandardMaterial>), With<ScopeReticle>>,
     mut shown: Local<Option<WeaponId>>,
 ) {
+    let Some(assets) = assets else { return };
     if *shown == Some(active.0) {
         return;
     }
@@ -418,7 +421,18 @@ pub(crate) fn gun_view_animation(
         }
 
         let ads_target = if aiming || force_ads() { 1.0 } else { 0.0 };
-        let ads_step = (GUN_ADS_SPEED * time.delta_secs()).min(1.0);
+        // Latched as the raise begins, and held for the whole of it. Reading
+        // ready_blend live would not do: aiming drives it to zero, so a raise
+        // that started from low ready would slow down halfway through it.
+        // ready_blend is still last frame's here, which is what we want.
+        if ads_target > 0.0 && gun.ads_blend <= f32::EPSILON {
+            gun.ads_from_ready = gun.ready_blend;
+        }
+        let from_rest = ADS_FROM_REST_SCALE + (1.0 - ADS_FROM_REST_SCALE) * gun.ads_from_ready;
+        // Dropping the sights is the weapon's own speed either way: what the
+        // rest pose costs is the distance up, not the distance back down.
+        let ads_rate = active.def().ads_speed * if ads_target > 0.0 { from_rest } else { 1.0 };
+        let ads_step = (ads_rate * time.delta_secs()).min(1.0);
         gun.ads_blend += (ads_target - gun.ads_blend) * ads_step;
 
         // Having aimed once means the player is working a sight line and will

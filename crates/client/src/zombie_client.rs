@@ -56,6 +56,9 @@ pub(crate) struct Gun {
     /// points the mesh marks along the tube rather than assumed. Identity for
     /// a scope mounted true, and for a weapon with no glass at all.
     pub(crate) optical_fix: Quat,
+    /// How ready the weapon was when the sights started coming up, latched for
+    /// the whole of that raise.
+    pub(crate) ads_from_ready: f32,
     pub(crate) base_offset: Vec3,
     pub(crate) recoil: f32,
     pub(crate) ammo: u32,

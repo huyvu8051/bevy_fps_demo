@@ -330,6 +330,7 @@ pub(crate) fn setup_gameplay(
             Visibility::default(),
             Gun {
                 optical_fix: Quat::IDENTITY,
+                ads_from_ready: 0.0,
                 base_offset: active.def().rest_offset,
                 muzzle_local: Transform::IDENTITY,
                 settle_jitter: Vec3::ZERO,

@@ -17,6 +17,9 @@ pub(crate) struct WeaponDef {
     /// a scope, the rear sight on irons. The gun is then placed so that point
     /// lands on the camera axis, which is the whole of ads_offset.
     pub(crate) ads_eye_relief: f32,
+    /// How fast the sights come up, from the ready pose. Weight and length:
+    /// a carbine snaps up, a scoped bolt gun does not.
+    pub(crate) ads_speed: f32,
 
     /// Added to the gun's own offset but along the camera's axes, not the
     /// gun's, so it tracks where the gun sits without taking its sway. Moving
@@ -93,6 +96,7 @@ static AK47: WeaponDef = WeaponDef {
     rest_offset: Vec3::new(0.160, -0.0905, -0.7094),
     ready_offset: Vec3::new(0.045, -0.1905, -0.6194),
     ads_eye_relief: 0.032,
+    ads_speed: 10.0,
     eject_port: Vec3::new(0.0410, 0.0086, 0.4905),
     fire_rate: 0.1,
     magazine: 50,
@@ -127,6 +131,7 @@ static M4A1: WeaponDef = WeaponDef {
     rest_offset: Vec3::new(0.160, -0.096, -0.626),
     ready_offset: Vec3::new(0.071, -0.196, -0.536),
     ads_eye_relief: 0.120,
+    ads_speed: 12.5,
     eject_port: Vec3::new(0.06, 0.02, 0.33),
     fire_rate: 0.085,
     magazine: 30,
@@ -134,19 +139,19 @@ static M4A1: WeaponDef = WeaponDef {
     // a flat ratio because it also fires faster, and matching per shot would
     // have climbed harder for the same trigger hold.
     recoil: Recoil {
-        pitch_kick: 0.014,
-        pitch_kick_max: 0.11,
-        yaw_jitter: 0.007,
-        push_back: 0.011,
-        push_back_max: 0.045,
-        recovery_speed: 6.5,
+        pitch_kick: 0.0080,
+        pitch_kick_max: 0.068,
+        yaw_jitter: 0.0044,
+        push_back: 0.0065,
+        push_back_max: 0.028,
+        recovery_speed: 7.4,
 
         duration: 0.10,
-        kick_back: 0.075,
-        kick_up: 0.006,
-        tilt_up_deg: 2.5,
-        roll_deg: 1.8,
-        yaw_kick_deg: 1.6,
+        kick_back: 0.039,
+        kick_up: 0.0036,
+        tilt_up_deg: 0.9,
+        roll_deg: 0.6,
+        yaw_kick_deg: 0.5,
     },
 };
 
@@ -168,6 +173,7 @@ static M24: WeaponDef = WeaponDef {
     rest_offset: Vec3::new(0.160, -0.0905, -0.9770),
     ready_offset: Vec3::new(0.045, -0.1905, -0.8870),
     ads_eye_relief: 0.032,
+    ads_speed: 6.5,
     // Eyeballed, like the other two. The mesh has no Socket_Eject yet.
     eject_port: Vec3::new(0.0525, 0.0158, 0.7560),
     fire_rate: 1.3,
@@ -178,9 +184,9 @@ static M24: WeaponDef = WeaponDef {
         yaw_jitter: 0.012,
         push_back: 0.030,
         push_back_max: 0.075,
-        recovery_speed: 4.0,
+        recovery_speed: 2.6,
 
-        duration: 0.25,
+        duration: 0.42,
         kick_back: 0.160,
         kick_up: 0.014,
         tilt_up_deg: 6.0,
