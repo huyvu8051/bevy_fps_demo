@@ -17,9 +17,7 @@ pub(crate) struct WeaponDef {
     /// a scope, the rear sight on irons. The gun is then placed so that point
     /// lands on the camera axis, which is the whole of ads_offset.
     pub(crate) ads_eye_relief: f32,
-    /// How fast the sights come up, from the ready pose. Weight and length:
-    /// a carbine snaps up, a scoped bolt gun does not.
-    pub(crate) ads_speed: f32,
+    pub(crate) ads_speed: AdsSpeed,
 
     pub(crate) scope: Scope,
     pub(crate) sound: WeaponSound,
@@ -29,6 +27,22 @@ pub(crate) struct WeaponDef {
     pub(crate) fire_rate: f32,
     pub(crate) magazine: u32,
     pub(crate) recoil: Recoil,
+}
+
+/// How fast the sights come up. Weight and length: a carbine snaps up, a
+/// scoped bolt gun does not.
+///
+/// Two speeds because the weapon starts from two places, and how much the
+/// shorter trip saves is the weapon's own business -- a rifle held low and
+/// wide gains more from being half way there than a carbine already tucked in.
+/// It was one speed and a scale shared by all three.
+///
+/// A raise that begins part way between the two poses interpolates; dropping
+/// the sights uses from_ready either way, because what the rest pose costs is
+/// the distance up, not the distance back down.
+pub(crate) struct AdsSpeed {
+    pub(crate) from_ready: f32,
+    pub(crate) from_rest: f32,
 }
 
 /// What the weapon sounds like. A 7.62, a 5.56 and a bolt gun do not share a
@@ -165,7 +179,7 @@ static AK47: WeaponDef = WeaponDef {
     rest_offset: Vec3::new(0.160, -0.0905, -0.7094),
     ready_offset: Vec3::new(0.045, -0.1905, -0.6194),
     ads_eye_relief: 0.01,
-    ads_speed: 10.0,
+    ads_speed: AdsSpeed { from_ready: 10.0, from_rest: 5.5 },
     // The floor is half the default, because that is where aim sensitivity,
     // which is default/zoom against a half speed base, comes back out at
     // exactly the hip fire rate.
@@ -209,7 +223,7 @@ static M4A1: WeaponDef = WeaponDef {
     rest_offset: Vec3::new(0.160, -0.1268, -0.626),
     ready_offset: Vec3::new(0.071, -0.2268, -0.536),
     ads_eye_relief: 0.10,
-    ads_speed: 12.5,
+    ads_speed: AdsSpeed { from_ready: 12.5, from_rest: 6.875 },
     // Irons: the scope view never comes on, so these only have to be sane.
     scope: Scope { min_zoom: 1.0, default_zoom: 1.0, max_zoom: 1.0, reticle_zoom: 1.0 },
     sound: WeaponSound { fire: "audio/weapons/m4a1_fire.wav", reload: "audio/weapons/m4a1_reload.wav" },
@@ -262,7 +276,7 @@ static M24: WeaponDef = WeaponDef {
     // carbine's sight. The glass itself sits 55mm further down the tube, so
     // there is still room before the near plane at 100mm.
     ads_eye_relief: -0.0,
-    ads_speed: 6.5,
+    ads_speed: AdsSpeed { from_ready: 6.5, from_rest: 3.575 },
     // Twice the AK at every stop: the glass it carries is the one thing this
     // rifle is for.
     scope: Scope { min_zoom: 12.0, default_zoom: 24.0, max_zoom: 40.0, reticle_zoom: 10.0 },

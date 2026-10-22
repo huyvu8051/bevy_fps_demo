@@ -492,10 +492,14 @@ pub(crate) fn gun_view_animation(
         if ads_target > 0.0 && gun.ads_blend <= f32::EPSILON {
             gun.ads_from_ready = gun.ready_blend;
         }
-        let from_rest = ADS_FROM_REST_SCALE + (1.0 - ADS_FROM_REST_SCALE) * gun.ads_from_ready;
-        // Dropping the sights is the weapon's own speed either way: what the
-        // rest pose costs is the distance up, not the distance back down.
-        let ads_rate = active.def().ads_speed * if ads_target > 0.0 { from_rest } else { 1.0 };
+        // Dropping the sights is the ready speed either way: what the rest
+        // pose costs is the distance up, not the distance back down.
+        let speed = &active.def().ads_speed;
+        let ads_rate = if ads_target > 0.0 {
+            speed.from_rest + (speed.from_ready - speed.from_rest) * gun.ads_from_ready
+        } else {
+            speed.from_ready
+        };
         let ads_step = (ads_rate * time.delta_secs()).min(1.0);
         gun.ads_blend += (ads_target - gun.ads_blend) * ads_step;
 

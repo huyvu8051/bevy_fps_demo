@@ -150,9 +150,6 @@ const GUN_SETTLE_JITTER: Vec3 = Vec3::new(0.030, 0.024, 0.020);
 const GUN_SETTLE_TWIST_DEG: f32 = 3.0;
 const GUN_SETTLE_SPEED: f32 = 3.0;
 const GUN_SHOULDER_SPEED: f32 = 9.0;
-/// What the sights cost coming up from the hip rest rather than from low
-/// ready, where the weapon is already half way there.
-const ADS_FROM_REST_SCALE: f32 = 0.55;
 const GUN_BOB_SPEED: f32 = 8.0;
 const GUN_BOB_AMOUNT_X: f32 = 0.015;
 const GUN_BOB_AMOUNT_Y: f32 = 0.012;
