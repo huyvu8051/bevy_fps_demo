@@ -335,6 +335,8 @@ pub(crate) fn adjust_scope_zoom(
 }
 
 pub(crate) fn update_scope_lens(
+    active: Res<ActiveWeapon>,
+    aim_socket: Query<&GlobalTransform, With<AimSocket>>,
     gun: Query<&Gun>,
     zoom: Res<ScopeZoom>,
     scope_camera_enabled: Res<ScopeCameraEnabled>,
@@ -377,9 +379,34 @@ pub(crate) fn update_scope_lens(
         // on the end. Only that inner part comes from the propagated
         // transforms, and it never animates; the gun's transform is this
         // frame's, so the disc cannot trail the mesh when the eye turns.
-        if let (Ok(socket), Ok((gun_local, gun_global))) = (view_socket.single(), gun_placed.single()) {
+        if let (Ok(socket), Ok((gun_local, gun_global)), Ok(aim)) =
+            (view_socket.single(), gun_placed.single(), aim_socket.single())
+        {
             let in_gun = socket.reparented_to(gun_global);
-            *transform = gun_local.mul_transform(in_gun);
+            let mut placed = gun_local.mul_transform(in_gun);
+
+            // Opened out for the depth the scope sets it at. The socket's
+            // scale is the aperture's radius, measured at the eyepiece; the
+            // disc sits further down the tube than that, and the same radius
+            // further from the eye covers a narrower cone, which shows as a
+            // ring of bare tube round the picture.
+            //
+            // Short of the aperture shows as a ring. Past it shows as nothing,
+            // because the glass and the tube crop the excess. So this aims
+            // past: it treats the aperture as sitting on Socket_Aim, a few
+            // millimetres behind the glass, which leaves the cone a little
+            // wide on purpose.
+            //
+            // Derived rather than baked into the asset because it follows
+            // ads_eye_relief, which is a feel number and gets retuned. A
+            // radius authored against one eye position goes quietly wrong at
+            // the next.
+            let relief = active.def().ads_eye_relief;
+            if relief > f32::EPSILON {
+                let recess = aim.reparented_to(gun_global).translation.distance(in_gun.translation);
+                placed.scale *= (relief + recess) / relief;
+            }
+            *transform = placed;
         }
     }
 }
