@@ -19,6 +19,13 @@ pub(crate) struct ScopeScreen;
 #[derive(Component)]
 pub(crate) struct ScopeReticle;
 
+/// The red bead at dead centre of the duplex. Its own entity because a mesh
+/// carries one material, and the posts are black while the bead is not. Rides
+/// the reticle as a child, so the throw and the magnification scaling are
+/// already done for it.
+#[derive(Component)]
+pub(crate) struct ScopeReticleCentreDot;
+
 /// One mark per kind of glass, built once and swapped on the single reticle
 /// entity rather than respawned, so nothing has to be rewired on a weapon
 /// change.
@@ -35,6 +42,7 @@ pub(crate) fn swap_scope_reticle(
     // sync point, so this runs at least one frame before it exists.
     assets: Option<Res<ReticleAssets>>,
     mut reticle: Query<(&mut Mesh3d, &mut MeshMaterial3d<StandardMaterial>), With<ScopeReticle>>,
+    mut centre_dot: Query<&mut Visibility, With<ScopeReticleCentreDot>>,
     mut shown: Local<Option<WeaponId>>,
 ) {
     let Some(assets) = assets else { return };
@@ -46,6 +54,14 @@ pub(crate) fn swap_scope_reticle(
         WeaponId::M24 => &assets.duplex,
         _ => &assets.chevron,
     };
+    // The chevron already comes to a point; only the duplex leaves a gap that
+    // wants filling.
+    if let Ok(mut visibility) = centre_dot.single_mut() {
+        *visibility = match active.0 {
+            WeaponId::M24 => Visibility::Visible,
+            _ => Visibility::Hidden,
+        };
+    }
     mesh.0 = next_mesh.clone();
     material.0 = next_material.clone();
     *shown = Some(active.0);
@@ -292,7 +308,12 @@ pub(crate) fn place_scope_reticle(
     // The mesh is built in radians at unit distance, so this is purely the
     // magnification: holding apparent thickness steady as the target grows is
     // what a second focal plane scope does.
-    reticle.scale = Vec3::splat(active.def().scope.default_zoom / zoom.0);
+    //
+    // Against reticle_zoom, not default_zoom. The two were the same number
+    // until the optics were wound up, at which point tying the mark to the
+    // weapon's power tripled the AK's chevron for a change that was meant to
+    // be about magnification alone.
+    reticle.scale = Vec3::splat(active.def().scope.reticle_zoom / zoom.0);
 }
 
 pub(crate) fn adjust_scope_zoom(

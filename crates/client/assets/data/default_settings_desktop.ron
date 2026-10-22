@@ -24,6 +24,7 @@
     map_msaa_on: Some(false),
     scope_camera_enabled: Some(true),
     sensitivity_scale: Some(1.0),
+    damage_multiplier: Some(1.0),
     noclip: Some(false),
     god_mode: Some(false),
     freeze_zombies: Some(false),

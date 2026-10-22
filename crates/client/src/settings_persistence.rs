@@ -17,6 +17,7 @@ pub(crate) struct PersistedSettings {
     pub(crate) port_smoke_enabled: Option<bool>,
     pub(crate) barrel_smoke_enabled: Option<bool>,
     pub(crate) sensitivity_scale: Option<f32>,
+    pub(crate) damage_multiplier: Option<f32>,
     pub(crate) noclip: Option<bool>,
     pub(crate) god_mode: Option<bool>,
     pub(crate) freeze_zombies: Option<bool>,
@@ -126,6 +127,7 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(port_smoke_enabled, PortSmokeEnabled);
     apply!(barrel_smoke_enabled, BarrelSmokeEnabled);
     apply!(sensitivity_scale, SensitivityScale);
+    apply!(damage_multiplier, DamageMultiplierUi);
     apply!(noclip, Noclip);
     apply!(god_mode, GodMode);
     apply!(freeze_zombies, FreezeZombies);
@@ -143,6 +145,13 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(autopilot, Autopilot);
     apply!(nav_debug_visible, NavDebugVisible);
     apply!(aim_toggle_mode, AimToggleMode);
+
+    // The combat side keeps its own copy, fed by the button's event rather than
+    // by the resource it sets. A loaded number has to travel that same path or
+    // the panel would read one multiplier while the bullets carried another.
+    if let Some(v) = settings.damage_multiplier {
+        world.trigger(SetDamageMultiplier(v));
+    }
 }
 
 pub(crate) fn apply_persisted_settings(world: &mut World) {
@@ -184,6 +193,7 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(PortSmokeEnabled)
         || changed!(BarrelSmokeEnabled)
         || changed!(SensitivityScale)
+        || changed!(DamageMultiplierUi)
         || changed!(Noclip)
         || changed!(GodMode)
         || changed!(FreezeZombies)
@@ -199,7 +209,8 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(ShowFloatingDamage)
         || changed!(ShowBulletTracers)
         || changed!(Autopilot)
-        || changed!(NavDebugVisible);
+        || changed!(NavDebugVisible)
+        || changed!(AimToggleMode);
     if !any_changed {
         return;
     }
@@ -222,6 +233,7 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         port_smoke_enabled: world.get_resource::<PortSmokeEnabled>().map(|r| r.0),
         barrel_smoke_enabled: world.get_resource::<BarrelSmokeEnabled>().map(|r| r.0),
         sensitivity_scale: world.get_resource::<SensitivityScale>().map(|r| r.0),
+        damage_multiplier: world.get_resource::<DamageMultiplierUi>().map(|r| r.0),
         noclip: world.get_resource::<Noclip>().map(|r| r.0),
         god_mode: world.get_resource::<GodMode>().map(|r| r.0),
         freeze_zombies: world.get_resource::<FreezeZombies>().map(|r| r.0),

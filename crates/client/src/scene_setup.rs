@@ -456,18 +456,33 @@ pub(crate) fn setup_gameplay(
         ChildOf(camera),
     ));
 
-    commands.spawn((
-        Mesh3d(reticles.chevron.0.clone()),
-        MeshMaterial3d(reticles.chevron.1.clone()),
-        // Hung off the camera, but aimed down the barrel each frame. Parenting
-        // here guarantees it is in front of the lens and facing it; the
-        // direction is what carries the weapon.
-        Transform::default(),
-        RenderLayers::layer(SCOPE_RETICLE_LAYER),
-        ScopeReticle,
-        ChildOf(scope_camera),
-    ));
+    let reticle = commands
+        .spawn((
+            Mesh3d(reticles.chevron.0.clone()),
+            MeshMaterial3d(reticles.chevron.1.clone()),
+            // Hung off the camera, but aimed down the barrel each frame. Parenting
+            // here guarantees it is in front of the lens and facing it; the
+            // direction is what carries the weapon.
+            Transform::default(),
+            RenderLayers::layer(SCOPE_RETICLE_LAYER),
+            ScopeReticle,
+            ChildOf(scope_camera),
+        ))
+        .id();
     commands.insert_resource(reticles);
+
+    // A child of the mark, so it is carried down the barrel and scaled with it
+    // and only its own colour has to be said here. Render layers do not
+    // propagate, so it names its own. Hidden until a weapon that wants it.
+    commands.spawn((
+        Mesh3d(meshes.add(Circle::new(SCOPE_RETICLE_CENTRE_DOT_SIZE / 2.0).mesh())),
+        MeshMaterial3d(materials.add(mark_material(Color::linear_rgb(35.0, 0.0, 0.0)))),
+        Transform::default(),
+        Visibility::Hidden,
+        RenderLayers::layer(SCOPE_RETICLE_LAYER),
+        ScopeReticleCentreDot,
+        ChildOf(reticle),
+    ));
 
     commands.spawn((
         Mesh3d(meshes.add(Circle::new(1.0))),

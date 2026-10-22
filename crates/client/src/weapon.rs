@@ -53,6 +53,11 @@ pub(crate) struct Scope {
     pub(crate) min_zoom: f32,
     pub(crate) default_zoom: f32,
     pub(crate) max_zoom: f32,
+    /// The magnification the reticle mesh was drawn against. Its size on
+    /// screen is proportional to this and to nothing else, so it is kept apart
+    /// from default_zoom: winding a weapon up more powerful should not fatten
+    /// its marks along with it.
+    pub(crate) reticle_zoom: f32,
 }
 
 /// What a shot does to the view and to the weapon in the hands. The two halves
@@ -143,7 +148,7 @@ static AK47: WeaponDef = WeaponDef {
     // The floor is half the default, because that is where aim sensitivity,
     // which is default/zoom against a half speed base, comes back out at
     // exactly the hip fire rate.
-    scope: Scope { min_zoom: 6.0, default_zoom: 12.0, max_zoom: 20.0 },
+    scope: Scope { min_zoom: 6.0, default_zoom: 12.0, max_zoom: 20.0, reticle_zoom: 4.0 },
     sound: WeaponSound { fire: "audio/weapons/ak47_fire.wav", reload: "audio/weapons/ak47_reload.wav" },
     reload_duration: 2.3,
     fire_rate: 0.1,
@@ -182,7 +187,7 @@ static M4A1: WeaponDef = WeaponDef {
     ads_eye_relief: 0.120,
     ads_speed: 12.5,
     // Irons: the scope view never comes on, so these only have to be sane.
-    scope: Scope { min_zoom: 1.0, default_zoom: 1.0, max_zoom: 1.0 },
+    scope: Scope { min_zoom: 1.0, default_zoom: 1.0, max_zoom: 1.0, reticle_zoom: 1.0 },
     sound: WeaponSound { fire: "audio/weapons/m4a1_fire.wav", reload: "audio/weapons/m4a1_reload.wav" },
     reload_duration: 1.9,
     fire_rate: 0.085,
@@ -229,7 +234,7 @@ static M24: WeaponDef = WeaponDef {
     ads_speed: 6.5,
     // Twice the AK at every stop: the glass it carries is the one thing this
     // rifle is for.
-    scope: Scope { min_zoom: 12.0, default_zoom: 24.0, max_zoom: 40.0 },
+    scope: Scope { min_zoom: 12.0, default_zoom: 24.0, max_zoom: 40.0, reticle_zoom: 10.0 },
     sound: WeaponSound { fire: "audio/weapons/m24_fire.wav", reload: "audio/weapons/m24_reload.wav" },
     reload_duration: 3.1,
     fire_rate: 1.3,

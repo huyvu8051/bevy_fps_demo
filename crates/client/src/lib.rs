@@ -391,6 +391,10 @@ const SCOPE_RETICLE_LINE_WIDTH: f32 = 0.00035;
 /// Gap at dead centre, so the mark never hides what it is pointing at.
 const SCOPE_RETICLE_CENTRE_GAP: f32 = 0.035;
 const SCOPE_RETICLE_DOT_SIZE: f32 = 0.0011;
+// Sits in the duplex's centre gap, which is SCOPE_RETICLE_CENTRE_GAP * REACH
+// half wide, so it has to stay well inside that or it fills the hole the gap
+// exists to leave.
+const SCOPE_RETICLE_CENTRE_DOT_SIZE: f32 = 0.0013;
 const SCOPE_RETICLE_DOTS_PER_ARM: usize = 4;
 
 const STATIONARY_SPREAD_MULTIPLIER: f32 = 0.4;
