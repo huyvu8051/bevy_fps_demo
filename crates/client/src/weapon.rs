@@ -276,7 +276,7 @@ static M24: WeaponDef = WeaponDef {
     // carbine's sight. The glass itself sits 55mm further down the tube, so
     // there is still room before the near plane at 100mm.
     ads_eye_relief: -0.0,
-    ads_speed: AdsSpeed { from_ready: 6.5, from_rest: 3.575 },
+    ads_speed: AdsSpeed { from_ready: 16.5, from_rest: 1.575 },
     // Twice the AK at every stop: the glass it carries is the one thing this
     // rifle is for.
     scope: Scope { min_zoom: 12.0, default_zoom: 24.0, max_zoom: 40.0, reticle_zoom: 10.0 },

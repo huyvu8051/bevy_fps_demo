@@ -57,8 +57,10 @@ pub(crate) struct Gun {
     /// a scope mounted true, and for a weapon with no glass at all.
     pub(crate) optical_fix: Quat,
     /// How ready the weapon was when the sights started coming up, latched for
-    /// the whole of that raise.
+    /// the whole of that raise, and whether they were being asked for last
+    /// frame -- which is what says a raise is starting.
     pub(crate) ads_from_ready: f32,
+    pub(crate) ads_wanted: bool,
     pub(crate) base_offset: Vec3,
     pub(crate) recoil: f32,
     /// Where the kick is headed. The shot sets this; recoil chases it, so the

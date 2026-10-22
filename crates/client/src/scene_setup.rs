@@ -345,6 +345,7 @@ pub(crate) fn setup_gameplay(
             Gun {
                 optical_fix: Quat::IDENTITY,
                 ads_from_ready: 0.0,
+                ads_wanted: false,
                 base_offset: active.def().rest_offset,
                 muzzle_local: Transform::IDENTITY,
                 eject_local: Transform::IDENTITY,

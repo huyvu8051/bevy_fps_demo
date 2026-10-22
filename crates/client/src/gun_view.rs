@@ -489,9 +489,20 @@ pub(crate) fn gun_view_animation(
         // ready_blend live would not do: aiming drives it to zero, so a raise
         // that started from low ready would slow down halfway through it.
         // ready_blend is still last frame's here, which is what we want.
-        if ads_target > 0.0 && gun.ads_blend <= f32::EPSILON {
-            gun.ads_from_ready = gun.ready_blend;
+        //
+        // On the rising edge of the request, not on ads_blend being near zero.
+        // ads_blend decays towards zero and never arrives, so testing it
+        // against f32::EPSILON meant the latch could not fire again for most
+        // of a second after the sights came down -- and a player who aimed
+        // again sooner than that kept whatever was latched last time, which
+        // after the first aim of a life is the hip value, for good.
+        //
+        // A raise that starts before the last one has finished coming down is
+        // at least as short a trip as one from low ready, hence the max.
+        if ads_target > 0.0 && !gun.ads_wanted {
+            gun.ads_from_ready = gun.ready_blend.max(gun.ads_blend);
         }
+        gun.ads_wanted = ads_target > 0.0;
         // Dropping the sights is the ready speed either way: what the rest
         // pose costs is the distance up, not the distance back down.
         let speed = &active.def().ads_speed;
