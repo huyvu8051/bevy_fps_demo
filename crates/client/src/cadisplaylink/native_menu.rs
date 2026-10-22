@@ -8,8 +8,11 @@ use shared::Health;
 #[cfg(debug_assertions)]
 use shared::{Zombie, ZOMBIE_MAX_HEALTH};
 
-pub fn ping_ms(app: &mut App) -> f32 {
-    app.world().get_resource::<bevy_replicon_renet2::renet2::RenetClient>().map(|c| c.rtt() as f32 * 1000.0).unwrap_or(-1.0)
+/// The game stopped being networked; there is no round trip left to report.
+/// The native menu still asks, and -1 is what it already showed when there
+/// was no client connected.
+pub fn ping_ms(_app: &mut App) -> f32 {
+    -1.0
 }
 
 pub fn menu_visible(app: &mut App) -> bool {
@@ -51,9 +54,8 @@ pub fn game_over(app: &mut App) -> bool {
 }
 
 pub fn trigger_restart(app: &mut App) {
-    use bevy_replicon::prelude::ClientTriggerExt;
     let mut state: SystemState<Commands> = SystemState::from_world(app.world_mut());
-    state.get_mut(app.world_mut()).expect("system param validation failed").client_trigger(shared::RequestRestart);
+    state.get_mut(app.world_mut()).expect("system param validation failed").trigger(shared::RequestRestart);
     state.apply(app.world_mut());
 }
 
@@ -144,12 +146,11 @@ pub fn kill_count(app: &mut App) -> u32 {
 
 #[cfg(debug_assertions)]
 fn set_zombie_count_and_trigger(app: &mut App, new_count: u32) {
-    use bevy_replicon::prelude::ClientTriggerExt;
     if let Some(mut count) = app.world_mut().get_resource_mut::<crate::ZombieCountUi>() {
         count.0 = new_count;
     }
     let mut state: SystemState<Commands> = SystemState::from_world(app.world_mut());
-    state.get_mut(app.world_mut()).expect("system param validation failed").client_trigger(shared::SetZombieCount(new_count));
+    state.get_mut(app.world_mut()).expect("system param validation failed").trigger(shared::SetZombieCount(new_count));
     state.apply(app.world_mut());
 }
 
@@ -197,16 +198,24 @@ pub fn near_death_nearest_zombie(app: &mut App) {
 
 #[cfg(debug_assertions)]
 pub fn trigger_kill_all_zombies(app: &mut App) {
-    use bevy_replicon::prelude::ClientTriggerExt;
     let mut state: SystemState<Commands> = SystemState::from_world(app.world_mut());
-    state.get_mut(app.world_mut()).expect("system param validation failed").client_trigger(shared::ClearAllZombies);
+    state.get_mut(app.world_mut()).expect("system param validation failed").trigger(shared::ClearAllZombies);
     state.apply(app.world_mut());
 }
 
 #[cfg(debug_assertions)]
 pub fn trigger_spawn_more_zombies(app: &mut App) {
-    use bevy_replicon::prelude::ClientTriggerExt;
     let mut state: SystemState<Commands> = SystemState::from_world(app.world_mut());
-    state.get_mut(app.world_mut()).expect("system param validation failed").client_trigger(shared::SpawnMoreZombies);
+    state.get_mut(app.world_mut()).expect("system param validation failed").trigger(shared::SpawnMoreZombies);
     state.apply(app.world_mut());
+}
+
+pub fn player_model_visible(app: &mut App) -> bool {
+    app.world().get_resource::<crate::PlayerModelVisible>().map(|v| v.0).unwrap_or(true)
+}
+
+pub fn set_player_model_visible(app: &mut App, on: bool) {
+    if let Some(mut v) = app.world_mut().get_resource_mut::<crate::PlayerModelVisible>() {
+        v.0 = on;
+    }
 }

@@ -178,7 +178,7 @@ static AK47: WeaponDef = WeaponDef {
     mesh_path: "models/ak47_scope/raw/scene.gltf",
     rest_offset: Vec3::new(0.160, -0.0905, -0.7094),
     ready_offset: Vec3::new(0.045, -0.1905, -0.6194),
-    ads_eye_relief: 0.01,
+    ads_eye_relief: 0.02,
     ads_speed: AdsSpeed { from_ready: 8.0, from_rest: 5.5 },
     // The floor is half the default, because that is where aim sensitivity,
     // which is default/zoom against a half speed base, comes back out at
@@ -201,7 +201,7 @@ static AK47: WeaponDef = WeaponDef {
             recover_speed: 6.6,
         },
         weapon: WeaponKick {
-            slide_back: 0.055,
+            slide_back: 0.075,
             lift: 0.0160,
             pitch_deg: 2.2,
             roll_deg: 0.8,

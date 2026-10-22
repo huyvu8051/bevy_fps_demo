@@ -640,6 +640,7 @@ impl Plugin for GamePlugin {
         .init_resource::<FogEnabled>()
         .init_resource::<BulletHolesEnabled>()
         .init_resource::<BloodEnabled>()
+        .init_resource::<PlayerModelVisible>()
         .init_resource::<MuzzleSmokeEnabled>()
         .init_resource::<PortSmokeEnabled>()
         .init_resource::<BarrelSmokeEnabled>()
@@ -808,7 +809,7 @@ impl Plugin for GamePlugin {
 
                 (
                     wire_player_model_scene_nodes,
-                    (spawn_viewmodel_body, wire_viewmodel_body_meshes),
+                    (spawn_viewmodel_body, wire_viewmodel_body_meshes, apply_player_model_visible),
                     spawn_grip_sockets,
                     wire_player_model_animations,
                     update_local_player_model_animation,

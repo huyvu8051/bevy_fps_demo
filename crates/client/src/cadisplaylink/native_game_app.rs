@@ -49,8 +49,6 @@ pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, sc
 
     app.register_type::<bevy::pbr::MeshMaterial3d<bevy::pbr::StandardMaterial>>();
     app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
-    app.add_plugins(bevy_replicon::prelude::RepliconPlugins);
-    app.add_plugins(bevy_replicon_renet2::RepliconRenetPlugins);
     app.add_plugins(crate::GamePlugin);
 
     app.world_mut().spawn((

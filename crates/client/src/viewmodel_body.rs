@@ -231,3 +231,30 @@ pub(crate) fn finger_grip_rotation(bare_name: &str) -> Option<Quat> {
 }
 
 
+
+/// Whether the first-person body is drawn.
+///
+/// The iOS native menu has had a switch for this all along; the resource
+/// behind it went when the body was rebuilt, leaving an FFI entry pointing at
+/// nothing. Restored here rather than deleted because the header the Swift
+/// side links against still declares it.
+#[derive(Resource)]
+pub(crate) struct PlayerModelVisible(pub(crate) bool);
+
+impl Default for PlayerModelVisible {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+pub(crate) fn apply_player_model_visible(
+    visible: Res<PlayerModelVisible>,
+    mut body: Query<&mut Visibility, With<ViewmodelBody>>,
+) {
+    if !visible.is_changed() {
+        return;
+    }
+    for mut v in &mut body {
+        *v = if visible.0 { Visibility::Inherited } else { Visibility::Hidden };
+    }
+}

@@ -39,7 +39,7 @@ pub struct ExtractQueries {
     )>,
     scope: SystemState<(
         Q<'static, 'static, (&'static GlobalTransform, &'static bevy::camera::Camera, &'static bevy::camera::Projection), With<crate::ScopeCamera>>,
-        Q<'static, 'static, (&'static GlobalTransform, &'static Transform), With<crate::ScopeLens>>,
+        Q<'static, 'static, (&'static GlobalTransform, &'static Transform), With<crate::ScopeScreen>>,
     )>,
     zombies: SystemState<(
         Q<'static, 'static, (bevy::ecs::entity::Entity, &'static GlobalTransform, Option<&'static ZombieKind>), With<Zombie>>,
@@ -49,7 +49,7 @@ pub struct ExtractQueries {
         Res<'static, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
     )>,
     remote_players: SystemState<(
-        Q<'static, 'static, (bevy::ecs::entity::Entity, &'static GlobalTransform), (With<NetPlayer>, Without<crate::LocalPlayer>)>,
+        Q<'static, 'static, (bevy::ecs::entity::Entity, &'static GlobalTransform), With<NetPlayer>>,
         Q<'static, 'static, &'static Children>,
         Q<'static, 'static, &'static SkinnedMesh>,
         Q<'static, 'static, &'static GlobalTransform>,
