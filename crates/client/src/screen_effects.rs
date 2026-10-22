@@ -42,3 +42,40 @@ pub(crate) fn update_screen_effects(
         effect.desaturation = *eased * DESATURATION_AT_DEATH;
     }
 }
+
+/// Whether the fullscreen grain and desaturation pass runs at all.
+///
+/// It is a FullscreenMaterial on the main camera, so it touches every pixel
+/// every frame whether anything is happening or not. Taking the component off
+/// the camera is what stops it; setting grain to zero would still pay for the
+/// pass.
+#[derive(Resource)]
+pub(crate) struct ScreenEffectsEnabled(pub(crate) bool);
+
+impl Default for ScreenEffectsEnabled {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+pub(crate) fn apply_screen_effects_toggle(
+    mut commands: Commands,
+    enabled: Res<ScreenEffectsEnabled>,
+    camera: Query<(Entity, Has<ScreenEffects>), (With<FpsCamera>, Without<ScopeCamera>)>,
+) {
+    if !enabled.is_changed() {
+        return;
+    }
+    let Ok((camera, present)) = camera.single() else {
+        return;
+    };
+    match (enabled.0, present) {
+        (true, false) => {
+            commands.entity(camera).insert(ScreenEffects::default());
+        }
+        (false, true) => {
+            commands.entity(camera).remove::<ScreenEffects>();
+        }
+        _ => {}
+    }
+}

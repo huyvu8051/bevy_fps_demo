@@ -3,7 +3,7 @@ use bevy::mesh::{Indices, MeshVertexAttribute, PrimitiveTopology, VertexAttribut
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use crate::{map::MapRoot, *};
+use crate::map::MapRoot;
 
 /// Whether the map's static geometry is welded together after it loads.
 ///

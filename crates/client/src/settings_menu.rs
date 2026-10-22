@@ -440,6 +440,8 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "HitMarks", CheatShowHitMarkersButton);
                         spawn_cheat_toggle_button(row, "DmgNum", CheatShowFloatingDamageButton);
                         spawn_cheat_toggle_button(row, "Tracer", CheatShowTracersButton);
+                        spawn_cheat_toggle_button(row, "Bloom", CheatBloomButton);
+                        spawn_cheat_toggle_button(row, "Grain", CheatGrainButton);
                     });
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
@@ -1501,3 +1503,38 @@ pub(crate) fn update_point_light_quality_button_colors(
     }
 }
 
+
+#[derive(Component)]
+pub(crate) struct CheatBloomButton;
+#[derive(Component)]
+pub(crate) struct CheatGrainButton;
+
+/// The two fullscreen passes, on their own system because the three that were
+/// already here each sit on Bevy's sixteen parameter limit.
+pub(crate) fn render_toggle_buttons(
+    mut bloom: ResMut<BloomEnabled>,
+    mut grain: ResMut<ScreenEffectsEnabled>,
+    bloom_btn: Query<&Interaction, (With<CheatBloomButton>, Changed<Interaction>)>,
+    grain_btn: Query<&Interaction, (With<CheatGrainButton>, Changed<Interaction>)>,
+) {
+    if tapped(&bloom_btn) {
+        bloom.0 = !bloom.0;
+    }
+    if tapped(&grain_btn) {
+        grain.0 = !grain.0;
+    }
+}
+
+pub(crate) fn update_render_toggle_colors(
+    bloom: Res<BloomEnabled>,
+    grain: Res<ScreenEffectsEnabled>,
+    mut buttons: Query<
+        (&mut BackgroundColor, Option<&CheatBloomButton>),
+        Or<(With<CheatBloomButton>, With<CheatGrainButton>)>,
+    >,
+) {
+    let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
+    for (mut bg, is_bloom) in &mut buttons {
+        *bg = BackgroundColor(color_for(if is_bloom.is_some() { bloom.0 } else { grain.0 }));
+    }
+}

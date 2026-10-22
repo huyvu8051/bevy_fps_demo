@@ -636,6 +636,7 @@ impl Plugin for GamePlugin {
         .init_resource::<MergeMapMeshes>()
         .init_resource::<ShadowCascades>()
         .init_resource::<BloomEnabled>()
+        .init_resource::<ScreenEffectsEnabled>()
         .init_resource::<MuzzleSmokeEnabled>()
         .init_resource::<PortSmokeEnabled>()
         .init_resource::<BarrelSmokeEnabled>()
@@ -737,6 +738,7 @@ impl Plugin for GamePlugin {
                     .chain(),
                 (
                     cheat_toggle_buttons_3,
+                    (render_toggle_buttons, update_render_toggle_colors).chain(),
                     autopilot_toggle_button,
                     update_extra_toggle_colors,
                     cheat_spawn_zombie_button,
@@ -842,7 +844,7 @@ impl Plugin for GamePlugin {
                 update_scope_zoom_slider_visibility,
                 sync_scope_camera,
                 (place_scope_reticle, swap_scope_reticle),
-                (update_scope_lens, apply_scope_fov_zoom, apply_bloom).chain(),
+                (update_scope_lens, apply_scope_fov_zoom, apply_bloom, apply_screen_effects_toggle).chain(),
                 update_ammo_ui,
                 update_crosshair,
                 set_hitbox_gizmo_depth_bias,
