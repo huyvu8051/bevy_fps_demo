@@ -23,6 +23,7 @@
     fps_cap: None,
     map_msaa_on: Some(false),
     scope_camera_enabled: Some(true),
+    scope_fov_zoom: Some(false),
     sensitivity_scale: Some(1.0),
     damage_multiplier: Some(1.0),
     noclip: Some(false),

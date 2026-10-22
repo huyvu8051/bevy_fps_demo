@@ -132,6 +132,16 @@ mod splash_screen;
 use splash_screen::*;
 
 
+/// Which way the sight picture is made: a second camera rendering the world
+/// again into the eyepiece, or the main camera narrowing its own field and a
+/// ring blacking out the rest.
+///
+/// The first is what an optic really does and costs a whole extra view. The
+/// second is free and native resolution, at the price of the world outside
+/// the ring, which is simply not drawn.
+#[derive(Resource, Default)]
+pub(crate) struct ScopeFovZoom(pub(crate) bool);
+
 /// How far the eye sits behind the player's own eye point. The gun and the
 /// body subtract it again, so pulling back moves only the camera.
 pub(crate) fn view_pullback() -> f32 {
@@ -367,6 +377,13 @@ const WORLD_LAYER: usize = 0;
 const VIEWMODEL_LAYER: usize = 1;
 
 const SCOPE_RETICLE_LAYER: usize = 2;
+
+/// The ring that blacks out everything outside the sight picture while the
+/// main camera is doing the magnifying itself. Its own layer because the
+/// viewmodel layer is exactly what gets switched off in that mode.
+const SCOPE_MASK_LAYER: usize = 3;
+/// How much of the screen half height the sight picture fills in that mode.
+const SCOPE_FOV_ZOOM_RADIUS: f32 = 0.42;
 
 /// A duplex reticle, in radians subtended. The mark hangs off the scope camera
 /// turned to point down the barrel, so only its angular size is ever visible —
@@ -607,6 +624,7 @@ impl Plugin for GamePlugin {
         .init_resource::<LightQuality>()
         .init_resource::<PointLightQuality>()
         .init_resource::<ScopeCameraEnabled>()
+        .init_resource::<ScopeFovZoom>()
         .init_resource::<MuzzleSmokeEnabled>()
         .init_resource::<PortSmokeEnabled>()
         .init_resource::<BarrelSmokeEnabled>()
@@ -812,7 +830,7 @@ impl Plugin for GamePlugin {
                 update_scope_zoom_slider_visibility,
                 sync_scope_camera,
                 (place_scope_reticle, swap_scope_reticle),
-                update_scope_lens,
+                (update_scope_lens, apply_scope_fov_zoom).chain(),
                 update_ammo_ui,
                 update_crosshair,
                 set_hitbox_gizmo_depth_bias,

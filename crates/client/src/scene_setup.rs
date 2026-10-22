@@ -332,7 +332,7 @@ pub(crate) fn setup_gameplay(
                 bevy::core_pipeline::prepass::DepthPrepass,
                 distance_fog_for(scenario),
             ),
-            RenderLayers::from_layers(&[WORLD_LAYER, VIEWMODEL_LAYER]),
+            RenderLayers::from_layers(&[WORLD_LAYER, VIEWMODEL_LAYER, SCOPE_MASK_LAYER]),
             RenderTarget::from(scene_target.0.clone()),
         ))
         .id();
@@ -457,6 +457,27 @@ pub(crate) fn setup_gameplay(
         Name::new("ReloadHandTarget"),
         Transform::default(),
         ReloadHandTarget,
+        ChildOf(camera),
+    ));
+
+    // The sight picture in fov-zoom mode is a hole in this, so the inner
+    // radius is resized every frame against whatever field the camera is on.
+    // The outer has to reach the corners, which on 16:9 sit 2.04 times the
+    // half height out -- and the whole ring is scaled by the hole, so the
+    // ratio has to carry that 2.04 and the 0.42 the hole is: 12 leaves room
+    // for a wider window than that.
+    commands.spawn((
+        Name::new("ScopeFovMask"),
+        Mesh3d(meshes.add(Annulus::new(1.0, 12.0).mesh().resolution(64).build())),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::BLACK,
+            unlit: true,
+            ..default()
+        })),
+        Transform::from_xyz(0.0, 0.0, -1.0),
+        Visibility::Hidden,
+        RenderLayers::layer(SCOPE_MASK_LAYER),
+        ScopeFovMask,
         ChildOf(camera),
     ));
 
