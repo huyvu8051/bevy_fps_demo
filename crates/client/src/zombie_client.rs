@@ -239,7 +239,7 @@ pub(crate) fn zombie_cosmetic_bundle() -> impl Bundle {
 
 pub(crate) fn zombie_mesh_bundle(asset_server: &AssetServer, kind: ZombieKind) -> impl Bundle {
     (
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(zombie_kind_mesh_path(kind)))),
+        WorldAssetRoot(load_gltf_scene(&asset_server, zombie_kind_mesh_path(kind), RenderAssetUsages::RENDER_WORLD)),
         Transform::IDENTITY,
     )
 }

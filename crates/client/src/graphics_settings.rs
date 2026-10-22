@@ -161,7 +161,7 @@ pub(crate) fn spawn_gun_mesh_parts(
 ) {
     commands.spawn((
         Name::new("Gun mesh"),
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(mesh_path.to_string()))),
+        WorldAssetRoot(load_gltf_scene(asset_server, mesh_path, RenderAssetUsages::RENDER_WORLD)),
         Transform::IDENTITY,
         GunMeshPart,
         ChildOf(gun_entity),
@@ -507,4 +507,34 @@ pub(crate) fn apply_fog(
             _ => {}
         }
     }
+}
+
+/// Loads a glTF scene, saying out loud what is kept in RAM once it is on the
+/// GPU.
+///
+/// Bevy's default is MAIN_WORLD | RENDER_WORLD: a CPU copy of every mesh and
+/// every decoded texture, kept forever alongside the GPU copy. Measured on
+/// desktop, loading climbs about 1.7GB a second to a 9.9GB peak and settles
+/// at 2.7GB -- which is why an iPhone, jetsammed somewhere around 3GB, is
+/// killed two seconds in.
+///
+/// Only meshes are dropped. Materials cannot be: load_materials governs the
+/// StandardMaterial assets themselves, not their textures, and taking their
+/// main world half away empties Assets<StandardMaterial> -- which renders a
+/// black screen, measured, not guessed.
+///
+/// Meshes are safe to drop except where something reads them back, and one
+/// thing does: Avian builds the map's trimesh colliders from the CPU copy. So
+/// that caller keeps its half and says so at the call site.
+pub(crate) fn load_gltf_scene(
+    asset_server: &AssetServer,
+    path: impl Into<String>,
+    meshes: RenderAssetUsages,
+) -> Handle<bevy::world_serialization::WorldAsset> {
+    asset_server.load_with_settings(
+        GltfAssetLabel::Scene(0).from_asset(path.into()),
+        move |settings: &mut bevy::gltf::GltfLoaderSettings| {
+            settings.load_meshes = meshes;
+        },
+    )
 }

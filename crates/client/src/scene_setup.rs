@@ -280,7 +280,9 @@ pub(crate) fn setup_gameplay(
     commands.spawn((
         Name::new(scenario.title()),
         crate::map::MapRoot,
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(scenario.require_gltf_scene_path()))),
+        // The map keeps its CPU meshes: Avian builds every trimesh collider from
+        // them, and world_ready is the signal that it has finished.
+        WorldAssetRoot(load_gltf_scene(&asset_server, scenario.require_gltf_scene_path(), RenderAssetUsages::default())),
         Transform::IDENTITY,
         shared::gltf_scene_colliders(),
     ));
