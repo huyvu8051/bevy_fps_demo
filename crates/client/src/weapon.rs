@@ -166,11 +166,11 @@ static AK47: WeaponDef = WeaponDef {
 
         settle_speed: 21.0,
         kick_back: 0.075,
-        // Above the 12.8mm the 1.2 degree tilt drops the stock by over its own
+        // Above the 21.3mm the 2.0 degree tilt drops the stock by over its own
         // 612mm lever, or the weapon reads as sinking at the shot rather than
         // rising: the tilt pivots on the muzzle, so it moves the tail.
         kick_up: 0.0260,
-        tilt_up_deg: 1.2,
+        tilt_up_deg: 2.0,
         roll_deg: 0.8,
         yaw_kick_deg: 0.7,
     },
@@ -209,10 +209,10 @@ static M4A1: WeaponDef = WeaponDef {
 
         settle_speed: 23.0,
         kick_back: 0.055,
-        // Clears the 8.0mm its own 0.9 degree tilt drops the stock by, the way
-        // the AK clears its 12.8mm.
+        // Clears the 13.4mm its own 1.5 degree tilt drops the stock by, the way
+        // the AK clears its 21.3mm.
         kick_up: 0.0170,
-        tilt_up_deg: 0.9,
+        tilt_up_deg: 1.5,
         roll_deg: 0.6,
         yaw_kick_deg: 0.5,
     },
