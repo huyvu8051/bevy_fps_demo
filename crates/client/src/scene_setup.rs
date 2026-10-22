@@ -64,8 +64,14 @@ pub(crate) fn setup_common(
         }),
     });
 
-    commands.insert_resource(GunshotSound(asset_server.load("audio/gunshot.wav")));
-    commands.insert_resource(ReloadSound(asset_server.load("audio/reload.wav")));
+    // One handle per weapon, in WeaponId order, so a weapon that gets its own
+    // recording only has to say so in the table.
+    commands.insert_resource(GunshotSound(
+        WeaponId::ALL.iter().map(|w| asset_server.load(w.def().sound.fire)).collect(),
+    ));
+    commands.insert_resource(ReloadSound(
+        WeaponId::ALL.iter().map(|w| asset_server.load(w.def().sound.reload)).collect(),
+    ));
     commands.insert_resource(FootstepSounds {
         player: (0..PLAYER_FOOTSTEP_SAMPLES)
             .map(|i| asset_server.load(format!("audio/footsteps/{PLAYER_FOOTSTEP_SURFACE}/{i}.ogg")))

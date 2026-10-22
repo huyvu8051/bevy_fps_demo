@@ -601,11 +601,11 @@ pub(crate) fn shoot(
     gun.recoil_target = 1.0;
 
     gun.recoil_roll = ops::sin(time.elapsed_secs() * 641.0);
-    commands.spawn((AudioPlayer(vfx_assets.gunshot.0.clone()), PlaybackSettings::DESPAWN, GunshotVoice));
+    commands.spawn((AudioPlayer(vfx_assets.gunshot.of(active.0)), PlaybackSettings::DESPAWN, GunshotVoice));
     if gun.ammo == 0 {
 
         gun.reload_remaining = active.def().reload_duration;
-        commands.spawn((AudioPlayer(vfx_assets.reload_sound.0.clone()), PlaybackSettings::DESPAWN));
+        commands.spawn((AudioPlayer(vfx_assets.reload_sound.of(active.0)), PlaybackSettings::DESPAWN));
     }
 
     let Ok((camera_transform, mut recoil)) = camera.single_mut() else {
@@ -796,6 +796,6 @@ pub(crate) fn reload_gun(
         return;
     }
     gun.reload_remaining = active.def().reload_duration;
-    commands.spawn((AudioPlayer(reload_sound.0.clone()), PlaybackSettings::DESPAWN));
+    commands.spawn((AudioPlayer(reload_sound.of(active.0)), PlaybackSettings::DESPAWN));
 }
 

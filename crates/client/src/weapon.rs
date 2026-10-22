@@ -22,12 +22,24 @@ pub(crate) struct WeaponDef {
     pub(crate) ads_speed: f32,
 
     pub(crate) scope: Scope,
+    pub(crate) sound: WeaponSound,
     /// How long the weapon takes to reload. A fifty round magazine and a five
     /// round bolt gun are not the same job.
     pub(crate) reload_duration: f32,
     pub(crate) fire_rate: f32,
     pub(crate) magazine: u32,
     pub(crate) recoil: Recoil,
+}
+
+/// What the weapon sounds like. A 7.62, a 5.56 and a bolt gun do not share a
+/// report, and one file for all three was the last of the global settings.
+///
+/// Both files are cut by tools/make_weapon_sounds.sh. The reload is composed
+/// against reload_duration below, so changing that number means re-running the
+/// script or the mag hits land off the animation.
+pub(crate) struct WeaponSound {
+    pub(crate) fire: &'static str,
+    pub(crate) reload: &'static str,
 }
 
 /// What the glass magnifies by. A short scope on a rifle and a sniper's optic
@@ -97,6 +109,16 @@ impl ActiveWeapon {
 }
 
 impl WeaponId {
+    pub(crate) const ALL: [WeaponId; 3] = [WeaponId::Ak47, WeaponId::M4a1, WeaponId::M24];
+
+    pub(crate) fn index(self) -> usize {
+        match self {
+            WeaponId::Ak47 => 0,
+            WeaponId::M4a1 => 1,
+            WeaponId::M24 => 2,
+        }
+    }
+
     pub(crate) fn def(self) -> &'static WeaponDef {
         match self {
             WeaponId::Ak47 => &AK47,
@@ -120,6 +142,7 @@ static AK47: WeaponDef = WeaponDef {
     ads_speed: 10.0,
     // A short combat optic, not a sniper scope.
     scope: Scope { min_zoom: 2.0, default_zoom: 4.0, max_zoom: 6.0 },
+    sound: WeaponSound { fire: "audio/weapons/ak47_fire.wav", reload: "audio/weapons/ak47_reload.wav" },
     reload_duration: 2.3,
     fire_rate: 0.1,
     magazine: 50,
@@ -158,6 +181,7 @@ static M4A1: WeaponDef = WeaponDef {
     ads_speed: 12.5,
     // Irons: the scope view never comes on, so these only have to be sane.
     scope: Scope { min_zoom: 1.0, default_zoom: 1.0, max_zoom: 1.0 },
+    sound: WeaponSound { fire: "audio/weapons/m4a1_fire.wav", reload: "audio/weapons/m4a1_reload.wav" },
     reload_duration: 1.9,
     fire_rate: 0.085,
     magazine: 30,
@@ -202,6 +226,7 @@ static M24: WeaponDef = WeaponDef {
     ads_eye_relief: 0.032,
     ads_speed: 6.5,
     scope: Scope { min_zoom: 6.0, default_zoom: 10.0, max_zoom: 25.0 },
+    sound: WeaponSound { fire: "audio/weapons/m24_fire.wav", reload: "audio/weapons/m24_reload.wav" },
     reload_duration: 3.1,
     fire_rate: 1.3,
     magazine: 5,

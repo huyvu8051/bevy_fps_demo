@@ -3,10 +3,22 @@ use bevy::prelude::*;
 use crate::*;
 
 #[derive(Resource)]
-pub(crate) struct GunshotSound(pub(crate) Handle<AudioSource>);
+pub(crate) struct GunshotSound(pub(crate) Vec<Handle<AudioSource>>);
+
+impl GunshotSound {
+    pub(crate) fn of(&self, weapon: WeaponId) -> Handle<AudioSource> {
+        self.0[weapon.index()].clone()
+    }
+}
 
 #[derive(Resource)]
-pub(crate) struct ReloadSound(pub(crate) Handle<AudioSource>);
+pub(crate) struct ReloadSound(pub(crate) Vec<Handle<AudioSource>>);
+
+impl ReloadSound {
+    pub(crate) fn of(&self, weapon: WeaponId) -> Handle<AudioSource> {
+        self.0[weapon.index()].clone()
+    }
+}
 
 #[derive(Resource)]
 pub(crate) struct FootstepSounds {

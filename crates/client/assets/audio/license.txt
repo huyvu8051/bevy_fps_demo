@@ -11,5 +11,14 @@ footsteps/
 
     These are .ogg, which is why the client enables bevy's "vorbis" feature.
 
-gunshot.wav, reload.wav
-    Source unrecorded.
+weapons/
+    Cut from the Sonniss GDC "Game Audio Bundle", which is royalty free for
+    commercial use with no attribution required. Recordings by Pole Position
+    Production, except m4a1_reload.wav (Coll Anderson).
+
+        ak47_*   AKM 7.62x39mm, and G36C magazine foley
+        m4a1_*   H&K HK416 5.56mm on-gun mic, and AR-15 magazine foley
+        m24_*    Remington 700 7.62x51mm -- the rifle the M24 is built on --
+                 and SAIGA-12 cocking foley
+
+    tools/make_weapon_sounds.sh fetches the sources and rebuilds all six.
