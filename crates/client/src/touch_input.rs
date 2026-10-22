@@ -611,6 +611,7 @@ pub(crate) fn update_joystick_knob_visual(state: Res<TouchMoveState>, touches: R
 }
 
 pub(crate) fn touch_scope_zoom_drag(
+    active: Res<ActiveWeapon>,
     touches: Res<Touches>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mouse_ui_locked: Res<MouseUiLocked>,
@@ -651,14 +652,20 @@ pub(crate) fn touch_scope_zoom_drag(
     let logical_top = transform.affine().translation.y * node.inverse_scale_factor() - logical_height / 2.0;
     let t = ((touch.position().y - logical_top) / logical_height).clamp(0.0, 1.0);
 
-    zoom.0 = SCOPE_MAX_ZOOM + (SCOPE_MIN_ZOOM - SCOPE_MAX_ZOOM) * t;
+    let scope = &active.def().scope;
+    zoom.0 = scope.max_zoom + (scope.min_zoom - scope.max_zoom) * t;
 }
 
-pub(crate) fn update_scope_zoom_slider_visual(zoom: Res<ScopeZoom>, mut handle: Query<&mut Node, With<TouchScopeZoomSliderHandle>>) {
+pub(crate) fn update_scope_zoom_slider_visual(
+    active: Res<ActiveWeapon>,
+    zoom: Res<ScopeZoom>,
+    mut handle: Query<&mut Node, With<TouchScopeZoomSliderHandle>>,
+) {
     let Ok(mut node) = handle.single_mut() else {
         return;
     };
-    let t = ((zoom.0 - SCOPE_MIN_ZOOM) / (SCOPE_MAX_ZOOM - SCOPE_MIN_ZOOM)).clamp(0.0, 1.0);
+    let scope = &active.def().scope;
+    let t = ((zoom.0 - scope.min_zoom) / (scope.max_zoom - scope.min_zoom).max(f32::EPSILON)).clamp(0.0, 1.0);
 
     let travel = TOUCH_SCOPE_ZOOM_TRACK_HEIGHT_PX - TOUCH_SCOPE_ZOOM_HANDLE_PX;
     node.top = Val::Px(travel * (1.0 - t));

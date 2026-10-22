@@ -26,9 +26,23 @@ pub(crate) struct WeaponDef {
     /// the mesh origin moves this with it.
     pub(crate) eject_port: Vec3,
 
+    pub(crate) scope: Scope,
     pub(crate) fire_rate: f32,
     pub(crate) magazine: u32,
     pub(crate) recoil: Recoil,
+}
+
+/// What the glass magnifies by. A short scope on a rifle and a sniper's optic
+/// are not the same instrument, and a single global number made them so.
+///
+/// `default` is where a weapon starts and what the reticle is authored
+/// against; the two bounds are what the wheel and the touch slider range over.
+/// A weapon with no glass never shows a scope view, so its numbers only have
+/// to be sane, not meaningful.
+pub(crate) struct Scope {
+    pub(crate) min_zoom: f32,
+    pub(crate) default_zoom: f32,
+    pub(crate) max_zoom: f32,
 }
 
 /// What a shot does to the view and to the weapon in the hands. The two halves
@@ -101,6 +115,8 @@ static AK47: WeaponDef = WeaponDef {
     ready_offset: Vec3::new(0.045, -0.1905, -0.6194),
     ads_eye_relief: 0.032,
     ads_speed: 10.0,
+    // A short combat optic, not a sniper scope.
+    scope: Scope { min_zoom: 2.0, default_zoom: 4.0, max_zoom: 6.0 },
     eject_port: Vec3::new(0.0410, 0.0086, 0.4905),
     fire_rate: 0.1,
     magazine: 50,
@@ -136,6 +152,8 @@ static M4A1: WeaponDef = WeaponDef {
     ready_offset: Vec3::new(0.071, -0.196, -0.536),
     ads_eye_relief: 0.120,
     ads_speed: 12.5,
+    // Irons: the scope view never comes on, so these only have to be sane.
+    scope: Scope { min_zoom: 1.0, default_zoom: 1.0, max_zoom: 1.0 },
     eject_port: Vec3::new(0.06, 0.02, 0.33),
     fire_rate: 0.085,
     magazine: 30,
@@ -178,6 +196,7 @@ static M24: WeaponDef = WeaponDef {
     ready_offset: Vec3::new(0.045, -0.1905, -0.8870),
     ads_eye_relief: 0.032,
     ads_speed: 6.5,
+    scope: Scope { min_zoom: 6.0, default_zoom: 10.0, max_zoom: 25.0 },
     // Eyeballed, like the other two. The mesh has no Socket_Eject yet.
     eject_port: Vec3::new(0.0525, 0.0158, 0.7560),
     fire_rate: 1.3,
@@ -209,6 +228,7 @@ pub(crate) fn switch_weapon(
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut active: ResMut<ActiveWeapon>,
+    mut zoom: ResMut<ScopeZoom>,
     mut gun: Query<(Entity, &mut Gun)>,
     mesh_parts: Query<Entity, With<GunMeshPart>>,
     sockets: Query<Entity, Or<(With<TriggerGripSocket>, With<ForeGripSocket>)>>,
@@ -232,6 +252,7 @@ pub(crate) fn switch_weapon(
     active.0 = wanted;
     let def = wanted.def();
 
+    zoom.0 = def.scope.default_zoom;
     gun.base_offset = def.rest_offset;
     gun.ammo = def.magazine;
     gun.reload_remaining = 0.0;

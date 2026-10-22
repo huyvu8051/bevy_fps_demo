@@ -250,6 +250,7 @@ pub(crate) fn sync_scope_camera(
 /// which is where the bullet goes, however the weapon sits against the eye.
 /// The socket says which way that is, so no weapon carries its own copy.
 pub(crate) fn place_scope_reticle(
+    active: Res<ActiveWeapon>,
     aim: Query<&GlobalTransform, With<AimSocket>>,
     gun: Query<(&Transform, &GlobalTransform), (With<Gun>, Without<ScopeReticle>)>,
     zoom: Res<ScopeZoom>,
@@ -276,10 +277,11 @@ pub(crate) fn place_scope_reticle(
     // The mesh is built in radians at unit distance, so this is purely the
     // magnification: holding apparent thickness steady as the target grows is
     // what a second focal plane scope does.
-    reticle.scale = Vec3::splat(SCOPE_DEFAULT_ZOOM / zoom.0);
+    reticle.scale = Vec3::splat(active.def().scope.default_zoom / zoom.0);
 }
 
 pub(crate) fn adjust_scope_zoom(
+    active: Res<ActiveWeapon>,
     mut wheel: MessageReader<MouseWheel>,
     mouse: Res<ButtonInput<MouseButton>>,
     touch_aiming: Res<TouchAiming>,
@@ -307,7 +309,8 @@ pub(crate) fn adjust_scope_zoom(
                 let t = ((distance - AUTO_ZOOM_NEAR_DISTANCE)
                     / (AUTO_ZOOM_FAR_DISTANCE - AUTO_ZOOM_NEAR_DISTANCE))
                     .clamp(0.0, 1.0);
-                zoom.0 = SCOPE_MIN_ZOOM + (SCOPE_MAX_ZOOM - SCOPE_MIN_ZOOM) * t;
+                let scope = &active.def().scope;
+                zoom.0 = scope.min_zoom + (scope.max_zoom - scope.min_zoom) * t;
                 wheel.clear();
                 return;
             }
@@ -315,7 +318,7 @@ pub(crate) fn adjust_scope_zoom(
     }
     for event in wheel.read() {
         zoom.0 = (zoom.0 * SCOPE_ZOOM_STEP_FACTOR.powf(event.y.signum()))
-            .clamp(SCOPE_MIN_ZOOM, SCOPE_MAX_ZOOM);
+            .clamp(active.def().scope.min_zoom, active.def().scope.max_zoom);
     }
 }
 

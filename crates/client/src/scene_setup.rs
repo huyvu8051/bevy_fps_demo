@@ -176,7 +176,7 @@ pub(crate) fn setup_common(
     }));
     commands.insert_resource(build_zombie_kind_anims(&asset_server, &mut graphs));
     commands.insert_resource(build_player_model_anim(&asset_server, &mut graphs, &player_model_tuning));
-    commands.insert_resource(ScopeZoom(SCOPE_DEFAULT_ZOOM));
+    commands.insert_resource(ScopeZoom(WeaponId::default().def().scope.default_zoom));
     commands.insert_resource(GameOver(false));
     // Everything now goes through the loading gate; it remembers where it was
     // headed.

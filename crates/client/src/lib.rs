@@ -338,8 +338,8 @@ const RESOLUTION_SCALE_PRESETS: [f32; 7] = [0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0];
 const FPS_CAP_PRESETS: [u32; 4] = [120, 80, 60, 30];
 
 const SCOPE_TEXTURE_SIZE: u32 = 512;
-const SCOPE_MIN_ZOOM: f32 = 6.0;
-const SCOPE_MAX_ZOOM: f32 = 25.0;
+/// Only the first frame, before update_scope_lens writes the weapon.s own
+/// magnification over it.
 const SCOPE_DEFAULT_ZOOM: f32 = 8.0;
 
 const SCOPE_ZOOM_STEP_FACTOR: f32 = 1.15;
