@@ -637,6 +637,7 @@ impl Plugin for GamePlugin {
         .init_resource::<ShadowCascades>()
         .init_resource::<BloomEnabled>()
         .init_resource::<ScreenEffectsEnabled>()
+        .init_resource::<FogEnabled>()
         .init_resource::<MuzzleSmokeEnabled>()
         .init_resource::<PortSmokeEnabled>()
         .init_resource::<BarrelSmokeEnabled>()
@@ -844,7 +845,7 @@ impl Plugin for GamePlugin {
                 update_scope_zoom_slider_visibility,
                 sync_scope_camera,
                 (place_scope_reticle, swap_scope_reticle),
-                (update_scope_lens, apply_scope_fov_zoom, apply_bloom, apply_screen_effects_toggle).chain(),
+                (update_scope_lens, apply_scope_fov_zoom, apply_bloom, apply_screen_effects_toggle, apply_fog).chain(),
                 update_ammo_ui,
                 update_crosshair,
                 set_hitbox_gizmo_depth_bias,

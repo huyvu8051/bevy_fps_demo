@@ -474,3 +474,43 @@ fn count_draws(
         opaque_views.iter().sum::<usize>() + shadow_total,
     );
 }
+
+/// Whether the cameras carry DistanceFog.
+///
+/// Unlike bloom this is not a pass of its own: it is arithmetic inside the PBR
+/// shader, run per fragment, and it specialises the mesh pipeline. So the cost
+/// is spread through the opaque pass rather than sitting in a node where a
+/// profiler can name it, which is exactly why it needs measuring rather than
+/// guessing.
+///
+/// It is also load bearing for the look: the far distance of desert_city is
+/// haze, and that haze is why the sun's far shadow cascade was worth so little.
+#[derive(Resource)]
+pub(crate) struct FogEnabled(pub(crate) bool);
+
+impl Default for FogEnabled {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+pub(crate) fn apply_fog(
+    mut commands: Commands,
+    enabled: Res<FogEnabled>,
+    cameras: Query<(Entity, Has<DistanceFog>), With<Camera3d>>,
+) {
+    if !enabled.is_changed() {
+        return;
+    }
+    for (camera, present) in &cameras {
+        match (enabled.0, present) {
+            (true, false) => {
+                commands.entity(camera).insert(distance_fog_for(game_flow::current_scenario()));
+            }
+            (false, true) => {
+                commands.entity(camera).remove::<DistanceFog>();
+            }
+            _ => {}
+        }
+    }
+}

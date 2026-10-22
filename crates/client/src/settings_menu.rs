@@ -442,6 +442,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "Tracer", CheatShowTracersButton);
                         spawn_cheat_toggle_button(row, "Bloom", CheatBloomButton);
                         spawn_cheat_toggle_button(row, "Grain", CheatGrainButton);
+                        spawn_cheat_toggle_button(row, "Fog", CheatFogButton);
                     });
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
@@ -1514,8 +1515,10 @@ pub(crate) struct CheatGrainButton;
 pub(crate) fn render_toggle_buttons(
     mut bloom: ResMut<BloomEnabled>,
     mut grain: ResMut<ScreenEffectsEnabled>,
+    mut fog: ResMut<FogEnabled>,
     bloom_btn: Query<&Interaction, (With<CheatBloomButton>, Changed<Interaction>)>,
     grain_btn: Query<&Interaction, (With<CheatGrainButton>, Changed<Interaction>)>,
+    fog_btn: Query<&Interaction, (With<CheatFogButton>, Changed<Interaction>)>,
 ) {
     if tapped(&bloom_btn) {
         bloom.0 = !bloom.0;
@@ -1523,18 +1526,26 @@ pub(crate) fn render_toggle_buttons(
     if tapped(&grain_btn) {
         grain.0 = !grain.0;
     }
+    if tapped(&fog_btn) {
+        fog.0 = !fog.0;
+    }
 }
 
 pub(crate) fn update_render_toggle_colors(
     bloom: Res<BloomEnabled>,
     grain: Res<ScreenEffectsEnabled>,
+    fog: Res<FogEnabled>,
     mut buttons: Query<
-        (&mut BackgroundColor, Option<&CheatBloomButton>),
-        Or<(With<CheatBloomButton>, With<CheatGrainButton>)>,
+        (&mut BackgroundColor, Option<&CheatBloomButton>, Option<&CheatFogButton>),
+        Or<(With<CheatBloomButton>, With<CheatGrainButton>, With<CheatFogButton>)>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, is_bloom) in &mut buttons {
-        *bg = BackgroundColor(color_for(if is_bloom.is_some() { bloom.0 } else { grain.0 }));
+    for (mut bg, is_bloom, is_fog) in &mut buttons {
+        let on = if is_bloom.is_some() { bloom.0 } else if is_fog.is_some() { fog.0 } else { grain.0 };
+        *bg = BackgroundColor(color_for(on));
     }
 }
+
+#[derive(Component)]
+pub(crate) struct CheatFogButton;
