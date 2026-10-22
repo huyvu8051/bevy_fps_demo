@@ -416,6 +416,7 @@ pub(crate) fn setup_gameplay(
             // scope and the shader fails to build for this camera.
             bevy::core_pipeline::prepass::DepthPrepass,
             RenderLayers::from_layers(&[WORLD_LAYER, SCOPE_RETICLE_LAYER]),
+            NoShadowPass,
             distance_fog_for(scenario),
             // No Bloom here, unlike the main camera. Measured at 0.66ms of the
             // 3.9ms a sighted frame costs -- a sixth of it -- for a glow drawn

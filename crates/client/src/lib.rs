@@ -584,6 +584,7 @@ impl Plugin for GamePlugin {
         // side is recorded, which is the side a second camera is expensive on:
         // the graph is walked per view whether that view draws anything or not.
         .add_plugins(render_diagnostics_if_asked())
+        .add_plugins(NoShadowPassPlugin)
 
         .insert_resource(Noclip(false))
         .init_resource::<HitFlash>()

@@ -302,3 +302,60 @@ pub(crate) fn cascade_config() -> bevy::light::CascadeShadowConfig {
     let count = std::env::var("CASCADES").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
     bevy::light::CascadeShadowConfigBuilder { num_cascades: count, ..default() }.build()
 }
+
+/// Keeps a camera out of the shadow pass.
+///
+/// Every view renders the shadow maps again, and on a sighted frame that is
+/// 2.80ms of the 3.39ms aiming costs -- measured, and the single largest
+/// thing a second camera does. per_view_shadow_pass is the only system that
+/// requires ViewLightEntities; everything else reads it as Option, so taking
+/// it off a view after prepare_lights built it skips that view's pass and
+/// leaves the rest of the frame alone.
+///
+/// The view's own shadow depth texture then goes unwritten, so whatever
+/// shadows it samples are whatever was in that memory. For a scope at twelve
+/// magnifications that may be a fair trade; it may also be unusable. The
+/// point of the flag is to be able to look.
+#[derive(Component, Clone, Copy, Default)]
+pub(crate) struct NoShadowPass;
+
+impl bevy::render::sync_component::SyncComponent for NoShadowPass {
+    type Target = Self;
+}
+
+impl bevy::render::extract_component::ExtractComponent for NoShadowPass {
+    type QueryData = ();
+    type QueryFilter = With<NoShadowPass>;
+    type Out = NoShadowPass;
+    fn extract_component(_: ()) -> Option<NoShadowPass> {
+        Some(NoShadowPass)
+    }
+}
+
+/// Runs after prepare_lights has built the component, in the same set, so the
+/// view is stripped before the graph walks it.
+fn drop_shadow_views(
+    mut commands: Commands,
+    views: Query<Entity, (With<NoShadowPass>, With<bevy::pbr::ViewLightEntities>)>,
+) {
+    for view in &views {
+        commands.entity(view).remove::<bevy::pbr::ViewLightEntities>();
+    }
+}
+
+pub(crate) struct NoShadowPassPlugin;
+
+impl Plugin for NoShadowPassPlugin {
+    fn build(&self, app: &mut App) {
+        // ExtractComponentPlugin brings SyncComponentPlugin with it; adding
+        // both is a panic, not a no-op.
+        app.add_plugins(bevy::render::extract_component::ExtractComponentPlugin::<NoShadowPass>::default());
+        let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) else { return };
+        render_app.add_systems(
+            bevy::render::Render,
+            drop_shadow_views
+                .in_set(bevy::render::RenderSystems::CreateViews)
+                .after(bevy::pbr::prepare_lights),
+        );
+    }
+}
