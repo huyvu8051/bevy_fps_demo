@@ -416,7 +416,10 @@ pub(crate) fn setup_gameplay(
             bevy::core_pipeline::prepass::DepthPrepass,
             RenderLayers::from_layers(&[WORLD_LAYER, SCOPE_RETICLE_LAYER]),
             distance_fog_for(scenario),
-            Bloom::default(),
+            // No Bloom here, unlike the main camera. Measured at 0.66ms of the
+            // 3.9ms a sighted frame costs -- a sixth of it -- for a glow drawn
+            // into a 512px disc at twelve times magnification, where there is
+            // almost nothing bright enough left in frame to bloom.
             ScopeCamera,
         ))
         .id();
