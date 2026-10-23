@@ -55,6 +55,16 @@ pub struct ExtractQueries {
         Q<'static, 'static, &'static GlobalTransform>,
         Res<'static, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
     )>,
+    /// The local player's own body. It is skinned, so the static mesh path
+    /// skips it, and the skinned path only ever collected zombies and remote
+    /// players -- which is why nobody drew it.
+    viewmodel_body: SystemState<(
+        Q<'static, 'static, (bevy::ecs::entity::Entity, &'static GlobalTransform), With<crate::ViewmodelBody>>,
+        Q<'static, 'static, &'static Children>,
+        Q<'static, 'static, &'static SkinnedMesh>,
+        Q<'static, 'static, &'static GlobalTransform>,
+        Res<'static, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
+    )>,
     point_lights: SystemState<Q<'static, 'static, (&'static PointLight, &'static GlobalTransform)>>,
     sun: SystemState<Q<'static, 'static, (&'static DirectionalLight, &'static GlobalTransform)>>,
     meshes_changed: SystemState<MeshExtractParams<'static, 'static, MeshChanged>>,
@@ -84,6 +94,7 @@ impl ExtractQueries {
             scope: SystemState::new(world),
             zombies: SystemState::new(world),
             remote_players: SystemState::new(world),
+            viewmodel_body: SystemState::new(world),
             point_lights: SystemState::new(world),
             sun: SystemState::new(world),
             meshes_changed: SystemState::new(world),
@@ -172,9 +183,18 @@ fn joint_matrices_for(
 /// which is how its scope camera leaves them out. Nothing carried that across,
 /// so the native scope drew the gun inside its own eyepiece.
 fn on_viewmodel_layer(layers: Option<&bevy::camera::visibility::RenderLayers>) -> bool {
-    layers.is_some_and(|l| {
-        l.intersects(&bevy::camera::visibility::RenderLayers::layer(crate::VIEWMODEL_LAYER))
-    })
+    on_layer(layers, crate::VIEWMODEL_LAYER)
+}
+
+/// The reticle is the scope's own mark: the scope camera carries
+/// SCOPE_RETICLE_LAYER and the main camera does not. Without this it draws in
+/// both, leaving a red mark in the middle of the screen while hip firing.
+fn on_reticle_layer(layers: Option<&bevy::camera::visibility::RenderLayers>) -> bool {
+    on_layer(layers, crate::SCOPE_RETICLE_LAYER)
+}
+
+fn on_layer(layers: Option<&bevy::camera::visibility::RenderLayers>, layer: usize) -> bool {
+    layers.is_some_and(|l| l.intersects(&bevy::camera::visibility::RenderLayers::layer(layer)))
 }
 
 pub fn extract_render_snapshot(
@@ -251,6 +271,24 @@ pub fn extract_render_snapshot(
             }
         })
         .collect();
+
+    {
+        let (body_query, body_children, body_skinned, body_joints, body_bindposes) =
+            queries.viewmodel_body.get(world).expect("system param validation failed");
+        snapshot.skinned_actors.extend(body_query.iter().map(|(entity, transform)| {
+            let joint_matrices = find_first_skinned_mesh(entity, &body_children, &body_skinned)
+                .and_then(|mesh_entity| body_skinned.get(mesh_entity).ok())
+                .map(|skinned| joint_matrices_for(skinned, &body_joints, &body_bindposes))
+                .unwrap_or_default();
+            SkinnedRenderState {
+                transform: transform.compute_transform(),
+                joint_matrices,
+                // Already preloaded: zombie_model_specs registers the player
+                // mesh under this name for exactly this.
+                model: "soldier",
+            }
+        }));
+    }
 
     const LOCAL_PLAYER_EXCLUSION_RADIUS_XZ: f32 = 1.0;
     let camera_eye_xz = snapshot.camera.as_ref().map(|c| bevy::math::Vec2::new(c.eye[0], c.eye[2]));
@@ -334,6 +372,7 @@ pub fn extract_render_snapshot(
                 &meshes, &materials, &images, &mut texture_cache, &mut used_texture_ids,
                 &geometry_already_uploaded,
                 on_viewmodel_layer(layers),
+                on_reticle_layer(layers),
             );
         }
     }
@@ -353,6 +392,7 @@ pub fn extract_render_snapshot(
                 &meshes, &materials, &images, &mut texture_cache, &mut used_texture_ids,
                 &geometry_already_uploaded,
                 on_viewmodel_layer(layers),
+                on_reticle_layer(layers),
             );
         }
     }

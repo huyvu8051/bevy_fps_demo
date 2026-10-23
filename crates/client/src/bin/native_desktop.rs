@@ -13,8 +13,11 @@
 //! Measured against the windowed build on the same map, this is the question
 //! the rigs were built to answer -- see desert_rust_bevy's README.
 
-#![cfg(target_os = "macos")]
-
+// Not `#![cfg(target_os = "macos")]`: that empties the whole file on iOS,
+// main included, and cargo then fails the binary for having no entry point --
+// which is what broke the device deploy.
+#[cfg(target_os = "macos")]
+mod mac {
 use objc::runtime::Object;
 use objc::{msg_send, sel, sel_impl};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -35,7 +38,7 @@ use client::cadisplaylink::ffi::{
     native_metal_probe_render_frame,
 };
 
-fn main() {
+pub fn run() {
     let event_loop = EventLoop::new().expect("no event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop.run_app(&mut Host::default()).expect("event loop failed");
@@ -182,4 +185,10 @@ fn key_id(code: KeyCode) -> Option<u16> {
         ArrowRight => 52,
         _ => return None,
     })
+}
+}
+
+fn main() {
+    #[cfg(target_os = "macos")]
+    mac::run();
 }
