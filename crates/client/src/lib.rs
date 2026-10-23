@@ -673,8 +673,6 @@ impl Plugin for GamePlugin {
         .add_systems(OnExit(AppState::Loading), despawn_loading_screen)
         .add_systems(Update, finish_loading.run_if(in_state(AppState::Loading)));
     app.add_systems(Update, persist_settings_on_change);
-    // Runs until the three zombie glTFs land, then drops its own input
-    // resource and early-returns forever after.
     app.add_systems(Update, build_zombie_anims_when_loaded);
 
     app.add_systems(
@@ -806,9 +804,9 @@ impl Plugin for GamePlugin {
                     wire_player_model_scene_nodes,
                     (spawn_viewmodel_body, wire_viewmodel_body_meshes, apply_player_model_visible),
                     spawn_grip_sockets,
-                    wire_player_model_animations,
-                    update_local_player_model_animation,
-                    apply_player_model_pose_override,
+                    wire_player_model_animations.run_if(resource_exists::<PlayerModelAnim>),
+                    update_local_player_model_animation.run_if(resource_exists::<PlayerModelAnim>),
+                    apply_player_model_pose_override.run_if(resource_exists::<PlayerModelAnim>),
                     update_health_ui,
                     update_compass_ui,
                     update_radar_ui,

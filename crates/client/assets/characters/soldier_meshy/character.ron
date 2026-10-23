@@ -1,60 +1,13 @@
-// Metadata for the "soldier_meshy" character — see docs/CHARACTER_IMPORT_CHECKLIST.md's
-// "Scale and origin" section for why this can't just trust the mesh's native
-// scale/pivot.
-//
-// This mesh shipped lying on its back, facing the camera instead of away
-// from it (a Meshy-export quirk zombie_meshy.glb also had) — both fixed
-// PERMANENTLY in the asset itself with scripts/normalize_glb_root_rotation.py
-// (X +90° to stand it up, then Y +180° to face the right way, composed
-// together into the scene root node's own rotation — see that script's own
-// doc comment). facing_deg stays 0.0 below because of that, same as it
-// would for any other fully-normalized mesh; if a fresh re-export of this
-// asset ever needs re-normalizing, redo both axes in one run rather than
-// reaching for a runtime facing_deg workaround.
-//
-// scale/y_offset are F9-tunable (EDITOR=1): third-person (KeyU),
-// Comma/Period nudges scale, Minus/Equal nudges y_offset — see
-// nudge_player_model_tuning/save_player_model_tuning
-// (crates/client/src/movement_combat.rs). `animations` isn't nudge-able,
-// only hand-edited.
-//
-// mesh/anim_source are two SEPARATE glb files (scripts/extract_glb_mesh_only.py
-// and scripts/extract_glb_animations.py, run against the original combined
-// export) — mesh has zero animations of its own; every clip below is
-// loaded from anim_source instead.
-//
-// POLICY: anim_source lives under THIS character's own characters/
-// soldier_meshy/anims/ folder now, NOT a cross-character shared one —
-// mesh/anim still split into 2 files (keeps tooling uniform), but no
-// longer shared with any other rig's mesh. Used to live at
-// characters/_shared_anims/mixamo_base.glb and also be pointed at by
-// crates/shared's ZOMBIE_SOLDIER_ANIM_PATH (zombie_soldier, a different
-// character's rig) — retired after a confirmed incident: bone-name/
-// hierarchy matching between the 2 rigs wasn't enough, because
-// bevy_animation clips set each joint's LOCAL rotation to an ABSOLUTE
-// value every keyframe (not a delta from rest), so playback is only
-// correct if the target joint's own rest rotation means the same thing
-// this clip's source rig's did — zombie_soldier's didn't (confirmed:
-// wrong Hips->Foot world-space direction), and 2 separate attempts to fix
-// it by rewriting zombie_soldier's rest pose to match (scripts/
-// retarget_rest_pose.py) both failed, the second one catastrophically
-// (deformed mesh, not just wrong pose). soldier_meshy itself was always
-// fine here — this file's clips were authored FOR this exact rig
-// originally, the mismatch was only ever an issue for the OTHER
-// character borrowing it.
 (
     id: "soldier_meshy",
     display_name: "Soldier (Meshy)",
     lore_ref: "docs/characters/soldier.md",
 
     mesh: "characters/soldier_meshy/mesh/soldier_meshy.glb",
-    // See docs/CHARACTER_IMPORT_CHECKLIST.md before replacing this mesh.
-    anim_source: "characters/soldier_meshy/anims/mixamo_base.glb",
     scale: 1.04,
     y_offset: -0.76,
     facing_deg: 0.0,
 
-    // Indices into anim_source (mixamo_base.glb), not mesh.
     animations: (
         idle: 15,
         walk: 15,

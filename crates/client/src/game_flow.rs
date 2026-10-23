@@ -88,6 +88,7 @@ pub(crate) fn finish_loading(
     mut next_state: ResMut<NextState<AppState>>,
     mut progress: Query<&mut Text, With<LoadingProgressText>>,
     zombie_anim: Option<Res<ZombieAnim>>,
+    player_anim: Option<Res<PlayerModelAnim>>,
 ) {
     let total = roots.iter().len();
     let ready = roots
@@ -104,10 +105,7 @@ pub(crate) fn finish_loading(
     if after.0 == AppState::InGame && total == 0 {
         return;
     }
-    // The zombie animation graphs come from three glTFs that are not
-    // WorldAssetRoots, so the root count can clear while they are still in
-    // flight. handle_fire_shot is an observer and takes ZombieAnim outright.
-    if after.0 == AppState::InGame && zombie_anim.is_none() {
+    if after.0 == AppState::InGame && (zombie_anim.is_none() || player_anim.is_none()) {
         return;
     }
     if ready == total {

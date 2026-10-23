@@ -128,23 +128,23 @@ impl ZombieKindAnims {
     }
 }
 
-/// One handle per kind, held until the graphs are built.
-///
-/// `asset_server.load(path#Animation(i))` dedupes on the *labelled* path, and
-/// every miss re-runs the glTF loader over the whole file: 70 labelled loads
-/// of Classic meant 70 full parses of a 26 MB .glb.
 #[derive(Resource)]
 pub(crate) struct ZombieAnimGltfs {
     classic: Handle<bevy::gltf::Gltf>,
     soldier: Handle<bevy::gltf::Gltf>,
     female: Handle<bevy::gltf::Gltf>,
+    player: Handle<bevy::gltf::Gltf>,
 }
 
-pub(crate) fn load_zombie_anim_gltfs(asset_server: &AssetServer) -> ZombieAnimGltfs {
+pub(crate) fn load_zombie_anim_gltfs(
+    asset_server: &AssetServer,
+    tuning: &PlayerModelTuning,
+) -> ZombieAnimGltfs {
     ZombieAnimGltfs {
         classic: asset_server.load(zombie_kind_anim_path(ZombieKind::Classic)),
         soldier: asset_server.load(zombie_kind_anim_path(ZombieKind::Soldier)),
         female: asset_server.load(zombie_kind_anim_path(ZombieKind::Female)),
+        player: asset_server.load(tuning.anim_source_or_mesh().to_string()),
     }
 }
 
@@ -153,12 +153,14 @@ pub(crate) fn build_zombie_anims_when_loaded(
     pending: Option<Res<ZombieAnimGltfs>>,
     gltfs: Res<Assets<bevy::gltf::Gltf>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
+    tuning: Res<PlayerModelTuning>,
 ) {
     let Some(pending) = pending else { return };
-    let (Some(classic), Some(soldier), Some(female)) = (
+    let (Some(classic), Some(soldier), Some(female), Some(player)) = (
         gltfs.get(&pending.classic),
         gltfs.get(&pending.soldier),
         gltfs.get(&pending.female),
+        gltfs.get(&pending.player),
     ) else {
         return;
     };
@@ -183,6 +185,7 @@ pub(crate) fn build_zombie_anims_when_loaded(
         &soldier.animations,
         &female.animations,
     ));
+    commands.insert_resource(build_player_model_anim(&mut graphs, &tuning, &player.animations));
     commands.remove_resource::<ZombieAnimGltfs>();
 }
 
@@ -216,10 +219,10 @@ pub(crate) struct PlayerModelAnim {
     pub(crate) run_back: AnimationNodeIndex,
 }
 
-pub(crate) fn build_player_model_anim(
-    asset_server: &AssetServer,
+fn build_player_model_anim(
     graphs: &mut Assets<AnimationGraph>,
     tuning: &PlayerModelTuning,
+    all: &[Handle<AnimationClip>],
 ) -> PlayerModelAnim {
     let clips: Vec<Handle<AnimationClip>> = [
         tuning.animations.idle,
@@ -228,7 +231,12 @@ pub(crate) fn build_player_model_anim(
         tuning.animations.run_back,
     ]
     .into_iter()
-    .map(|index| asset_server.load(GltfAssetLabel::Animation(index).from_asset(tuning.anim_source_or_mesh().to_string())))
+    .map(|index| {
+        all.get(index).cloned().unwrap_or_else(|| {
+            warn!("[player] no clip {index}, model has {}", all.len());
+            Handle::default()
+        })
+    })
     .collect();
     let (graph, nodes) = AnimationGraph::from_clips(clips);
     PlayerModelAnim {
