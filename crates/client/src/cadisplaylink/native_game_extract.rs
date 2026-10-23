@@ -168,6 +168,15 @@ fn joint_matrices_for(
         .collect()
 }
 
+/// The weapon and the hands live on VIEWMODEL_LAYER in the windowed build,
+/// which is how its scope camera leaves them out. Nothing carried that across,
+/// so the native scope drew the gun inside its own eyepiece.
+fn on_viewmodel_layer(layers: Option<&bevy::camera::visibility::RenderLayers>) -> bool {
+    layers.is_some_and(|l| {
+        l.intersects(&bevy::camera::visibility::RenderLayers::layer(crate::VIEWMODEL_LAYER))
+    })
+}
+
 pub fn extract_render_snapshot(
     world: &mut bevy::ecs::world::World,
     geometry_already_uploaded: impl Fn(AssetId<Mesh>) -> bool,
@@ -319,11 +328,12 @@ pub fn extract_render_snapshot(
     {
         let (mesh_query, meshes, materials, images, mut texture_cache) =
             queries.meshes_changed.get_mut(world).expect("system param validation failed");
-        for (entity, mesh3d, material3d, transform, visibility) in mesh_query.iter() {
+        for (entity, mesh3d, material3d, transform, visibility, layers) in mesh_query.iter() {
             store_extracted_mesh(
                 &mut cache, entity, mesh3d, material3d, transform, visibility,
                 &meshes, &materials, &images, &mut texture_cache, &mut used_texture_ids,
                 &geometry_already_uploaded,
+                on_viewmodel_layer(layers),
             );
         }
     }
@@ -333,7 +343,8 @@ pub fn extract_render_snapshot(
         let (mesh_query, meshes, materials, images, mut texture_cache) =
             queries.meshes_any.get_mut(world).expect("system param validation failed");
         for entity in retry {
-            let Ok((_, mesh3d, material3d, transform, visibility)) = mesh_query.get(entity) else {
+            let Ok((_, mesh3d, material3d, transform, visibility, layers)) = mesh_query.get(entity)
+            else {
                 cache.awaiting_textures.remove(&entity);
                 continue;
             };
@@ -341,6 +352,7 @@ pub fn extract_render_snapshot(
                 &mut cache, entity, mesh3d, material3d, transform, visibility,
                 &meshes, &materials, &images, &mut texture_cache, &mut used_texture_ids,
                 &geometry_already_uploaded,
+                on_viewmodel_layer(layers),
             );
         }
     }
