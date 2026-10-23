@@ -13,7 +13,6 @@ pub(crate) struct PersistedSettings {
     pub(crate) fps_cap: Option<u32>,
     pub(crate) map_msaa_on: Option<bool>,
     pub(crate) scope_camera_enabled: Option<bool>,
-    pub(crate) merge_map_meshes: Option<bool>,
     pub(crate) shadow_cascades: Option<u8>,
     pub(crate) bloom_enabled: Option<bool>,
     pub(crate) screen_effects_enabled: Option<bool>,
@@ -131,7 +130,6 @@ fn apply_settings_to_world(world: &mut World, settings: &PersistedSettings) {
     apply!(fps_cap, FpsCap);
     apply!(map_msaa_on, MapMsaaOn);
     apply!(scope_camera_enabled, ScopeCameraEnabled);
-    apply!(merge_map_meshes, MergeMapMeshes);
     apply!(shadow_cascades, ShadowCascades);
     apply!(bloom_enabled, BloomEnabled);
     apply!(screen_effects_enabled, ScreenEffectsEnabled);
@@ -213,7 +211,6 @@ pub(crate) fn persist_settings_on_change(world: &mut World) {
         || changed!(FpsCap)
         || changed!(MapMsaaOn)
         || changed!(ScopeCameraEnabled)
-        || changed!(MergeMapMeshes)
         || changed!(ShadowCascades)
         || changed!(BloomEnabled)
         || changed!(ScreenEffectsEnabled)
@@ -260,7 +257,6 @@ fn read_settings_from_world(world: &World) -> PersistedSettings {
         fps_cap: world.get_resource::<FpsCap>().map(|r| r.0),
         map_msaa_on: world.get_resource::<MapMsaaOn>().map(|r| r.0),
         scope_camera_enabled: world.get_resource::<ScopeCameraEnabled>().map(|r| r.0),
-        merge_map_meshes: world.get_resource::<MergeMapMeshes>().map(|r| r.0),
         shadow_cascades: world.get_resource::<ShadowCascades>().map(|r| r.0),
         bloom_enabled: world.get_resource::<BloomEnabled>().map(|r| r.0),
         screen_effects_enabled: world.get_resource::<ScreenEffectsEnabled>().map(|r| r.0),

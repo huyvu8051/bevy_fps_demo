@@ -69,8 +69,6 @@ mod gun_view;
 use gun_view::*;
 
 mod map;
-mod map_merge;
-use map_merge::*;
 
 mod screen_effects;
 use screen_effects::*;
@@ -617,7 +615,6 @@ impl Plugin for GamePlugin {
         .init_resource::<LightQuality>()
         .init_resource::<PointLightQuality>()
         .init_resource::<ScopeCameraEnabled>()
-        .init_resource::<MergeMapMeshes>()
         .init_resource::<ShadowCascades>()
         .init_resource::<BloomEnabled>()
         .init_resource::<ScreenEffectsEnabled>()
@@ -784,7 +781,6 @@ impl Plugin for GamePlugin {
                 wire_zombie_scene_animation_targets,
                 wire_zombie_animations.run_if(resource_exists::<ZombieKindAnims>),
                 wire_zombie_hitbox_bones,
-                merge_static_map_meshes.run_if(map::world_ready),
                 wire_gun_mesh,
                 wire_weapon_sockets,
                 log_frame_pacing,
