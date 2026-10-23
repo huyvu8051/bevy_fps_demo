@@ -27,7 +27,7 @@ use shared::{
     zombie_pose_for, ZombieAnim, ZombiePose, ZombieWalkVariant, ZOMBIE_KIND_WEIGHTS, ZOMBIE_MAX_HEALTH, ZOMBIE_STOP_DISTANCE,
 };
 
-#[cfg(target_os = "ios")]
+#[cfg(target_vendor = "apple")]
 pub mod cadisplaylink;
 
 mod weapon;

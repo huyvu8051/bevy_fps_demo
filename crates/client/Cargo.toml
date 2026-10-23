@@ -9,6 +9,12 @@ frameworks = ["AudioToolbox"]
 [lib]
 crate-type = ["staticlib", "rlib"]
 
+# The desktop build of the native path. macOS only; the windowed build is
+# still the default binary.
+[[bin]]
+name = "native_desktop"
+path = "src/bin/native_desktop.rs"
+
 [dependencies]
 shared = { path = "../shared" }
 big-brain = { git = "https://github.com/huyvu8051/big-brain", rev = "c8e2cf2" }
@@ -23,8 +29,11 @@ serde = { version = "1.0", features = ["derive"] }
 
 bevy = { version = "0.19", features = ["jpeg", "bevy_dev_tools", "wav", "vorbis", "debug", "shader_format_wesl"] }
 
-[target.'cfg(target_os = "ios")'.dependencies]
-metal_renderer = { git = "https://github.com/huyvu8051/metal_renderer" }
+[target.'cfg(target_vendor = "apple")'.dependencies]
+# Path, not the git pin: the desktop build needs the gates in metal_renderer
+# widened past target_os = "ios", and that work lives locally.
+metal_renderer = { path = "../../../metal_renderer" }
+winit = "0.30"
 raw-window-handle = "0.6"
 objc = "0.2"
 core-graphics = "0.25"
