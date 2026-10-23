@@ -13,7 +13,7 @@ pub(crate) fn setup_common(
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut graphs: ResMut<Assets<AnimationGraph>>,
+    _graphs: ResMut<Assets<AnimationGraph>>,
     mut images: ResMut<Assets<Image>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     player_model_tuning: Res<PlayerModelTuning>,
@@ -330,7 +330,7 @@ pub(crate) fn setup_gameplay(
                 Msaa::Off,
                 bevy::core_pipeline::prepass::DepthPrepass,
             ),
-            RenderLayers::from_layers(&[WORLD_LAYER, VIEWMODEL_LAYER, SCOPE_MASK_LAYER]),
+            RenderLayers::from_layers(&[WORLD_LAYER, VIEWMODEL_LAYER]),
             RenderTarget::from(scene_target.0.clone()),
         ))
         .id();
@@ -455,24 +455,6 @@ pub(crate) fn setup_gameplay(
         Name::new("ReloadHandTarget"),
         Transform::default(),
         ReloadHandTarget,
-        ChildOf(camera),
-    ));
-
-    // The hole is resized each frame to the camera's field. The outer radius
-    // must reach the corners, 2.04x the half height on 16:9, scaled by the
-    // hole's own 0.42 -- so 12 leaves room for wider windows.
-    commands.spawn((
-        Name::new("ScopeFovMask"),
-        Mesh3d(meshes.add(Annulus::new(1.0, 12.0).mesh().resolution(64).build())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::BLACK,
-            unlit: true,
-            ..default()
-        })),
-        Transform::from_xyz(0.0, 0.0, -1.0),
-        Visibility::Hidden,
-        RenderLayers::layer(SCOPE_MASK_LAYER),
-        ScopeFovMask,
         ChildOf(camera),
     ));
 

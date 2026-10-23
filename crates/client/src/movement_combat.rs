@@ -297,9 +297,6 @@ pub(crate) fn apply_aim_zoom(
     time: Res<Time>,
     aim_held: Res<AimHeld>,
     touch_aiming: Res<TouchAiming>,
-    fov_zoom: Res<ScopeFovZoom>,
-    zoom: Res<ScopeZoom>,
-    eyepiece: Query<(), With<EyepieceSocket>>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut camera: Query<&mut Projection, With<FpsCamera>>,
 ) {
@@ -307,13 +304,7 @@ pub(crate) fn apply_aim_zoom(
         return;
     };
     let aiming = is_aiming(cursor, &aim_held, touch_aiming.0) || force_ads();
-    // In fov-zoom mode the main camera is the optic, so it takes the weapon's
-    // own magnification rather than the gentle ADS nudge every weapon shares.
-    let target_fov = match (aiming, fov_zoom.0 && !eyepiece.is_empty()) {
-        (true, true) => SCOPE_BASE_FOV / zoom.0,
-        (true, false) => BASE_FOV * AIM_FOV_MULTIPLIER,
-        (false, _) => BASE_FOV,
-    };
+    let target_fov = if aiming { BASE_FOV * AIM_FOV_MULTIPLIER } else { BASE_FOV };
 
     let Ok(mut projection) = camera.single_mut() else {
         return;

@@ -134,11 +134,6 @@ mod splash_screen;
 use splash_screen::*;
 
 
-/// Picture-in-picture, or the main camera narrowing its own field behind a
-/// mask. The second costs no extra view but loses the world outside the ring.
-#[derive(Resource, Default)]
-pub(crate) struct ScopeFovZoom(pub(crate) bool);
-
 /// How far the eye sits behind the player's own eye point. The gun and the
 /// body subtract it again, so pulling back moves only the camera.
 pub(crate) fn view_pullback() -> f32 {
@@ -375,9 +370,7 @@ const SCOPE_RETICLE_LAYER: usize = 2;
 /// The ring that blacks out everything outside the sight picture while the
 /// main camera is doing the magnifying itself. Its own layer because the
 /// viewmodel layer is exactly what gets switched off in that mode.
-const SCOPE_MASK_LAYER: usize = 3;
 /// How much of the screen half height the sight picture fills in that mode.
-const SCOPE_FOV_ZOOM_RADIUS: f32 = 0.42;
 
 /// A duplex reticle, in radians subtended. The mark hangs off the scope camera
 /// turned to point down the barrel, so only its angular size is ever visible —
@@ -624,7 +617,6 @@ impl Plugin for GamePlugin {
         .init_resource::<LightQuality>()
         .init_resource::<PointLightQuality>()
         .init_resource::<ScopeCameraEnabled>()
-        .init_resource::<ScopeFovZoom>()
         .init_resource::<MergeMapMeshes>()
         .init_resource::<ShadowCascades>()
         .init_resource::<BloomEnabled>()
@@ -841,7 +833,7 @@ impl Plugin for GamePlugin {
                 update_scope_zoom_slider_visibility,
                 sync_scope_camera,
                 (place_scope_reticle, swap_scope_reticle),
-                (update_scope_lens, apply_scope_fov_zoom, apply_bloom, apply_screen_effects_toggle, apply_fog).chain(),
+                (update_scope_lens, apply_bloom, apply_screen_effects_toggle, apply_fog).chain(),
                 update_ammo_ui,
                 update_crosshair,
                 set_hitbox_gizmo_depth_bias,

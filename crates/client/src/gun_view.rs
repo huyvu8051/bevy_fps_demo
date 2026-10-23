@@ -357,7 +357,6 @@ pub(crate) fn update_scope_lens(
     gun: Query<&Gun>,
     zoom: Res<ScopeZoom>,
     scope_camera_enabled: Res<ScopeCameraEnabled>,
-    fov_zoom: Res<ScopeFovZoom>,
     mut scope_camera: Query<(&mut Camera, &mut Projection), With<ScopeCamera>>,
     mut lens: Query<(&mut Transform, &mut Visibility), (With<ScopeScreen>, Without<ScopeReticle>)>,
     view_socket: Query<&GlobalTransform, With<EyepieceSocket>>,
@@ -370,7 +369,6 @@ pub(crate) fn update_scope_lens(
     // gun comes up and that is the whole of it.
     let visible = !view_socket.is_empty()
         && scope_camera_enabled.0
-        && !fov_zoom.0
         && gun.ads_blend > SCOPE_ACTIVE_ADS_THRESHOLD
         && gun.wall_raise < SCOPE_HIDDEN_WALL_RAISE_THRESHOLD;
 
@@ -649,48 +647,4 @@ fn settle_jitter(seed: f32) -> (Vec3, f32) {
         ),
         axis(94.673) * GUN_SETTLE_TWIST_DEG,
     )
-}
-
-/// The ring that leaves only the sight picture visible when the main camera is
-/// doing the magnifying itself.
-#[derive(Component)]
-pub(crate) struct ScopeFovMask;
-
-/// Switches the sight picture between picture-in-picture and the main camera
-/// narrowing its own field behind a mask. The second costs no extra view but
-/// cannot show the world outside the ring.
-pub(crate) fn apply_scope_fov_zoom(
-    mode: Res<ScopeFovZoom>,
-    gun: Query<&Gun>,
-    eyepiece: Query<(), With<EyepieceSocket>>,
-    mut camera: Query<(&Projection, &mut RenderLayers), With<FpsCamera>>,
-    mut mask: Query<(&mut Transform, &mut Visibility), With<ScopeFovMask>>,
-) {
-    let Ok(gun) = gun.single() else { return };
-    let Ok((projection, mut layers)) = camera.single_mut() else { return };
-
-    // Only a weapon with glass. The M4 sights down irons and has no picture to
-    // frame, so it keeps its weapon on screen whatever the mode says.
-    let zoomed = mode.0 && !eyepiece.is_empty() && gun.ads_blend > SCOPE_ACTIVE_ADS_THRESHOLD;
-
-    // The mark comes with it: it hangs off the scope camera, which keeps the
-    // eye's transform whether it draws or not, and is already scaled to this
-    // field.
-    *layers = if zoomed {
-        RenderLayers::from_layers(&[WORLD_LAYER, SCOPE_MASK_LAYER, SCOPE_RETICLE_LAYER])
-    } else {
-        RenderLayers::from_layers(&[WORLD_LAYER, VIEWMODEL_LAYER, SCOPE_MASK_LAYER])
-    };
-
-    let Ok((mut transform, mut visibility)) = mask.single_mut() else { return };
-    *visibility = if zoomed { Visibility::Visible } else { Visibility::Hidden };
-    if !zoomed {
-        return;
-    }
-    // The hole has to track the field the camera is actually on this frame,
-    // which eases rather than snapping, or the ring would breathe open and
-    // shut through every raise.
-    let Projection::Perspective(perspective) = projection else { return };
-    let half_height = ops::tan(perspective.fov / 2.0);
-    transform.scale = Vec3::splat(half_height * SCOPE_FOV_ZOOM_RADIUS);
 }
