@@ -38,17 +38,12 @@ pub(crate) fn scope_lens_material(view: Handle<Image>) -> ScopeLensMaterial {
 
 /// Whether the eyepiece bends and fringes what it shows.
 ///
-/// Off flattens the picture: no barrel bulge, no colour splitting at the rim.
-/// The vignette and the rim fade stay either way -- they are what makes the
-/// disc read as a circle of glass rather than a square of screen.
-#[derive(Resource)]
+/// Off by default: the bulge pulls the picture away from the rim, so the glass
+/// shows less than it could, and a sight is for reading what is in it. The
+/// vignette and the rim fade stay either way -- they are what makes the disc
+/// read as a circle of glass rather than a square of screen.
+#[derive(Resource, Default)]
 pub(crate) struct ScopeLensDistortion(pub(crate) bool);
-
-impl Default for ScopeLensDistortion {
-    fn default() -> Self {
-        Self(true)
-    }
-}
 
 pub(crate) fn apply_scope_lens_distortion(
     distortion: Res<ScopeLensDistortion>,

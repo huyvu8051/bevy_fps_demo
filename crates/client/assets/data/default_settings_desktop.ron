@@ -23,7 +23,7 @@
     fps_cap: None,
     map_msaa_on: Some(false),
     scope_camera_enabled: Some(true),
-    scope_lens_distortion: Some(true),
+    scope_lens_distortion: Some(false),
     shadow_cascades: Some(2),
     bloom_enabled: Some(true),
     screen_effects_enabled: Some(false),

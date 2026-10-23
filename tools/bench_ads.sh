@@ -29,22 +29,42 @@ trap 'rm -rf "$work"' EXIT
 [ -x ./target/debug/client ] || { echo "chua build: cargo build -p client"; exit 1; }
 pgrep -f "target/debug/client" >/dev/null && { echo "client dang chay -- dong no truoc"; exit 1; }
 
+# One field per line so the benchmarked key can be filtered out by name.
+baseline=(
+  "fps_cap:Some(1000)"
+  "autopilot:Some(false)"
+  "render_resolution_scale:Some(1.0)"
+  "freeze_zombies:Some(true)"
+  "zombie_anim_disabled:Some(true)"
+  "zombie_health_bars_hidden:Some(true)"
+  "aim_blur_enabled:Some(false)"
+  "muzzle_smoke_enabled:Some(false)"
+  "port_smoke_enabled:Some(false)"
+  "barrel_smoke_enabled:Some(false)"
+  "show_hit_markers:Some(false)"
+  "show_floating_damage:Some(false)"
+  "show_bullet_tracers:Some(false)"
+  "show_hitboxes:Some(false)"
+  "nav_debug_visible:Some(false)"
+  "scope_camera_enabled:Some(true)"
+)
+
+printf '%s\n' "${baseline[@]}" | grep -q "^${key}:" || {
+  echo "canh bao: '$key' khong co trong baseline, se dung mac dinh cua game cho moi thu khac" >&2
+}
+
 one() {
   # The benchmarked key must appear exactly once. RON rejects a duplicate
   # field outright, the game falls back to shipped defaults, and those cap at
   # 60fps -- so every sample reads 16.67ms and the A/B looks like a dead heat.
   # That is what `bench_ads.sh scope_camera_enabled true false`, this file's
-  # own first example, did for as long as it existed.
+  # own first example, did for as long as it existed. Any baseline field is
+  # a candidate to be benchmarked, so the key is dropped from the baseline
+  # rather than special-cased.
   {
-    echo "(fps_cap:Some(1000),autopilot:Some(false),"
-    echo " render_resolution_scale:Some(1.0),"
-    echo " freeze_zombies:Some(true),zombie_anim_disabled:Some(true),zombie_health_bars_hidden:Some(true),"
-    echo " aim_blur_enabled:Some(false),"
-    echo " muzzle_smoke_enabled:Some(false),port_smoke_enabled:Some(false),barrel_smoke_enabled:Some(false),"
-    echo " show_hit_markers:Some(false),show_floating_damage:Some(false),show_bullet_tracers:Some(false),"
-    echo " show_hitboxes:Some(false),nav_debug_visible:Some(false),"
-    [ "$key" = scope_camera_enabled ] || echo " scope_camera_enabled:Some(true),"
-    echo " $key:Some($1))"
+    echo "("
+    printf '%s\n' "${baseline[@]}" | grep -v "^${key}:" | sed 's/$/,/'
+    echo "$key:Some($1))"
   } > "$work/home/.bevy_fps_demo_settings.ron"
 
   # VSYNC=0 or nothing below a refresh is visible: on a 120Hz panel every
