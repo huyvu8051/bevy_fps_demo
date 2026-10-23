@@ -673,6 +673,9 @@ impl Plugin for GamePlugin {
         .add_systems(OnExit(AppState::Loading), despawn_loading_screen)
         .add_systems(Update, finish_loading.run_if(in_state(AppState::Loading)));
     app.add_systems(Update, persist_settings_on_change);
+    // Runs until the three zombie glTFs land, then drops its own input
+    // resource and early-returns forever after.
+    app.add_systems(Update, build_zombie_anims_when_loaded);
 
     app.add_systems(
         Update,
@@ -789,14 +792,14 @@ impl Plugin for GamePlugin {
                 map_select_button,
                 reset_config_button,
                 wire_zombie_scene_animation_targets,
-                wire_zombie_animations,
+                wire_zombie_animations.run_if(resource_exists::<ZombieKindAnims>),
                 wire_zombie_hitbox_bones,
                 merge_static_map_meshes.run_if(map::world_ready),
                 wire_gun_mesh,
                 wire_weapon_sockets,
                 log_frame_pacing,
                 (track_muzzle_socket, track_optical_axis),
-                update_zombie_animation,
+                update_zombie_animation.run_if(resource_exists::<ZombieAnim>),
                 freeze_zombie_animations,
 
                 (

@@ -128,21 +128,81 @@ impl ZombieKindAnims {
     }
 }
 
-pub(crate) fn build_zombie_kind_anims(
-    asset_server: &AssetServer,
+/// One handle per kind, held until the graphs are built.
+///
+/// `asset_server.load(path#Animation(i))` dedupes on the *labelled* path, and
+/// every miss re-runs the glTF loader over the whole file: 70 labelled loads
+/// of Classic meant 70 full parses of a 26 MB .glb.
+#[derive(Resource)]
+pub(crate) struct ZombieAnimGltfs {
+    classic: Handle<bevy::gltf::Gltf>,
+    soldier: Handle<bevy::gltf::Gltf>,
+    female: Handle<bevy::gltf::Gltf>,
+}
+
+pub(crate) fn load_zombie_anim_gltfs(asset_server: &AssetServer) -> ZombieAnimGltfs {
+    ZombieAnimGltfs {
+        classic: asset_server.load(zombie_kind_anim_path(ZombieKind::Classic)),
+        soldier: asset_server.load(zombie_kind_anim_path(ZombieKind::Soldier)),
+        female: asset_server.load(zombie_kind_anim_path(ZombieKind::Female)),
+    }
+}
+
+pub(crate) fn build_zombie_anims_when_loaded(
+    mut commands: Commands,
+    pending: Option<Res<ZombieAnimGltfs>>,
+    gltfs: Res<Assets<bevy::gltf::Gltf>>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
+) {
+    let Some(pending) = pending else { return };
+    let (Some(classic), Some(soldier), Some(female)) = (
+        gltfs.get(&pending.classic),
+        gltfs.get(&pending.soldier),
+        gltfs.get(&pending.female),
+    ) else {
+        return;
+    };
+
+    let all = |kind: ZombieKind| -> &[Handle<AnimationClip>] {
+        match kind {
+            ZombieKind::Classic => &classic.animations,
+            ZombieKind::Soldier => &soldier.animations,
+            ZombieKind::Female => &female.animations,
+        }
+    };
+
+    commands.insert_resource(ZombieAnim::build(&mut graphs, |kind, index| {
+        all(kind).get(index).cloned().unwrap_or_else(|| {
+            warn!("[zombie] {kind:?} has no clip {index}, wanted {}", all(kind).len());
+            Handle::default()
+        })
+    }));
+    commands.insert_resource(build_zombie_kind_anims(
+        &mut graphs,
+        &classic.animations,
+        &soldier.animations,
+        &female.animations,
+    ));
+    commands.remove_resource::<ZombieAnimGltfs>();
+}
+
+fn build_zombie_kind_anims(
     graphs: &mut Assets<AnimationGraph>,
+    classic: &[Handle<AnimationClip>],
+    soldier: &[Handle<AnimationClip>],
+    female: &[Handle<AnimationClip>],
 ) -> ZombieKindAnims {
-    let mut build = |kind: ZombieKind| {
+    let mut build = |kind: ZombieKind, all: &[Handle<AnimationClip>]| {
         let clips: Vec<Handle<AnimationClip>> = (0..zombie_kind_clip_count(kind))
-            .map(|i| asset_server.load(GltfAssetLabel::Animation(i).from_asset(zombie_kind_anim_path(kind))))
+            .filter_map(|i| all.get(i).cloned())
             .collect();
         let (graph, nodes) = AnimationGraph::from_clips(clips);
         (graphs.add(graph), nodes)
     };
     ZombieKindAnims {
-        classic: build(ZombieKind::Classic),
-        soldier: build(ZombieKind::Soldier),
-        female: build(ZombieKind::Female),
+        classic: build(ZombieKind::Classic, classic),
+        soldier: build(ZombieKind::Soldier, soldier),
+        female: build(ZombieKind::Female, female),
     }
 }
 
