@@ -304,7 +304,9 @@ pub(crate) fn cascade_config(cascades: &ShadowCascades) -> bevy::light::CascadeS
     .build()
 }
 
-/// Keeps a camera out of the shadow pass, worth 2.8ms on a sighted frame.
+/// Keeps a camera out of the shadow pass, worth 1.47ms on a sighted frame --
+/// most of the 2.25ms the scope view costs at all. Measured by removing this
+/// component and nothing else: 10.70ms becomes 12.17ms.
 ///
 /// per_view_shadow_pass is the only system that requires ViewLightEntities, so
 /// removing it after prepare_lights skips that view. Its depth texture then

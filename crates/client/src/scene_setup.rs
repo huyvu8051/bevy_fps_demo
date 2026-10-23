@@ -414,10 +414,16 @@ pub(crate) fn setup_gameplay(
             bevy::core_pipeline::prepass::DepthPrepass,
             RenderLayers::from_layers(&[WORLD_LAYER, SCOPE_RETICLE_LAYER]),
             NoShadowPass,
-            // No Bloom here, unlike the main camera. Measured at 0.66ms of the
-            // 3.9ms a sighted frame costs -- a sixth of it -- for a glow drawn
-            // into a 512px disc at twelve times magnification, where there is
-            // almost nothing bright enough left in frame to bloom.
+            // No Bloom here, unlike the main camera: a glow drawn into a 512px
+            // disc at twelve times magnification, where almost nothing bright
+            // enough to bloom is left in frame.
+            //
+            // The scope view costs 2.25ms, and 1.77ms of that is there even
+            // when it draws no world at all -- it is the price of a second
+            // view, not of what the view contains. Resolution barely touches
+            // it: 512px to 128px is worth 0.19ms, and a map with thirty times
+            // fewer primitives is worth nothing measurable. Only NoShadowPass
+            // moved it, by 1.47ms.
             ScopeCamera,
         ))
         .id();
