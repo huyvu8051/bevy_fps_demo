@@ -175,6 +175,19 @@ pub fn extract_render_snapshot(
     let mut snapshot = RenderSnapshot::default();
 
     let mut queries = take_queries(world);
+    let fps_fov = {
+        // get_mut, not get: the query is declared with &mut because other
+        // callers write through it.
+        let cameras = queries.fps_camera.get_mut(world).expect("system param validation failed");
+        cameras
+            .iter()
+            .next()
+            .and_then(|(_, projection)| match &*projection {
+                bevy::camera::Projection::Perspective(p) => Some(p.fov),
+                _ => None,
+            })
+            .unwrap_or(std::f32::consts::FRAC_PI_4)
+    };
     let (camera_query, gun_query, scope_zoom) = queries.camera.get(world).expect("system param validation failed");
     if let Some((transform, cam)) = camera_query.iter().next() {
         snapshot.camera = Some(CameraSnapshot {
@@ -182,6 +195,10 @@ pub fn extract_render_snapshot(
             rotation: transform.rotation().to_array(),
             yaw: cam.yaw,
             pitch: cam.pitch,
+            // The scope camera's fov was already being sent; the main one
+            // never was, so the renderer fell back to a hardcoded 60 against
+            // this camera's 45.
+            fov: fps_fov,
             ads_blend: gun_query.iter().next().map(|g| g.ads_blend).unwrap_or(0.0),
             scope_zoom: scope_zoom.0,
             wall_raise: gun_query.iter().next().map(|g| g.wall_raise).unwrap_or(0.0),
