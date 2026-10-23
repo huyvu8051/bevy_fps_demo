@@ -389,13 +389,13 @@
   ],
   "images": [
     {
-      "uri": "textures/Material_37_baseColor.ktx2"
+      "uri": "textures/Material_37_baseColor.jpeg"
     },
     {
-      "uri": "textures/Material_37_metallicRoughness.ktx2"
+      "uri": "textures/Material_37_metallicRoughness.png"
     },
     {
-      "uri": "textures/Material_37_normal.ktx2"
+      "uri": "textures/Material_37_normal.png"
     },
     {
       "uri": "textures/Material_38_baseColor.png"
