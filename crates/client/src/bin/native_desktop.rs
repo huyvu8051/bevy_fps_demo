@@ -143,34 +143,43 @@ impl ApplicationHandler for Host {
     }
 }
 
-/// The iOS host sends raw `kVK_ANSI_*` codes, so the desktop has to speak the
-/// same ones rather than winit's.
+/// The host has its own table, not the platform's: letters are 0..=25 in
+/// alphabetical order, digits 26..=35, then a handful of named keys. See
+/// `map_key_id` in cadisplaylink::ffi, which is the other half of this.
 fn key_id(code: KeyCode) -> Option<u16> {
+    use KeyCode::*;
+    const LETTERS: [KeyCode; 26] = [
+        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM,
+        KeyN, KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
+    ];
+    const DIGITS: [KeyCode; 10] = [
+        Digit0, Digit1, Digit2, Digit3, Digit4,
+        Digit5, Digit6, Digit7, Digit8, Digit9,
+    ];
+    if let Some(i) = LETTERS.iter().position(|k| *k == code) {
+        return Some(i as u16);
+    }
+    if let Some(i) = DIGITS.iter().position(|k| *k == code) {
+        return Some(26 + i as u16);
+    }
     Some(match code {
-        KeyCode::KeyA => 0,
-        KeyCode::KeyS => 1,
-        KeyCode::KeyD => 2,
-        KeyCode::KeyF => 3,
-        KeyCode::KeyH => 4,
-        KeyCode::KeyG => 5,
-        KeyCode::KeyZ => 6,
-        KeyCode::KeyX => 7,
-        KeyCode::KeyC => 8,
-        KeyCode::KeyV => 9,
-        KeyCode::KeyB => 11,
-        KeyCode::KeyQ => 12,
-        KeyCode::KeyW => 13,
-        KeyCode::KeyE => 14,
-        KeyCode::KeyR => 15,
-        KeyCode::KeyY => 16,
-        KeyCode::KeyT => 17,
-        KeyCode::Digit1 => 18,
-        KeyCode::Digit2 => 19,
-        KeyCode::Digit3 => 20,
-        KeyCode::Digit4 => 21,
-        KeyCode::Space => 49,
-        KeyCode::ShiftLeft => 56,
-        KeyCode::ControlLeft => 59,
+        Space => 36,
+        Escape => 37,
+        ShiftLeft => 38,
+        ShiftRight => 39,
+        ControlLeft => 40,
+        ControlRight => 41,
+        AltLeft => 42,
+        AltRight => 43,
+        BracketLeft => 44,
+        BracketRight => 45,
+        F1 => 46,
+        Tab => 47,
+        Enter => 48,
+        ArrowUp => 49,
+        ArrowDown => 50,
+        ArrowLeft => 51,
+        ArrowRight => 52,
         _ => return None,
     })
 }
