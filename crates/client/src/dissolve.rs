@@ -28,18 +28,26 @@ pub(crate) fn begin_death(
     commands: &mut Commands,
     entity: Entity,
     kind: ZombieKind,
-    anim: &ZombieAnim,
+    anim: Option<&ZombieAnim>,
     link: Option<&ZombieAnimationPlayer>,
     players: &mut Query<&mut AnimationPlayer>,
     push: Vec3,
 ) {
-    let (clip, clip_seconds) = anim.slot(kind).death(entity.to_bits() as usize);
-    if let Some(link) = link {
-        if let Ok(mut player) = players.get_mut(link.0) {
-            player.stop_all();
-            player.play(clip);
+    // Without the graphs the body still has to die, or a kill that lands
+    // before they are built leaves a corpse walking and shootable.
+    let clip_seconds = match anim {
+        Some(anim) => {
+            let (clip, seconds) = anim.slot(kind).death(entity.to_bits() as usize);
+            if let Some(link) = link {
+                if let Ok(mut player) = players.get_mut(link.0) {
+                    player.stop_all();
+                    player.play(clip);
+                }
+            }
+            seconds
         }
-    }
+        None => ZOMBIE_LIE_STILL_SECONDS,
+    };
     commands
         .entity(entity)
         .remove::<Zombie>()

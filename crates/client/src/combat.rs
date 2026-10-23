@@ -45,7 +45,7 @@ pub(crate) fn handle_fire_shot(
         ),
         With<Zombie>,
     >,
-    anim: Res<ZombieAnim>,
+    anim: Option<Res<ZombieAnim>>,
     mut anim_players: Query<&mut AnimationPlayer>,
     mut respawns: ResMut<PendingRespawns>,
     mut threats: Query<&mut PlayerThreat>,
@@ -121,7 +121,7 @@ pub(crate) fn handle_fire_shot(
                     &mut commands,
                     entity,
                     kind.copied().unwrap_or_default(),
-                    &anim,
+                    anim.as_deref(),
                     link,
                     &mut anim_players,
                     Vec3::new(shot.direction.x, 0.0, shot.direction.z).normalize_or_zero()

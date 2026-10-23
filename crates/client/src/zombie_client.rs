@@ -154,22 +154,41 @@ pub(crate) fn build_zombie_anims_when_loaded(
     gltfs: Res<Assets<bevy::gltf::Gltf>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
     tuning: Res<PlayerModelTuning>,
+    asset_server: Res<AssetServer>,
 ) {
     let Some(pending) = pending else { return };
-    let (Some(classic), Some(soldier), Some(female), Some(player)) = (
-        gltfs.get(&pending.classic),
-        gltfs.get(&pending.soldier),
-        gltfs.get(&pending.female),
-        gltfs.get(&pending.player),
-    ) else {
-        return;
+
+    // Settled, not loaded: a glTF that fails must not hold the game in the
+    // loading screen for ever. It degrades to a kind with no clips.
+    let settled = |handle: &Handle<bevy::gltf::Gltf>| {
+        matches!(
+            asset_server.load_state(handle),
+            bevy::asset::LoadState::Loaded | bevy::asset::LoadState::Failed(_)
+        )
     };
+    let handles = [&pending.classic, &pending.soldier, &pending.female, &pending.player];
+    if !handles.iter().all(|handle| settled(handle)) {
+        return;
+    }
+    for (name, handle) in ["classic", "soldier", "female", "player"].iter().zip(handles) {
+        if gltfs.get(handle).is_none() {
+            warn!("[anim] {name} glTF failed to load; it will have no clips");
+        }
+    }
+
+    let clips_of = |handle: &Handle<bevy::gltf::Gltf>| -> &[Handle<AnimationClip>] {
+        gltfs.get(handle).map_or(&[][..], |gltf| &gltf.animations)
+    };
+    let classic = clips_of(&pending.classic);
+    let soldier = clips_of(&pending.soldier);
+    let female = clips_of(&pending.female);
+    let player = clips_of(&pending.player);
 
     let all = |kind: ZombieKind| -> &[Handle<AnimationClip>] {
         match kind {
-            ZombieKind::Classic => &classic.animations,
-            ZombieKind::Soldier => &soldier.animations,
-            ZombieKind::Female => &female.animations,
+            ZombieKind::Classic => classic,
+            ZombieKind::Soldier => soldier,
+            ZombieKind::Female => female,
         }
     };
 
@@ -181,11 +200,11 @@ pub(crate) fn build_zombie_anims_when_loaded(
     }));
     commands.insert_resource(build_zombie_kind_anims(
         &mut graphs,
-        &classic.animations,
-        &soldier.animations,
-        &female.animations,
+        classic,
+        soldier,
+        female,
     ));
-    commands.insert_resource(build_player_model_anim(&mut graphs, &tuning, &player.animations));
+    commands.insert_resource(build_player_model_anim(&mut graphs, &tuning, player));
     commands.remove_resource::<ZombieAnimGltfs>();
 }
 

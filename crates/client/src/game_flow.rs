@@ -87,8 +87,6 @@ pub(crate) fn finish_loading(
     after: Res<AfterLoading>,
     mut next_state: ResMut<NextState<AppState>>,
     mut progress: Query<&mut Text, With<LoadingProgressText>>,
-    zombie_anim: Option<Res<ZombieAnim>>,
-    player_anim: Option<Res<PlayerModelAnim>>,
 ) {
     let total = roots.iter().len();
     let ready = roots
@@ -103,9 +101,6 @@ pub(crate) fn finish_loading(
     // Going into a map with nothing spawned yet means setup has not run, so
     // an empty set is not the same as a finished one.
     if after.0 == AppState::InGame && total == 0 {
-        return;
-    }
-    if after.0 == AppState::InGame && (zombie_anim.is_none() || player_anim.is_none()) {
         return;
     }
     if ready == total {
