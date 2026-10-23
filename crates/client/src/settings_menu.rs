@@ -430,7 +430,9 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                     });
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
+                        flex_wrap: FlexWrap::Wrap,
                         column_gap: Val::Px(8.0),
+                        row_gap: Val::Px(8.0),
                         ..default()
                     })
                     .with_children(|row| {

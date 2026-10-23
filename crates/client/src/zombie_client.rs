@@ -484,7 +484,7 @@ pub(crate) fn wire_zombie_animations(
     kind_anims: Res<ZombieKindAnims>,
     child_of: Query<&ChildOf>,
     zombies: Query<(Option<&ZombieShowcaseClip>, Option<&ZombieKind>), With<Zombie>>,
-    mut new_players: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
+    mut new_players: Query<(Entity, &mut AnimationPlayer), Without<AnimationGraphHandle>>,
 ) {
     for (player_entity, mut player) in &mut new_players {
         let Some(root) = find_animation_root(player_entity, &child_of, |e| zombies.contains(e)) else {
@@ -606,7 +606,7 @@ pub(crate) fn wire_player_model_animations(
     child_of: Query<&ChildOf>,
     roots: Query<(), With<PlayerModelAnimRoot>>,
     viewmodel: Query<(), With<ViewmodelBody>>,
-    mut new_players: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
+    mut new_players: Query<(Entity, &mut AnimationPlayer), Without<AnimationGraphHandle>>,
 ) {
     for (player_entity, mut player) in &mut new_players {
         let Some(root) = find_animation_root(player_entity, &child_of, |e| roots.contains(e)) else {
