@@ -130,20 +130,33 @@ impl ZombieKindAnims {
 
 #[derive(Resource)]
 pub(crate) struct ZombieAnimGltfs {
-    classic: Handle<bevy::gltf::Gltf>,
-    soldier: Handle<bevy::gltf::Gltf>,
-    female: Handle<bevy::gltf::Gltf>,
+    /// None for a kind ZOMBIE_KIND_WEIGHTS never spawns. Loading one costs
+    /// its whole texture set: zombie_female alone carries three 4096s, 192 MB
+    /// decoded, for a kind that never appears.
+    kinds: [Option<Handle<bevy::gltf::Gltf>>; 3],
     player: Handle<bevy::gltf::Gltf>,
+}
+
+impl ZombieAnimGltfs {
+    fn of(&self, kind: ZombieKind) -> Option<&Handle<bevy::gltf::Gltf>> {
+        self.kinds[kind as usize].as_ref()
+    }
 }
 
 pub(crate) fn load_zombie_anim_gltfs(
     asset_server: &AssetServer,
     tuning: &PlayerModelTuning,
 ) -> ZombieAnimGltfs {
+    let load = |kind: ZombieKind| {
+        (ZOMBIE_KIND_WEIGHTS[kind as usize] > 0.0)
+            .then(|| asset_server.load(zombie_kind_anim_path(kind)))
+    };
     ZombieAnimGltfs {
-        classic: asset_server.load(zombie_kind_anim_path(ZombieKind::Classic)),
-        soldier: asset_server.load(zombie_kind_anim_path(ZombieKind::Soldier)),
-        female: asset_server.load(zombie_kind_anim_path(ZombieKind::Female)),
+        kinds: [
+            load(ZombieKind::Classic),
+            load(ZombieKind::Soldier),
+            load(ZombieKind::Female),
+        ],
         player: asset_server.load(tuning.anim_source_or_mesh().to_string()),
     }
 }
@@ -166,23 +179,28 @@ pub(crate) fn build_zombie_anims_when_loaded(
             bevy::asset::LoadState::Loaded | bevy::asset::LoadState::Failed(_)
         )
     };
-    let handles = [&pending.classic, &pending.soldier, &pending.female, &pending.player];
-    if !handles.iter().all(|handle| settled(handle)) {
+    let wanted: Vec<&Handle<bevy::gltf::Gltf>> = pending
+        .kinds
+        .iter()
+        .flatten()
+        .chain(std::iter::once(&pending.player))
+        .collect();
+    if !wanted.iter().all(|handle| settled(handle)) {
         return;
     }
-    for (name, handle) in ["classic", "soldier", "female", "player"].iter().zip(handles) {
-        if gltfs.get(handle).is_none() {
-            warn!("[anim] {name} glTF failed to load; it will have no clips");
+    for handle in &wanted {
+        if gltfs.get(*handle).is_none() {
+            warn!("[anim] a glTF failed to load; that kind will have no clips");
         }
     }
 
-    let clips_of = |handle: &Handle<bevy::gltf::Gltf>| -> &[Handle<AnimationClip>] {
-        gltfs.get(handle).map_or(&[][..], |gltf| &gltf.animations)
+    let clips_of = |handle: Option<&Handle<bevy::gltf::Gltf>>| -> &[Handle<AnimationClip>] {
+        handle.and_then(|h| gltfs.get(h)).map_or(&[][..], |gltf| &gltf.animations)
     };
-    let classic = clips_of(&pending.classic);
-    let soldier = clips_of(&pending.soldier);
-    let female = clips_of(&pending.female);
-    let player = clips_of(&pending.player);
+    let classic = clips_of(pending.of(ZombieKind::Classic));
+    let soldier = clips_of(pending.of(ZombieKind::Soldier));
+    let female = clips_of(pending.of(ZombieKind::Female));
+    let player = clips_of(Some(&pending.player));
 
     let all = |kind: ZombieKind| -> &[Handle<AnimationClip>] {
         match kind {
@@ -194,7 +212,11 @@ pub(crate) fn build_zombie_anims_when_loaded(
 
     commands.insert_resource(ZombieAnim::build(&mut graphs, |kind, index| {
         all(kind).get(index).cloned().unwrap_or_else(|| {
-            warn!("[zombie] {kind:?} has no clip {index}, wanted {}", all(kind).len());
+            // A kind with zero spawn weight is not loaded at all; its graph
+            // is built empty and never played.
+            if pending.of(kind).is_some() {
+                warn!("[zombie] {kind:?} has no clip {index}, wanted {}", all(kind).len());
+            }
             Handle::default()
         })
     }));

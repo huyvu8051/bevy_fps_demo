@@ -24,7 +24,7 @@ use shared::{
     HEAD_HITBOX_RADIUS, LIMB_HITBOX_RADIUS, TORSO_HITBOX_RADIUS,
     resolve_bone_world_positions, zombie_hit_damage_ray,
     ZOMBIE_ATTACK_INTERVAL, ZOMBIE_OUTER_HEIGHT, ZOMBIE_OUTER_RADIUS,
-    zombie_pose_for, ZombieAnim, ZombiePose, ZombieWalkVariant, ZOMBIE_MAX_HEALTH, ZOMBIE_STOP_DISTANCE,
+    zombie_pose_for, ZombieAnim, ZombiePose, ZombieWalkVariant, ZOMBIE_KIND_WEIGHTS, ZOMBIE_MAX_HEALTH, ZOMBIE_STOP_DISTANCE,
 };
 
 #[cfg(target_os = "ios")]
