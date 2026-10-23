@@ -448,6 +448,7 @@ pub(crate) fn spawn_settings_menu(commands: &mut Commands) {
                         spawn_cheat_toggle_button(row, "Holes", CheatHolesButton);
                         spawn_cheat_toggle_button(row, "Blood", CheatBloodButton);
                         spawn_cheat_toggle_button(row, "Pools", CheatPoolsButton);
+                        spawn_cheat_toggle_button(row, "LensWarp", CheatLensWarpButton);
                     });
                     page.spawn(Node {
                         flex_direction: FlexDirection::Row,
@@ -1523,12 +1524,14 @@ pub(crate) fn render_toggle_buttons(
     mut fog: ResMut<FogEnabled>,
     mut holes: ResMut<BulletHolesEnabled>,
     mut blood: ResMut<BloodEnabled>,
+    mut lens_warp: ResMut<ScopeLensDistortion>,
     bloom_btn: Query<&Interaction, (With<CheatBloomButton>, Changed<Interaction>)>,
     grain_btn: Query<&Interaction, (With<CheatGrainButton>, Changed<Interaction>)>,
     fog_btn: Query<&Interaction, (With<CheatFogButton>, Changed<Interaction>)>,
     holes_btn: Query<&Interaction, (With<CheatHolesButton>, Changed<Interaction>)>,
     blood_btn: Query<&Interaction, (With<CheatBloodButton>, Changed<Interaction>)>,
     pools_btn: Query<&Interaction, (With<CheatPoolsButton>, Changed<Interaction>)>,
+    lens_warp_btn: Query<&Interaction, (With<CheatLensWarpButton>, Changed<Interaction>)>,
 ) {
     if tapped(&bloom_btn) {
         bloom.0 = !bloom.0;
@@ -1548,6 +1551,9 @@ pub(crate) fn render_toggle_buttons(
     if tapped(&pools_btn) {
         blood.stains = !blood.stains;
     }
+    if tapped(&lens_warp_btn) {
+        lens_warp.0 = !lens_warp.0;
+    }
 }
 
 pub(crate) fn update_render_toggle_colors(
@@ -1556,6 +1562,7 @@ pub(crate) fn update_render_toggle_colors(
     fog: Res<FogEnabled>,
     holes: Res<BulletHolesEnabled>,
     blood: Res<BloodEnabled>,
+    lens_warp: Res<ScopeLensDistortion>,
     mut buttons: Query<
         (
             &mut BackgroundColor,
@@ -1564,6 +1571,7 @@ pub(crate) fn update_render_toggle_colors(
             Option<&CheatHolesButton>,
             Option<&CheatBloodButton>,
             Option<&CheatPoolsButton>,
+            Option<&CheatLensWarpButton>,
         ),
         Or<(
             With<CheatBloomButton>,
@@ -1572,11 +1580,12 @@ pub(crate) fn update_render_toggle_colors(
             With<CheatHolesButton>,
             With<CheatBloodButton>,
             With<CheatPoolsButton>,
+            With<CheatLensWarpButton>,
         )>,
     >,
 ) {
     let color_for = |on: bool| if on { Color::srgba(0.3, 1.0, 0.4, 0.5) } else { Color::srgba(1.0, 1.0, 1.0, 0.2) };
-    for (mut bg, is_bloom, is_fog, is_holes, is_blood, is_pools) in &mut buttons {
+    for (mut bg, is_bloom, is_fog, is_holes, is_blood, is_pools, is_lens_warp) in &mut buttons {
         let on = if is_bloom.is_some() {
             bloom.0
         } else if is_fog.is_some() {
@@ -1587,6 +1596,8 @@ pub(crate) fn update_render_toggle_colors(
             blood.spray
         } else if is_pools.is_some() {
             blood.stains
+        } else if is_lens_warp.is_some() {
+            lens_warp.0
         } else {
             grain.0
         };
@@ -1604,3 +1615,5 @@ pub(crate) struct CheatHolesButton;
 pub(crate) struct CheatBloodButton;
 #[derive(Component)]
 pub(crate) struct CheatPoolsButton;
+#[derive(Component)]
+pub(crate) struct CheatLensWarpButton;
