@@ -255,7 +255,7 @@ pub(crate) fn build_gore_assets(
         ..default()
     };
     GoreAssets {
-        arm_scene: load_gltf_scene(asset_server, "models/gore/severed_arm.glb", RenderAssetUsages::RENDER_WORLD),
+        arm_scene: load_gltf_scene(asset_server, "models/gore/severed_arm.glb", crate::gltf_usages()),
         head_mesh: meshes.add(Sphere::new(HEAD_GORE_RADIUS)),
         head_material: materials.add(flesh("textures/gore/head.png")),
     }

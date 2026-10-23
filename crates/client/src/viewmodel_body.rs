@@ -43,7 +43,7 @@ pub(crate) fn spawn_viewmodel_body(
 
     commands.spawn((
         Name::new("ViewmodelBody (first-person, headless)"),
-        WorldAssetRoot(load_gltf_scene(&asset_server, tuning.mesh.clone(), RenderAssetUsages::RENDER_WORLD)),
+        WorldAssetRoot(load_gltf_scene(&asset_server, tuning.mesh.clone(), crate::gltf_usages())),
         Transform::from_translation(BODY_OFFSET_FROM_EYE - Vec3::Z * view_pullback())
             .with_rotation(Quat::from_rotation_y(tuning.facing_deg.to_radians()))
             .with_scale(Vec3::splat(tuning.scale)),

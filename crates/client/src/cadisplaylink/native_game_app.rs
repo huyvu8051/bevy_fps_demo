@@ -3,6 +3,10 @@ use bevy::app::App;
 use bevy::asset::AssetApp;
 
 pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, scale_factor: f32) -> App {
+    // Before anything spawns: it decides whether mesh and image data survives
+    // on the CPU, which metal_renderer needs and bevy_render does not.
+    crate::mark_native_renderer_in_use();
+
     let mut app = App::new();
 
     app.add_plugins(bevy::app::PanicHandlerPlugin);

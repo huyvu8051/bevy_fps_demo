@@ -161,7 +161,7 @@ pub(crate) fn spawn_gun_mesh_parts(
 ) {
     commands.spawn((
         Name::new("Gun mesh"),
-        WorldAssetRoot(load_gltf_scene(asset_server, mesh_path, RenderAssetUsages::RENDER_WORLD)),
+        WorldAssetRoot(load_gltf_scene(asset_server, mesh_path, crate::gltf_usages())),
         Transform::IDENTITY,
         GunMeshPart,
         ChildOf(gun_entity),
@@ -476,6 +476,32 @@ pub(crate) fn apply_fog(
 /// Only meshes can be dropped: load_materials governs the StandardMaterial
 /// assets rather than their textures, and dropping their main world half
 /// renders a black screen. The map keeps its CPU meshes for Avian's colliders.
+/// Where the meshes a renderer has to read back on the CPU should live.
+///
+/// RENDER_WORLD alone throws the CPU copy away once it is uploaded, which is
+/// right for bevy_render and fatal for the native path: metal_renderer reads
+/// `image.data` to build its own textures, finds None, and draws the mesh
+/// untextured. The gun was grey for exactly this reason.
+pub(crate) fn gltf_usages() -> RenderAssetUsages {
+    if native_renderer_in_use() {
+        RenderAssetUsages::default()
+    } else {
+        RenderAssetUsages::RENDER_WORLD
+    }
+}
+
+/// Set once by the native app builder. A flag rather than a cfg because both
+/// paths are built for the same target.
+static NATIVE_RENDERER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn mark_native_renderer_in_use() {
+    NATIVE_RENDERER.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn native_renderer_in_use() -> bool {
+    NATIVE_RENDERER.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn load_gltf_scene(
     asset_server: &AssetServer,
     path: impl Into<String>,

@@ -12,6 +12,15 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window};
 pub struct GameHost {
     app: App,
     renderer: NativeMetalRenderer,
+    frames: u32,
+    last_update_ms: f32,
+    update_ms: f32,
+    wait_ms: f32,
+    book_ms: f32,
+    scene_ms: f32,
+    prepass_ms: f32,
+    draws: usize,
+    window_start: std::time::Instant,
 }
 
 fn zombie_model_specs() -> Vec<SkinnedModelSpec> {
@@ -51,11 +60,54 @@ impl GameHost {
             height_pts,
             self.renderer.contents_scale(),
         );
+        let update_start = std::time::Instant::now();
         self.app.update();
+        self.last_update_ms = update_start.elapsed().as_secs_f32() * 1000.0;
         let snapshot = super::native_game_extract::extract_render_snapshot(self.app.world_mut(), |id| {
             self.renderer.has_uploaded_mesh(id)
         });
-        self.renderer.render_frame(snapshot);
+        let timings = self.renderer.render_frame(snapshot);
+        self.report(timings);
+    }
+
+    /// NATIVE_STATS=1 prints a phase breakdown once a second. The renderer
+    /// already measures all of it and the host was throwing it away, so there
+    /// was no way to say where a frame went without rebuilding.
+    fn report(&mut self, t: metal_renderer::native_metal_renderer::FrameTimings) {
+        if std::env::var("NATIVE_STATS").is_err() {
+            return;
+        }
+        self.frames += 1;
+        self.update_ms += self.last_update_ms;
+        self.wait_ms += t.drawable_wait_ms;
+        self.book_ms += t.bookkeeping_ms;
+        self.scene_ms += t.scene_ms;
+        self.prepass_ms += t.prepasses_ms;
+        self.draws = t.draws;
+        let elapsed = self.window_start.elapsed().as_secs_f32();
+        if elapsed < 1.0 {
+            return;
+        }
+        let n = self.frames as f32;
+        println!(
+            "[native] {:.0} fps | update {:.2} + wait {:.2} + book {:.2} + prepass {:.2} + scene {:.2} ms | {} draws",
+            n / elapsed,
+            self.update_ms / n,
+            self.wait_ms / n,
+            self.book_ms / n,
+            self.prepass_ms / n,
+            self.scene_ms / n,
+            self.draws,
+        );
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        self.frames = 0;
+        self.update_ms = 0.0;
+        self.wait_ms = 0.0;
+        self.book_ms = 0.0;
+        self.scene_ms = 0.0;
+        self.prepass_ms = 0.0;
+        self.window_start = std::time::Instant::now();
     }
 }
 
@@ -72,7 +124,19 @@ pub extern "C" fn native_metal_probe_create_real_game(
         (height_pts * scale) as u32,
         scale,
     );
-    Box::into_raw(Box::new(GameHost { app, renderer })) as *mut std::ffi::c_void
+    Box::into_raw(Box::new(GameHost {
+        app,
+        renderer,
+        frames: 0,
+        last_update_ms: 0.0,
+        update_ms: 0.0,
+        wait_ms: 0.0,
+        book_ms: 0.0,
+        scene_ms: 0.0,
+        prepass_ms: 0.0,
+        draws: 0,
+        window_start: std::time::Instant::now(),
+    })) as *mut std::ffi::c_void
 }
 
 #[unsafe(no_mangle)]
