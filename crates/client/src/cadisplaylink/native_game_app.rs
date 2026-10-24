@@ -59,6 +59,7 @@ pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, sc
 
     app.register_type::<bevy::pbr::MeshMaterial3d<bevy::pbr::StandardMaterial>>();
     app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
+    app.insert_resource(avian3d::prelude::SubstepCount(crate::PHYSICS_SUBSTEPS));
     // Without these the native path has physics and a player but no zombies,
     // no AI and no world_ready -- it has never actually run the game. They sit
     // beside PhysicsPlugins in main()'s plugin list for the windowed build and

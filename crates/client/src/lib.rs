@@ -331,6 +331,8 @@ const CROSSHAIR_GAP_SPREAD_SCALE: f32 = 500.0;
 
 const BASE_FOV: f32 = std::f32::consts::PI / 4.0;
 
+const PHYSICS_SUBSTEPS: u32 = 4;
+
 const AIM_ZOOM_SPEED: f32 = 12.0;
 const AIM_SPREAD_MULTIPLIER: f32 = 0.35;
 
@@ -515,6 +517,11 @@ pub fn main() {
             SimPlugin,
             zombie_nav::ZombieNavmeshPlugin,
         ))
+        // Four, not Avian's default six: the solver was running at 384Hz for
+        // capsule characters and ragdolls, and the two builds have to agree or
+        // they are not the same game. Raise it again if joints go rubbery or
+        // a crowd starts interpenetrating.
+        .insert_resource(avian3d::prelude::SubstepCount(PHYSICS_SUBSTEPS))
 
         .insert_resource(if cfg!(target_os = "ios") {
             WinitSettings {
