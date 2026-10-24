@@ -259,6 +259,9 @@ fn map_key_id(id: u16) -> Option<KeyCode> {
         50 => KeyCode::ArrowDown,
         51 => KeyCode::ArrowLeft,
         52 => KeyCode::ArrowRight,
+        // Toggles the mouse free so the settings button can be clicked, so
+        // without it the native path has no way into the settings menu at all.
+        53 => KeyCode::Backquote,
         _ => return None,
     })
 }

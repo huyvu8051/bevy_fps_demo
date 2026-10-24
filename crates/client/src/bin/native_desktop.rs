@@ -200,6 +200,7 @@ fn key_id(code: KeyCode) -> Option<u16> {
         ArrowDown => 50,
         ArrowLeft => 51,
         ArrowRight => 52,
+        Backquote => 53,
         _ => return None,
     })
 }
