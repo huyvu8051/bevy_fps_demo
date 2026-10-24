@@ -223,6 +223,7 @@ pub(crate) fn mouse_look(
 pub(crate) fn apply_view_recoil(
     time: Res<Time>,
     active: Res<ActiveWeapon>,
+    cycle: Res<crate::gun_view::WalkCycle>,
     mut query: Query<(&mut Transform, &FpsCamera, &mut ViewRecoil, &Lean)>,
 ) {
     for (mut transform, cam, mut recoil, lean) in &mut query {
@@ -244,7 +245,12 @@ pub(crate) fn apply_view_recoil(
         let pitch = (cam.pitch + recoil.climb).clamp(-1.54, 1.54);
         let yaw = cam.yaw + recoil.wander;
 
-        let roll = -LEAN_ROLL_DEG.to_radians() * lean.current;
+        // Walk roll goes in with the lean's, which is the only other thing
+        // that rolls the view. In phase with the sideways sway, so the head
+        // tilts the way it is already leaning rather than against it.
+        let walk_roll =
+            ops::sin(cycle.phase) * CAMERA_BOB_ROLL_DEG.to_radians() * cycle.amount();
+        let roll = -LEAN_ROLL_DEG.to_radians() * lean.current + walk_roll;
         transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
     }
 }
@@ -468,6 +474,7 @@ pub(crate) fn send_player_input(
 }
 
 pub(crate) fn sync_camera_to_player(
+    cycle: Res<crate::gun_view::WalkCycle>,
     player_query: Query<(&Transform, &PlayerStance), (With<Player>, Without<FpsCamera>)>,
     mut camera_query: Query<(&mut Transform, &Lean, &ViewRecoil), With<FpsCamera>>,
 ) {
@@ -490,7 +497,15 @@ pub(crate) fn sync_camera_to_player(
     // Along the camera's own back, not a levelled one: a kick that stays
     // horizontal while the view climbs reads as the player being shoved.
     let shove = *camera_transform.back() * recoil.shove;
-    camera_transform.translation = eye + side_offset + pullback + shove;
+
+    // The head rides the same walk cycle the weapon does, at a third of the
+    // amplitude. Sideways once every two steps, down once per step -- the
+    // body only completes a full sway after both feet have been through it.
+    let amount = cycle.amount();
+    let bob = *camera_transform.right() * (ops::sin(cycle.phase) * CAMERA_BOB_AMOUNT_X * amount)
+        - Vec3::Y * (ops::sin(cycle.phase).abs() * CAMERA_BOB_AMOUNT_Y * amount);
+
+    camera_transform.translation = eye + side_offset + pullback + shove + bob;
 }
 
 

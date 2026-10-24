@@ -253,9 +253,11 @@ pub(crate) struct GunPoseTimings {
     dip: f32,
     bob_x: f32,
     bob_y: f32,
+    bob_roll: f32,
+    bob_pitch: f32,
 }
 
-pub(crate) fn gun_pose_timings(gun: &Gun, def: &WeaponDef) -> GunPoseTimings {
+pub(crate) fn gun_pose_timings(gun: &Gun, def: &WeaponDef, cycle: &WalkCycle) -> GunPoseTimings {
     let recoil_t = gun.recoil;
     let reload_t = gun.reload_remaining / def.reload_duration;
 
@@ -265,12 +267,22 @@ pub(crate) fn gun_pose_timings(gun: &Gun, def: &WeaponDef) -> GunPoseTimings {
     // back out of it. This one is flat at both ends: it eases in and eases
     // out, which is the curve the sights and the kick already use.
     let dip = ops::sin(std::f32::consts::PI * reload_t).powi(2);
-    let bob_aim_scale = 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER);
-    let bob_x = ops::sin(gun.bob_phase) * GUN_BOB_AMOUNT_X * gun.bob_blend * bob_aim_scale;
+    let amount = cycle.amount();
+    let bob_x = ops::sin(cycle.phase) * GUN_BOB_AMOUNT_X * amount;
     // abs() already doubles the rate: |sin| repeats every pi, not every tau.
     // One dip per footfall, against a full sway every two.
-    let bob_y = ops::sin(gun.bob_phase).abs() * GUN_BOB_AMOUNT_Y * gun.bob_blend * bob_aim_scale;
-    GunPoseTimings { recoil_t, dip, bob_x, bob_y }
+    let bob_y = ops::sin(cycle.phase).abs() * GUN_BOB_AMOUNT_Y * amount;
+
+    // The weapon trails the body. Arms are compliant, and a weapon that cants
+    // in exact step with the hips reads as welded to them -- the lag is most
+    // of what makes it look carried rather than attached.
+    let lagged = cycle.phase - GUN_BOB_LAG;
+    let bob_roll = ops::sin(lagged) * GUN_BOB_ROLL_DEG * amount;
+    // Pitch turns about the mesh origin, which sits on the bore at the muzzle,
+    // so this pins the nose and swings the stock -- the muzzle stays the
+    // steadiest thing on screen, which is what a carried weapon does.
+    let bob_pitch = ops::sin(lagged).abs() * GUN_BOB_PITCH_DEG * amount;
+    GunPoseTimings { recoil_t, dip, bob_x, bob_y, bob_roll, bob_pitch }
 }
 
 /// Takes the scope picture from the eye rather than from the weapon.
@@ -450,6 +462,7 @@ pub(crate) fn gun_view_animation(
     local_moving: Res<LocalPlayerMoving>,
     local_sprinting: Res<LocalPlayerSprinting>,
     active: Res<ActiveWeapon>,
+    cycle: Res<WalkCycle>,
 ) {
     // Taken, not read: the single consumer clearing it is what lets each
     // input path write only when it has a delta, instead of every path having
@@ -568,13 +581,6 @@ pub(crate) fn gun_view_animation(
         let shoulder_step = (GUN_SHOULDER_SPEED * time.delta_secs()).min(1.0);
         gun.shoulder_blend += (shoulder_target - gun.shoulder_blend) * shoulder_step;
 
-        let moving = local_moving.0;
-        let bob_target = if moving { 1.0 } else { 0.0 };
-        let bob_blend_step = (GUN_BOB_BLEND_SPEED * time.delta_secs()).min(1.0);
-        gun.bob_blend += (bob_target - gun.bob_blend) * bob_blend_step;
-        if moving {
-            gun.bob_phase += GUN_BOB_SPEED * time.delta_secs();
-        }
 
         // Late to a turn, not rolled by one. Both meshes put their origin on
         // the muzzle, so this pivots there: the barrel holds its aim and the
@@ -588,7 +594,7 @@ pub(crate) fn gun_view_animation(
         gun.look_sway += sway_gap * sway_step;
 
         let kick = &active.def().recoil;
-        let timings = gun_pose_timings(&gun, active.def());
+        let timings = gun_pose_timings(&gun, active.def(), &cycle);
 
         // Faded out by ads_blend, the way the positional jitter already is
         // through resting: a weapon canted on its own bore would take the
@@ -650,6 +656,8 @@ pub(crate) fn gun_view_animation(
         transform.rotation = Quat::from_rotation_x(wall_raise_tilt)
             * Quat::from_rotation_y(gun.look_sway.x.to_radians())
             * Quat::from_rotation_x(gun.look_sway.y.to_radians())
+            * Quat::from_rotation_z(timings.bob_roll.to_radians())
+            * Quat::from_rotation_x(timings.bob_pitch.to_radians())
             * Quat::from_rotation_y(kick.weapon.yaw_deg.to_radians() * gun.recoil_roll * timings.recoil_t)
             * Quat::from_rotation_z(kick.weapon.roll_deg.to_radians() * gun.recoil_roll * timings.recoil_t)
             * Quat::from_rotation_x(kick.weapon.pitch_deg.to_radians() * timings.recoil_t)
@@ -671,4 +679,57 @@ fn settle_jitter(seed: f32) -> (Vec3, f32) {
         ),
         axis(94.673) * GUN_SETTLE_TWIST_DEG,
     )
+}
+
+/// One walk cycle, shared by the weapon and the view.
+///
+/// Both have to ride the *same* cycle or they drift against each other and the
+/// weapon stops following the step it is supposed to be following. `phase`
+/// advances only while moving, `blend` fades the whole thing in and out so
+/// stopping does not cut it off mid-stride, and `aim_damp` is how much of it
+/// survives the sights coming up.
+#[derive(Resource, Default)]
+pub(crate) struct WalkCycle {
+    pub(crate) phase: f32,
+    pub(crate) blend: f32,
+    pub(crate) aim_damp: f32,
+    /// 1.0 at a walk, higher at a sprint.
+    pub(crate) gait: f32,
+}
+
+impl WalkCycle {
+    /// What the weapon and the view both scale their bob by.
+    pub(crate) fn amount(&self) -> f32 {
+        self.blend * self.aim_damp * self.gait
+    }
+}
+
+pub(crate) fn advance_walk_cycle(
+    time: Res<Time>,
+    moving: Res<LocalPlayerMoving>,
+    sprinting: Res<LocalPlayerSprinting>,
+    gun: Query<&Gun>,
+    mut cycle: ResMut<WalkCycle>,
+) {
+    let dt = time.delta_secs();
+    let blend_target = if moving.0 { 1.0 } else { 0.0 };
+    cycle.blend += (blend_target - cycle.blend) * (GUN_BOB_BLEND_SPEED * dt).min(1.0);
+
+    // A sprint is a different gait, not a louder walk. Raising the amplitude
+    // while leaving the cadence at walking pace is the thing that reads as
+    // wrong -- the steps stop matching the ground going past.
+    let gait_target = if sprinting.0 { SPRINT_BOB_GAIT } else { 1.0 };
+    cycle.gait += (gait_target - cycle.gait) * (BOB_GAIT_BLEND_SPEED * dt).min(1.0);
+
+    if moving.0 {
+        // Wrapped rather than left to grow: at 8 rad/s an hour of walking puts
+        // the phase near 29000, where an f32 step of 0.13 starts to quantise.
+        cycle.phase = (cycle.phase + GUN_BOB_SPEED * cycle.gait * dt)
+            .rem_euclid(std::f32::consts::TAU);
+    }
+
+    cycle.aim_damp = gun
+        .single()
+        .map(|gun| 1.0 - gun.ads_blend * (1.0 - AIM_BOB_MULTIPLIER))
+        .unwrap_or(1.0);
 }

@@ -362,8 +362,6 @@ pub(crate) fn setup_gameplay(
                 ready_blend: 0.0,
                 ready_armed: false,
                 recoil_roll: 0.0,
-                bob_phase: 0.0,
-                bob_blend: 0.0,
                 look_sway: Vec2::ZERO,
             },
             ChildOf(camera),

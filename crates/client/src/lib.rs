@@ -154,6 +154,24 @@ const GUN_BOB_SPEED: f32 = 8.0;
 const GUN_BOB_AMOUNT_X: f32 = 0.015;
 const GUN_BOB_AMOUNT_Y: f32 = 0.012;
 const GUN_BOB_BLEND_SPEED: f32 = 6.0;
+/// Radians the weapon's cant trails the body's. Arms are compliant; without
+/// the lag the weapon rolls in exact step with the hips and reads as welded.
+const GUN_BOB_LAG: f32 = 0.35;
+const GUN_BOB_ROLL_DEG: f32 = 1.1;
+const GUN_BOB_PITCH_DEG: f32 = 0.55;
+/// Cadence and amplitude together, so a sprint is a different gait rather
+/// than a walk with the volume turned up.
+const SPRINT_BOB_GAIT: f32 = 1.35;
+const BOB_GAIT_BLEND_SPEED: f32 = 4.0;
+
+/// Deliberately a third of the weapon's. If the view moves as much as the
+/// weapon, the weapon looks still and the world looks like it is shaking --
+/// what sells a step is the weapon moving *within* the frame.
+const CAMERA_BOB_AMOUNT_X: f32 = 0.005;
+const CAMERA_BOB_AMOUNT_Y: f32 = 0.008;
+/// Roll sells walking harder than translation does, and makes people sick
+/// faster too. Under half a degree.
+const CAMERA_BOB_ROLL_DEG: f32 = 0.40;
 const AIM_BOB_MULTIPLIER: f32 = 0.35;
 
 /// How far the weapon lags behind a turn. SPEED is what reads as weight:
@@ -609,6 +627,7 @@ impl Plugin for GamePlugin {
         .init_resource::<ShowBulletTracers>()
         .init_resource::<BarrelSmoke>()
         .init_resource::<LimbDamage>()
+        .init_resource::<gun_view::WalkCycle>()
         .init_resource::<ActiveWeapon>()
         .init_resource::<weapon::WeaponSwitchRequest>()
         .add_systems(
@@ -781,6 +800,10 @@ impl Plugin for GamePlugin {
                     // weapon posed afterwards leaves that transform a frame
                     // old -- 2cm of it while the weapon is swinging to ready,
                     // which shows as the flash hanging off the muzzle.
+                    // Before everything that rides it: the weapon and the
+                    // view both read this cycle in the same frame it is
+                    // advanced, so they cannot drift apart.
+                    advance_walk_cycle,
                     gun_view_animation,
                     shoot,
                     reload_gun,

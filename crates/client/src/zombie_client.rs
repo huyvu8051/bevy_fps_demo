@@ -81,8 +81,6 @@ pub(crate) struct Gun {
 
     pub(crate) recoil_roll: f32,
 
-    pub(crate) bob_phase: f32,
-    pub(crate) bob_blend: f32,
 
     /// How far the weapon is still turned away from where the view now points,
     /// as yaw then pitch in degrees. Chases zero, so it is only non-zero while
