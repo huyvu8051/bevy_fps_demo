@@ -752,7 +752,11 @@ impl Plugin for GamePlugin {
                     toggle_player_stance,
                     toggle_debug_flags.run_if(debug_keys_allowed),
                     autopilot_pick_target,
-                    autopilot_think.after(bevy_landmass::prelude::LandmassSystems::Output),
+                    // No longer ordered against LandmassSystems::Output --
+                    // landmass runs in FixedUpdate now, and this does not.
+                    // The desired velocity read here can be one frame old,
+                    // which is nothing against a 20Hz decision rate.
+                    autopilot_think,
                     mouse_look,
                     // Before shoot, not after. Everything that leaves the
                     // barrel is placed from the weapon's transform, and a

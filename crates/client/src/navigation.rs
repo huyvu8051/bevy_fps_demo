@@ -33,13 +33,21 @@ pub(crate) struct ClientNavigationPlugin;
 
 impl Plugin for ClientNavigationPlugin {
     fn build(&self, app: &mut App) {
+        // FixedUpdate, not Update: update_archipelagos cost 0.15ms and ran at
+        // the refresh rate, while the only consumer -- move_zombies -- reads
+        // the desired velocity once every 0.8s. It was computing a hundred and
+        // eighteen answers a second to use one and a quarter of them.
+        //
+        // move_zombies is in FixedUpdate too, so it still orders after
+        // LandmassSystems::Output and reads this frame's paths, not last
+        // frame's.
         app.add_plugins((
             NavmeshPlugins::default(),
-            Landmass3dPlugin::default().in_schedule(Update),
-            LandmassRerecastPlugin::default().in_schedule(Update),
+            Landmass3dPlugin::default().in_schedule(FixedUpdate),
+            LandmassRerecastPlugin::default().in_schedule(FixedUpdate),
         ))
         .add_systems(Startup, load_baked_navmesh)
-        .add_systems(Update, register_player_agent.before(LandmassSystems::SyncExistence));
+        .add_systems(FixedUpdate, register_player_agent.before(LandmassSystems::SyncExistence));
     }
 }
 

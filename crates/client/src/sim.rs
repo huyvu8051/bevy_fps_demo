@@ -51,12 +51,12 @@ impl Plugin for SimPlugin {
             // roughly half as often on a 120Hz panel, for the same motion,
             // since every velocity here is already multiplied by delta_secs.
             //
-            // It loses `.after(LandmassSystems::Output)` by moving: landmass
-            // is in Update, which runs after FixedUpdate, so the desired
-            // velocity read here is one frame old. Paths are recalculated
-            // every 0.8s and the target is re-chosen every 1.5s, so a frame
-            // of staleness is well inside what those intervals already allow.
-            .add_systems(FixedUpdate, move_zombies.run_if(world_ready))
+            // Landmass moved here with it, so the ordering against its output
+            // still holds and the desired velocity read below is this tick's.
+            .add_systems(
+                FixedUpdate,
+                move_zombies.after(LandmassSystems::Output).run_if(world_ready),
+            )
             .add_systems(
                 Update,
                 (tick_respawns.run_if(world_ready), decay_player_threat),
