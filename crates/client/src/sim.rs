@@ -45,13 +45,21 @@ impl Plugin for SimPlugin {
                     near_player_scorer.in_set(BigBrainSet::Scorers),
                 ),
             )
+            // move_zombies is the one system here that costs real time -- a
+            // swept capsule against the whole map per zombie, every call. In
+            // Update that ran at the refresh rate; at a fixed 64Hz it runs
+            // roughly half as often on a 120Hz panel, for the same motion,
+            // since every velocity here is already multiplied by delta_secs.
+            //
+            // It loses `.after(LandmassSystems::Output)` by moving: landmass
+            // is in Update, which runs after FixedUpdate, so the desired
+            // velocity read here is one frame old. Paths are recalculated
+            // every 0.8s and the target is re-chosen every 1.5s, so a frame
+            // of staleness is well inside what those intervals already allow.
+            .add_systems(FixedUpdate, move_zombies.run_if(world_ready))
             .add_systems(
                 Update,
-                (
-                    move_zombies.after(LandmassSystems::Output).run_if(world_ready),
-                    tick_respawns.run_if(world_ready),
-                    decay_player_threat,
-                ),
+                (tick_respawns.run_if(world_ready), decay_player_threat),
             )
             .add_observer(spawn_more_zombies)
             .add_observer(on_set_zombie_count)
