@@ -35,7 +35,7 @@ use client::cadisplaylink::ffi::{
     native_metal_probe_create_real_game, native_metal_probe_cursor_locked,
     native_metal_probe_cursor_moved_to, native_metal_probe_key_changed,
     native_metal_probe_mouse_button_changed, native_metal_probe_mouse_connected,
-    native_metal_probe_mouse_moved, native_metal_probe_release,
+    native_metal_probe_mouse_moved, native_metal_probe_mouse_wheel, native_metal_probe_release,
     native_metal_probe_render_frame,
 };
 
@@ -141,6 +141,13 @@ impl ApplicationHandler for Host {
                 };
                 let down = state == ElementState::Pressed;
                 unsafe { native_metal_probe_mouse_button_changed(game, index, down) };
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let (x, y, pixels) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y, false),
+                    winit::event::MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32, true),
+                };
+                unsafe { native_metal_probe_mouse_wheel(game, x, y, pixels) };
             }
             WindowEvent::CursorMoved { position, .. } => {
                 // Only while free. Captured, the pointer does not move and the

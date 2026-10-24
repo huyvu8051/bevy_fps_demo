@@ -369,6 +369,39 @@ pub extern "C" fn native_metal_probe_mouse_connected(obj: *mut std::ffi::c_void,
     }
 }
 
+/// The wheel. Two things read it -- the scope's magnification and the settings
+/// menu's scroll -- and on this path nothing was writing it, so both were dead.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_mouse_wheel(
+    obj: *mut std::ffi::c_void,
+    x: f32,
+    y: f32,
+    pixels: bool,
+) {
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
+    let Some(app) = probe.real_game_app_mut() else {
+        return;
+    };
+    let Some(window) = primary_window_entity(app) else {
+        return;
+    };
+    let unit = if pixels {
+        bevy::input::mouse::MouseScrollUnit::Pixel
+    } else {
+        bevy::input::mouse::MouseScrollUnit::Line
+    };
+    let wheel = bevy::input::mouse::MouseWheel {
+        unit,
+        x,
+        y,
+        window,
+        // Always Moved for a wheel; the field exists for trackpad gestures.
+        phase: bevy::input::touch::TouchPhase::Moved,
+    };
+    app.world_mut().write_message(wheel);
+    app.world_mut().write_message(bevy::window::WindowEvent::MouseWheel(wheel));
+}
+
 /// Where the pointer is, not how far it moved. Deltas drive the camera; this
 /// drives the UI, which needs a position on screen and gets one from nowhere
 /// else on this path -- there is no winit underneath to supply it.
