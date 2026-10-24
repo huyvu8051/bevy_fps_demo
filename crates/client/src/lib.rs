@@ -331,7 +331,8 @@ const CROSSHAIR_GAP_SPREAD_SCALE: f32 = 500.0;
 
 const BASE_FOV: f32 = std::f32::consts::PI / 4.0;
 
-const PHYSICS_SUBSTEPS: u32 = 4;
+pub(crate) const PHYSICS_SUBSTEPS: u32 = 4;
+pub(crate) const UI_LAYOUT_HZ: u64 = 30;
 
 const AIM_ZOOM_SPEED: f32 = 12.0;
 const AIM_SPREAD_MULTIPLIER: f32 = 0.35;
@@ -522,6 +523,16 @@ pub fn main() {
         // they are not the same game. Raise it again if joints go rubbery or
         // a crowd starts interpenetrating.
         .insert_resource(avian3d::prelude::SubstepCount(PHYSICS_SUBSTEPS))
+        // The HUD is near static -- ammo, health, a compass strip -- and
+        // recomputing its layout at the refresh rate cost 0.09ms a frame to
+        // produce the same numbers. A newly spawned node now waits up to 33ms
+        // to be placed, which is the price.
+        .configure_sets(
+            PostUpdate,
+            bevy::ui::UiSystems::Layout.run_if(bevy::time::common_conditions::on_timer(
+                std::time::Duration::from_millis(1000 / UI_LAYOUT_HZ),
+            )),
+        )
 
         .insert_resource(if cfg!(target_os = "ios") {
             WinitSettings {

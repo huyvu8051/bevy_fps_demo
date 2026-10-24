@@ -60,6 +60,16 @@ pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, sc
     app.register_type::<bevy::pbr::MeshMaterial3d<bevy::pbr::StandardMaterial>>();
     app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
     app.insert_resource(avian3d::prelude::SubstepCount(crate::PHYSICS_SUBSTEPS));
+    // Both of these live in main() for the windowed build, which this path
+    // does not go through. Anything tuned there has to be repeated here or the
+    // two builds quietly stop being the same game -- see PHYSICS_SUBSTEPS.
+    use bevy::ecs::schedule::IntoScheduleConfigs;
+    app.configure_sets(
+        bevy::app::PostUpdate,
+        bevy::ui::UiSystems::Layout.run_if(bevy::time::common_conditions::on_timer(
+            std::time::Duration::from_millis(1000 / crate::UI_LAYOUT_HZ),
+        )),
+    );
     // Without these the native path has physics and a player but no zombies,
     // no AI and no world_ready -- it has never actually run the game. They sit
     // beside PhysicsPlugins in main()'s plugin list for the windowed build and

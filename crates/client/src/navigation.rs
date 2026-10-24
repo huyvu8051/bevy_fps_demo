@@ -46,6 +46,28 @@ impl Plugin for ClientNavigationPlugin {
             Landmass3dPlugin::default().in_schedule(FixedUpdate),
             LandmassRerecastPlugin::default().in_schedule(FixedUpdate),
         ))
+        // The pathfinding step itself at 10Hz, not 64. Both consumers --
+        // move_zombies and the autopilot -- normalise the desired velocity and
+        // throw its magnitude away, and both do their own close-range steering
+        // on top, so what they take from landmass is a direction that is only
+        // re-read every 0.8s anyway.
+        //
+        // Only `Update` is gated. The sync sets either side stay at 64Hz: they
+        // cost 0.007ms between them, and `Output` is what copies the last
+        // computed velocity into the components, so gating it would starve the
+        // consumers on the ticks it skipped.
+        //
+        // One consequence worth knowing: landmass's local avoidance is handed
+        // `Time<Fixed>`'s 15.6ms rather than the real 100ms between calls, so
+        // it deflects less than it would. Harmless here -- the magnitude is
+        // discarded and separation is move_zombies' own job -- but it is why
+        // this is a rate change and not a free one.
+        .configure_sets(
+            FixedUpdate,
+            LandmassSystems::Update.run_if(bevy::time::common_conditions::on_timer(
+                std::time::Duration::from_millis(100),
+            )),
+        )
         .add_systems(Startup, load_baked_navmesh)
         .add_systems(FixedUpdate, register_player_agent.before(LandmassSystems::SyncExistence));
     }

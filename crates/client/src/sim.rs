@@ -328,6 +328,11 @@ fn move_zombies(
     >,
     players: Query<(Entity, &Transform, &PlayerThreat), (With<Player>, Without<Zombie>)>,
     mover: MoveAndSlide,
+    // Kept rather than rebuilt: these are refilled from scratch every call,
+    // so all a fresh Vec and HashMap bought was the allocation.
+    mut positions: Local<Vec<(Entity, Vec3)>>,
+    mut candidates: Local<Vec<(Entity, Vec3, f32)>>,
+    mut chase_load: Local<std::collections::HashMap<Entity, u32>>,
 ) {
 
     if freeze.0 {
@@ -337,14 +342,24 @@ fn move_zombies(
         return;
     }
 
-    let positions: Vec<(Entity, Vec3)> = zombies.iter().map(|(e, t, ..)| (e, t.translation)).collect();
+    positions.clear();
+    positions.extend(zombies.iter().map(|(e, t, ..)| (e, t.translation)));
 
-    let candidates: Vec<(Entity, Vec3, f32)> = players.iter().map(|(e, t, threat)| (e, t.translation, threat.0)).collect();
+    candidates.clear();
+    candidates.extend(players.iter().map(|(e, t, threat)| (e, t.translation, threat.0)));
 
-    let mut chase_load: std::collections::HashMap<Entity, u32> = std::collections::HashMap::new();
-    for (.., chase_target, _, _, _) in &zombies {
-        if let Some(target) = chase_target.entity {
-            *chase_load.entry(target).or_insert(0) += 1;
+    // Only read when a zombie's retarget timer has expired, which at a 1.5s
+    // interval is a handful of ticks in a hundred -- so the whole sweep is
+    // skipped unless at least one of them is due.
+    let anyone_retargeting = zombies
+        .iter()
+        .any(|(.., chase_target, _, _, _)| chase_target.reevaluate_timer - time.delta_secs() <= 0.0);
+    if anyone_retargeting {
+        chase_load.clear();
+        for (.., chase_target, _, _, _) in &zombies {
+            if let Some(target) = chase_target.entity {
+                *chase_load.entry(target).or_insert(0) += 1;
+            }
         }
     }
 
