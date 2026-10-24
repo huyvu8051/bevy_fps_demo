@@ -32,7 +32,8 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 // separate binary and needs the FFI, this one is the same crate and linking
 // against its own no_mangle exports only invites the linker to drop them.
 use client::cadisplaylink::ffi::{
-    native_metal_probe_create_real_game, native_metal_probe_key_changed,
+    native_metal_probe_create_real_game, native_metal_probe_cursor_locked,
+    native_metal_probe_cursor_moved_to, native_metal_probe_key_changed,
     native_metal_probe_mouse_button_changed, native_metal_probe_mouse_connected,
     native_metal_probe_mouse_moved, native_metal_probe_release,
     native_metal_probe_render_frame,
@@ -52,6 +53,11 @@ struct Host {
     /// only written when the app shuts down properly, and killing it from the
     /// outside is what left every chrome trace empty.
     quit_at: Option<std::time::Instant>,
+    /// What the window is currently doing with the pointer. The game decides
+    /// this -- backquote toggles it to reach the settings menu -- but only the
+    /// host can carry it out, and until it did the cursor stayed captured
+    /// whatever the game thought.
+    cursor_locked: bool,
 }
 
 impl ApplicationHandler for Host {
@@ -96,6 +102,7 @@ impl ApplicationHandler for Host {
 
         let _ = window.set_cursor_grab(CursorGrabMode::Locked);
         window.set_cursor_visible(false);
+        self.cursor_locked = true;
 
         // Without this nothing ever asks for the first frame, so render_frame
         // -- and with it app.update() -- never runs: the window opens, the
@@ -135,12 +142,30 @@ impl ApplicationHandler for Host {
                 let down = state == ElementState::Pressed;
                 unsafe { native_metal_probe_mouse_button_changed(game, index, down) };
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                // Only while free. Captured, the pointer does not move and the
+                // camera is driven by DeviceEvent deltas instead.
+                if !self.cursor_locked {
+                    unsafe {
+                        native_metal_probe_cursor_moved_to(game, position.x as f32, position.y as f32)
+                    };
+                }
+            }
             WindowEvent::RedrawRequested => {
                 if self.quit_at.is_some_and(|at| std::time::Instant::now() >= at) {
                     event_loop.exit();
                     return;
                 }
                 unsafe { native_metal_probe_render_frame(game) };
+                let wanted = unsafe { native_metal_probe_cursor_locked(game) };
+                if wanted != self.cursor_locked {
+                    if let Some(window) = &self.window {
+                        let mode = if wanted { CursorGrabMode::Locked } else { CursorGrabMode::None };
+                        let _ = window.set_cursor_grab(mode);
+                        window.set_cursor_visible(!wanted);
+                    }
+                    self.cursor_locked = wanted;
+                }
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }

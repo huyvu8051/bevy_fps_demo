@@ -309,11 +309,16 @@ pub(super) fn mouse_button_changed(app: &mut App, button: u8, pressed: bool) {
     let Some(window) = primary_window_entity(app) else {
         return;
     };
-    app.world_mut().write_message(MouseButtonInput {
+    let input = MouseButtonInput {
         button,
         state: if pressed { ButtonState::Pressed } else { ButtonState::Released },
         window,
-    });
+    };
+    app.world_mut().write_message(input);
+    // The WindowEvent copy as well as the plain one: bevy_picking reads this
+    // stream, and without it a visible cursor can hover a button but never
+    // press it.
+    app.world_mut().write_message(bevy::window::WindowEvent::MouseButtonInput(input));
 }
 
 #[unsafe(no_mangle)]
@@ -361,6 +366,47 @@ pub extern "C" fn native_metal_probe_mouse_connected(obj: *mut std::ffi::c_void,
     let probe = unsafe { &mut *(obj as *mut GameHost) };
     if let Some(app) = probe.real_game_app_mut() {
         mouse_connected(app, connected);
+    }
+}
+
+/// Where the pointer is, not how far it moved. Deltas drive the camera; this
+/// drives the UI, which needs a position on screen and gets one from nowhere
+/// else on this path -- there is no winit underneath to supply it.
+pub(super) fn cursor_moved_to(app: &mut App, x: f32, y: f32) {
+    let Some(window_entity) = primary_window_entity(app) else {
+        return;
+    };
+    let position = bevy::math::Vec2::new(x, y);
+    if let Some(mut window) = app.world_mut().get_mut::<bevy::window::Window>(window_entity) {
+        window.set_physical_cursor_position(Some(bevy::math::DVec2::new(x as f64, y as f64)));
+    }
+    app.world_mut().write_message(bevy::window::WindowEvent::CursorMoved(
+        bevy::window::CursorMoved { window: window_entity, position, delta: None },
+    ));
+}
+
+/// Whether the game wants the pointer captured. The host owns the real window
+/// and is the only thing that can act on it; the CursorOptions the game writes
+/// sit on a stub entity that nothing was reading.
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_cursor_locked(obj: *mut std::ffi::c_void) -> bool {
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
+    let Some(app) = probe.real_game_app_mut() else {
+        return true;
+    };
+    let Some(window) = primary_window_entity(app) else {
+        return true;
+    };
+    app.world()
+        .get::<bevy::window::CursorOptions>(window)
+        .is_none_or(|cursor| cursor.grab_mode != bevy::window::CursorGrabMode::None)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn native_metal_probe_cursor_moved_to(obj: *mut std::ffi::c_void, x: f32, y: f32) {
+    let probe = unsafe { &mut *(obj as *mut GameHost) };
+    if let Some(app) = probe.real_game_app_mut() {
+        cursor_moved_to(app, x, y);
     }
 }
 
