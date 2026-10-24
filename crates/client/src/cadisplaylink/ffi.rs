@@ -125,7 +125,8 @@ pub extern "C" fn native_metal_probe_create_real_game(
     view: *mut objc::runtime::Object,
     scale_factor: f32,
 ) -> *mut std::ffi::c_void {
-    let renderer = unsafe { NativeMetalRenderer::new(view, &zombie_model_specs(), Default::default()) };
+    let mut renderer =
+        unsafe { NativeMetalRenderer::new(view, &zombie_model_specs(), Default::default()) };
     let (width_pts, height_pts) = renderer.view_size();
     let scale = if scale_factor > 0.0 { scale_factor } else { renderer.contents_scale() };
     let app = super::native_game_app::build_headless_game_ecs_app(
@@ -133,6 +134,14 @@ pub extern "C" fn native_metal_probe_create_real_game(
         (height_pts * scale) as u32,
         scale,
     );
+    // The atlas is already decoded in the resource the app just built; handing
+    // it to the renderer here avoids reading the png twice.
+    if let Some(lightmap) = app.world().get_resource::<crate::lightmap::Lightmap>() {
+        if let Some((rgba, size)) = lightmap.texture.as_ref() {
+            renderer.set_lightmap(rgba, *size);
+        }
+    }
+
     Box::into_raw(Box::new(GameHost {
         app,
         renderer,

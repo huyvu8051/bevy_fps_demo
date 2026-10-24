@@ -1,0 +1,7 @@
+(
+    sun_direction: (-0.47942558, -0.687434, -0.54551417),
+    ao_rays: 64,
+    ao_distance: 6.0,
+    surface_bias: 0.01,
+    dilate_passes: 4,
+)

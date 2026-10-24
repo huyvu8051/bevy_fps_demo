@@ -118,6 +118,12 @@ pub fn player_spawn_floor_point(scenario: Scenario) -> Option<Vec3> {
     }
 }
 
+/// Resolves a path under the asset root -- the app bundle on iOS, the crate's
+/// assets directory otherwise.
+pub fn asset_path(relative: &str) -> Option<std::path::PathBuf> {
+    asset_file_path(relative)
+}
+
 fn asset_file_path(relative: &str) -> Option<std::path::PathBuf> {
     #[cfg(target_os = "ios")]
     {

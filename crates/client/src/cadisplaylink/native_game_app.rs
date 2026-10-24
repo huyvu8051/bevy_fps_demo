@@ -84,6 +84,15 @@ pub fn build_headless_game_ecs_app(physical_width: u32, physical_height: u32, sc
     app.init_asset::<crate::MuzzleSmokeMaterial>();
     app.init_asset::<crate::MuzzleFlashMaterial>();
 
+    // Before GamePlugin: the mesh extractor looks this resource up on every
+    // pass, and a map that finishes loading before the bake does would be
+    // cached without it and never re-extracted.
+    let scenario = crate::current_scenario();
+    let lightmap = shared::asset_path(scenario.map_asset_dir())
+        .map(|dir| crate::lightmap::load(&dir))
+        .unwrap_or_default();
+    app.insert_resource(lightmap);
+
     app.add_plugins(crate::GamePlugin);
 
     app.world_mut().spawn((

@@ -363,6 +363,27 @@ pub fn extract_render_snapshot(
         cache.awaiting_textures.remove(&entity);
     }
 
+    // Built once per extraction rather than per mesh: it borrows the atlas
+    // and the key has to be computed from world-space positions, which means
+    // transforming the mesh -- cheap, but only worth doing for the map.
+    let lightmap = world.get_resource::<crate::lightmap::Lightmap>().map(|l| l.by_key.clone());
+    let decorate = |mesh: &mut metal_renderer::snapshot::ExtractedMesh| {
+        let Some(atlas) = lightmap.as_ref() else { return };
+        if atlas.is_empty() || mesh.positions.is_empty() {
+            return;
+        }
+        let affine = mesh.transform.compute_affine();
+        let world_positions: Vec<bevy::math::Vec3> = mesh
+            .positions
+            .iter()
+            .map(|p| affine.transform_point3(bevy::math::Vec3::from_array(*p)))
+            .collect();
+        let key = crate::lightmap::instance_key(&world_positions, &mesh.indices);
+        if let Some(entry) = atlas.get(&key) {
+            crate::lightmap::apply(mesh, entry);
+        }
+    };
+
     {
         let (mesh_query, meshes, materials, images, mut texture_cache) =
             queries.meshes_changed.get_mut(world).expect("system param validation failed");
@@ -373,6 +394,7 @@ pub fn extract_render_snapshot(
                 &geometry_already_uploaded,
                 on_viewmodel_layer(layers),
                 on_reticle_layer(layers),
+                &decorate,
             );
         }
     }
@@ -393,6 +415,7 @@ pub fn extract_render_snapshot(
                 &geometry_already_uploaded,
                 on_viewmodel_layer(layers),
                 on_reticle_layer(layers),
+                &decorate,
             );
         }
     }

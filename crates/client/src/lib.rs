@@ -35,6 +35,7 @@ use weapon::*;
 mod dismember;
 use dismember::*;
 mod auto_lean;
+mod lightmap;
 mod autopilot;
 use auto_lean::*;
 use autopilot::{autopilot_pick_target, autopilot_think, Autopilot, AutopilotIntent, AutopilotLookOnly, AutopilotState};
