@@ -16,7 +16,9 @@ pub struct ZombieNavmeshPlugin;
 impl Plugin for ZombieNavmeshPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_baked_navmesh)
-        .add_systems(Update, register_zombie_agents.before(LandmassSystems::SyncExistence));
+        // FixedUpdate, with landmass: ordering against one of its sets from
+        // another schedule is silently no ordering at all.
+        .add_systems(FixedUpdate, register_zombie_agents.before(LandmassSystems::SyncExistence));
     }
 }
 
