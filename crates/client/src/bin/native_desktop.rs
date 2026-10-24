@@ -48,6 +48,10 @@ pub fn run() {
 struct Host {
     window: Option<Window>,
     game: Option<*mut c_void>,
+    /// `EXIT_AFTER=<seconds>` leaves the same way Escape does. A profile is
+    /// only written when the app shuts down properly, and killing it from the
+    /// outside is what left every chrome trace empty.
+    quit_at: Option<std::time::Instant>,
 }
 
 impl ApplicationHandler for Host {
@@ -97,6 +101,10 @@ impl ApplicationHandler for Host {
         // -- and with it app.update() -- never runs: the window opens, the
         // renderer initialises, and the map never finishes loading.
         window.request_redraw();
+        self.quit_at = std::env::var("EXIT_AFTER")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .map(|after| std::time::Instant::now() + std::time::Duration::from_secs_f32(after));
         self.window = Some(window);
         self.game = Some(game);
     }
@@ -128,6 +136,10 @@ impl ApplicationHandler for Host {
                 unsafe { native_metal_probe_mouse_button_changed(game, index, down) };
             }
             WindowEvent::RedrawRequested => {
+                if self.quit_at.is_some_and(|at| std::time::Instant::now() >= at) {
+                    event_loop.exit();
+                    return;
+                }
                 unsafe { native_metal_probe_render_frame(game) };
                 if let Some(window) = &self.window {
                     window.request_redraw();
