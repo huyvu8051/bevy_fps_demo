@@ -18,6 +18,12 @@ pub(crate) struct TouchScopeZoomSliderTrack;
 pub(crate) struct TouchScopeZoomSliderHandle;
 #[derive(Component)]
 pub(crate) struct TouchFireButton;
+
+/// Cycles the weapon. The desktop has 1/2/3 for this and a phone has no
+/// number row, so without it a touch player is stuck on whatever they spawn
+/// holding.
+#[derive(Component)]
+pub(crate) struct TouchWeaponButton;
 #[derive(Component)]
 pub(crate) struct TouchAimButton;
 
@@ -399,6 +405,15 @@ pub(crate) fn spawn_touch_controls(commands: &mut Commands) {
         Color::srgba(0.4, 0.85, 0.5, 0.4),
         TouchLeanRightButton,
     );
+    spawn_touch_round_button(
+        commands,
+        "WEAPON",
+        32.0 + (stance_btn_px + stance_row_gap) * 3.0,
+        modifier_row_bottom,
+        stance_btn_px,
+        Color::srgba(0.9, 0.9, 0.95, 0.4),
+        TouchWeaponButton,
+    );
 
     commands
         .spawn((
@@ -733,6 +748,23 @@ pub(crate) fn touch_look(
         cam.yaw -= delta.x * sensitivity;
         cam.pitch = (cam.pitch - delta.y * sensitivity).clamp(-PITCH_CLAMP, PITCH_CLAMP);
     }
+}
+
+/// One tap, one weapon. Edge triggered off Interaction::Pressed, since a held
+/// finger would otherwise cycle every frame.
+pub(crate) fn touch_weapon_button(
+    buttons: Query<&Interaction, With<TouchWeaponButton>>,
+    active: Res<crate::ActiveWeapon>,
+    mut request: ResMut<crate::weapon::WeaponSwitchRequest>,
+    mut was_pressed: Local<bool>,
+) {
+    let pressed = buttons.iter().any(|i| *i == Interaction::Pressed);
+    if pressed && !*was_pressed {
+        let all = crate::WeaponId::ALL;
+        let at = all.iter().position(|w| *w == active.0).unwrap_or(0);
+        request.0 = Some(all[(at + 1) % all.len()]);
+    }
+    *was_pressed = pressed;
 }
 
 pub(crate) fn touch_fire_button(mut firing: ResMut<TouchFiring>, buttons: Query<&Interaction, With<TouchFireButton>>) {

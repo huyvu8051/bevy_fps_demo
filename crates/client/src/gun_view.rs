@@ -39,27 +39,47 @@ pub(crate) fn swap_scope_reticle(
     // Built in setup_gameplay, whose insert_resource only lands at the next
     // sync point, so this runs at least one frame before it exists.
     assets: Option<Res<ReticleAssets>>,
-    mut reticle: Query<(&mut Mesh3d, &mut MeshMaterial3d<StandardMaterial>), With<ScopeReticle>>,
-    mut centre_dot: Query<&mut Visibility, With<ScopeReticleCentreDot>>,
+    // Without the exclusion this and centre_dot both take &mut Visibility and
+    // Bevy refuses the system outright -- B0001, at startup, before a frame.
+    mut reticle: Query<
+        (&mut Mesh3d, &mut MeshMaterial3d<StandardMaterial>, &mut Visibility),
+        (With<ScopeReticle>, Without<ScopeReticleCentreDot>),
+    >,
+    mut centre_dot: Query<
+        (&mut Visibility, &mut Transform),
+        (With<ScopeReticleCentreDot>, Without<ScopeReticle>),
+    >,
     mut shown: Local<Option<WeaponId>>,
 ) {
     let Some(assets) = assets else { return };
     if *shown == Some(active.0) {
         return;
     }
-    let Ok((mut mesh, mut material)) = reticle.single_mut() else { return };
-    let (next_mesh, next_material) = match active.0 {
-        WeaponId::M24 => &assets.duplex,
-        _ => &assets.chevron,
+    let Ok((mut mesh, mut material, mut reticle_visibility)) = reticle.single_mut() else {
+        return;
     };
-    // The chevron already comes to a point; only the duplex leaves a gap that
-    // wants filling.
-    if let Ok(mut visibility) = centre_dot.single_mut() {
-        *visibility = match active.0 {
-            WeaponId::M24 => Visibility::Visible,
-            _ => Visibility::Hidden,
-        };
+    // The AK wears a red dot: the centre dot alone, with the duplex bars
+    // hidden. The M24 keeps the duplex, whose gap the dot fills. Anything
+    // sighted without glass gets the chevron, though update_scope_lens has
+    // already stopped it before this matters.
+    // The AK's dot carries the sight by itself, where the M24's only fills the
+    // gap the duplex bars already point at, so it is drawn larger.
+    let (bars, dot) = match active.0 {
+        WeaponId::M24 => (Some(&assets.duplex), Some(1.0)),
+        WeaponId::Ak47 => (None, Some(2.5)),
+        _ => (Some(&assets.chevron), None),
+    };
+    // Hiding the bars does not hide the dot: Visibility::Visible on a child
+    // wins over a hidden parent, which is what the dot is already set to.
+    *reticle_visibility = if bars.is_some() { Visibility::Visible } else { Visibility::Hidden };
+    if let Ok((mut visibility, mut transform)) = centre_dot.single_mut() {
+        *visibility = if dot.is_some() { Visibility::Visible } else { Visibility::Hidden };
+        transform.scale = Vec3::splat(dot.unwrap_or(1.0));
     }
+    let Some((next_mesh, next_material)) = bars else {
+        *shown = Some(active.0);
+        return;
+    };
     mesh.0 = next_mesh.clone();
     material.0 = next_material.clone();
     *shown = Some(active.0);
@@ -421,7 +441,7 @@ pub(crate) fn gun_view_animation(
     aim_held: Res<AimHeld>,
     touch_aiming: Res<TouchAiming>,
     game_over: Res<GameOver>,
-    look_delta: Res<MouseLookDelta>,
+    mut look_delta: ResMut<MouseLookDelta>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     camera: Query<(&Transform, &Lean), (With<FpsCamera>, Without<Gun>)>,
     spatial_query: SpatialQuery,
@@ -431,6 +451,10 @@ pub(crate) fn gun_view_animation(
     local_sprinting: Res<LocalPlayerSprinting>,
     active: Res<ActiveWeapon>,
 ) {
+    // Taken, not read: the single consumer clearing it is what lets each
+    // input path write only when it has a delta, instead of every path having
+    // to zero it and racing the others to do so.
+    let look_delta = std::mem::take(&mut look_delta.0);
     let camera_single = camera.single().ok();
     let aiming = cursor.single().is_ok_and(|cursor| is_aiming(cursor, &aim_held, touch_aiming.0));
 
@@ -556,7 +580,7 @@ pub(crate) fn gun_view_animation(
         // the muzzle, so this pivots there: the barrel holds its aim and the
         // stock swings out. Negated because the weapon is still aimed back
         // where the view was, opposite the way it just moved.
-        let lag = -look_delta.0;
+        let lag = -look_delta;
         let sway_target = (lag * LOOK_SWAY_SENSITIVITY)
             .clamp(Vec2::splat(-LOOK_SWAY_MAX_DEG), Vec2::splat(LOOK_SWAY_MAX_DEG));
         let sway_step = (LOOK_SWAY_SPEED * time.delta_secs()).min(1.0);

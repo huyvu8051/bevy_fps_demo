@@ -8,6 +8,10 @@ pub const MAX_SHOT_DISTANCE: f32 = 200.0;
 pub struct FireShot {
     pub origin: Vec3,
     pub direction: Vec3,
+    /// What the firing weapon multiplies a hitbox's own damage by. Carried on
+    /// the shot rather than read where it lands: the weapon can be swapped
+    /// between a shot leaving the barrel and it arriving.
+    pub damage_scale: f32,
 }
 
 #[derive(Event, Clone, Copy, Serialize, Deserialize)]

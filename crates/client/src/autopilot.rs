@@ -3,7 +3,7 @@ use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use bevy::math::ops;
 use bevy::prelude::*;
 
-use crate::{FpsCamera, Lean, Player, TouchAiming, LEAN_SIDE_OFFSET};
+use crate::{ActiveWeapon, FpsCamera, Lean, Player, TouchAiming, LEAN_SIDE_OFFSET};
 use shared::{random_aim_point, resolve_bone_world_positions, Health, NetPlayer, Zombie, ZombieHitboxBones, PLAYER_MAX_HEALTH};
 
 #[derive(Resource)]
@@ -33,8 +33,6 @@ pub(crate) struct AutopilotState {
     hold_fire_timer: f32,
     pub(crate) time_since_swap: f32,
 
-    tap_fire_timer: f32,
-
     travel_dir: Option<Vec3>,
 
     /// Whether the sights were up last tick, so the distance bounds can be
@@ -53,19 +51,11 @@ pub(crate) struct AutopilotIntent {
 
 const AUTOPILOT_DETECT_RANGE: f32 = 80.0;
 
-const AUTOPILOT_ENGAGE_RANGE: f32 = 40.0;
-
 const AUTOPILOT_RETREAT_RANGE: f32 = 5.0;
 const AUTOPILOT_RETARGET_INTERVAL: f32 = 1.2;
 
-const AUTOPILOT_ADS_MIN_DISTANCE: f32 = 25.0;
-
 const AUTOPILOT_TARGET_SWITCH_HOLD_MIN: f32 = 0.1;
 const AUTOPILOT_TARGET_SWITCH_HOLD_MAX: f32 = 0.3;
-
-const AUTOPILOT_TAP_FIRE_DISTANCE: f32 = 20.0;
-
-const AUTOPILOT_TAP_FIRE_INTERVAL: f32 = 0.15;
 
 const AUTOPILOT_TURN_RATE_DEG: f32 = 260.0;
 
@@ -76,12 +66,7 @@ const AUTOPILOT_TURN_FADE_IN_DURATION: f32 = 0.4;
 const AUTOPILOT_FIRE_AIM_TOLERANCE_DEG: f32 = 12.0;
 const AUTOPILOT_ADS_AIM_TOLERANCE_DEG: f32 = 35.0;
 const AUTOPILOT_ADS_DISTANCE_MARGIN: f32 = 2.5;
-const AUTOPILOT_SPRINT_APPROACH_DISTANCE: f32 = 22.0;
 
-/// How far a blind approach has to be before it is worth sprinting. Pathing
-/// around a corner to something 15m away is a walk; the old threshold was the
-/// retreat range, so any detour past 5m broke into a run.
-const AUTOPILOT_SPRINT_PATHING_DISTANCE: f32 = 15.0;
 const AUTOPILOT_LOW_HEALTH_FRACTION: f32 = 0.3;
 const AUTOPILOT_LOW_HEALTH_RETREAT_BONUS: f32 = 4.0;
 const AUTOPILOT_IDLE_SCAN_DEG_PER_SEC: f32 = 20.0;
@@ -175,8 +160,10 @@ pub(crate) fn autopilot_pick_target(
 
 pub(crate) fn autopilot_think(
     time: Res<Time>,
-    autopilot: Res<Autopilot>,
-    look_only: Res<AutopilotLookOnly>,
+    // Bundled into one parameter: Bevy caps a system at sixteen and this one
+    // was already there, so the weapon rides in with the two flags rather
+    // than pushing something else out.
+    (autopilot, active, look_only): (Res<Autopilot>, Res<ActiveWeapon>, Res<AutopilotLookOnly>),
     mut state: ResMut<AutopilotState>,
     mut intent: ResMut<AutopilotIntent>,
     player: Query<&Transform, (With<Player>, Without<NetPlayer>, Without<FpsCamera>)>,
@@ -282,33 +269,23 @@ pub(crate) fn autopilot_think(
     cam.pitch = turn_towards_angle(cam.pitch, desired_pitch, turn_step);
 
     state.hold_fire_timer = (state.hold_fire_timer - dt).max(0.0);
-    state.tap_fire_timer = (state.tap_fire_timer - dt).max(0.0);
 
     let raw_aim_error = (cam.yaw - desired_yaw).rem_euclid(std::f32::consts::TAU);
     let aim_error = raw_aim_error.min(std::f32::consts::TAU - raw_aim_error);
     let want_fire = state.hold_fire_timer <= 0.0
         && straight_los
-        && horizontal_distance <= AUTOPILOT_ENGAGE_RANGE + 1.0
+        && horizontal_distance <= active.def().autopilot_engage_range + 1.0
         && aim_error < AUTOPILOT_FIRE_AIM_TOLERANCE_DEG.to_radians();
 
-    intent.fire = if want_fire && horizontal_distance > AUTOPILOT_TAP_FIRE_DISTANCE {
-        if state.tap_fire_timer <= 0.0 {
-            state.tap_fire_timer = AUTOPILOT_TAP_FIRE_INTERVAL;
-            true
-        } else {
-            false
-        }
-    } else {
-        want_fire
-    };
+    intent.fire = want_fire;
     // Also waits until the swing is nearly on target. Raising the sights the
     // instant a target is picked means riding an iron sight through a 180,
     // which no player would do and which hides most of the turn.
     // Both bounds carry a margin that widens once the sights are up. A bare
     // comparison flips every tick on a zombie standing on the threshold, and
     // the gun snaps in and out of the shoulder with it.
-    let near = AUTOPILOT_ADS_MIN_DISTANCE;
-    let far = AUTOPILOT_ENGAGE_RANGE + 1.0;
+    let near = active.def().autopilot_ads_min_distance;
+    let far = active.def().autopilot_engage_range + 1.0;
     let margin = if state.aiming { -AUTOPILOT_ADS_DISTANCE_MARGIN } else { AUTOPILOT_ADS_DISTANCE_MARGIN };
     intent.aim = straight_los
         && horizontal_distance > near + margin
@@ -361,7 +338,7 @@ pub(crate) fn autopilot_think(
     } else if !straight_los {
 
         Vec2::ZERO
-    } else if horizontal_distance > AUTOPILOT_ENGAGE_RANGE {
+    } else if horizontal_distance > active.def().autopilot_engage_range {
         Vec2::new(0.0, 1.0)
     } else {
 
@@ -376,10 +353,10 @@ pub(crate) fn autopilot_think(
 
     intent.move_axis = move_axis;
     intent.sprint = nearby.is_empty()
-        && (horizontal_distance > AUTOPILOT_SPRINT_APPROACH_DISTANCE
+        && (horizontal_distance > active.def().autopilot_sprint_approach_distance
             || (!straight_los
                 && peek_dir == 0.0
-                && horizontal_distance > AUTOPILOT_SPRINT_PATHING_DISTANCE));
+                && horizontal_distance > active.def().autopilot_sprint_pathing_distance));
 }
 fn path_direction(
     archipelagos: &Query<&bevy_landmass::prelude::Archipelago3d>,

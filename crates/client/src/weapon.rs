@@ -18,12 +18,36 @@ pub(crate) struct WeaponDef {
     /// lands on the camera axis, which is the whole of ads_offset.
     pub(crate) ads_eye_relief: f32,
     pub(crate) ads_speed: AdsSpeed,
+    /// What the main camera's field of view is multiplied by while sighted.
+    /// This is the whole of the magnification on irons, and only the pull
+    /// around the glass on a weapon that has any -- so the better the scope,
+    /// the less this has to do.
+    pub(crate) aim_fov_multiplier: f32,
+    /// How far out the autopilot bothers raising the sights. A scope earns its
+    /// slower handling at range; irons do not, so they engage from the hip for
+    /// longer.
+    pub(crate) autopilot_ads_min_distance: f32,
+    /// The furthest the autopilot will open fire from, and the ceiling of the
+    /// window it raises the sights in. Keep it above ads_min_distance or the
+    /// weapon never aims at all.
+    pub(crate) autopilot_engage_range: f32,
+    /// Past this it sprints to close. Set near the engage range for a weapon
+    /// that has no business closing at all.
+    pub(crate) autopilot_sprint_approach_distance: f32,
+    /// The same question for a blind approach -- pathing round a corner to
+    /// something it cannot see. Shorter than the sighted threshold, since
+    /// nothing is being covered while it runs.
+    pub(crate) autopilot_sprint_pathing_distance: f32,
 
     pub(crate) scope: Scope,
     pub(crate) sound: WeaponSound,
     /// How long the weapon takes to reload. A fifty round magazine and a five
     /// round bolt gun are not the same job.
     pub(crate) reload_duration: f32,
+    /// Multiplies the damage the hitbox it lands on is worth. The hitbox
+    /// decides where a shot counts for more; this decides what the weapon
+    /// firing it is worth at all.
+    pub(crate) damage_scale: f32,
     pub(crate) fire_rate: f32,
     pub(crate) magazine: u32,
     pub(crate) recoil: Recoil,
@@ -152,15 +176,21 @@ static AK47: WeaponDef = WeaponDef {
     mesh_path: "models/ak47_scope/raw/scene.gltf",
     rest_offset: Vec3::new(0.160, -0.0905, -0.7094),
     ready_offset: Vec3::new(0.045, -0.1905, -0.6194),
-    ads_eye_relief: 0.02,
+    ads_eye_relief: 0.12,
     ads_speed: AdsSpeed { from_ready: 8.0, from_rest: 5.5 },
+    aim_fov_multiplier: 0.35,
+    autopilot_ads_min_distance: 7.0,
+    autopilot_engage_range: 30.0,
+    autopilot_sprint_approach_distance: 22.0,
+    autopilot_sprint_pathing_distance: 15.0,
     // The floor is half the default, because that is where aim sensitivity,
     // which is default/zoom against a half speed base, comes back out at
     // exactly the hip fire rate.
     scope: Scope { min_zoom: 6.0, default_zoom: 12.0, max_zoom: 20.0, reticle_zoom: 4.0 },
     sound: WeaponSound { fire: "audio/weapons/ak47_fire.wav", reload: "audio/weapons/ak47_reload.wav" },
     reload_duration: 2.3,
-    fire_rate: 0.1,
+    damage_scale: 1.0,
+    fire_rate: 0.12,
     magazine: 50,
     // 7.62: slower, heavier, looser at the top of a burst. Every axis above
     // the M4's.
@@ -175,11 +205,11 @@ static AK47: WeaponDef = WeaponDef {
             recover_speed: 6.6,
         },
         weapon: WeaponKick {
-            slide_back: 0.075,
+            slide_back: 0.175,
             lift: 0.0160,
-            pitch_deg: 2.2,
-            roll_deg: 0.8,
-            yaw_deg: 0.7,
+            pitch_deg: 2.5,
+            roll_deg: 0.9,
+            yaw_deg: 0.9,
             settle_speed: 21.0,
         },
     },
@@ -196,14 +226,20 @@ static M4A1: WeaponDef = WeaponDef {
     mesh_path: "models/m4a1/mesh/m4a1_rigged.glb",
     rest_offset: Vec3::new(0.160, -0.1268, -0.626),
     ready_offset: Vec3::new(0.071, -0.2268, -0.536),
-    ads_eye_relief: 0.10,
+    ads_eye_relief: 0.11,
     ads_speed: AdsSpeed { from_ready: 16.0, from_rest: 9.0 },
+    aim_fov_multiplier: 0.45,
+    autopilot_ads_min_distance: 7.0,
+    autopilot_engage_range: 30.0,
+    autopilot_sprint_approach_distance: 14.0,
+    autopilot_sprint_pathing_distance: 9.0,
     // Irons: the scope view never comes on, so these only have to be sane.
     scope: Scope { min_zoom: 1.0, default_zoom: 1.0, max_zoom: 1.0, reticle_zoom: 1.0 },
     sound: WeaponSound { fire: "audio/weapons/m4a1_fire.wav", reload: "audio/weapons/m4a1_reload.wav" },
     reload_duration: 1.9,
-    fire_rate: 0.085,
-    magazine: 30,
+    damage_scale: 0.85,
+    fire_rate: 0.105,
+    magazine: 40,
     // 5.56: about two thirds the AK's kick, settling faster. Cut by more than
     // a flat ratio because it also fires faster, and matching per shot would
     // have climbed harder for the same trigger hold.
@@ -218,11 +254,11 @@ static M4A1: WeaponDef = WeaponDef {
             recover_speed: 7.4,
         },
         weapon: WeaponKick {
-            slide_back: 0.055,
-            lift: 0.0170,
+            slide_back: 0.135,
+            lift: 0.020,
             pitch_deg: 2.4,
-            roll_deg: 0.6,
-            yaw_deg: 0.5,
+            roll_deg: 0.8,
+            yaw_deg: 0.6,
             settle_speed: 23.0,
         },
     },
@@ -249,13 +285,19 @@ static M24: WeaponDef = WeaponDef {
     // rear glass, so the scope picture fills more of the view than either
     // carbine's sight. The glass itself sits 55mm further down the tube, so
     // there is still room before the near plane at 100mm.
-    ads_eye_relief: -0.0,
+    ads_eye_relief: 0.20,
     ads_speed: AdsSpeed { from_ready: 5.5, from_rest: 2.575 },
+    aim_fov_multiplier: 0.25,
+    autopilot_ads_min_distance: 32.0,
+    autopilot_engage_range: 60.0,
+    autopilot_sprint_approach_distance: 55.0,
+    autopilot_sprint_pathing_distance: 38.0,
     // Twice the AK at every stop: the glass it carries is the one thing this
     // rifle is for.
     scope: Scope { min_zoom: 12.0, default_zoom: 24.0, max_zoom: 40.0, reticle_zoom: 10.0 },
     sound: WeaponSound { fire: "audio/weapons/m24_fire.wav", reload: "audio/weapons/m24_reload.wav" },
     reload_duration: 3.1,
+    damage_scale: 3.2,
     fire_rate: 1.3,
     magazine: 5,
     recoil: Recoil {
@@ -269,7 +311,7 @@ static M24: WeaponDef = WeaponDef {
             recover_speed: 2.6,
         },
         weapon: WeaponKick {
-            slide_back: 0.04,
+            slide_back: 0.235,
             lift: 0.014,
             pitch_deg: 3.0,
             roll_deg: 3.5,
@@ -278,6 +320,12 @@ static M24: WeaponDef = WeaponDef {
         },
     },
 };
+
+/// A weapon asked for from somewhere other than the number keys -- the touch
+/// button. `switch_weapon` owns the whole rebuild, so a request goes through
+/// it rather than writing `ActiveWeapon` and leaving the mesh behind.
+#[derive(Resource, Default)]
+pub(crate) struct WeaponSwitchRequest(pub(crate) Option<WeaponId>);
 
 /// Rebuilds the viewmodel for the weapon the player picked.
 ///
@@ -289,12 +337,15 @@ pub(crate) fn switch_weapon(
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut active: ResMut<ActiveWeapon>,
+    mut request: ResMut<WeaponSwitchRequest>,
     mut zoom: ResMut<ScopeZoom>,
     mut gun: Query<(Entity, &mut Gun)>,
     mesh_parts: Query<Entity, With<GunMeshPart>>,
     sockets: Query<Entity, Or<(With<TriggerGripSocket>, With<ForeGripSocket>)>>,
 ) {
-    let wanted = if keys.just_pressed(KeyCode::Digit1) {
+    let wanted = if let Some(wanted) = request.0.take() {
+        wanted
+    } else if keys.just_pressed(KeyCode::Digit1) {
         WeaponId::Ak47
     } else if keys.just_pressed(KeyCode::Digit2) {
         WeaponId::M4a1

@@ -207,6 +207,9 @@ const TRACER_START_Y_OFFSET: f32 = -0.05;
 
 const SMOKE_LIFETIME: f32 = 1.9;
 const SMOKE_START_SCALE: f32 = 0.52;
+/// How opaque the native path's stand-in puff starts. The real material is
+/// thinner than this and builds up by overlapping; one flat quad cannot.
+const SMOKE_STAND_IN_ALPHA: f32 = 0.34;
 const SMOKE_GROWTH_PER_SEC: f32 = 1.5;
 const SMOKE_DRAG: f32 = 1.2;
 const SMOKE_MAX_PUFFS: usize = 9;
@@ -327,7 +330,6 @@ const CROSSHAIR_BASE_GAP_PX: f32 = 4.0;
 const CROSSHAIR_GAP_SPREAD_SCALE: f32 = 500.0;
 
 const BASE_FOV: f32 = std::f32::consts::PI / 4.0;
-const AIM_FOV_MULTIPLIER: f32 = 0.6;
 
 const AIM_ZOOM_SPEED: f32 = 12.0;
 const AIM_SPREAD_MULTIPLIER: f32 = 0.35;
@@ -590,6 +592,7 @@ impl Plugin for GamePlugin {
         .init_resource::<BarrelSmoke>()
         .init_resource::<LimbDamage>()
         .init_resource::<ActiveWeapon>()
+        .init_resource::<weapon::WeaponSwitchRequest>()
         .add_systems(
             PostUpdate,
             sever_limbs
@@ -677,6 +680,7 @@ impl Plugin for GamePlugin {
                 update_joystick_knob_visual,
                 touch_look,
                 touch_fire_button,
+                touch_weapon_button,
                 touch_aim_button,
                 touch_scope_zoom_drag,
                 touch_jump_button,
@@ -845,7 +849,19 @@ impl Plugin for GamePlugin {
                     (update_blood_bursts, update_bullet_holes, update_impact_dust, update_casings, update_port_smoke),
                     (drop_magazine_on_reload, restore_magazine_after_reload, update_dropped_magazines),
                 ),
-                (update_muzzle_smoke, update_muzzle_flash, update_barrel_smoke),
+                (
+                    update_muzzle_smoke,
+                    update_muzzle_flash,
+                    update_barrel_smoke,
+                    // Nested rather than added beside the others: this tuple's
+                    // parent was already at Bevy's twenty-element limit.
+                    //
+                    // Only on the native path -- the windowed build renders
+                    // the real materials and a second would draw over them.
+                    (attach_muzzle_fx_stand_ins, fade_muzzle_fx_stand_ins)
+                        .chain()
+                        .run_if(native_renderer_in_use),
+                ),
                 update_spark_particles,
                 despawn_blood_stains,
             )

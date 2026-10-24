@@ -340,7 +340,10 @@ pub(crate) fn droplet_image(size: u32) -> Image {
         TextureDimension::D2,
         data,
         TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
+        // Not RENDER_WORLD: that drops the CPU copy once the GPU has it, and
+        // the native extractor reads image.data -- the droplet then drew as
+        // an untextured square.
+        crate::gltf_usages(),
     )
 }
 

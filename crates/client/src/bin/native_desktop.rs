@@ -77,6 +77,11 @@ impl ApplicationHandler for Host {
         unsafe {
             let layer: *mut Object = msg_send![objc::class!(CAMetalLayer), new];
             let _: () = msg_send![layer, setContentsScale: scale as f64];
+            // A framebufferOnly layer cannot be read back, and a screenshot of
+            // this path is the only way to see it without holding the device.
+            if std::env::var("CAPTURE_SCREENSHOT_TO").is_ok() {
+                let _: () = msg_send![layer, setFramebufferOnly: false];
+            }
             let _: () = msg_send![view, setLayer: layer];
             let _: () = msg_send![view, setWantsLayer: true];
         }

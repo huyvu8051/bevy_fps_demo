@@ -188,16 +188,23 @@ pub(crate) fn mouse_look(
         return;
     }
     let Ok(cursor) = cursor.single() else {
-        look_delta.0 = Vec2::ZERO;
         return;
     };
     if cursor.grab_mode == CursorGrabMode::None {
         motion.clear();
-        look_delta.0 = Vec2::ZERO;
         return;
     }
 
     let delta: Vec2 = motion.read().map(|e| e.delta).sum();
+    // Ahead of the write, not behind it. A still frame used to publish a zero
+    // over whatever touch_look had just put there, and since the two cannot
+    // run at once one of them always lost -- on iOS, where there is never any
+    // mouse motion, that was the touch delta every frame and the weapon never
+    // swayed. Clearing is gun_view_animation's job now; this only speaks when
+    // it has something to say.
+    if delta == Vec2::ZERO {
+        return;
+    }
     let sensitivity = if is_aiming(cursor, &aim_held, touch_aiming.0) {
         MOUSE_SENSITIVITY * AIM_MOUSE_SENSITIVITY_MULTIPLIER * (active.def().scope.default_zoom / zoom.0)
     } else {
@@ -206,9 +213,6 @@ pub(crate) fn mouse_look(
     // Radians the view turned, not pixels the mouse moved: sway is measured
     // against the turn, so it follows the aim multiplier and the zoom.
     look_delta.0 = delta * sensitivity;
-    if delta == Vec2::ZERO {
-        return;
-    }
 
     for mut cam in &mut query {
         cam.yaw -= delta.x * sensitivity;
@@ -295,6 +299,7 @@ pub(crate) fn apply_lean_input(
 
 pub(crate) fn apply_aim_zoom(
     time: Res<Time>,
+    active: Res<ActiveWeapon>,
     aim_held: Res<AimHeld>,
     touch_aiming: Res<TouchAiming>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
@@ -304,7 +309,8 @@ pub(crate) fn apply_aim_zoom(
         return;
     };
     let aiming = is_aiming(cursor, &aim_held, touch_aiming.0) || force_ads();
-    let target_fov = if aiming { BASE_FOV * AIM_FOV_MULTIPLIER } else { BASE_FOV };
+    let target_fov =
+        if aiming { BASE_FOV * active.def().aim_fov_multiplier } else { BASE_FOV };
 
     let Ok(mut projection) = camera.single_mut() else {
         return;
@@ -621,24 +627,49 @@ pub(crate) fn shoot(
 
     let stance = vfx_assets.stance.single().copied().unwrap_or_default();
 
+    let aiming = is_aiming(cursor, &aim_held, touch_aiming.0);
     let spread = current_bullet_spread(
         recoil.climb,
         kick.view.climb_max,
-        is_aiming(cursor, &aim_held, touch_aiming.0),
+        aiming,
         local_moving.0,
         stance,
         local_sprinting.0,
     );
-    // Out of the barrel, not out of the eye. The two part company by every
-    // degree of sway and recoil the weapon has, so firing down the view made
-    // the sights a decoration: the shot went where the player looked whatever
-    // the weapon was doing, and no mark on the glass could have told the
-    // truth about it.
+    // Out of the barrel, never out of the eye: the flash, the smoke and the
+    // tracer all start where the muzzle is.
     let muzzle_in_cam = gun_transform.mul_transform(gun.muzzle_local);
     let muzzle_world_pos =
         camera_transform.translation + camera_transform.rotation * muzzle_in_cam.translation;
     let bore = camera_transform.rotation * muzzle_in_cam.rotation;
-    let bore_axis = bore * Vec3::NEG_Z;
+    // Where it points is a different question from where it starts, and the
+    // answer differs by whether the player is using the sights.
+    //
+    // Sighted, the shot runs down the bore: the glass is lined up with the
+    // barrel, so every degree of sway and recoil has to show, or the sights
+    // are a decoration and no mark on them could tell the truth.
+    //
+    // From the hip there are no sights -- there is a cross painted on the
+    // middle of the screen, and it promises the middle of the screen. The
+    // muzzle sits right of and below the eye, so a bore-parallel shot misses
+    // that cross by the whole of that offset, at every range. Converging on
+    // what the cross covers is what makes it honest.
+    let bore_axis = if aiming {
+        bore * Vec3::NEG_Z
+    } else {
+        let view_axis = *camera_transform.forward();
+        let aim_point = spatial_query
+            .cast_ray(
+                camera_transform.translation,
+                camera_transform.forward(),
+                MAX_SHOT_DISTANCE,
+                true,
+                &SpatialQueryFilter::default(),
+            )
+            .map(|hit| camera_transform.translation + view_axis * hit.distance)
+            .unwrap_or(camera_transform.translation + view_axis * MAX_SHOT_DISTANCE);
+        (aim_point - muzzle_world_pos).normalize_or_zero()
+    };
 
     let spread_x = ops::sin(time.elapsed_secs() * 613.0) * spread;
     let spread_y = ops::sin(time.elapsed_secs() * 811.0) * spread;
@@ -743,7 +774,7 @@ pub(crate) fn shoot(
         })
         .filter(|(distance, ..)| !wall_distance.is_some_and(|w| w < distance - 0.1))
         .min_by(|(a, ..), (b, ..)| a.total_cmp(b));
-    if let Some((distance, entity, point, normal)) = predicted_hit {
+    if let Some((_distance, entity, point, normal)) = predicted_hit {
         if show_hit_markers.0 {
             commands.spawn((
                 Mesh3d(vfx_assets.hit_assets.mesh.clone()),
@@ -753,10 +784,6 @@ pub(crate) fn shoot(
                     remaining: HIT_MARKER_LIFETIME,
                 },
             ));
-        }
-
-        if autopilot.0 && is_aiming(cursor, &aim_held, touch_aiming.0) {
-            *cooldown = active.def().fire_rate * (1.0 + (distance / 10.0).min(4.0));
         }
 
         vfx_assets.recently_hit.0.insert(entity, RECENTLY_HIT_ZOMBIE_TTL);
@@ -771,6 +798,7 @@ pub(crate) fn shoot(
     commands.trigger(FireShot {
         origin: muzzle_world_pos,
         direction: *direction,
+        damage_scale: active.def().damage_scale,
     });
 }
 

@@ -24,11 +24,20 @@ pub struct GameHost {
 }
 
 fn zombie_model_specs() -> Vec<SkinnedModelSpec> {
+    // Whatever character is actually loaded, not a second rig that happens to
+    // be a soldier too. The joint matrices handed to this model come from the
+    // player body's own skeleton, so a different skeleton here lands them on
+    // the wrong bones -- which drew a slab of black geometry across the view.
+    //
+    // Identity scale and offset: the body's Bevy transform already carries the
+    // character's own, and the spec's would be applied on top of it.
+    let player_mesh: &'static str =
+        Box::leak(crate::PlayerModelTuning::default().mesh.into_boxed_str());
     let mut specs = vec![SkinnedModelSpec {
         name: "soldier",
-        asset_path: "characters/soldier_meshy/mesh/soldier_meshy.glb",
-        scale: 1.04,
-        y_offset: -0.76,
+        asset_path: player_mesh,
+        scale: 1.0,
+        y_offset: 0.0,
         facing_radians: 0.0,
     }];
     for kind in [shared::ZombieKind::Classic, shared::ZombieKind::Soldier] {

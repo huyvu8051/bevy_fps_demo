@@ -388,3 +388,112 @@ fn write_ribbon(points: &[TrailPoint], eye: Vec3, visible: f32, mesh: &mut Mesh)
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
 }
+
+/// The native renderer only looks at `StandardMaterial`, so on that path the
+/// flash and the smoke are invisible: their own materials carry their own
+/// shaders and the extractor's query never matches them.
+///
+/// Rather than port two WGSL shaders, each gets a plain stand-in alongside.
+/// The flash loses its shape for 0.05s, which is not long enough to read. The
+/// smoke keeps its fade, because two seconds is.
+pub(crate) fn attach_muzzle_fx_stand_ins(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut masks: Local<Option<(Handle<Image>, Handle<Image>)>>,
+    flashes: Query<Entity, (Added<MuzzleFlash>, Without<MeshMaterial3d<StandardMaterial>>)>,
+    smoke: Query<Entity, (Added<Smoke>, Without<MeshMaterial3d<StandardMaterial>>)>,
+) {
+    // The shape of both lives in the alpha channel. Without one the quad is
+    // exactly that -- a square -- which is what a flat emissive stand-in
+    // looked like the first time round.
+    let (flash_mask, smoke_mask) = masks
+        .get_or_insert_with(|| (
+            images.add(alpha_mask(64, flash_alpha)),
+            images.add(alpha_mask(64, smoke_alpha)),
+        ))
+        .clone();
+    for entity in &flashes {
+        // Black base, all of it emissive: the base colour is what the lighting
+        // multiplies, and a muzzle flash is not lit by anything.
+        commands.entity(entity).insert(MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgba(0.0, 0.0, 0.0, 1.0),
+            base_color_texture: Some(flash_mask.clone()),
+            // Inside 0..1, not an HDR value: this path writes straight to an
+            // 8-bit target with no tonemapping, so (12, 6, 2) clipped every
+            // channel to full and the flash came out white. The colour has to
+            // live in the ratio, and the ratio only survives below 1.0.
+            emissive: LinearRgba::new(1.0, 0.46, 0.13, 1.0),
+            alpha_mode: bevy::material::AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        })));
+    }
+    for entity in &smoke {
+        commands.entity(entity).insert(MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgba(0.42, 0.40, 0.38, SMOKE_STAND_IN_ALPHA),
+            base_color_texture: Some(smoke_mask.clone()),
+            alpha_mode: bevy::material::AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        })));
+    }
+}
+
+/// Fades the stand-ins, which have no shader to do it for them.
+pub(crate) fn fade_muzzle_fx_stand_ins(
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    flashes: Query<(&MuzzleFlash, &MeshMaterial3d<StandardMaterial>)>,
+    smoke: Query<(&Smoke, &MeshMaterial3d<StandardMaterial>)>,
+) {
+    for (flash, handle) in &flashes {
+        if let Some(mut material) = materials.get_mut(&handle.0) {
+            let left = 1.0 - elapsed_fraction_of(flash.remaining, MUZZLE_FLASH_LIFETIME);
+            material.base_color.set_alpha(left);
+        }
+    }
+    for (puff, handle) in &smoke {
+        if let Some(mut material) = materials.get_mut(&handle.0) {
+            let left = 1.0 - elapsed_fraction_of(puff.remaining, SMOKE_LIFETIME);
+            material.base_color.set_alpha(left * SMOKE_STAND_IN_ALPHA);
+        }
+    }
+}
+
+/// A white square whose alpha is `shape(x, y)` over -1..1 in both axes.
+///
+/// `RenderAssetUsages::default()` rather than RENDER_WORLD: the native
+/// extractor reads `image.data` on the CPU, and dropping it leaves the decal
+/// untextured -- the same square this exists to avoid.
+fn alpha_mask(size: u32, shape: fn(f32, f32) -> f32) -> Image {
+    let mut data = Vec::with_capacity((size * size * 4) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let fx = (x as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+            let fy = (y as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+            data.extend_from_slice(&[255, 255, 255, (shape(fx, fy).clamp(0.0, 1.0) * 255.0) as u8]);
+        }
+    }
+    Image::new(
+        bevy::render::render_resource::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+        bevy::render::render_resource::TextureDimension::D2,
+        data,
+        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+        bevy::asset::RenderAssetUsages::default(),
+    )
+}
+
+/// A bright core with four petals -- the shape the real shader draws, minus
+/// its animation.
+fn flash_alpha(x: f32, y: f32) -> f32 {
+    let r = (x * x + y * y).sqrt();
+    let reach = (1.0 - r).max(0.0);
+    let petal = ops::cos(ops::atan2(y, x) * 2.0).abs().powf(5.0);
+    (reach.powf(3.0) * 0.75 + reach.powf(1.3) * petal * 0.9).min(1.0)
+}
+
+/// A soft round puff, densest just off centre so it does not read as a disc.
+fn smoke_alpha(x: f32, y: f32) -> f32 {
+    let r = (x * x + y * y).sqrt();
+    (1.0 - r).max(0.0).powf(1.8)
+}

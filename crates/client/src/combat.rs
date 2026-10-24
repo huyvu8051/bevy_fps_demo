@@ -101,7 +101,7 @@ pub(crate) fn handle_fire_shot(
         if let Some((limb, segment)) = hit.limb {
             limb_damage.record(entity, limb, segment, damage);
         }
-        let damage = damage * damage_multiplier.0
+        let damage = damage * damage_multiplier.0 * shot.damage_scale
             * path.damage_scale_at(shot.origin, shot.origin.distance(hit_point));
 
         let hit_distance = shot.origin.distance(hit_point);
